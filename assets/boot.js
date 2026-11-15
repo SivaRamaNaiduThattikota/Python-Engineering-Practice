@@ -1,0 +1,35 @@
+// Runs in <head> before first paint: theme, transition direction, view-transition opt-in.
+(function () {
+  var h = document.documentElement;
+  var v = localStorage.getItem('pyp-theme') || 'auto';
+  // 'glass' (Liquid Glass) follows the system light / dark setting, like 'auto'
+  var dark = v === 'dark' || ((v === 'auto' || v === 'glass') && matchMedia('(prefers-color-scheme: dark)').matches);
+  h.dataset.theme = dark ? 'dark' : 'light';
+  h.classList.add('js');
+  if (v === 'glass') h.classList.add('glass');
+  if (localStorage.getItem('pyp-side-collapsed') === '1') h.classList.add('side-collapsed');
+  var tint = localStorage.getItem('pyp-glass-tint');
+  if (tint !== null && !matchMedia('(prefers-contrast: more)').matches) h.style.setProperty('--tint', tint);
+
+  var dir = sessionStorage.getItem('pyp-nav-dir') || 'none';
+  sessionStorage.removeItem('pyp-nav-dir');
+  h.dataset.dir = dir;
+
+  // Cross-document view transitions only work over http(s). On file:// app.js
+  // falls back to its own enter/leave animation.
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (/^https?:$/.test(location.protocol) && 'onpagereveal' in window && !reduce) {
+    h.classList.add('vt');
+    var s = document.createElement('style');
+    s.textContent = '@view-transition{navigation:auto}';
+    document.head.appendChild(s);
+    addEventListener('pagereveal', function (e) {
+      if (!e.viewTransition) return;
+      var t = dir === 'back' ? 'back' : 'forward';
+      // browser back / forward buttons
+      var act = window.navigation && navigation.activation;
+      if (act && act.navigationType === 'traverse' && act.from) t = act.from.index > act.entry.index ? 'back' : 'forward';
+      e.viewTransition.types.add(t);
+    });
+  }
+})();

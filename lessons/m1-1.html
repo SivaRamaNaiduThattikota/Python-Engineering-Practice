@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>1.1 · Numbers, operators and truthiness</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m1-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 1 · Warm-up drills</span></div>
+  <h1>1.1 Numbers, operators and truthiness</h1>
+  <p>Division, rounding, precedence and what counts as false. Small rules, but each one is a classic source of silent bugs in data code, and a favourite in interviews.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">6 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="rules">
+<h2><span class="n">1</span>The rules in one screen</h2>
+<p>Three number types cover daily work: <code>int</code> (whole numbers with no size limit), <code>float</code> (64-bit binary, about 15 to 16 significant digits) and <code>bool</code>, which is a kind of int: <code>True</code> is 1 and <code>False</code> is 0.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">division.py</span><button class="copy">Copy</button></div><pre><code class="py">print(7 / 2, 7 // 2, 7 % 2)
+print(-7 / 2, -7 // 2, -7 % 2)
+print(divmod(-7, 2))
+print(int(-3.5))</code></pre><div class="out"><span class="ol">Output</span><pre>3.5 3 1
+-3.5 -4 1
+(-4, 1)
+-3</pre></div></div>
+<p><code>/</code> always gives a float. <code>//</code> <strong>floors</strong>: it rounds toward minus infinity, not toward zero. <code>%</code> follows the same rule, so <code>(a // b) * b + a % b == a</code> is always true and the remainder takes the sign of the divisor. <code>int()</code> on a float just cuts off the decimals, which moves toward zero.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 132" role="img" aria-label="-7 / 2 is -3.5. Floor division goes down to -4, int() goes toward zero to -3.">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker>
+    <marker id="ah2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--orange)"/></marker></defs>
+  <line x1="30" y1="62" x2="610" y2="62" style="stroke:var(--label3);stroke-width:2"/>
+  <line x1="40" y1="56" x2="40" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="40" y="88" class="mid">-5</text>
+  <line x1="152" y1="56" x2="152" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="152" y="88" class="mid">-4</text>
+  <line x1="264" y1="56" x2="264" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="264" y="88" class="mid">-3</text>
+  <line x1="376" y1="56" x2="376" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="376" y="88" class="mid">-2</text>
+  <line x1="488" y1="56" x2="488" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="488" y="88" class="mid">-1</text>
+  <line x1="600" y1="56" x2="600" y2="68" style="stroke:var(--label3);stroke-width:2"/><text x="600" y="88" class="mid">0</text>
+  <circle cx="208" cy="62" r="6" style="fill:var(--accent)"/><text x="208" y="88" class="v mid">-3.5</text>
+  <path d="M200 40 H160" style="stroke:var(--accent);stroke-width:2.5;fill:none" marker-end="url(#ah)"/>
+  <text x="152" y="26" class="v">-7 // 2 = -4 (floor: always down)</text>
+  <path d="M216 108 H256" style="stroke:var(--orange);stroke-width:2.5;fill:none" marker-end="url(#ah2)"/>
+  <text x="270" y="113" class="v">int(-7 / 2) = -3 (truncate: toward zero, like SQL Server)</text>
+</svg></div><figcaption>The same -3.5 gives two different whole numbers depending on which way you round.</figcaption></figure>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>In SQL Server, integer division truncates: <code>-7 / 2</code> is <code>-3</code>. Python's <code>-7 // 2</code> is <code>-4</code>. Port a bucketing or week-number calculation from SQL and negative values land in a different bucket. In DAX, <code>INT()</code> rounds down like <code>//</code>, and <code>TRUNC()</code> behaves like <code>int()</code>.</p></div></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">floats.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+print(0.1 + 0.2)
+print(0.1 + 0.2 == 0.3, math.isclose(0.1 + 0.2, 0.3))
+print(round(2.5), round(3.5), round(-2.5))
+print(round(2.675, 2))</code></pre><div class="out"><span class="ol">Output</span><pre>0.30000000000000004
+False True
+2 4 -2
+2.67</pre></div></div>
+<p>Floats are stored in binary, so 0.1 is already slightly off before you add anything. Never compare floats with <code>==</code>. Use <code>math.isclose</code> (in numpy <code>np.isclose</code>, in tests <code>pytest.approx</code>). <code>round()</code> rounds a tie to the nearest even number, called <strong>banker's rounding</strong>. And 2.675 is really stored as 2.67499999..., so it rounds down.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">Matching a SQL or Excel report</div><p><code>ROUND(2.5, 0)</code> gives 3 in SQL Server and in Excel: both round a tie away from zero. Python gives 2. When a Python number has to match a finance report to the cent, use <code>decimal.Decimal</code> with <code>ROUND_HALF_UP</code> (problem 12).</p></div></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">precedence.py</span><button class="copy">Copy</button></div><pre><code class="py">print(-2 ** 2, 2 ** 3 ** 2)
+print(1 &lt; 2 &lt; 3, 3 &gt; 2 &gt; 2)
+print(not 1 == 2)</code></pre><div class="out"><span class="ol">Output</span><pre>-4 512
+True False
+True</pre></div></div>
+<p><code><strong></code> binds tighter than the minus sign in front of it, and it groups right to left: <code>2 </strong> 3 <strong> 2</code> is <code>2 </strong> 9</code>. Comparisons chain: <code>a &lt; b &lt; c</code> means <code>a &lt; b and b &lt; c</code>. <code>not</code> is weaker than <code>==</code>, so <code>not 1 == 2</code> is <code>not (1 == 2)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">truthiness.py</span><button class="copy">Copy</button></div><pre><code class="py">for v in [0, 0.0, &quot;&quot;, [], {}, None, &quot;0&quot;, &quot; &quot;, [0], -1]:
+    print(f&quot;{v!r:&gt;5} -&gt; {bool(v)}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>    0 -&gt; False
+  0.0 -&gt; False
+   &#x27;&#x27; -&gt; False
+   [] -&gt; False
+   {} -&gt; False
+ None -&gt; False
+  &#x27;0&#x27; -&gt; True
+  &#x27; &#x27; -&gt; True
+  [0] -&gt; True
+   -1 -&gt; True</pre></div></div>
+<p>Falsy means "acts as False in an <code>if</code>": <code>None</code>, <code>False</code>, zero of any number type, and empty containers. Everything else is truthy, including the string <code>"0"</code>, a space, and a list holding a zero.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">and_or.py</span><button class="copy">Copy</button></div><pre><code class="py">print(0 or &quot;default&quot;)
+print(&quot;&quot; and 5)
+print(3 and 4)
+print(None or 0 or [])</code></pre><div class="out"><span class="ol">Output</span><pre>default
+
+4
+[]</pre></div></div>
+<p><code>and</code> and <code>or</code> return one of their operands, not <code>True</code> or <code>False</code>. <code>or</code> returns the first truthy value (or the last one if none are). <code>and</code> returns the first falsy value (or the last one). Both stop early, which is called <strong>short-circuit</strong> evaluation.</p>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">The COALESCE trap</div><p><code>x or default</code> looks like SQL's <code>COALESCE(x, default)</code>, but COALESCE only replaces NULL. <code>or</code> also replaces <code>0</code>, <code>""</code> and <code>[]</code>, which are often valid values. The real COALESCE is <code>default if x is None else x</code>.</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">2</span>Warm-up</h2>
+<article class="prob" id="p-division-with-negative-numbers" data-pid="m1-1-division-with-negative-numbers" data-type="predict" data-level="easy" data-answer="3 2
+-4 3
+-4 -3">
+<header class="prob-head"><h3>1. Division with negative numbers</h3></header>
+<div class="code"><pre><code class="py">print(17 // 5, 17 % 5)
+print(-17 // 5, -17 % 5)
+print(17 // -5, 17 % -5)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Work out the true quotient first (-3.4), then round it toward minus infinity.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The remainder is whatever makes <code>(a // b) * b + a % b == a</code> true.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 2
+-4 3
+-4 -3</pre></div><p><code>-17 / 5</code> is -3.4, and floor goes down to -4. Then the remainder must satisfy <code>-4 * 5 + r == -17</code>, so <code>r</code> is 3. In the last line <code>17 / -5</code> is also -3.4, floor is -4, and <code>-4 * -5 + r == 17</code> gives <code>r = -3</code>. The remainder always has the sign of the divisor.</p></div></details>
+</article>
+<article class="prob" id="p-which-values-are-kept" data-pid="m1-1-which-values-are-kept" data-type="predict" data-level="easy" data-answer="[&#x27;0&#x27;, [[]], &#x27;False&#x27;]">
+<header class="prob-head"><h3>2. Which values are kept?</h3></header>
+<div class="code"><pre><code class="py">values = [0, &quot;0&quot;, [], [[]], 0.0, &quot;False&quot;, None]
+print([v for v in values if v])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only empty containers, zeros, None and False are falsy. Check each one against that list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;0&#x27;, [[]], &#x27;False&#x27;]</pre></div><p><code>"0"</code> and <code>"False"</code> are non-empty strings, so they are truthy. <code>[[]]</code> is a list with one item in it (that item happens to be an empty list), so it is not empty. The rest are falsy.</p></div></details>
+</article>
+<article class="prob" id="p-and-or-return-a-value" data-pid="m1-1-and-or-return-a-value" data-type="predict" data-level="easy" data-answer="5
+0
+n/a
+[]
+False">
+<header class="prob-head"><h3>3. and / or return a value</h3></header>
+<div class="code"><pre><code class="py">print(5 or 0)
+print(0 and 5)
+print(&quot;&quot; or &quot;n/a&quot;)
+print([] and [1])
+print(None or False)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>or</code> gives back the first truthy operand, <code>and</code> the first falsy one. If no operand settles it, you get the last one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5
+0
+n/a
+[]
+False</pre></div><p><code>5 or 0</code>: 5 is truthy, stop, return 5. <code>0 and 5</code>: 0 is falsy, stop, return 0. <code>"" or "n/a"</code>: the empty string is falsy, so it moves on and returns <code>"n/a"</code>. <code>[] and [1]</code> stops at <code>[]</code>. <code>None or False</code>: both are falsy, so it returns the last one, <code>False</code>.</p></div></details>
+</article>
+<article class="prob" id="p-even-or-odd" data-pid="m1-1-even-or-odd" data-type="write" data-level="easy">
+<header class="prob-head"><h3>4. Even or odd</h3></header>
+<div class="prob-q"><p>Write <code>is_even(n)</code> that returns <code>True</code> for even integers and <code>False</code> for odd ones. It must work for 0 and negative numbers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def is_even(n):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert is_even(4) is True
+assert is_even(7) is False
+assert is_even(0) is True
+assert is_even(-3) is False
+assert is_even(-10) is True</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert is_even(4) is True
+assert is_even(7) is False
+assert is_even(0) is True
+assert is_even(-3) is False
+assert is_even(-10) is True</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What is the remainder when an even number is divided by 2?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def is_even(n):
+    return n % 2 == 0</code></pre></div><p><code>n % 2</code> is 0 for even numbers and 1 for odd ones, also for negatives, because the remainder takes the sign of the divisor (2). In C or Java, <code>-3 % 2</code> is -1, so the common check <code>n % 2 == 1</code> for "odd" breaks there on negatives. In Python it is safe, but <code>n % 2 == 0</code> is safe everywhere.</p></div></details>
+</article>
+<article class="prob" id="p-minutes-to-hours-and-minutes" data-pid="m1-1-minutes-to-hours-and-minutes" data-type="write" data-level="easy">
+<header class="prob-head"><h3>5. Minutes to hours and minutes</h3></header>
+<div class="prob-q"><p>Write <code>split_minutes(total)</code> that returns a tuple <code>(hours, minutes)</code>. For example 135 minutes is <code>(2, 15)</code>. This is the kind of helper you write when turning event durations into features.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def split_minutes(total):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert split_minutes(135) == (2, 15)
+assert split_minutes(0) == (0, 0)
+assert split_minutes(59) == (0, 59)
+assert split_minutes(60) == (1, 0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert split_minutes(135) == (2, 15)
+assert split_minutes(0) == (0, 0)
+assert split_minutes(59) == (0, 59)
+assert split_minutes(60) == (1, 0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Hours come from <code>//</code>, minutes from <code>%</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>There is a built-in that does both at once and returns a tuple.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def split_minutes(total):
+    return divmod(total, 60)</code></pre></div><p><code>divmod(a, b)</code> returns <code>(a // b, a % b)</code> in one call. Writing <code>(total // 60, total % 60)</code> is also right. <code>divmod</code> says what you mean and does the division once.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">3</span>Medium</h2>
+<article class="prob" id="p-the-total-that-never-matches" data-pid="m1-1-the-total-that-never-matches" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. The total that never matches</h3></header>
+<div class="prob-q"><p>A reconciliation script checks that two amounts add up to an expected total. It reports a mismatch for <code>0.1 + 0.2</code> against <code>0.3</code>. Fix <code>totals_match</code> so it compares the way floats should be compared.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def totals_match(a, b, expected):
+    return a + b == expected
+</textarea>
+<script type="text/plain" class="prob-tests">assert totals_match(0.1, 0.2, 0.3)
+assert totals_match(1.5, 2.5, 4.0)
+assert not totals_match(0.1, 0.2, 0.31)
+assert totals_match(0.3, -(0.1 + 0.2), 0.0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert totals_match(0.1, 0.2, 0.3)
+assert totals_match(1.5, 2.5, 4.0)
+assert not totals_match(0.1, 0.2, 0.31)
+assert totals_match(0.3, -(0.1 + 0.2), 0.0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look in the <code>math</code> module for a function that compares with a tolerance.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last test compares against 0.0. A relative tolerance of a tiny number around zero is still tiny. Check the <code>abs_tol</code> argument.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+def totals_match(a, b, expected):
+    return math.isclose(a + b, expected, abs_tol=1e-9)</code></pre></div><p><code>math.isclose</code> uses a relative tolerance by default (<code>rel_tol=1e-09</code>), meaning "within a billionth of the size of the numbers". Near zero that window shrinks to nothing: <code>0.3 - (0.1 + 0.2)</code> is about -5.6e-17, and no relative tolerance of 0.0 accepts that. <code>abs_tol</code> adds a fixed floor, which you need for anything that should be 0, like a residual or a difference. For money, the real fix is to store cents as <code>int</code> or use <code>Decimal</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-discount-of-zero" data-pid="m1-1-a-discount-of-zero" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A discount of zero</h3></header>
+<div class="prob-q"><p><code>final_price</code> should apply a 10% discount when no discount is given, and the given discount otherwise. A customer with a 0% discount is getting 10% off. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def final_price(price, discount_pct=None):
+    pct = discount_pct or 10   # 10% when no discount is given
+    return round(price * (1 - pct / 100), 2)
+</textarea>
+<script type="text/plain" class="prob-tests">assert final_price(100) == 90.0
+assert final_price(100, 25) == 75.0
+assert final_price(100, 0) == 100.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert final_price(100) == 90.0
+assert final_price(100, 25) == 75.0
+assert final_price(100, 0) == 100.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>0 or 10</code> return?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>You want to replace only <code>None</code>, the way COALESCE replaces only NULL.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def final_price(price, discount_pct=None):
+    pct = 10 if discount_pct is None else discount_pct
+    return round(price * (1 - pct / 100), 2)</code></pre></div><p><code>0 or 10</code> is 10 because 0 is falsy. "Missing" and "zero" are different things, so test for <code>None</code> directly. The same bug shows up in pandas as <code>df["x"].fillna(...)</code> versus <code>df["x"].replace(0, ...)</code>: decide which one you mean.</p></div></details>
+</article>
+<article class="prob" id="p-digit-sum-step-by-step" data-pid="m1-1-digit-sum-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Digit sum, step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>n</code> and <code>total</code> after each pass of the loop.</p></div>
+<div class="code"><pre><code class="py">n = 4073
+total = 0
+step = 0
+while n &gt; 0:
+    step += 1
+    total += n % 10
+    n //= 10</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>n</code></th><th><code>total</code></th></tr><tr><td>after pass 1</td><td><input class="cell" data-a="407" data-s="407" aria-label="n at after pass 1" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="total at after pass 1" autocomplete="off"></td></tr><tr><td>after pass 2</td><td><input class="cell" data-a="40" data-s="40" aria-label="n at after pass 2" autocomplete="off"></td><td><input class="cell" data-a="10" data-s="10" aria-label="total at after pass 2" autocomplete="off"></td></tr><tr><td>after pass 3</td><td><input class="cell" data-a="4" data-s="4" aria-label="n at after pass 3" autocomplete="off"></td><td><input class="cell" data-a="10" data-s="10" aria-label="total at after pass 3" autocomplete="off"></td></tr><tr><td>after pass 4</td><td><input class="cell" data-a="0" data-s="0" aria-label="n at after pass 4" autocomplete="off"></td><td><input class="cell" data-a="14" data-s="14" aria-label="total at after pass 4" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>n % 10</code> is the last digit, <code>n // 10</code> drops the last digit.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>n</code></th><th><code>total</code></th></tr><tr><td>after pass 1</td><td><code>407</code></td><td><code>3</code></td></tr><tr><td>after pass 2</td><td><code>40</code></td><td><code>10</code></td></tr><tr><td>after pass 3</td><td><code>4</code></td><td><code>10</code></td></tr><tr><td>after pass 4</td><td><code>0</code></td><td><code>14</code></td></tr></table></div><p>Each pass peels off the last digit with <code>% 10</code> and removes it with <code>// 10</code>: 3, then 7, then 0, then 4. The loop stops when <code>n</code> reaches 0. This pattern (digit by digit with <code>%</code> and <code>//</code>) is the base of many interview problems: reversing a number, checking palindromes, converting bases.</p></div></details>
+</article>
+<article class="prob" id="p-age-bands" data-pid="m1-1-age-bands" data-type="write" data-level="medium">
+<header class="prob-head"><h3>9. Age bands</h3></header>
+<div class="prob-q"><p>Write <code>age_band(age)</code> that returns <code>"child"</code> under 13, <code>"teen"</code> for 13 to 17, <code>"adult"</code> for 18 to 64, <code>"senior"</code> for 65 and over, and <code>"invalid"</code> for negative ages. Use chained comparisons like <code>13 &lt;= age &lt; 18</code>. This is a <code>CASE WHEN</code> column in SQL, or a bins / groups column in Power BI.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def age_band(age):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert age_band(-1) == "invalid"
+assert age_band(0) == "child"
+assert age_band(12) == "child"
+assert age_band(13) == "teen"
+assert age_band(17) == "teen"
+assert age_band(18) == "adult"
+assert age_band(64) == "adult"
+assert age_band(65) == "senior"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 8 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert age_band(-1) == &quot;invalid&quot;
+assert age_band(0) == &quot;child&quot;
+assert age_band(12) == &quot;child&quot;
+assert age_band(13) == &quot;teen&quot;
+assert age_band(17) == &quot;teen&quot;
+assert age_band(18) == &quot;adult&quot;
+assert age_band(64) == &quot;adult&quot;
+assert age_band(65) == &quot;senior&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write one condition per band, top to bottom. Each band is <code>low &lt;= age &lt; high</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def age_band(age):
+    if age &lt; 0:
+        return &quot;invalid&quot;
+    if age &lt; 13:
+        return &quot;child&quot;
+    if 13 &lt;= age &lt; 18:
+        return &quot;teen&quot;
+    if 18 &lt;= age &lt; 65:
+        return &quot;adult&quot;
+    return &quot;senior&quot;</code></pre></div><p>Half-open ranges (<code>low &lt;= age &lt; high</code>) never overlap and never leave gaps, the same reason pandas <code>pd.cut</code> and most binning tools use them. Since each <code>if</code> returns, the lower bounds are not strictly needed (<code>if age &lt; 18</code> would do), but writing the full range keeps each line readable on its own. The boundary tests (12, 13, 17, 18, 64, 65) are where band code usually breaks.</p></div></details>
+</article>
+<article class="prob" id="p-sum-of-1-to-n" data-pid="m1-1-sum-of-1-to-n" data-type="choose" data-level="medium" data-answer="c">
+<header class="prob-head"><h3>10. Sum of 1 to n</h3></header>
+<div class="prob-q"><p>Each option computes the sum 1 + 2 + ... + n. Which is fastest for <code>n = 100_000</code>?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">n = 100_000</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">total = 0
+for i in range(1, n + 1):
+    total += i</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">total = sum(range(1, n + 1))</code></pre></button><button class="opt" type="button" data-key="c"><b>C</b><pre><code class="py">total = n * (n + 1) // 2</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count how many steps each one takes as <code>n</code> grows.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>13.31 ms</td></tr><tr><td>B</td><td>9.00 ms</td></tr><tr><td>C</td><td>0.31 µs</td></tr></table></div><p>C does a fixed amount of work whatever <code>n</code> is: O(1). A and B both touch every number: O(n). B beats A because the loop inside <code>sum</code> runs in C, while A runs the Python interpreter for each <code>+=</code>. The ranking <strong>between</strong> A and B is a constant factor; the jump to C is a different growth rate. Module 16 builds on this.</p></div></details>
+</article>
+<article class="prob" id="p-clean-up-the-checks" data-pid="m1-1-clean-up-the-checks" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Clean up the checks</h3></header>
+<div class="prob-q"><p>This works but is clumsy. Rewrite it in clean, idiomatic Python. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def describe(items):
+    if len(items) == 0:
+        return &quot;empty&quot;
+    else:
+        if len(items) &gt; 0 and items[0] == None:
+            return &quot;starts with None&quot;
+        else:
+            return &quot;has &quot; + str(len(items)) + &quot; items&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert describe([]) == "empty"
+assert describe(()) == "empty"
+assert describe([None, 1]) == "starts with None"
+assert describe([1, 2]) == "has 2 items"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert describe([]) == &quot;empty&quot;
+assert describe(()) == &quot;empty&quot;
+assert describe([None, 1]) == &quot;starts with None&quot;
+assert describe([1, 2]) == &quot;has 2 items&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An empty sequence is falsy.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each branch returns, so the <code>else</code> blocks are not needed.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare with <code>None</code> using <code>is</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def describe(items):
+    if not items:
+        return &quot;empty&quot;
+    if items[0] is None:
+        return &quot;starts with None&quot;
+    return f&quot;has {len(items)} items&quot;</code></pre></div><p><code>if not items</code> is the normal way to test for empty. After the first <code>return</code>, <code>len(items) &gt; 0</code> is already known, and the <code>else</code> blocks only add indentation. Use <code>is None</code> because <code>None</code> is a single object, and <code>==</code> can be redefined: on a numpy array or pandas Series, <code>== None</code> compares element by element and does not give one True or False. One exception to <code>if not items</code>: a numpy array refuses to be used as a bool, so for arrays write <code>if arr.size == 0</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">4</span>Hard</h2>
+<article class="prob" id="p-round-like-excel" data-pid="m1-1-round-like-excel" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Round like Excel</h3></header>
+<div class="prob-q"><p>Write <code>round_half_up(x, digits=0)</code> that rounds the way Excel and SQL Server do: ties go away from zero. Return a float. <code>round_half_up(2.675, 2)</code> must give 2.68, even though <code>round(2.675, 2)</code> gives 2.67.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def round_half_up(x, digits=0):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert round_half_up(2.5) == 3.0
+assert round_half_up(-2.5) == -3.0
+assert round_half_up(2.675, 2) == 2.68
+assert round_half_up(1.005, 2) == 1.01
+assert round_half_up(0.125, 2) == 0.13
+assert round_half_up(7.0) == 7.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert round_half_up(2.5) == 3.0
+assert round_half_up(-2.5) == -3.0
+assert round_half_up(2.675, 2) == 2.68
+assert round_half_up(1.005, 2) == 1.01
+assert round_half_up(0.125, 2) == 0.13
+assert round_half_up(7.0) == 7.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>decimal</code> module has a rounding mode called <code>ROUND_HALF_UP</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Decimal(2.675)</code> copies the binary error. <code>Decimal(str(2.675))</code> starts from the text you see.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Decimal.quantize(Decimal('0.01'), rounding=...)</code> rounds to two places.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from decimal import Decimal, ROUND_HALF_UP
+
+def round_half_up(x, digits=0):
+    step = Decimal(1).scaleb(-digits)        # 0 -&gt; 1, 2 -&gt; 0.01
+    d = Decimal(str(x)).quantize(step, rounding=ROUND_HALF_UP)
+    return float(d)</code></pre></div><p>Two separate problems hide here. First, <code>round</code> uses banker's rounding, so <code>round(2.5)</code> is 2. Second, the float 2.675 is really 2.67499999..., so any rounding of the float itself goes down. Going through <code>str(x)</code> gives the short decimal text Python prints (<code>'2.675'</code>), and <code>Decimal</code> then does exact decimal arithmetic. <code>ROUND_HALF_UP</code> in the decimal module means "ties away from zero", so -2.5 becomes -3.</p></div></details>
+</article>
+<article class="prob" id="p-min-max-scaling" data-pid="m1-1-min-max-scaling" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Min-max scaling</h3></header>
+<div class="prob-q"><p>Write <code>minmax_scale(xs)</code> that rescales a list of numbers to the range 0 to 1: <code>(x - min) / (max - min)</code>. An empty list gives <code>[]</code>. If every value is the same, return all <code>0.0</code> instead of dividing by zero.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def minmax_scale(xs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import math
+assert minmax_scale([10, 20, 30]) == [0.0, 0.5, 1.0]
+assert minmax_scale([5, 5, 5]) == [0.0, 0.0, 0.0]
+assert minmax_scale([]) == []
+assert minmax_scale([-1, 1]) == [0.0, 1.0]
+assert all(math.isclose(a, b) for a, b in zip(minmax_scale([0.1, 0.2, 0.3]), [0.0, 0.5, 1.0]))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math
+assert minmax_scale([10, 20, 30]) == [0.0, 0.5, 1.0]
+assert minmax_scale([5, 5, 5]) == [0.0, 0.0, 0.0]
+assert minmax_scale([]) == []
+assert minmax_scale([-1, 1]) == [0.0, 1.0]
+assert all(math.isclose(a, b) for a, b in zip(minmax_scale([0.1, 0.2, 0.3]), [0.0, 0.5, 1.0]))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle the empty list first, before calling <code>min</code> or <code>max</code> (they fail on empty input).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute <code>span = max - min</code> once. If it is 0, every output is 0.0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def minmax_scale(xs):
+    if not xs:
+        return []
+    lo, hi = min(xs), max(xs)
+    span = hi - lo
+    if span == 0:
+        return [0.0] * len(xs)
+    return [(x - lo) / span for x in xs]</code></pre></div><p>This is what scikit-learn's <code>MinMaxScaler</code> does per column, including the constant-column case: it outputs zeros instead of dividing by zero. Note the last test: <code>0.2</code> scaled is 0.5000000000000001, not 0.5, so it must use <code>isclose</code>. <code>span == 0</code> is a safe float comparison here because subtracting a number from itself is exactly 0.</p></div></details>
+</article>
+<article class="prob" id="p-convert-to-any-base" data-pid="m1-1-convert-to-any-base" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. Convert to any base</h3></header>
+<div class="prob-q"><p>Write <code>to_base(n, base)</code> that returns the integer <code>n</code> written in <code>base</code> (2 to 36) as a string, using digits <code>0-9</code> then <code>a-z</code>. Handle 0 and negative numbers. Do not use <code>bin</code>, <code>hex</code> or <code>format</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def to_base(n, base):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert to_base(0, 2) == "0"
+assert to_base(10, 2) == "1010"
+assert to_base(255, 16) == "ff"
+assert to_base(35, 36) == "z"
+assert to_base(-10, 2) == "-1010"
+assert int(to_base(123456, 7), 7) == 123456</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert to_base(0, 2) == &quot;0&quot;
+assert to_base(10, 2) == &quot;1010&quot;
+assert to_base(255, 16) == &quot;ff&quot;
+assert to_base(35, 36) == &quot;z&quot;
+assert to_base(-10, 2) == &quot;-1010&quot;
+assert int(to_base(123456, 7), 7) == 123456</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>divmod(n, base)</code> gives the next quotient and the last digit.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The digits come out last first, so collect them and reverse.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Deal with the sign once at the start: work on <code>abs(n)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">DIGITS = &quot;0123456789abcdefghijklmnopqrstuvwxyz&quot;
+
+def to_base(n, base):
+    if n == 0:
+        return &quot;0&quot;
+    sign = &quot;-&quot; if n &lt; 0 else &quot;&quot;
+    n = abs(n)
+    out = []
+    while n:
+        n, r = divmod(n, base)
+        out.append(DIGITS[r])
+    return sign + &quot;&quot;.join(reversed(out))</code></pre></div><p>It is the digit-sum loop from the trace problem with <code>base</code> instead of 10. Taking <code>abs(n)</code> first matters: <code>divmod(-10, 2)</code> floors, so on a negative number the remainders come out in a form you do not want. Building a list and joining once is the standard way to build a string (Module 4 shows why <code>+=</code> in a loop is slower). The last test checks against Python's own <code>int(s, base)</code>, a good habit: test your code against a trusted version.</p></div></details>
+</article>
+<article class="prob" id="p-precedence-and-chaining" data-pid="m1-1-precedence-and-chaining" data-type="predict" data-level="hard" data-answer="-9
+0.5
+True
+True
+3
+5 256">
+<header class="prob-head"><h3>15. Precedence and chaining</h3></header>
+<div class="code"><pre><code class="py">print(-3 ** 2)
+print(2 ** -1)
+print(1 &lt; 3 &gt; 2)
+print(1 == 1.0 == True)
+print(True + True * 2)
+print(10 - 2 - 3, 2 ** 2 ** 3)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code><strong></code> happens before the unary minus, and <code></strong></code> groups right to left.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>a &lt; b &gt; c</code> is <code>a &lt; b and b &gt; c</code>. <code>True</code> equals 1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>-9
+0.5
+True
+True
+3
+5 256</pre></div><p><code>-3 <strong> 2</code> is <code>-(3 </strong> 2)</code> = -9. <code>2 <strong> -1</code> is 0.5, a float. <code>1 &lt; 3 &gt; 2</code> is <code>1 &lt; 3 and 3 &gt; 2</code>. <code>1 == 1.0 == True</code> is <code>1 == 1.0 and 1.0 == True</code>, both true since <code>True</code> is 1. <code>True + True * 2</code> is <code>1 + 2</code> = 3. Subtraction groups left to right, <code>(10 - 2) - 3</code> = 5, but <code></strong></code> groups right to left: <code>2 <strong> (2 </strong> 3)</code> = 256.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">5</span>Interview questions</h2>
+<article class="prob" id="p-when-is-x-or-default-wrong" data-pid="m1-1-when-is-x-or-default-wrong" data-type="explain" data-level="easy">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. When is <code>x or default</code> wrong?</h3></header>
+<div class="prob-q"><p>Say your answer out loud or write it down, then compare.</p></div>
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When a falsy value is a valid input. <code>or</code> replaces every falsy value: 0, 0.0, <code>""</code>, <code>[]</code>, <code>{}</code>, not just <code>None</code>. So <code>timeout or 30</code> turns a timeout of 0 into 30, and <code>name or "unknown"</code> turns an empty string into <code>"unknown"</code>. If only "missing" should get the default, write <code>default if x is None else x</code>. Mention that it is SQL's <code>COALESCE</code> that <code>is None</code> matches, not <code>or</code>.</p></div></details>
+</article>
+<article class="prob" id="p-why-is-0-1-0-2-0-3-and-how-do-you-test-f" data-pid="m1-1-why-is-0-1-0-2-0-3-and-how-do-you-test-f" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why is <code>0.1 + 0.2 != 0.3</code>, and how do you test float code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Floats are binary fractions. 0.1 has no exact binary form (like 1/3 has no exact decimal form), so it is stored as the nearest binary value, and the small errors add up: <code>0.1 + 0.2</code> is 0.30000000000000004. In code, compare with a tolerance: <code>math.isclose</code>, <code>numpy.isclose</code> / <code>numpy.allclose</code> for arrays, and <code>pytest.approx</code> in tests. For money, use integer cents or <code>decimal.Decimal</code>. Bonus point: in ML this is why you check a loss or a gradient with <code>allclose</code>, never <code>==</code>.</p></div></details>
+</article>
+<article class="prob" id="p-7-2-versus-int-7-2" data-pid="m1-1-7-2-versus-int-7-2" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. <code>-7 // 2</code> versus <code>int(-7 / 2)</code></h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>-7 // 2</code> is -4: floor division rounds toward minus infinity. <code>int(-7 / 2)</code> is -3: <code>-7 / 2</code> is -3.5, and <code>int</code> truncates toward zero. They agree for positive numbers and differ for negatives. Python chose floor so that <code>a % b</code> has the sign of <code>b</code> and <code>(a // b) * b + a % b == a</code> holds. That makes <code>%</code> safe for wrapping things like hours on a clock or array indexes even with negative inputs. C, Java and SQL Server truncate.</p></div></details>
+</article>
+<article class="prob" id="p-bool-is-a-subclass-of-int-where-does-tha" data-pid="m1-1-bool-is-a-subclass-of-int-where-does-tha" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. <code>bool</code> is a subclass of <code>int</code>. Where does that help, and where does it bite?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It helps for counting: <code>sum(x &gt; 0 for x in xs)</code> counts matches, and in pandas <code>(df["x"] &gt; 0).sum()</code> and <code>.mean()</code> give the count and the share of rows. It bites in validation: <code>isinstance(True, int)</code> is True, so code that checks "is this an int" accepts <code>True</code>; check <code>type(x) is int</code> or exclude bool explicitly. It also bites in dict keys: <code>True == 1</code> and they hash the same, so <code>{1: "a", True: "b"}</code> is <code>{1: "b"}</code>.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>/</code> gives a float. <code>//</code> floors toward minus infinity, and <code>%</code> takes the sign of the divisor. <code>int()</code> truncates toward zero.</li><li>Never compare floats with <code>==</code>: use <code>math.isclose</code>, <code>np.isclose</code> or <code>pytest.approx</code>. Add <code>abs_tol</code> near zero.</li><li><code>round()</code> is banker's rounding. To match Excel or SQL Server, use <code>Decimal(str(x))</code> with <code>ROUND_HALF_UP</code>.</li><li><code>**</code> beats unary minus and groups right to left. Comparisons chain. <code>not</code> is weaker than <code>==</code>.</li><li>Falsy: None, False, zeros, empty containers. <code>and</code> / <code>or</code> return an operand, and <code>or</code> is not COALESCE.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
