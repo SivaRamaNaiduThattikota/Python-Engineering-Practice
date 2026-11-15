@@ -2,8 +2,10 @@
 (function () {
   var h = document.documentElement;
   var v = localStorage.getItem('pyp-theme') || 'auto';
-  // 'glass' (Liquid Glass) follows the system light / dark setting, like 'auto'
-  var dark = v === 'dark' || ((v === 'auto' || v === 'glass') && matchMedia('(prefers-color-scheme: dark)').matches);
+  // 'glass' (Liquid Glass) comes in light and dark too: pyp-glass-mode is auto, light or dark
+  var gm = localStorage.getItem('pyp-glass-mode') || 'auto';
+  var sys = matchMedia('(prefers-color-scheme: dark)').matches;
+  var dark = v === 'dark' || (v === 'auto' && sys) || (v === 'glass' && (gm === 'dark' || (gm === 'auto' && sys)));
   h.dataset.theme = dark ? 'dark' : 'light';
   h.classList.add('js');
   if (v === 'glass') h.classList.add('glass');

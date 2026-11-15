@@ -82,7 +82,7 @@ const COURSE = [
     <div class="seg" id="theme-seg"><span class="thumb"></span><button data-v="auto">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button><button data-v="glass" title="Liquid Glass">Glass</button></div>
     <div class="glass-slider"><div class="gs-top"><span>Clear</span><span>Liquid Glass</span><span>Tinted</span></div>
       <input type="range" id="glass-tint" min="0" max="100" step="1" aria-label="Liquid Glass look, from clear to tinted">
-      <div class="gs-cap">Follows your system light or dark mode.</div></div>
+      <div class="gm" id="glass-mode" role="group" aria-label="Liquid Glass light or dark"><button type="button" data-m="auto">Auto</button><button type="button" data-m="light">Light</button><button type="button" data-m="dark">Dark</button></div></div>
     <p class="side-foot">Progress is saved in this browser.<br>Ctrl / ⌘ + K to search.</p>`;
   shell.insertBefore(side, main);
 
@@ -146,7 +146,9 @@ const COURSE = [
   const mq = matchMedia('(prefers-color-scheme: dark)');
   function applyTheme(v) {
     localStorage.setItem('pyp-theme', v);
-    const dark = v === 'dark' || ((v === 'auto' || v === 'glass') && mq.matches);
+    const gm = localStorage.getItem('pyp-glass-mode') || 'auto';
+    const dark = v === 'dark' || (v === 'auto' && mq.matches) || (v === 'glass' && (gm === 'dark' || (gm === 'auto' && mq.matches)));
+    side.querySelectorAll('#glass-mode button').forEach(b => b.classList.toggle('on', b.dataset.m === gm));
     const h = document.documentElement;
     h.dataset.theme = dark ? 'dark' : 'light';
     h.classList.toggle('glass', v === 'glass');
@@ -175,6 +177,14 @@ const COURSE = [
     localStorage.setItem('pyp-glass-tint', t);
   });
   seg.addEventListener('click', e => { if (e.target.dataset.v) applyTheme(e.target.dataset.v); });
+  side.querySelector('#glass-mode').addEventListener('click', e => {
+    const m = e.target.dataset.m;
+    if (!m) return;
+    localStorage.setItem('pyp-glass-mode', m);
+    applyTheme('glass');
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches)
+      e.target.animate([{ scale: '1' }, { scale: '.86' }, { scale: '1.06' }, { scale: '1' }], { duration: 520, easing: 'cubic-bezier(.3,1.6,.5,1)' });
+  });
   mq.addEventListener('change', () => applyTheme(localStorage.getItem('pyp-theme') || 'auto'));
   applyTheme(localStorage.getItem('pyp-theme') || 'auto');
 
