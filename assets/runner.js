@@ -349,9 +349,9 @@
   }
 
   // ---------- export / import progress ----------
-  const foot = document.querySelector('.side-foot');
+  const foot = document.getElementById('st-progress');
   if (foot) {
-    foot.insertAdjacentHTML('beforebegin', `<div class="io-row"><button class="copy" type="button" id="exp">Export progress</button>
+    foot.insertAdjacentHTML('beforeend', `<div class="io-row"><button class="copy" type="button" id="exp">Export progress</button>
       <label class="copy" tabindex="0">Import<input type="file" accept="application/json" id="imp" hidden></label></div>`);
     document.getElementById('exp').onclick = () => {
       const data = {};
