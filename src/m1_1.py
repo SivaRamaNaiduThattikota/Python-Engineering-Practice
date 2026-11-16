@@ -47,6 +47,15 @@ section("rules", "The rules in one screen",
     the same rule, so `(a // b) * b + a % b == a` is always true and the remainder takes the sign of the divisor.
     `int()` on a float just cuts off the decimals, which moves toward zero."""),
     fig(NUMBER_LINE, "The same -3.5 gives two different whole numbers depending on which way you round."),
+    callout("key", "Step by step: why -7 // 2 is -4", """
+    - **Step 1, divide exactly.** `-7 / 2` is `-3.5`.
+    - **Step 2, floor it.** Floor means "the nearest whole number that is **less than or equal to** it". The two
+      whole numbers around -3.5 are -4 and -3. Which one is smaller? -4, because on the number line it is further
+      left. So the answer is -4. For negative numbers, "down" moves **away** from zero.
+    - **Step 3, the remainder fills the gap.** `-7 % 2` is whatever makes `2 * (-7 // 2) + (-7 % 2) == -7` true:
+      `2 * -4` is -8, and -8 needs **+1** to get back to -7. So `-7 % 2` is 1.
+    - **Compare with positive 7.** `7 / 2` is 3.5, the whole numbers around it are 3 and 4, and the smaller is 3.
+      So `7 // 2` is 3. Same rule both times: always pick the smaller neighbour."""),
     callout("sql", "SQL / Power BI", """In SQL Server, integer division truncates: `-7 / 2` is `-3`. Python's `-7 // 2` is `-4`.
     Port a bucketing or week-number calculation from SQL and negative values land in a different bucket.
     In DAX, `INT()` rounds down like `//`, and `TRUNC()` behaves like `int()`."""),
