@@ -22,3 +22,12 @@ option is not actually faster.
     python -m http.server
 
 then open http://localhost:8000. Code runs in a web worker, so it needs http, not file://.
+
+## Theory pages
+
+`theory/` holds the full theory notes, converted from the notebooks in
+[python-core-foundations](https://github.com/SivaRamaNaiduThattikota/python-core-foundations):
+
+    python build/theory.py "../Python Core Foundations"
+
+Re-run it after editing a notebook. The outputs shown are the ones saved in the notebooks.

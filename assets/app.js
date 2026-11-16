@@ -5,33 +5,31 @@
 const GH = 'https://github.com/SivaRamaNaiduThattikota/';
 const CORE = GH + 'python-core-foundations';
 const DATA = GH + 'python-data-libraries';
-const nb = path => CORE + '/blob/main/' + encodeURI(path);
+const tp = slug => 'theory/' + slug + '.html';
 const REPOS = [
-  ['python-core-foundations', CORE, 'Theory notebooks for Modules 2 to 11 and 14: the object model through typing, in a 9-section format.'],
+  ['python-core-foundations', CORE, 'Source of the theory pages: the notebooks for Modules 2 to 11 and 14.'],
   ['python-data-libraries', DATA, 'pandas notebooks (24 lessons), for the data libraries stage.'],
   ['python-data-libraries · dsa branch', DATA + '/tree/dsa/dsa', 'Data structures and algorithms study track, for Module 16.'],
 ];
 const GUIDES = {
-  2: { notes: [['Mutability & the Object Model', nb('Mutability & the Object Model/theory.ipynb')]] },
-  3: { folder: CORE + '/tree/main/Sequences', notes: [
-    ['2A List', nb('Sequences/List/theory.ipynb')], ['2B Tuple', nb('Sequences/tuple/theory.ipynb')],
-    ['2C Set & frozenset', nb('Sequences/Set & frozenset/theory.ipynb')], ['2D Dictionaries', nb('Sequences/Dictionaries/theory.ipynb')]] },
-  4: { notes: [['Strings', nb('Strings/theory.ipynb')]] },
-  5: { notes: [['Functions, Scope & Closures', nb('Functions, Scope & Closures/theory.ipynb')]] },
-  6: { notes: [['Comprehensions & Generators', nb('Comprehensions & Generators/theory.ipynb')]] },
-  7: { notes: [['Decorators', nb('Decorators/theory.ipynb')]] },
-  8: { notes: [['Error Handling', nb('Error Handling/theory.ipynb')]] },
-  9: { folder: CORE + '/tree/main/OOP', notes: [
-    ['The four pillars', nb('OOP/00_four_pillars.ipynb')], ['7A Classes & Instances', nb('OOP/Classes & Instances/theory.ipynb')],
-    ['7B Dunder Methods', nb('OOP/Dunder Methods/theory.ipynb')], ['7C Inheritance & MRO', nb('OOP/Inheritance & MRO/theory.ipynb')],
-    ['7D Properties & Methods', nb('OOP/Properties & Methods/theory.ipynb')]] },
-  10: { notes: [['Iterators & Context Managers', nb('Iterators & Context Managers/theory.ipynb')]] },
-  11: { notes: [['Typing & Dataclasses', nb('Typing & Dataclasses/theory.ipynb')]] },
-  14: { notes: [['7E GIL & Concurrency', nb('OOP/GIL & Concurrency/theory.ipynb')]] },
+  2: { notes: [['Mutability and the object model', tp('mutability')]] },
+  3: { notes: [['2A List', tp('list')], ['2B Tuple', tp('tuple')], ['2C Set and frozenset', tp('set')], ['2D Dictionaries', tp('dict')]] },
+  4: { notes: [['Strings', tp('strings')]] },
+  5: { notes: [['Functions, scope and closures', tp('functions')]] },
+  6: { notes: [['Comprehensions and generators', tp('comprehensions')]] },
+  7: { notes: [['Decorators', tp('decorators')]] },
+  8: { notes: [['Error handling', tp('errors')]] },
+  9: { notes: [['The four pillars of OOP', tp('oop-pillars')], ['7A Classes and instances', tp('classes')], ['7B Dunder methods', tp('dunders')],
+    ['7C Inheritance and MRO', tp('inheritance')], ['7D Properties and methods', tp('properties')]] },
+  10: { notes: [['Iterators and context managers', tp('iterators')]] },
+  11: { notes: [['Typing and dataclasses', tp('typing')]] },
+  14: { notes: [['7E The GIL and concurrency', tp('concurrency')]] },
   16: { notes: [['DSA study track', DATA + '/tree/dsa/dsa'], ['Patterns', DATA + '/blob/dsa/dsa/PATTERNS.md'], ['Complexity', DATA + '/blob/dsa/dsa/COMPLEXITY.md']] },
   17: { notes: [['pandas, 24 lessons', DATA + '/tree/main/python-data-libraries/01_pandas']] },
 };
-const guideLink = s => GUIDES[s] && (GUIDES[s].folder || GUIDES[s].notes[0][1]);
+// every live theory page in reading order, for the pager on theory pages
+const THEORY_PAGES = Object.entries(GUIDES).flatMap(([st, g]) => g.notes.filter(n => !/^https?:/.test(n[1])).map(([t, f]) => ({ stage: +st, title: t, file: f, id: 't-' + f.slice(7, -5) })));
+const isExt = u => /^https?:/.test(u);
 const STAGES = {
   1: { name: 'Module 1 · Warm-up drills' },
   2: { name: 'Module 2 · The object model' },
@@ -86,6 +84,9 @@ const COURSE = [
 (function () {
   const root = document.body.dataset.root || '';
   const pageId = document.body.dataset.id || 'home';
+  const href = u => isExt(u) ? `href="${u}" target="_blank" rel="noopener"` : `href="${root + u}"`;
+  const arrow = u => isExt(u) ? ' ↗' : '';
+  const theoryPage = THEORY_PAGES.find(t => t.id === pageId);
   const KEY = 'pyp-done';
   let done = JSON.parse(localStorage.getItem(KEY) || '[]');
   const lesson = COURSE.find(c => c.id === pageId);
@@ -146,7 +147,7 @@ const COURSE = [
       html += `<div class="side-group" data-stage="${s}"><h4><i></i>${STAGES[s].name}</h4><ul class="side-list">` +
         items.map(c => `<li><a href="${c.soon ? '#' : root + c.file}" class="${c.id === pageId ? 'active' : ''} ${c.soon ? 'soon' : ''}">
           <span class="dot ${done.includes(c.id) ? 'done' : ''} ${c.soon ? 'soon' : ''}"></span><span class="num">${c.num}</span><span>${c.title}${c.soon ? ' · soon' : ''}</span></a></li>`).join('') +
-        (guideLink(s) && !f ? `<li><a class="side-theory" href="${guideLink(s)}" target="_blank" rel="noopener"><span class="ico bg-indigo">nb</span><span>Theory notes${GUIDES[s].notes.length > 1 ? ' (' + GUIDES[s].notes.length + ')' : ''} ↗</span></a></li>` : '') +
+        (GUIDES[s] && !f ? GUIDES[s].notes.map(([t, u]) => `<li><a class="side-theory ${theoryPage && theoryPage.file === u ? 'active' : ''}" ${href(u)}><span class="ico bg-indigo">nb</span><span>${t}${arrow(u)}</span></a></li>`).join('') : '') +
         '</ul></div>';
     });
     groups.innerHTML = html;
@@ -415,7 +416,7 @@ const COURSE = [
   if (tmap) {
     tmap.innerHTML = Object.keys(STAGES).map(st => {
       const g = GUIDES[st];
-      const links = g ? g.notes.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t} ↗</a>`).join('')
+      const links = g ? g.notes.map(([t, u]) => `<a ${href(u)}>${t}${arrow(u)}</a>`).join('')
         : '<span class="muted">New in this workbook: the short explanations are on the lesson pages.</span>';
       return `<div class="row tm-row" data-stage="${st}"><div class="icon bg-accent">${st === '17' ? 'D' : st}</div><div style="flex:1"><div class="t">${STAGES[st].name.replace(/^Module \d+ · |^Later · /, '')}</div><div class="tm-links">${links}</div></div></div>`;
     }).join('');
@@ -429,10 +430,20 @@ const COURSE = [
     const g = GUIDES[lesson.stage];
     const chips = document.querySelector('.l-hero .chips');
     if (chips) chips.insertAdjacentHTML('beforeend', g.notes.map(([t, u]) =>
-      `<a class="chip chip-link" href="${u}" target="_blank" rel="noopener">Theory: ${t} ↗</a>`).join(''));
+      `<a class="chip chip-link" ${href(u)}>Theory: ${t}${arrow(u)}</a>`).join(''));
     const rc = document.querySelector('.recap');
     if (rc) rc.insertAdjacentHTML('afterend', `<section class="deeper"><h2>Go deeper</h2><p>The full theory for this module, with every section, edge case and interview question:</p><ul>` +
-      g.notes.map(([t, u]) => `<li><a href="${u}" target="_blank" rel="noopener">${t} ↗</a></li>`).join('') + '</ul></section>');
+      g.notes.map(([t, u]) => `<li><a ${href(u)}>${t}${arrow(u)}</a></li>`).join('') + '</ul></section>');
+  }
+  // theory pages: previous / next theory page, and a way back to the practice
+  const tpager = document.getElementById('theory-pager');
+  if (theoryPage && tpager) {
+    const i = THEORY_PAGES.indexOf(theoryPage), prev = THEORY_PAGES[i - 1], next = THEORY_PAGES[i + 1];
+    const practice = COURSE.find(c => c.stage === theoryPage.stage && !c.soon);
+    tpager.innerHTML =
+      (practice ? `<a href="${root + practice.file}"><small>Practise this module →</small><b>${practice.num} ${practice.title}</b></a>`
+        : (prev ? `<a href="${root + prev.file}"><small>← Previous theory</small><b>${prev.title}</b></a>` : `<a href="${root}index.html#theory"><small>← Back</small><b>Theory map</b></a>`)) +
+      (next ? `<a class="nx" href="${root + next.file}"><small>Next theory →</small><b>${next.title}</b></a>` : `<a class="nx" href="${root}index.html#theory"><small>Done</small><b>Theory map</b></a>`);
   }
   if (lesson) {
     // table of contents + scrollspy

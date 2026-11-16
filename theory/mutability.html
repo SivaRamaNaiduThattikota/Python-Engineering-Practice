@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Theory · Mutability and the object model · Python Engineering Practice</title>
+<meta name="color-scheme" content="light dark">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="t-mutability" data-root="../" data-title="Theory · Mutability and the object model" data-stage="2">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><a href="../index.html#theory">Theory</a><span>›</span><span>Module 2 · The object model</span></div>
+  <h1>Mutability and the object model</h1>
+  <p>The full theory notes for this module: concept, worked examples, edge cases, traps, ML uses and interview questions. Read here, then practise on the lesson pages.</p>
+  <div class="chips"><span class="chip">Theory notes</span><span class="chip">8 sections</span><a class="chip chip-link" href="https://github.com/SivaRamaNaiduThattikota/python-core-foundations/blob/main/Mutability%20&amp;%20the%20Object%20Model/theory.ipynb" target="_blank" rel="noopener">Notebook on GitHub ↗</a></div>
+</section>
+
+<article class="nb">
+<div class="nb-md"><style>
+* {
+  box-sizing: border-box;
+}
+.nb-unused {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+}
+.main-title, .part-header, .ex-header, .warn-header,
+.theory-box, .code-block, .output-block, .note-box,
+.warn-box, .danger-box, .info-box, .ex-block, .edge-block,
+.step-box, .why-box, .growth-box, .perf-box {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+}
+</style>
+
+<style>
+  h1.main-title { color:#cba6f7; font-family:'Segoe UI',sans-serif; font-size:2em; border-bottom:2px solid #45475a; padding-bottom:10px; margin-bottom:20px; }
+  .part-header  { background:linear-gradient(90deg,#313244,#1e1e2e); border-left:5px solid #cba6f7; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .part-header h2 { color:#cba6f7; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .ex-header    { background:linear-gradient(90deg,#1a2e1a,#1e1e2e); border-left:5px solid #a6e3a1; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .ex-header h2 { color:#a6e3a1; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .warn-header  { background:linear-gradient(90deg,#2a1f00,#1e1e2e); border-left:5px solid #f9e2af; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .warn-header h2 { color:#f9e2af; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  h3.sub { color:#89dceb; font-family:'Segoe UI',sans-serif; margin-top:20px; margin-bottom:8px; font-size:1em; }
+  .theory-box { background:#2a2a3d; border-left:5px solid #89b4fa; border-radius:10px; padding:16px 22px; margin:14px 0; color:#cdd6f4; font-family:'Segoe UI',sans-serif; line-height:1.8; }
+  .code-block { background:#181825; border-radius:8px; padding:14px 20px; font-family:'Courier New',monospace; font-size:0.91em; color:#a6e3a1; margin:10px 0; overflow-x:auto; border:1px solid #313244; line-height:2; }
+  .output-block { background:#11111b; border-radius:8px; padding:12px 18px; font-family:'Courier New',monospace; font-size:0.88em; color:#cdd6f4; margin:4px 0 10px; border:1px solid #313244; line-height:1.9; }
+  .note-box   { background:#1c1c2e; border-left:4px solid #a6e3a1; border-radius:8px; padding:11px 16px; margin:10px 0; color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .warn-box   { background:#2a1f00; border-left:4px solid #f9e2af; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f9e2af; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .danger-box { background:#2e1e1e; border-left:4px solid #f38ba8; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f38ba8; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .info-box   { background:#1e2030; border-left:4px solid #89b4fa; border-radius:8px; padding:11px 16px; margin:10px 0; color:#89b4fa; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .divider { border:none; border-top:1px solid #313244; margin:22px 0; }
+  .cc { color:#6c7086; } .cs { color:#f9e2af; } .ck { color:#cba6f7; } .cm { color:#f38ba8; } .cn { color:#fab387; }
+  .vocab-box { background:#181825; border:1px solid #313244; border-radius:10px; padding:14px 20px; margin:12px 0; font-family:'Segoe UI',sans-serif; font-size:0.9em; }
+  .vocab-row { display:block; padding:8px 0; border-bottom:1px solid #313244; line-height:1.8; color:#cdd6f4; }
+  .vocab-row:last-child { border-bottom:none; }
+  .vocab-term { display:inline-block; min-width:100px; color:#cba6f7; font-weight:bold; font-family:'Courier New',monospace; }
+  .vocab-dash { color:#45475a; margin:0 8px; }
+  .mut-grid { display:block; margin:12px 0; }
+  .mut-card { display:inline-block; width:48%; min-width:200px; vertical-align:top; border-radius:10px; padding:14px 16px; margin-right:2%; margin-bottom:10px; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.9; }
+  .mut-card:last-child { margin-right:0; }
+  .mc-imm { background:#1e2030; border:1px solid #89b4fa; border-top:3px solid #89b4fa; }
+  .mc-mut { background:#1a2e1a; border:1px solid #a6e3a1; border-top:3px solid #a6e3a1; }
+  .mc-imm .mc-title { color:#89b4fa; font-weight:bold; margin-bottom:8px; }
+  .mc-mut .mc-title { color:#a6e3a1; font-weight:bold; margin-bottom:8px; }
+  .mc-imm .mc-body { color:#cdd6f4; font-family:'Courier New',monospace; font-size:0.88em; }
+  .mc-mut .mc-body { color:#cdd6f4; font-family:'Courier New',monospace; font-size:0.88em; }
+  .ex-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:12px 0; }
+  .ex-title { color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.97em; margin-bottom:10px; }
+  .ex-badge { display:inline-block; background:#1a2e1a; border:1px solid #a6e3a1; color:#a6e3a1; border-radius:20px; padding:2px 10px; font-size:0.82em; font-family:'Courier New',monospace; margin-right:8px; }
+  .step-box { background:#181825; border-left:4px solid #89b4fa; border-radius:0 8px 8px 0; padding:10px 14px; margin:8px 0; color:#89b4fa; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .step-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .edge-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:12px 0; }
+  .edge-title { color:#f9e2af; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.97em; margin-bottom:10px; }
+  .edge-badge { display:inline-block; background:#2a1f00; border:1px solid #f9e2af; color:#f9e2af; border-radius:20px; padding:2px 10px; font-size:0.82em; font-family:'Courier New',monospace; margin-right:8px; }
+  .why-box { background:#2a1e2e; border-left:4px solid #cba6f7; border-radius:0 8px 8px 0; padding:10px 14px; margin:8px 0; color:#cba6f7; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .why-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .nuance-box { background:#1c1c2e; border-left:4px solid #89dceb; border-radius:0 8px 8px 0; padding:10px 14px; margin:8px 0; color:#89dceb; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .nuance-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+</style>
+
+<!-- ── TITLE ── -->
+
+<h1 class="main-title">🐍 Session 1 — Mutability &amp; the Object Model</h1>
+<div class="info-box"><strong>Part 1:</strong> Theory → Example → Edge Cases</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 1: THEORY ══ -->
+
+<div class="part-header"><h2>1. Theory</h2></div>
+
+<h3 class="sub">🔹 The One Idea Everything Rests On</h3>
+
+<div class="theory-box">
+  <p style="margin:0 0 10px 0">In Python, a variable is not a box that holds a value. It is a <strong style="color:#89b4fa">name tag attached to an object</strong>.</p>
+  <p style="margin:0">This is the single mental model that explains every "weird" behavior in this entire session.</p>
+</div>
+
+<h3 class="sub">🔹 Power BI / SQL Analogy</h3>
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:8px 0">Think of a SQL VIEW. The view name (<code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1;font-family:'Courier New',monospace">vw_Sales</code>) doesn't contain data — it points at an underlying table. Two views can point at the same table. Drop a view, the table survives. Change the table, every view sees the change. Python names work exactly like that: the name points at an object living in memory, and multiple names can point at the same object.</p>
+
+<div class="info-box">💡 Another anchor: in Power BI, a measure reference vs. the measure itself. <strong>Total Sales</strong> the name is just a pointer; the actual DAX object lives once and many visuals reference it.</div>
+
+<h3 class="sub">🔹 Three Pieces of Vocabulary</h3>
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:8px 0">Every value in Python is an object, and every object has three things:</p>
+
+<div class="vocab-box">
+  <div class="vocab-row">
+    <span class="vocab-term">Identity</span><span class="vocab-dash">—</span>
+    a unique address in memory, never changes during the object's life. You read it with <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1;font-family:'Courier New',monospace">id()</code>. Think of it as the object's primary key.
+  </div>
+  <div class="vocab-row">
+    <span class="vocab-term">Type</span><span class="vocab-dash">—</span>
+    int, list, str, etc. Fixed for the object's life.
+  </div>
+  <div class="vocab-row">
+    <span class="vocab-term">Value</span><span class="vocab-dash">—</span>
+    the actual data inside.
+  </div>
+</div>
+
+<div class="note-box">💡 A <strong>name</strong> (variable) is separate from all of this. Assignment (<code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1;font-family:'Courier New',monospace">x = obj</code>) doesn't copy the object — it <strong>binds</strong> the name <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1;font-family:'Courier New',monospace">x</code> to the object. This is why people say Python has "names and bindings," not "variables and values."</div>
+
+<h3 class="sub">🔹 Mutable vs. Immutable — The Core Split</h3>
+
+<div class="mut-grid">
+  <div class="mut-card mc-imm">
+    <div class="mc-title">🔒 Immutable</div>
+    <div class="mc-body">
+      Cannot be changed after creation.<br>
+      If you "change" one, Python creates<br>
+      a new object and re-points your<br>
+      name at it.<br><br>
+      <strong style="color:#89b4fa">Types:</strong><br>
+      int, float, bool, str,<br>
+      tuple, frozenset, bytes
+    </div>
+  </div>
+  <div class="mut-card mc-mut">
+    <div class="mc-title">🔓 Mutable</div>
+    <div class="mc-body">
+      Can be changed in place —<br>
+      same identity, different contents.<br><br>
+      <strong style="color:#a6e3a1">Types:</strong><br>
+      list, dict, set,<br>
+      and most custom class instances
+    </div>
+  </div>
+</div>
+
+<div class="info-box">
+  💡 <strong>Why the split exists:</strong> Immutability lets Python safely share and cache objects, makes objects hashable (so they can be dict keys), and makes code easier to reason about. Mutability lets you modify large structures without the cost of copying. It's a deliberate trade-off, not an accident.
+</div>
+
+<div class="note-box">
+  💡 <strong>SQL analogy for the split:</strong> an immutable object is like a primary-key value in a row — you don't edit it, you insert a new row. A mutable object is like a regular column you UPDATE in place. Same row (identity), new content.
+</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 2: EXAMPLES ══ -->
+
+<div class="ex-header"><h2>2. Example (runnable, step by step)</h2></div>
+
+<div class="ex-block">
+  <div class="ex-title"><span class="ex-badge">Example 1</span> A name is a pointer; rebinding one name doesn't touch another</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+a = <span class="cn">5</span><br>
+b = a        <span class="cc"># b now points at the SAME object as a (the int 5)</span><br>
+a = <span class="cn">99</span>      <span class="cc"># a is RE-POINTED to a new object (99). b is untouched.</span><br>
+<span class="cm">print</span>(<span class="cs">"a:"</span>, a, <span class="cs">"b:"</span>, b)
+  </div>
+  <div class="output-block">a: 99 b: 5</div>
+  <div class="step-box">
+    <strong>Step by step:</strong><br>
+    <code>a = 5</code> binds <code>a</code> to the int object 5.<br>
+    <code>b = a</code> binds <code>b</code> to that same object.<br>
+    <code>a = 99</code> does not modify the object 5 — int is immutable. It rebinds <code>a</code> to a new object 99.<br>
+    <code>b</code> still points at 5.<br><br>
+    This always works "intuitively" for immutables, which is exactly why the next example surprises people.
+  </div>
+</div>
+
+<div class="ex-block">
+  <div class="ex-title"><span class="ex-badge">Example 2</span> Aliasing a mutable object: one object, two names</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+list1 = [<span class="cn">1</span>, <span class="cn">2</span>, <span class="cn">3</span>]<br>
+list2 = list1         <span class="cc"># NOT a copy — list2 points at the SAME list</span><br>
+list2.<span class="cm">append</span>(<span class="cn">4</span>)       <span class="cc"># mutate the object in place</span><br>
+<span class="cm">print</span>(<span class="cs">"list1:"</span>, list1)<br>
+<span class="cm">print</span>(<span class="cs">"list2:"</span>, list2)<br>
+<span class="cm">print</span>(<span class="cs">"same object:"</span>, list1 <span class="ck">is</span> list2)
+  </div>
+  <div class="output-block">
+list1: [1, 2, 3, 4]<br>
+list2: [1, 2, 3, 4]<br>
+same object: True
+  </div>
+  <div class="step-box">
+    <strong>This is the moment the model earns its keep.</strong><br>
+    <code>list2 = list1</code> copied the <em>pointer</em>, not the list. <code>.append(4)</code> mutated the single shared object, so both names see the change. <code>is</code> confirms they're literally the same object.<br><br>
+    This is the <strong>#1 source of "why did my original data change?!" bugs</strong> in data work.
+  </div>
+</div>
+
+<div class="ex-block">
+  <div class="ex-title"><span class="ex-badge">Example 3</span> Function arguments: mutation vs. rebinding</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">def</span> <span class="cm">add_item</span>(seq):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;seq.<span class="cm">append</span>(<span class="cs">"new"</span>)       <span class="cc"># MUTATES the passed-in object</span><br>
+<br>
+data = [<span class="cs">"a"</span>, <span class="cs">"b"</span>]<br>
+<span class="cm">add_item</span>(data)<br>
+<span class="cm">print</span>(<span class="cs">"after mutate:"</span>, data)<br>
+<br>
+<span class="ck">def</span> <span class="cm">rebind</span>(seq):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;seq = [<span class="cs">"totally"</span>, <span class="cs">"new"</span>]   <span class="cc"># REBINDS the local name only</span><br>
+<br>
+data2 = [<span class="cs">"x"</span>, <span class="cs">"y"</span>]<br>
+<span class="cm">rebind</span>(data2)<br>
+<span class="cm">print</span>(<span class="cs">"after rebind:"</span>, data2)
+  </div>
+  <div class="output-block">
+after mutate: ['a', 'b', 'new']<br>
+after rebind: ['x', 'y']
+  </div>
+  <div class="step-box">
+    This kills the "pass by value vs. pass by reference" question — it's the wrong frame for Python.<br><br>
+    <strong>The truth:</strong> Python passes the binding. Inside the function, the parameter <code>seq</code> initially points at the same object the caller passed. If you <strong>mutate</strong> that object (<code>.append</code>), the caller sees it. If you <strong>rebind</strong> the local name (<code>seq = [...]</code>), you've only changed where the local name points; the caller's binding is untouched.<br><br>
+    The official term is <strong>"call by object reference" / "call by sharing."</strong>
+  </div>
+</div>
+
+<div class="ex-block">
+  <div class="ex-title"><span class="ex-badge">Example 4</span> Copy vs. deepcopy</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">import</span> copy<br>
+original = [[<span class="cn">1</span>, <span class="cn">2</span>], [<span class="cn">3</span>, <span class="cn">4</span>]]       <span class="cc"># a list containing two inner lists</span><br>
+shallow  = copy.<span class="cm">copy</span>(original)      <span class="cc"># new outer list, SAME inner lists</span><br>
+deep     = copy.<span class="cm">deepcopy</span>(original)  <span class="cc"># new outer list, NEW inner lists</span><br>
+<br>
+original[<span class="cn">0</span>].<span class="cm">append</span>(<span class="cn">999</span>)            <span class="cc"># mutate an inner list</span><br>
+<span class="cm">print</span>(<span class="cs">"original:"</span>, original)<br>
+<span class="cm">print</span>(<span class="cs">"shallow: "</span>, shallow)<br>
+<span class="cm">print</span>(<span class="cs">"deep:    "</span>, deep)
+  </div>
+  <div class="output-block">
+original: [[1, 2, 999], [3, 4]]<br>
+shallow:  [[1, 2, 999], [3, 4]]<br>
+deep:     [[1, 2], [3, 4]]
+  </div>
+  <div class="step-box">
+    A <strong>shallow copy</strong> duplicates the outer container but the inner objects are still shared — so mutating an inner list shows up in the shallow copy.<br><br>
+    A <strong>deep copy</strong> recursively duplicates everything, so it's fully independent.<br><br>
+    This matters the instant you work with nested structures (lists of lists, dicts of lists — i.e., basically all real data).
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 3: EDGE CASES ══ -->
+
+<div class="warn-header"><h2>3. Edge Cases</h2></div>
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:0 0 14px 0">Six cases, all outputs verified by running the code.</p>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 1</span> The Mutable Default Argument (the most famous Python trap)</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">def</span> <span class="cm">add_to</span>(item, target=[]):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;target.<span class="cm">append</span>(item)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">return</span> target<br>
+<br>
+<span class="cm">print</span>(<span class="cm">add_to</span>(<span class="cn">1</span>))<br>
+<span class="cm">print</span>(<span class="cm">add_to</span>(<span class="cn">2</span>))<br>
+<span class="cm">print</span>(<span class="cm">add_to</span>(<span class="cn">3</span>))
+  </div>
+  <div class="output-block">
+[1]<br>
+[1, 2]<br>
+[1, 2, 3]
+  </div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> the default value <code>[]</code> is created <em>once</em>, when the function is defined — not each time it's called. So every call that relies on the default shares the same list object. It accumulates across calls. This is a real bug that ships to production. (The fix is the headline Golden Rule in Part 2.)
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 2</span> Small-Integer Caching, and Why the Demo is Subtle</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+a = <span class="cn">256</span><br>
+b = <span class="cn">256</span><br>
+<span class="cm">print</span>(<span class="cs">"256 is 256:"</span>, a <span class="ck">is</span> b)   <span class="cc"># True</span>
+  </div>
+  <div class="output-block">256 is 256: True</div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> CPython pre-creates and caches every integer from -5 to 256 at startup. Any name pointing at, say, 256 points at the one cached object — so <code>is</code> returns True. Outside that range, integers are normally separate objects.
+  </div>
+  <div class="nuance-box">
+    <strong>Honest nuance:</strong> if you write <code>c = 257; d = 257</code> in the same script or function body, you may still get <code>c is d → True</code>, because the compiler folds identical literals in one code block into one constant. To see the "real" False, you need them created separately:
+  </div>
+  <div class="code-block" style="margin:0 0 8px 0">
+c = <span class="cn">257</span><br>
+d = <span class="cm">int</span>(<span class="cs">"257"</span>)     <span class="cc"># forces a fresh object, defeats literal-folding</span><br>
+<span class="cm">print</span>(<span class="cs">"257 is 257:"</span>, c <span class="ck">is</span> d)   <span class="cc"># False</span>
+  </div>
+  <div class="output-block">257 is 257: False</div>
+  <div class="why-box">
+    The takeaway isn't the cache boundary trivia — it's the rule it teaches: <strong>never use <code>is</code> to compare values. Use <code>==</code>.</strong> <code>is</code> is for identity only (and for None).
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 3</span> String Interning</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+s1 = <span class="cs">"hello"</span><br>
+s2 = <span class="cs">"hello"</span><br>
+<span class="cm">print</span>(s1 <span class="ck">is</span> s2)   <span class="cc"># True</span>
+  </div>
+  <div class="output-block">True</div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> Python interns (caches) certain strings — short ones, and identifier-like literals — so identical literals share one object. But you can't rely on which strings get interned; it varies by content, Python version, and whether the strings are literals in the same compiled block vs. built at runtime (e.g., from user input or concatenation). Same lesson as Edge 2: <strong>comparing strings with <code>is</code> is a latent bug. Use <code>==</code>.</strong>
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 4</span> A Tuple Containing a List (the "immutable isn't always frozen" case)</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+t = (<span class="cn">1</span>, <span class="cn">2</span>, [<span class="cn">3</span>, <span class="cn">4</span>])<br>
+t[<span class="cn">2</span>].<span class="cm">append</span>(<span class="cn">5</span>)        <span class="cc"># allowed — mutating the inner list</span><br>
+<span class="cm">print</span>(<span class="cs">"after:"</span>, t)<br>
+<br>
+t[<span class="cn">0</span>] = <span class="cn">99</span>             <span class="cc"># not allowed — rebinding a tuple slot</span>
+  </div>
+  <div class="output-block">
+after: (1, 2, [3, 4, 5])<br>
+TypeError: 'tuple' object does not support item assignment
+  </div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> a tuple's immutability is <em>shallow</em>. It freezes <em>which objects</em> its slots point at — you can't swap slot [0] for 99. But if a slot points at a mutable object, that object can still be changed. "Immutable container" ≠ "everything inside is immutable." This also means such a tuple is <strong>not hashable</strong> and can't be a dict key.
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 5</span> == vs is, Side by Side</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+l1 = [<span class="cn">1</span>, <span class="cn">2</span>, <span class="cn">3</span>]<br>
+l2 = [<span class="cn">1</span>, <span class="cn">2</span>, <span class="cn">3</span>]<br>
+<span class="cm">print</span>(<span class="cs">"l1 == l2:"</span>, l1 == l2)   <span class="cc"># equal VALUES</span><br>
+<span class="cm">print</span>(<span class="cs">"l1 is l2:"</span>, l1 <span class="ck">is</span> l2)   <span class="cc"># different OBJECTS</span>
+  </div>
+  <div class="output-block">
+l1 == l2: True<br>
+l1 is l2: False
+  </div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> the cleanest statement of the whole distinction. <code>==</code> asks "same value?" <code>is</code> asks "same object in memory?" Two separately built lists are equal but not identical. Mixing these up is one of the most common interview gotchas and real bugs.
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 6</span> Augmented Assignment (+=) Behaves Differently on list vs. tuple</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+lst = [<span class="cn">1</span>, <span class="cn">2</span>]<br>
+<span class="cm">print</span>(<span class="cs">"list id before:"</span>, <span class="cm">id</span>(lst))<br>
+lst += [<span class="cn">3</span>]                        <span class="cc"># mutates IN PLACE — same object</span><br>
+<span class="cm">print</span>(<span class="cs">"list id after: "</span>, <span class="cm">id</span>(lst))<br>
+<br>
+tup = (<span class="cn">1</span>, <span class="cn">2</span>)<br>
+<span class="cm">print</span>(<span class="cs">"tuple id before:"</span>, <span class="cm">id</span>(tup))<br>
+tup += (<span class="cn">3</span>,)                        <span class="cc"># creates a NEW object — rebinds</span><br>
+<span class="cm">print</span>(<span class="cs">"tuple id after: "</span>, <span class="cm">id</span>(tup))
+  </div>
+  <div class="output-block">
+list id before: 139722336735104<br>
+list id after:  139722336735104 &nbsp;&nbsp; &lt;- SAME id<br>
+tuple id before: 139722334685504<br>
+tuple id after:  139722334804416 &nbsp; &lt;- DIFFERENT id<br>
+<span style="color:#6c7086">(ids will differ per run, but the pattern holds)</span>
+  </div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> for a mutable list, <code>+=</code> calls <code>__iadd__</code> and mutates in place (same identity) — so it behaves like <code>.extend()</code> and affects all aliases. For an immutable tuple, <code>+=</code> can't mutate, so it builds a new object and rebinds the name. <strong>Same operator, opposite consequences depending on mutability.</strong>
+  </div>
+</div>
+
+<div class="edge-block">
+  <div class="edge-title"><span class="edge-badge">Edge 6b</span> The Genuinely Cursed One: += Inside a Tuple</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+t = (<span class="cn">1</span>, <span class="cn">2</span>, [<span class="cn">3</span>, <span class="cn">4</span>])<br>
+t[<span class="cn">2</span>] += [<span class="cn">5</span>]
+  </div>
+  <div class="output-block">
+TypeError: 'tuple' object does not support item assignment<br>
+&gt;&gt;&gt; print(t)<br>
+(1, 2, [3, 4, 5])
+  </div>
+  <div class="why-box">
+    <strong>Why it matters:</strong> this <em>both succeeds and fails</em>. <code>t[2] += [5]</code> is <code>t[2] = t[2].__iadd__([5])</code>. The <code>__iadd__</code> part mutates the inner list (so 5 does get added), but then Python tries to reassign <code>t[2]</code> back into the tuple slot, which raises TypeError. End state: the list was modified and you got an exception.<br><br>
+    It's the perfect demonstration that <code>+=</code> is <strong>mutate-then-rebind</strong>, and that tuple immutability only blocks the rebind. <strong>Senior-level interview material.</strong>
+  </div>
+</div>
+
+</div>
+<div class="nb-md"></div>
+<div class="nb-md"><style>
+  .part-header  { background:linear-gradient(90deg,#313244,#1e1e2e); border-left:5px solid #cba6f7; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .part-header h2 { color:#cba6f7; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .trap-header  { background:linear-gradient(90deg,#2e1e1e,#1e1e2e); border-left:5px solid #f38ba8; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .trap-header h2 { color:#f38ba8; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  h3.sub { color:#89dceb; font-family:'Segoe UI',sans-serif; margin-top:20px; margin-bottom:8px; font-size:1em; }
+  .code-block { background:#181825; border-radius:8px; padding:14px 20px; font-family:'Courier New',monospace; font-size:0.91em; color:#a6e3a1; margin:10px 0; overflow-x:auto; border:1px solid #313244; line-height:2; }
+  .output-block { background:#11111b; border-radius:8px; padding:12px 18px; font-family:'Courier New',monospace; font-size:0.88em; color:#cdd6f4; margin:4px 0 10px; border:1px solid #313244; line-height:1.9; }
+  .note-box   { background:#1c1c2e; border-left:4px solid #a6e3a1; border-radius:8px; padding:11px 16px; margin:10px 0; color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .warn-box   { background:#2a1f00; border-left:4px solid #f9e2af; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f9e2af; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .danger-box { background:#2e1e1e; border-left:4px solid #f38ba8; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f38ba8; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .info-box   { background:#1e2030; border-left:4px solid #89b4fa; border-radius:8px; padding:11px 16px; margin:10px 0; color:#89b4fa; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .divider { border:none; border-top:1px solid #313244; margin:22px 0; }
+  .cc { color:#6c7086; } .cs { color:#f9e2af; } .ck { color:#cba6f7; } .cm { color:#f38ba8; } .cn { color:#fab387; }
+  .rule-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:12px 0; }
+  .rule-title { color:#cba6f7; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.97em; margin-bottom:10px; }
+  .rule-badge { display:inline-block; background:#2a1e2e; border:1px solid #cba6f7; color:#cba6f7; border-radius:20px; padding:2px 10px; font-size:0.82em; font-family:'Courier New',monospace; margin-right:8px; }
+  .rule-body { color:#cdd6f4; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.8; }
+  .rule-body code { background:#313244; padding:2px 6px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .verified-box { background:#1a2e1a; border-left:4px solid #a6e3a1; border-radius:0 8px 8px 0; padding:9px 14px; margin:8px 0; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; line-height:1.8; }
+  .trap-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:12px 0; }
+  .trap-title { color:#f38ba8; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.97em; margin-bottom:10px; }
+  .trap-badge { display:inline-block; background:#2e1e1e; border:1px solid #f38ba8; color:#f38ba8; border-radius:20px; padding:2px 10px; font-size:0.82em; font-family:'Courier New',monospace; margin-right:8px; }
+  .why-box { background:#2a1e2e; border-left:4px solid #cba6f7; border-radius:0 8px 8px 0; padding:10px 14px; margin:8px 0; color:#cba6f7; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .why-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+</style>
+
+<!-- ══ SECTION 4: GOLDEN RULES ══ -->
+
+<h2> <div class="info-box"><strong>Part 2:</strong> Golden Rules → Common Traps → Exercise</div> </h2>
+
+<div class="part-header"><h2>4. Golden Rules</h2></div>
+
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:0 0 14px 0">Production patterns to memorize. Each one is a direct consequence of the object model from Part 1.</p>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 1</span> Never use a mutable default argument. Use <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1">None</code> as the sentinel.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="cc"># WRONG</span><br>
+<span class="ck">def</span> <span class="cm">f</span>(target=[]):  ...<br>
+<br>
+<span class="cc"># RIGHT</span><br>
+<span class="ck">def</span> <span class="cm">f</span>(target=<span class="ck">None</span>):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">if</span> target <span class="ck">is</span> <span class="ck">None</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;target = []
+  </div>
+  <div class="verified-box">
+    Verified — the fixed version resets per call:<br>
+    add_to_fixed(1) -&gt; [1]<br>
+    add_to_fixed(2) -&gt; [2] &nbsp;&nbsp; # no accumulation
+  </div>
+  <div class="rule-body" style="margin-top:8px">The default is evaluated once at definition time. <code>None</code> is immutable and safe; you build a fresh list inside the call.</div>
+</div>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 2</span> <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1">is</code> is for identity and <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1">None</code> only. <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1">==</code> is for values.</div>
+  <div class="rule-body">
+    Use <code>if x is None:</code>, never <code>if x == None:</code>.<br>
+    Never use <code>is</code> to compare numbers or strings — Part 1's caching edge cases are exactly why.<br>
+    Python will even warn you (<code>SyntaxWarning: "is" with 'int' literal</code>).
+  </div>
+</div>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 3</span> Copying a list: <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1">b = a</code> is not a copy.</div>
+  <div class="rule-body">
+    Use <code>a[:]</code>, <code>a.copy()</code>, or <code>list(a)</code>.<br>
+    And the instant you have nesting, those three are still <strong>shallow</strong> — reach for <code>copy.deepcopy()</code>.
+  </div>
+</div>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 4</span> Mutable class attributes are shared across all instances.</div>
+  <div class="rule-body" style="margin-bottom:8px">Put mutable state in <code>__init__</code> (instance attribute), never as a bare class attribute.</div>
+  <div class="code-block" style="margin:0">
+<span class="cc"># WRONG: items = [] at class level (shared)</span><br>
+<span class="cc"># RIGHT:</span><br>
+<span class="ck">class</span> <span class="cm">Cart</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">def</span> <span class="cm">__init__</span>(self):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.items = []   <span class="cc"># fresh per instance</span>
+  </div>
+</div>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 5</span> If a function mutates its argument, that's a side effect — make it obvious or avoid it.</div>
+  <div class="rule-body">
+    Either name it clearly (<code>append_processed_row</code>) and document it, or return a new object and don't touch the input.<br>
+    Silent mutation of caller data is the bug that wastes the most debugging hours in data pipelines.
+  </div>
+</div>
+
+<div class="rule-block">
+  <div class="rule-title"><span class="rule-badge">Rule 6</span> Want a hashable / dict-key / set-member object? It must be immutable all the way down.</div>
+  <div class="rule-body">
+    A tuple of ints works; a tuple containing a list does not (Part 1, Edge 4).
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 5: COMMON TRAPS ══ -->
+
+<div class="trap-header"><h2>5. Common Traps</h2></div>
+
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:0 0 14px 0">The bugs that bite — beginners and seniors. All outputs verified.</p>
+
+<div class="trap-block">
+  <div class="trap-title"><span class="trap-badge">Trap 1</span> Silent argument mutation corrupts your source data.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">def</span> <span class="cm">normalize</span>(row):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;row.<span class="cm">append</span>(<span class="cs">"processed"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">return</span> row<br>
+<br>
+master = [<span class="cs">"id1"</span>, <span class="cs">"value"</span>]<br>
+result = <span class="cm">normalize</span>(master)<br>
+<span class="cm">print</span>(master)   <span class="cc"># ['id1', 'value', 'processed']  ← master is wrecked</span>
+  </div>
+  <div class="output-block">['id1', 'value', 'processed']</div>
+  <div class="why-box">
+    You thought <code>result</code> was a new thing. It's the same object as <code>master</code>. This is the pandas-relevant one: it's the pure-Python version of the <code>SettingWithCopyWarning</code> / "did I modify a view or a copy?" confusion you hit in DataFrames. Same root cause — aliasing a mutable object.
+  </div>
+</div>
+
+<div class="trap-block">
+  <div class="trap-title"><span class="trap-badge">Trap 2</span> Aliasing vs. copying.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+b = a        <span class="cc"># alias: b tracks every change to a</span><br>
+c = a[:]     <span class="cc"># copy: independent</span>
+  </div>
+  <div class="why-box">
+    After <code>a.append(4)</code>: <code>b</code> → <code>[1,2,3,4]</code>, <code>c</code> → <code>[1,2,3]</code>.<br>
+    If you didn't mean to share, you created a bug.
+  </div>
+</div>
+
+<div class="trap-block">
+  <div class="trap-title"><span class="trap-badge">Trap 3</span> Mutable class attribute shared across instances.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">class</span> <span class="cm">Cart</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;items = []           <span class="cc"># SHARED by every Cart</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">def</span> <span class="cm">add</span>(self, x): self.items.<span class="cm">append</span>(x)<br>
+<br>
+c1, c2 = <span class="cm">Cart</span>(), <span class="cm">Cart</span>()<br>
+c1.<span class="cm">add</span>(<span class="cs">"apple"</span>)<br>
+<span class="cm">print</span>(c2.items)   <span class="cc"># ['apple']  ← c2 has c1's data</span>
+  </div>
+  <div class="output-block">['apple']</div>
+  <div class="why-box">
+    <code>c2</code> never added anything, yet it sees "apple". One list object backs all instances. Verified.
+  </div>
+</div>
+
+<div class="trap-block">
+  <div class="trap-title"><span class="trap-badge">Trap 4</span> The <code style="background:#3e1818;padding:2px 6px;border-radius:4px;color:#f38ba8">[[0]*3]*3</code> grid trap.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+grid = [[<span class="cn">0</span>]*<span class="cn">3</span> <span class="ck">for</span> _ <span class="ck">in</span> <span class="cm">range</span>(<span class="cn">3</span>)]   <span class="cc"># GOOD: 3 distinct rows</span><br>
+bad  = [[<span class="cn">0</span>]*<span class="cn">3</span>]*<span class="cn">3</span>                    <span class="cc"># BAD: 3 aliases of ONE row</span><br>
+<br>
+grid[<span class="cn">0</span>][<span class="cn">0</span>] = <span class="cn">1</span>   <span class="cc"># -> [[1,0,0],[0,0,0],[0,0,0]]</span><br>
+bad[<span class="cn">0</span>][<span class="cn">0</span>]  = <span class="cn">1</span>   <span class="cc"># -> [[1,0,0],[1,0,0],[1,0,0]]  all rows change</span>
+  </div>
+  <div class="output-block">
+grid: [[1,0,0],[0,0,0],[0,0,0]]<br>
+bad:  [[1,0,0],[1,0,0],[1,0,0]]
+  </div>
+  <div class="why-box">
+    <code>* 3</code> on a list of lists copies the pointer three times. Setting one cell appears to set a whole column. Extremely common when building matrices/boards by hand — relevant to any from-scratch ML or DP grid work.
+  </div>
+</div>
+
+<div class="trap-block">
+  <div class="trap-title"><span class="trap-badge">Trap 5</span> Late binding closures in a loop.</div>
+  <div class="code-block" style="margin:0 0 8px 0">
+funcs = [<span class="ck">lambda</span>: i <span class="ck">for</span> i <span class="ck">in</span> <span class="cm">range</span>(<span class="cn">3</span>)]<br>
+<span class="cm">print</span>([f() <span class="ck">for</span> f <span class="ck">in</span> funcs])   <span class="cc"># [2, 2, 2]  not [0, 1, 2]</span>
+  </div>
+  <div class="output-block">[2, 2, 2]</div>
+  <div class="why-box">
+    The lambdas don't capture the <em>value</em> of <code>i</code> — they capture the <em>name</em> <code>i</code>, which all three share. By the time you call them, the loop has finished and <code>i</code> is <code>2</code>.<br><br>
+    Fix: <code>lambda i=i: i</code> to bind at definition time.<br><br>
+    This is a Session 5 closure topic, but it's rooted in the same names-vs-objects idea, so meet it now.
+  </div>
+</div>
+
+</div>
+<div class="nb-md"></div>
+<div class="nb-md"><style>
+* {
+  box-sizing: border-box;
+}
+.nb-unused {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+}
+.main-title, .part-header, .ex-header, .warn-header,
+.theory-box, .code-block, .output-block, .note-box,
+.warn-box, .danger-box, .info-box, .ex-block, .edge-block,
+.step-box, .why-box, .growth-box, .perf-box {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+}
+</style>
+
+<div style="background:#1e1e2e; border-left:4px solid #cba6f7; padding:16px 20px; border-radius:8px; font-family:monospace; color:#cdd6f4">
+  <h4 style="color:#cba6f7; margin:0 0 12px 0;">🔑 Key Takeaways</h4>
+  <ul style="margin:0; padding-left:20px; line-height:2.2">
+    <li>A name is a tag on an object — <code>=</code> binds a tag, it never copies the object</li>
+    <li>Mutating a shared object is visible through every tag on it</li>
+    <li>Immutable objects can't be mutated, so "changing" them rebinds the tag to a new object instead</li>
+    <li><code>is</code> = same object, <code>==</code> = same value</li>
+  </ul>
+</div>
+
+</div>
+<div class="nb-md"></div>
+<div class="nb-md"><style>
+* {
+  box-sizing: border-box;
+}
+.nb-unused {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+}
+.main-title, .part-header, .ex-header, .warn-header,
+.theory-box, .code-block, .output-block, .note-box,
+.warn-box, .danger-box, .info-box, .ex-block, .edge-block,
+.step-box, .why-box, .growth-box, .perf-box {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+}
+</style>
+
+<style>
+  .part-header  { background:linear-gradient(90deg,#313244,#1e1e2e); border-left:5px solid #cba6f7; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .part-header h2 { color:#cba6f7; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .ml-header    { background:linear-gradient(90deg,#1a2e1a,#1e1e2e); border-left:5px solid #a6e3a1; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .ml-header h2 { color:#a6e3a1; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .interview-header { background:linear-gradient(90deg,#2a1e2e,#1e1e2e); border-left:5px solid #cba6f7; border-radius:10px; padding:14px 22px; margin:24px 0 10px; }
+  .interview-header h2 { color:#cba6f7; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  .sub-header { background:linear-gradient(90deg,#1e2030,#1e1e2e); border-left:4px solid #89b4fa; border-radius:8px; padding:9px 16px; margin:16px 0 8px; }
+  .sub-header h3 { color:#89b4fa; margin:0; font-size:0.93em; font-family:'Segoe UI',sans-serif; }
+  h3.sub { color:#89dceb; font-family:'Segoe UI',sans-serif; margin-top:20px; margin-bottom:8px; font-size:1em; }
+  .code-block { background:#181825; border-radius:8px; padding:14px 20px; font-family:'Courier New',monospace; font-size:0.91em; color:#a6e3a1; margin:10px 0; overflow-x:auto; border:1px solid #313244; line-height:2; }
+  .output-block { background:#11111b; border-radius:8px; padding:12px 18px; font-family:'Courier New',monospace; font-size:0.88em; color:#cdd6f4; margin:4px 0 10px; border:1px solid #313244; line-height:1.9; }
+  .note-box   { background:#1c1c2e; border-left:4px solid #a6e3a1; border-radius:8px; padding:11px 16px; margin:10px 0; color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .warn-box   { background:#2a1f00; border-left:4px solid #f9e2af; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f9e2af; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .danger-box { background:#2e1e1e; border-left:4px solid #f38ba8; border-radius:8px; padding:11px 16px; margin:10px 0; color:#f38ba8; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .info-box   { background:#1e2030; border-left:4px solid #89b4fa; border-radius:8px; padding:11px 16px; margin:10px 0; color:#89b4fa; font-family:'Segoe UI',sans-serif; font-size:0.93em; line-height:1.7; }
+  .divider { border:none; border-top:1px solid #313244; margin:22px 0; }
+  .cc { color:#6c7086; } .cs { color:#f9e2af; } .ck { color:#cba6f7; } .cm { color:#f38ba8; } .cn { color:#fab387; }
+  .ml-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:12px 0; }
+  .ml-block-title { color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.97em; margin-bottom:10px; }
+  .ml-badge { display:inline-block; background:#1a2e1a; border:1px solid #a6e3a1; color:#a6e3a1; border-radius:20px; padding:2px 10px; font-size:0.82em; font-family:'Courier New',monospace; margin-right:8px; }
+  .verified-box { background:#1a2e1a; border-left:4px solid #a6e3a1; border-radius:0 8px 8px 0; padding:9px 14px; margin:8px 0; color:#a6e3a1; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .verified-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .why-box { background:#2a1e2e; border-left:4px solid #cba6f7; border-radius:0 8px 8px 0; padding:10px 14px; margin:8px 0; color:#cba6f7; font-family:'Segoe UI',sans-serif; font-size:0.9em; line-height:1.7; }
+  .why-box code { background:#313244; padding:1px 5px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .qa-block { background:#1e1e2e; border:1px solid #313244; border-radius:10px; padding:16px 20px; margin:10px 0; }
+  .qa-q { color:#f9e2af; font-family:'Segoe UI',sans-serif; font-weight:bold; font-size:0.93em; margin-bottom:8px; line-height:1.6; }
+  .qa-badge { display:inline-block; border-radius:12px; padding:1px 9px; font-size:0.78em; font-family:'Courier New',monospace; margin-right:8px; vertical-align:middle; }
+  .badge-basic  { background:#1a2e1a; border:1px solid #a6e3a1; color:#a6e3a1; }
+  .badge-medium { background:#1e2030; border:1px solid #89b4fa; color:#89b4fa; }
+  .badge-trap   { background:#2e1e1e; border:1px solid #f38ba8; color:#f38ba8; }
+  .badge-deep   { background:#2a1e2e; border:1px solid #cba6f7; color:#cba6f7; }
+  .ans-label { display:inline-block; background:#1a2e1a; border:1px solid #a6e3a1; color:#a6e3a1; border-radius:4px; padding:1px 8px; font-size:0.78em; font-family:'Segoe UI',sans-serif; font-weight:bold; margin-right:8px; vertical-align:middle; }
+  .qa-a { color:#cdd6f4; font-family:'Segoe UI',sans-serif; font-size:0.92em; line-height:1.8; }
+  .qa-a code { background:#313244; padding:2px 6px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+  .q-num { display:inline-block; min-width:26px; height:26px; border-radius:50%; background:#2a1e2e; border:2px solid #cba6f7; color:#cba6f7; font-weight:bold; font-size:0.82em; text-align:center; line-height:22px; font-family:'Courier New',monospace; margin-right:10px; vertical-align:middle; }
+  .bullet-list { padding-left:20px; margin:8px 0; line-height:2.1; color:#cdd6f4; font-family:'Segoe UI',sans-serif; font-size:0.93em; }
+  .bullet-list li { margin-bottom:2px; }
+  .bullet-list code { background:#313244; padding:1px 6px; border-radius:4px; color:#a6e3a1; font-family:'Courier New',monospace; font-size:0.88em; }
+</style>
+
+<div class="info-box">
+  <strong>📎 Session 1 — Mutability &amp; the Object Model</strong><br>
+  <strong>Part 3:</strong> ML Real-World → Interview Q&amp;A → Code Challenges → Summary
+</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 7: ML REAL-WORLD ══ -->
+
+<div class="ml-header"><h2>7. ML Real-World Connection</h2></div>
+
+<p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.93em;line-height:1.7;margin:0 0 14px 0">This isn't abstract trivia — mutability bugs are some of the nastiest in ML because they're <strong style="color:#f38ba8">silent</strong>. No error, just wrong numbers. Three places it bites in real pipelines:</p>
+
+<div class="ml-block">
+  <div class="ml-block-title"><span class="ml-badge">ML Bite 1</span> Accidental data corruption / label leakage via aliasing</div>
+  <p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.92em;line-height:1.7;margin:0 0 8px 0">You write a feature-engineering function that "returns" a transformed row but actually mutates the input:</p>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">def</span> <span class="cm">add_features</span>(row):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;row.<span class="cm">append</span>(row[<span class="cn">0</span>] * <span class="cn">2</span>)   <span class="cc"># mutates the ORIGINAL</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">return</span> row<br>
+<br>
+raw = [<span class="cn">3</span>, <span class="cn">5</span>]                  <span class="cc"># [feature, label]</span><br>
+features = <span class="cm">add_features</span>(raw)<br>
+<span class="cc"># raw is now [3, 5, 6] -> your "raw" dataset is silently changed</span>
+  </div>
+  <div class="output-block">raw corrupted: [3, 5, 6]</div>
+  <div class="verified-box">
+    ✅ Verified output: raw corrupted: [3, 5, 6]<br>
+    In a real pipeline this is how you accidentally leak or destroy data between train/test splits.<br>
+    The fix is Golden Rule 5: make transforms pure (<code>return row + [row[0]*2]</code>).
+  </div>
+</div>
+
+<div class="ml-block">
+  <div class="ml-block-title"><span class="ml-badge">ML Bite 2</span> Shared config / hyperparameter dicts persisting across runs</div>
+  <p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.92em;line-height:1.7;margin:0 0 8px 0">The mutable-default trap wearing a data-science costume:</p>
+  <div class="code-block" style="margin:0 0 8px 0">
+<span class="ck">def</span> <span class="cm">train</span>(params={<span class="cs">"lr"</span>: <span class="cn">0.01</span>}):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;params[<span class="cs">"lr"</span>] *= <span class="cn">0.1</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="ck">return</span> params<br>
+<br>
+<span class="cm">train</span>()   <span class="cc"># {'lr': 0.001}</span><br>
+<span class="cm">train</span>()   <span class="cc"># {'lr': 0.0001}  ← decayed AGAIN across calls</span>
+  </div>
+  <div class="output-block">
+{'lr': 0.001}<br>
+{'lr': 0.0001}
+  </div>
+  <div class="verified-box">
+    ✅ Verified. Your learning rate silently compounds between experiments and your results aren't reproducible.<br>
+    This is exactly the kind of bug that makes "I ran the same code and got different numbers" tickets.<br>
+    Fix: <code>params=None</code> sentinel.
+  </div>
+</div>
+
+<div class="ml-block">
+  <div class="ml-block-title"><span class="ml-badge">ML Bite 3</span> NumPy/pandas views vs. copies — the SettingWithCopyWarning root cause</div>
+  <p style="color:#cdd6f4;font-family:'Segoe UI',sans-serif;font-size:0.92em;line-height:1.7;margin:0 0 8px 0">This is the same concept behind NumPy/pandas views vs. copies — the thing you already hit as <code style="background:#313244;padding:2px 6px;border-radius:4px;color:#a6e3a1;font-family:'Courier New',monospace">SettingWithCopyWarning</code>. NumPy slicing returns a view that shares memory with the original:</p>
+  <div class="code-block" style="margin:0 0 8px 0">
+a = np.<span class="cm">array</span>([<span class="cn">1</span>, <span class="cn">2</span>, <span class="cn">3</span>, <span class="cn">4</span>])<br>
+view = a[<span class="cn">1</span>:<span class="cn">3</span>]    <span class="cc"># shares memory</span><br>
+view[<span class="cn">0</span>] = <span class="cn">99</span>     <span class="cc"># a becomes [1, 99, 3, 4]  ← original changed</span>
+  </div>
+  <div class="output-block">a: [1, 99, 3, 4]</div>
+  <div class="verified-box">✅ Verified. This is pure-Python aliasing at the array level.</div>
+  <div class="why-box">
+    When pandas warns you "you're setting on a copy of a slice," it's warning about exactly the names-vs-objects ambiguity from Part 1. You now understand the root cause of a warning you've been working around in your Commercial Wire data work — it's not a pandas quirk, it's the Python object model. That connection alone earns this session.
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ══ SECTION 8: INTERVIEW QUESTIONS ══ -->
+
+<div class="interview-header"><h2>8. Interview Questions</h2></div>
+
+<div class="sub-header"><h3>8a — Conceptual Q&amp;A (12 questions)</h3></div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">1</span> "Is Python pass-by-value or pass-by-reference?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    Neither. It's <strong>call-by-object-reference</strong> (call by sharing). The function receives a binding to the same object. Mutating the object is visible to the caller; rebinding the local name is not.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">2</span> "What's the difference between <code>is</code> and <code>==</code>?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    <code>is</code> compares <strong>identity</strong> (same object in memory, i.e. same <code>id()</code>).<br>
+    <code>==</code> compares <strong>value</strong> (via <code>__eq__</code>).<br>
+    Two distinct lists with equal contents are <code>== True</code> but <code>is False</code>.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">3</span> "Name the immutable built-in types."</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    <strong>Immutable:</strong> <code>int</code>, <code>float</code>, <code>bool</code>, <code>complex</code>, <code>str</code>, <code>tuple</code>, <code>frozenset</code>, <code>bytes</code>, and <code>None</code>.<br>
+    <strong>Mutable:</strong> <code>list</code>, <code>dict</code>, <code>set</code>, <code>bytearray</code>, most custom objects.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">4</span> "Why is <code>def f(x=[])</code> dangerous?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    The default is created <strong>once at definition time</strong> and shared across all calls relying on it, so it accumulates state. Use <code>x=None</code> and build the list inside.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">5</span> "Can a tuple ever 'change'?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    Its bindings can't — you can't reassign a slot. But if a slot holds a mutable object (like a list), that object can be mutated. So a tuple's immutability is <strong>shallow</strong>.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">6</span> "Why must dict keys / set members be immutable?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    They must be <strong>hashable</strong>, and hashability requires a stable hash over the object's lifetime. Mutable objects could change and break the hash table's invariants, so <code>list</code> and <code>dict</code> are unhashable.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">7</span> "Difference between shallow and deep copy?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    <strong>Shallow</strong> (<code>copy.copy</code>, <code>a[:]</code>, <code>a.copy()</code>, <code>list(a)</code>) duplicates the outer container but shares the inner objects.<br>
+    <strong>Deep</strong> (<code>copy.deepcopy</code>) recursively duplicates everything.<br>
+    Matters the moment data is nested.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">8</span> "Why does <code>a is b</code> sometimes return True for two separate int or str assignments?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    CPython caches small ints (-5 to 256) and interns some strings, so identical literals may share one object. It's an implementation detail — never rely on it; use <code>==</code>.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">9</span> "What does <code>id()</code> return and when does it change?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    A unique identifier for the object (in CPython, its memory address), constant for the object's lifetime. A new object gets a new id. Rebinding a name doesn't change any object's id.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">10</span> "After <code>b = a</code> where a is a list, how do you check if they're the same object vs. equal?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    <code>a is b</code> → same object (True here).<br>
+    <code>a == b</code> → equal value.<br>
+    To get an independent copy, use <code>b = a.copy()</code>.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">11</span> "What happens with <code>t[2] += [5]</code> when <code>t = (1,2,[3,4])</code>?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    It <strong>both succeeds and raises</strong>. <code>+=</code> mutates the inner list in place (so 5 is added), then tries to reassign the tuple slot, which raises <code>TypeError</code>. End state: list modified and exception raised. Demonstrates <code>+=</code> is <strong>mutate-then-rebind</strong>.
+  </div>
+</div>
+
+<div class="qa-block">
+  <div class="qa-q"><span class="q-num">12</span> "How does this concept relate to pandas <code>SettingWithCopyWarning</code>?"</div>
+  <div class="qa-a">
+    <span class="ans-label">A</span>
+    Same root: ambiguity over whether you hold a <strong>view</strong> (alias, shared memory) or a <strong>copy</strong> (independent). The warning flags that your assignment might be hitting a copy, so it may not affect the original — the names-vs-objects problem at the DataFrame level.
+  </div>
+</div>
+
+</div>
+<div class="nb-md"><style>
+* {
+  box-sizing: border-box;
+}
+.nb-unused {
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow-x: hidden !important;
+}
+.main-title, .part-header, .ex-header, .warn-header,
+.theory-box, .code-block, .output-block, .note-box,
+.warn-box, .danger-box, .info-box, .ex-block, .edge-block,
+.step-box, .why-box, .growth-box, .perf-box {
+  max-width: 100% !important;
+  overflow-x: auto !important;
+}
+</style>
+
+<style>
+  .summary-header { background:linear-gradient(90deg,#1e2030,#1e1e2e); border-left:5px solid #89b4fa; border-radius:10px; padding:14px 22px; margin:24px 0 12px; }
+  .summary-header h2 { color:#89b4fa; margin:0; font-size:1.3em; font-family:'Segoe UI',sans-serif; }
+  table.summary { width:100%; border-collapse:collapse; font-family:'Segoe UI',sans-serif; font-size:0.91em; margin:14px 0; }
+  table.summary th { background:#313244; color:#cba6f7; padding:10px 16px; text-align:left; border:1px solid #45475a; }
+  table.summary td { background:#1e1e2e; color:#cdd6f4; padding:9px 16px; border:1px solid #313244; vertical-align:top; line-height:1.7; }
+  table.summary tr:hover td { background:#252540; }
+  table.summary td:first-child { color:#89dceb; font-family:'Courier New',monospace; font-size:0.88em; }
+  table.summary td:last-child { text-align:center; font-weight:bold; font-size:0.88em; }
+  .freq-vh  { color:#f38ba8; }
+  .freq-h   { color:#f9e2af; }
+  .freq-m   { color:#89b4fa; }
+  .freq-ds  { color:#a6e3a1; }
+</style>
+
+<div class="summary-header"><h2>📊 Summary Table — Session 1</h2></div>
+
+<table class="summary">
+  <tr>
+    <th>Concept</th>
+    <th>Why it matters in ML</th>
+    <th>Interview frequency</th>
+  </tr>
+  <tr>
+    <td>Names vs. objects<br><span style="color:#6c7086;font-size:0.85em">= binds, doesn't copy</span></td>
+    <td>Root cause of silent data corruption in pipelines</td>
+    <td><span class="freq-vh">Very High</span></td>
+  </tr>
+  <tr>
+    <td>Mutable vs. immutable types</td>
+    <td>Determines what's safe to share, hash, use as dict key</td>
+    <td><span class="freq-vh">Very High</span></td>
+  </tr>
+  <tr>
+    <td>is vs ==</td>
+    <td>Wrong choice → subtle bugs; classic gotcha</td>
+    <td><span class="freq-vh">Very High</span></td>
+  </tr>
+  <tr>
+    <td>Aliasing</td>
+    <td>Accidentally mutating source data / train-test leakage</td>
+    <td><span class="freq-h">High</span></td>
+  </tr>
+  <tr>
+    <td>Call by object reference</td>
+    <td>Predicting whether a function changes your data</td>
+    <td><span class="freq-h">High</span></td>
+  </tr>
+  <tr>
+    <td>Mutable default argument</td>
+    <td>Non-reproducible runs, persisting config/hyperparams</td>
+    <td><span class="freq-vh">Very High</span></td>
+  </tr>
+  <tr>
+    <td>Shallow vs. deep copy</td>
+    <td>Independence of nested structures (configs, grids)</td>
+    <td><span class="freq-h">High</span></td>
+  </tr>
+  <tr>
+    <td>Tuple shallow immutability / hashability</td>
+    <td>Valid dict keys, frozen configs</td>
+    <td><span class="freq-m">Medium</span></td>
+  </tr>
+  <tr>
+    <td>+= mutate-vs-rebind</td>
+    <td>Senior-level identity reasoning</td>
+    <td><span class="freq-m">Medium</span></td>
+  </tr>
+  <tr>
+    <td>Connection to NumPy/pandas views</td>
+    <td>Understand SettingWithCopyWarning at the root</td>
+    <td><span class="freq-ds">High (DS roles)</span></td>
+  </tr>
+</table>
+
+</div>
+</article>
+
+<nav class="pager" id="theory-pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
