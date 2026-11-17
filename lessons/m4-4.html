@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.4 · Sets and hashing</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.4 Sets and hashing</h1>
+  <p>How a hash table finds an item without searching, why that makes membership O(1), set algebra as SQL's UNION, INTERSECT and EXCEPT, why set order can change between runs (a reproducibility trap), <code>frozenset</code>, and the rule that equal values must hash alike.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="hashing">
+<h2><span class="n">1</span>How a set finds an item without searching</h2>
+<p>A set is a <strong>hash table</strong>: an array of slots where each value's position is <strong>computed from the value itself</strong>. Step by step, adding or looking up <code>x</code> works like this:</p>
+<ul><li><strong>1. Hash.</strong> Python calls <code>hash(x)</code>, which turns the value into a large integer. Equal values always give equal hashes.</li><li><strong>2. Pick a slot.</strong> The hash is reduced to a slot number in the table (think <code>hash % number_of_slots</code>).</li><li><strong>3. Compare.</strong> If that slot is empty, <code>x</code> is not in the set. If it holds an item, Python checks identity, then equality (2.1). If it holds a different item (a <strong>collision</strong>), it probes a few other slots in a fixed pattern.</li><li><strong>4. Grow.</strong> When the table gets about two-thirds full, it is rebuilt with more slots, like a list resize (4.1).</li></ul>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 150" role="img" aria-label="To look up 'refund', Python computes its hash, maps it to slot 5, and compares only the item in that slot.">
+  <defs><marker id="h1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <rect x="10" y="50" width="100" height="40" rx="10" class="box a"/><text x="60" y="75" class="w mid">"refund"</text>
+  <rect x="150" y="50" width="130" height="40" rx="10" class="box b"/><text x="215" y="68" class="w mid">hash(...)</text><text x="215" y="84" class="w mid">% 8 slots = 5</text>
+  <path d="M110 70 L146 70" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#h1)"/>
+  <rect x="320" y="20" width="300" height="24" rx="6" class="box"/><text x="335" y="37">0  "invoice"</text>
+  <rect x="320" y="46" width="300" height="24" rx="6" class="box"/><text x="335" y="63">1  (empty)</text>
+  <rect x="320" y="72" width="300" height="24" rx="6" class="box"/><text x="335" y="89">2  "login"</text>
+  <rect x="320" y="98" width="300" height="24" rx="6" class="box a"/><text x="335" y="115" class="w">5  "refund"   one comparison: found</text>
+  <path d="M280 70 C 300 70, 300 110, 316 110" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#h1)"/>
+  <text x="470" y="142" class="mid">(slots 3, 4, 6, 7 not shown)</text>
+</svg></div><figcaption>Membership costs one hash and usually one comparison, however many items the set holds.</figcaption></figure>
+<p>Because the slot is computed rather than searched for, <code>x in s</code>, <code>s.add(x)</code> and <code>s.discard(x)</code> are <strong>O(1) on average</strong>, whether the set holds ten items or ten million. The price: a set has <strong>no meaningful order</strong> (items sit wherever their hashes put them), it uses more memory than a list, and it can only store <strong>hashable</strong> values.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hashing.py</span><button class="copy">Copy</button></div><pre><code class="py">print(hash(&quot;refund&quot;) == hash(&quot;re&quot; + &quot;fund&quot;), hash(42), hash((1, 2)) == hash((1, 2)))
+tags = {&quot;billing&quot;, &quot;eu&quot;, &quot;billing&quot;, &quot;refund&quot;}      # duplicates collapse
+print(len(tags), &quot;eu&quot; in tags, &quot;us&quot; in tags)
+try:
+    {[&quot;a&quot;], [&quot;b&quot;]}
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>True 42 True
+3 True False
+TypeError: cannot use &#x27;list&#x27; as a set element (unhashable type: &#x27;list&#x27;)</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A set is like a column with a <strong>unique index</strong>: duplicates are rejected and a lookup by value is a single seek instead of a table scan. <code>x in my_list</code> is the full-scan query; <code>x in my_set</code> is the indexed one. Power BI's <code>DISTINCT()</code> and relationship lookups rely on the same idea.</p></div></div>
+</section>
+<section class="sec" id="membership">
+<h2><span class="n">2</span>Membership at scale: when to convert</h2>
+<p>The most common speed-up in data code is replacing a list membership test inside a loop with a set. Checking 100,000 ids against a list of 100,000 known ids is 100,000 × O(n) = billions of comparisons; against a set it is 100,000 × O(1). Building the set costs one pass, O(n), so it pays off as soon as you test membership more than a few times.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">membership.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+
+known = list(range(0, 100_000, 2))
+queries = list(range(0, 1_000))
+
+start = time.perf_counter()
+hits_list = sum(1 for q in queries if q in known)
+t_list = time.perf_counter() - start
+
+known_set = set(known)
+start = time.perf_counter()
+hits_set = sum(1 for q in queries if q in known_set)
+t_set = time.perf_counter() - start
+
+print(hits_list == hits_set, f&quot;set is about {t_list / t_set:.0f}x faster here&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>True set is about 1910x faster here</pre></div></div>
+<p>The exact factor depends on the data and the machine, but it grows with the size of the list: the list scan gets slower as the list grows, while the set lookup does not. Convert <strong>once</strong>, outside the loop; <code>if q in set(known)</code> inside the loop rebuilds the set every time and is even slower than the list.</p>
+</section>
+<section class="sec" id="algebra">
+<h2><span class="n">3</span>Set algebra</h2>
+<p>Sets support the operations of the SQL set operators, each building a <strong>new</strong> set:</p>
+<div class="tbl"><table>
+      <tr><th>Operation</th><th>Operator</th><th>Method</th><th>SQL</th><th>Meaning</th></tr>
+      <tr><td>union</td><td><code>a | b</code></td><td><code>a.union(b)</code></td><td><code>UNION</code></td><td>in either</td></tr>
+      <tr><td>intersection</td><td><code>a &amp; b</code></td><td><code>a.intersection(b)</code></td><td><code>INTERSECT</code></td><td>in both</td></tr>
+      <tr><td>difference</td><td><code>a - b</code></td><td><code>a.difference(b)</code></td><td><code>EXCEPT</code></td><td>in a, not in b</td></tr>
+      <tr><td>symmetric difference</td><td><code>a ^ b</code></td><td><code>a.symmetric_difference(b)</code></td><td>(full outer join, mismatches)</td><td>in exactly one</td></tr>
+      <tr><td>subset / superset</td><td><code>a &lt;= b</code>, <code>a &gt;= b</code></td><td><code>a.issubset(b)</code></td><td></td><td>every item of a is in b</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">set_algebra.py</span><button class="copy">Copy</button></div><pre><code class="py">required = {&quot;title&quot;, &quot;priority&quot;, &quot;owner&quot;}
+returned = {&quot;title&quot;, &quot;owner&quot;, &quot;confidence&quot;}          # keys an LLM put in its JSON
+print(required - returned)                          # missing fields
+print(returned - required)                          # unexpected fields
+print(sorted(required &amp; returned), required &lt;= returned)
+print(sorted(required ^ returned))
+print(sorted(required.union([&quot;due&quot;, &quot;title&quot;])))     # methods accept any iterable</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;priority&#x27;}
+{&#x27;confidence&#x27;}
+[&#x27;owner&#x27;, &#x27;title&#x27;] False
+[&#x27;confidence&#x27;, &#x27;priority&#x27;]
+[&#x27;due&#x27;, &#x27;owner&#x27;, &#x27;priority&#x27;, &#x27;title&#x27;]</pre></div></div>
+<p>Two practical details. The <strong>operators</strong> need sets on both sides, while the <strong>methods</strong> accept any iterable (<code>a.union(some_list)</code>), which saves a conversion. And there are in-place versions that change the left set instead of building a new one: <code>a |= b</code>, <code>a &amp;= b</code>, <code>a -= b</code>, or <code>a.update(b)</code>, <code>a.difference_update(b)</code>.</p>
+</section>
+<section class="sec" id="order">
+<h2><span class="n">4</span>Order and determinism</h2>
+<p>A set has no guaranteed order. Iterating over a set of small integers often looks sorted, which misleads people, but that is a side effect of small integers hashing to themselves. For <strong>strings</strong>, Python randomises the hash function <strong>per process</strong> (a protection against attacks that feed a server many colliding keys), so the iteration order of a set of strings can differ from one run of your program to the next. The values are the same; only the order changes.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">order.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+print(os.environ.get(&quot;PYTHONHASHSEED&quot;, &quot;not set (random per run)&quot;))
+
+words = [&quot;refund&quot;, &quot;invoice&quot;, &quot;login&quot;, &quot;agent&quot;, &quot;embedding&quot;, &quot;chunk&quot;]
+unique = set(words)
+print(len(unique), sorted(unique))          # sorted: the same every run
+print(list(dict.fromkeys(words)))           # first-seen order, the same every run</code></pre><div class="out"><span class="ol">Output</span><pre>not set (random per run)
+6 [&#x27;agent&#x27;, &#x27;chunk&#x27;, &#x27;embedding&#x27;, &#x27;invoice&#x27;, &#x27;login&#x27;, &#x27;refund&#x27;]
+[&#x27;refund&#x27;, &#x27;invoice&#x27;, &#x27;login&#x27;, &#x27;agent&#x27;, &#x27;embedding&#x27;, &#x27;chunk&#x27;]</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">A reproducibility trap in ML</div><p>Code like <code>labels = list(set(df["label"]))</code> gives the classes an order that can change between runs, so "class 0" may be <code>"spam"</code> today and <code>"ham"</code> tomorrow, and a saved model's outputs get mapped to the wrong names. Build anything that needs a stable order with <code>sorted(set(...))</code> or <code>dict.fromkeys(...)</code>. Setting <code>PYTHONHASHSEED</code> makes the order repeatable, but does not make it meaningful.</p></div></div>
+</section>
+<section class="sec" id="frozen">
+<h2><span class="n">5</span><code>frozenset</code>, and the rule that equal values hash alike</h2>
+<p>A <code>set</code> is mutable, so it is <strong>not</strong> hashable: you cannot put a set inside a set or use it as a dict key. A <strong><code>frozenset</code></strong> is the immutable version, with the same operations except those that change it, and it is hashable. It is the right key for anything <strong>unordered</strong>: a pair of documents <code>{a, b}</code> where <code>(a, b)</code> and <code>(b, a)</code> should be the same, a combination of tags, the set of tools an agent may use.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">frozenset.py</span><button class="copy">Copy</button></div><pre><code class="py">similar = {}
+for a, b, score in [(&quot;d1&quot;, &quot;d2&quot;, 0.91), (&quot;d2&quot;, &quot;d1&quot;, 0.91), (&quot;d3&quot;, &quot;d1&quot;, 0.40)]:
+    similar[frozenset((a, b))] = score       # (d1, d2) and (d2, d1) are one key
+print(len(similar), similar[frozenset((&quot;d1&quot;, &quot;d2&quot;))])
+print(frozenset(&quot;ab&quot;) == frozenset(&quot;ba&quot;), {frozenset({1, 2}), frozenset({2, 1})})</code></pre><div class="out"><span class="ol">Output</span><pre>2 0.91
+True {frozenset({1, 2})}</pre></div></div>
+<p>Hashing relies on one contract: <strong>if <code>a == b</code>, then <code>hash(a) == hash(b)</code></strong>. Python's numbers keep it across types, so <code>1</code>, <code>1.0</code> and <code>True</code> are equal, hash alike, and count as <strong>the same element</strong>: the set keeps whichever arrived first. That surprises people who mix flags and numbers in one collection. NaN is the opposite case: it is not equal to itself, so separate NaN objects are separate elements (2.1).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">eq_hash.py</span><button class="copy">Copy</button></div><pre><code class="py">print({1, 1.0, True}, {True, 1, 1.0}, len({0, False, 0.0, &quot;0&quot;}))
+print({float(&quot;nan&quot;), float(&quot;nan&quot;)}, len({float(&quot;nan&quot;), float(&quot;nan&quot;)}))</code></pre><div class="out"><span class="ol">Output</span><pre>{1} {True} 2
+{nan, nan} 2</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-sets-drop-duplicates-not-order-you-rely-" data-pid="m4-4-sets-drop-duplicates-not-order-you-rely-" data-type="predict" data-level="easy" data-answer="3 True False
+[1, 2, 3] [3, 1, 2]
+3
+KeyError: 99">
+<header class="prob-head"><h3>1. Sets drop duplicates, not order you rely on</h3></header>
+<div class="code"><pre><code class="py">ids = [3, 1, 3, 2, 1]
+s = set(ids)
+print(len(s), 2 in s, 5 in s)
+print(sorted(s), list(dict.fromkeys(ids)))
+s.add(2)
+s.discard(99)
+print(len(s))
+try:
+    s.remove(99)
+except KeyError as e:
+    print(&quot;KeyError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>discard</code> ignores a missing item; <code>remove</code> raises.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 True False
+[1, 2, 3] [3, 1, 2]
+3
+KeyError: 99</pre></div><p>The set keeps three distinct ids. Adding an existing value changes nothing, and <code>discard</code> of a missing value is silent, while <code>remove</code> raises <code>KeyError</code>. For a deduplicated list in a stable order, use <code>sorted(set(...))</code> or <code>dict.fromkeys(...)</code> (first-seen order): never rely on the order of the set itself.</p></div></details>
+</article>
+<article class="prob" id="p-missing-and-unexpected-json-fields" data-pid="m4-4-missing-and-unexpected-json-fields" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Missing and unexpected JSON fields</h3></header>
+<div class="prob-q"><p>Write <code>check_fields(record, required, optional=())</code> for a dict produced by an LLM. Return a dict with <code>"missing"</code>: sorted list of required keys not present, and <code>"unexpected"</code>: sorted list of keys that are neither required nor optional. Use set operations.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def check_fields(record, required, optional=()):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">r = {"title": "Refund", "owner": "ana", "mood": "angry"}
+assert check_fields(r, ["title", "priority", "owner"]) == {"missing": ["priority"], "unexpected": ["mood"]}
+assert check_fields(r, ["title"], optional=["owner", "mood"]) == {"missing": [], "unexpected": []}
+assert check_fields({}, ["a", "b"]) == {"missing": ["a", "b"], "unexpected": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = {&quot;title&quot;: &quot;Refund&quot;, &quot;owner&quot;: &quot;ana&quot;, &quot;mood&quot;: &quot;angry&quot;}
+assert check_fields(r, [&quot;title&quot;, &quot;priority&quot;, &quot;owner&quot;]) == {&quot;missing&quot;: [&quot;priority&quot;], &quot;unexpected&quot;: [&quot;mood&quot;]}
+assert check_fields(r, [&quot;title&quot;], optional=[&quot;owner&quot;, &quot;mood&quot;]) == {&quot;missing&quot;: [], &quot;unexpected&quot;: []}
+assert check_fields({}, [&quot;a&quot;, &quot;b&quot;]) == {&quot;missing&quot;: [&quot;a&quot;, &quot;b&quot;], &quot;unexpected&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>record.keys()</code> behaves like a set already: <code>set(required) - record.keys()</code> works.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def check_fields(record, required, optional=()):
+    keys = set(record)
+    required = set(required)
+    return {
+        &quot;missing&quot;: sorted(required - keys),
+        &quot;unexpected&quot;: sorted(keys - required - set(optional)),
+    }</code></pre></div><p>Difference answers both questions in one expression each: required minus present is missing, present minus allowed is unexpected. Sorting the results makes the output deterministic, which matters for logs and for tests (the set order could differ between runs). Validating an LLM's JSON this way before using it, and sending the missing/unexpected lists back to the model, is a common repair loop; schema validators like Pydantic report the same information in more detail (Module 11).</p></div></details>
+</article>
+<article class="prob" id="p-a-loop-that-checks-membership-in-a-list" data-pid="m4-4-a-loop-that-checks-membership-in-a-list" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A loop that checks membership in a list</h3></header>
+<div class="prob-q"><p><code>new_customers</code> is correct but painfully slow on real data (hundreds of thousands of ids). Make it fast without changing the result or its order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def new_customers(today, known):
+    return [c for c in today if c not in known]
+</textarea>
+<script type="text/plain" class="prob-tests">today = ["c5", "c1", "c9", "c5", "c7"]
+known = ["c1", "c2", "c7"]
+assert new_customers(today, known) == ["c5", "c9", "c5"]
+assert new_customers([], known) == []
+class CountingList(list):
+    checks = 0
+    def __contains__(self, item):
+        CountingList.checks += 1
+        return super().__contains__(item)
+watched = CountingList(f"c{i}" for i in range(50_000))
+assert new_customers(["c3", "x1", "c7"], watched) == ["x1"]
+assert CountingList.checks == 0, f"{CountingList.checks} linear scans of the list"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">today = [&quot;c5&quot;, &quot;c1&quot;, &quot;c9&quot;, &quot;c5&quot;, &quot;c7&quot;]
+known = [&quot;c1&quot;, &quot;c2&quot;, &quot;c7&quot;]
+assert new_customers(today, known) == [&quot;c5&quot;, &quot;c9&quot;, &quot;c5&quot;]
+assert new_customers([], known) == []
+class CountingList(list):
+    checks = 0
+    def __contains__(self, item):
+        CountingList.checks += 1
+        return super().__contains__(item)
+watched = CountingList(f&quot;c{i}&quot; for i in range(50_000))
+assert new_customers([&quot;c3&quot;, &quot;x1&quot;, &quot;c7&quot;], watched) == [&quot;x1&quot;]
+assert CountingList.checks == 0, f&quot;{CountingList.checks} linear scans of the list&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a set from <code>known</code> once, before the comprehension.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last test counts how many times <code>in</code> is used on the list itself. The fast version never does.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def new_customers(today, known):
+    known_set = set(known)
+    return [c for c in today if c not in known_set]</code></pre></div><p><code>c not in known</code> scans the list for every customer, so the whole function is O(len(today) × len(known)). Building the set once makes each check O(1), for O(len(today) + len(known)) overall. The comprehension still walks <code>today</code> in order, so the result keeps its order and its duplicates; only the lookup structure changed. This is the same as SQL <code>WHERE id NOT IN (...)</code> against an indexed table versus an unindexed one.</p></div></details>
+</article>
+<article class="prob" id="p-set-operators" data-pid="m4-4-set-operators" data-type="predict" data-level="easy" data-answer="[&#x27;calc&#x27;, &#x27;email&#x27;, &#x27;search&#x27;, &#x27;weather&#x27;]
+[&#x27;calc&#x27;, &#x27;search&#x27;] [&#x27;weather&#x27;] [&#x27;email&#x27;] [&#x27;email&#x27;, &#x27;weather&#x27;]
+True True False True">
+<header class="prob-head"><h3>4. Set operators</h3></header>
+<div class="code"><pre><code class="py">a = {&quot;search&quot;, &quot;calc&quot;, &quot;weather&quot;}
+b = {&quot;calc&quot;, &quot;email&quot;, &quot;search&quot;}
+print(sorted(a | b))
+print(sorted(a &amp; b), sorted(a - b), sorted(b - a), sorted(a ^ b))
+print({&quot;calc&quot;} &lt;= a, a &lt;= a, a &lt; a, a.isdisjoint({&quot;email&quot;}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>&lt;=</code> is subset, <code>&lt;</code> is proper subset (a subset that is not equal).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;calc&#x27;, &#x27;email&#x27;, &#x27;search&#x27;, &#x27;weather&#x27;]
+[&#x27;calc&#x27;, &#x27;search&#x27;] [&#x27;weather&#x27;] [&#x27;email&#x27;] [&#x27;email&#x27;, &#x27;weather&#x27;]
+True True False True</pre></div><p>Union has every tool from both, intersection the shared ones, and the two differences are not symmetric: <code>a - b</code> is what only <code>a</code> has. Symmetric difference is what exactly one side has. A set is a subset of itself but not a <strong>proper</strong> subset, and <code>isdisjoint</code> is <code>True</code> when nothing is shared.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-agreement-between-two-annotators" data-pid="m4-4-agreement-between-two-annotators" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Agreement between two annotators</h3></header>
+<div class="prob-q"><p>Two annotators tagged the same documents. Each gives a dict from document id to a <strong>set</strong> of tags. Write <code>agreement(a, b)</code> returning, for every document in both, the Jaccard similarity of the two tag sets: size of the intersection divided by size of the union (1.0 when both are empty). Return a dict, and include only shared document ids.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def agreement(a, b):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ann1 = {"d1": {"refund", "billing"}, "d2": {"login"}, "d3": set(), "d9": {"x"}}
+ann2 = {"d1": {"refund", "eu"}, "d2": {"login"}, "d3": set()}
+out = agreement(ann1, ann2)
+assert out == {"d1": 1 / 3, "d2": 1.0, "d3": 1.0}
+assert agreement({}, ann2) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ann1 = {&quot;d1&quot;: {&quot;refund&quot;, &quot;billing&quot;}, &quot;d2&quot;: {&quot;login&quot;}, &quot;d3&quot;: set(), &quot;d9&quot;: {&quot;x&quot;}}
+ann2 = {&quot;d1&quot;: {&quot;refund&quot;, &quot;eu&quot;}, &quot;d2&quot;: {&quot;login&quot;}, &quot;d3&quot;: set()}
+out = agreement(ann1, ann2)
+assert out == {&quot;d1&quot;: 1 / 3, &quot;d2&quot;: 1.0, &quot;d3&quot;: 1.0}
+assert agreement({}, ann2) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The shared ids are <code>a.keys() &amp; b.keys()</code>. For each, <code>len(x &amp; y) / len(x | y)</code>, with a guard for an empty union.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def agreement(a, b):
+    out = {}
+    for doc in a.keys() &amp; b.keys():
+        x, y = a[doc], b[doc]
+        union = x | y
+        out[doc] = len(x &amp; y) / len(union) if union else 1.0
+    return out</code></pre></div><p>Dict key views support set operations directly, so <code>a.keys() &amp; b.keys()</code> finds the shared documents without building lists. Jaccard similarity is the standard way to compare two sets: it is used for annotator agreement on multi-label data, for near-duplicate detection (MinHash approximates it at scale), and for comparing retrieved document sets between two RAG configurations. The guard defines two empty tag sets as full agreement, a choice worth stating explicitly because <code>0 / 0</code> has no natural answer.</p></div></details>
+</article>
+<article class="prob" id="p-classes-in-a-different-order-every-run" data-pid="m4-4-classes-in-a-different-order-every-run" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Classes in a different order every run</h3></header>
+<div class="prob-q"><p><code>encode_labels</code> maps each class name to an integer for training. On some runs <code>"spam"</code> is 0, on others it is 1, so a saved model's predictions get decoded to the wrong names. Make the mapping deterministic: classes numbered in <strong>sorted</strong> order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def encode_labels(labels):
+    classes = list(set(labels))
+    mapping = {c: i for i, c in enumerate(classes)}
+    return [mapping[l] for l in labels], classes
+</textarea>
+<script type="text/plain" class="prob-tests">codes, classes = encode_labels(["spam", "ham", "spam", "eggs"])
+assert classes == ["eggs", "ham", "spam"]
+assert codes == [2, 1, 2, 0]
+assert encode_labels([]) == ([], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">codes, classes = encode_labels([&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;eggs&quot;])
+assert classes == [&quot;eggs&quot;, &quot;ham&quot;, &quot;spam&quot;]
+assert codes == [2, 1, 2, 0]
+assert encode_labels([]) == ([], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>list(set(...))</code> has no guaranteed order. Which function gives a stable order of the distinct labels?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def encode_labels(labels):
+    classes = sorted(set(labels))
+    mapping = {c: i for i, c in enumerate(classes)}
+    return [mapping[l] for l in labels], classes</code></pre></div><p>The iteration order of a set of strings depends on the per-process hash seed, so <code>list(set(labels))</code> can order the classes differently on different runs, and the integer codes change with it. <code>sorted(set(labels))</code> is deterministic. scikit-learn's <code>LabelEncoder</code> does exactly this, keeping the sorted classes in <code>classes_</code>; saving that list together with the model is how predictions are decoded back to names later.</p></div></details>
+</article>
+<article class="prob" id="p-building-a-set-step-by-step" data-pid="m4-4-building-a-set-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Building a set step by step</h3></header>
+<div class="prob-q"><p>Fill in the set (shown sorted) and its size after each marked line.</p></div>
+<div class="code"><pre><code class="py">s = set()
+s.add(&quot;Refund&quot;)
+s |= {&quot;refund&quot;, &quot;Refund&quot;}
+s = {x.lower() for x in s}
+s -= {&quot;invoice&quot;}
+s.update([&quot;login&quot;, &quot;refund&quot;])</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>sorted(s)</code></th><th><code>len(s)</code></th></tr><tr><td>s.add(&#x27;Refund&#x27;)</td><td><input class="cell" data-a="[&#x27;Refund&#x27;]" data-s="[&#x27;Refund&#x27;]" aria-label="sorted(s) at s.add(&#x27;Refund&#x27;)" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(s) at s.add(&#x27;Refund&#x27;)" autocomplete="off"></td></tr><tr><td>s |= {&#x27;refund&#x27;, &#x27;Refund&#x27;}</td><td><input class="cell" data-a="[&#x27;Refund&#x27;, &#x27;refund&#x27;]" data-s="[&#x27;Refund&#x27;, &#x27;refund&#x27;]" aria-label="sorted(s) at s |= {&#x27;refund&#x27;, &#x27;Refund&#x27;}" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="len(s) at s |= {&#x27;refund&#x27;, &#x27;Refund&#x27;}" autocomplete="off"></td></tr><tr><td>lower-case every item</td><td><input class="cell" data-a="[&#x27;refund&#x27;]" data-s="[&#x27;refund&#x27;]" aria-label="sorted(s) at lower-case every item" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(s) at lower-case every item" autocomplete="off"></td></tr><tr><td>s -= {&#x27;invoice&#x27;}</td><td><input class="cell" data-a="[&#x27;refund&#x27;]" data-s="[&#x27;refund&#x27;]" aria-label="sorted(s) at s -= {&#x27;invoice&#x27;}" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(s) at s -= {&#x27;invoice&#x27;}" autocomplete="off"></td></tr><tr><td>s.update([...])</td><td><input class="cell" data-a="[&#x27;login&#x27;, &#x27;refund&#x27;]" data-s="[&#x27;login&#x27;, &#x27;refund&#x27;]" aria-label="sorted(s) at s.update([...])" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="len(s) at s.update([...])" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Strings that differ in case are different values. <code>-=</code> with an item that is not there changes nothing.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>sorted(s)</code></th><th><code>len(s)</code></th></tr><tr><td>s.add(&#x27;Refund&#x27;)</td><td><code>[&#x27;Refund&#x27;]</code></td><td><code>1</code></td></tr><tr><td>s |= {&#x27;refund&#x27;, &#x27;Refund&#x27;}</td><td><code>[&#x27;Refund&#x27;, &#x27;refund&#x27;]</code></td><td><code>2</code></td></tr><tr><td>lower-case every item</td><td><code>[&#x27;refund&#x27;]</code></td><td><code>1</code></td></tr><tr><td>s -= {&#x27;invoice&#x27;}</td><td><code>[&#x27;refund&#x27;]</code></td><td><code>1</code></td></tr><tr><td>s.update([...])</td><td><code>[&#x27;login&#x27;, &#x27;refund&#x27;]</code></td><td><code>2</code></td></tr></table></div><p><code>"Refund"</code> and <code>"refund"</code> are different strings, so after the union the set has two items. Lower-casing builds a <strong>new</strong> set in which both become <code>"refund"</code>, so it collapses to one item: normalising before deduplicating is what actually merges variants. Removing an absent item with <code>-=</code> is silently fine, and <code>update</code> adds only <code>"login"</code>, since <code>"refund"</code> is already present.</p></div></details>
+</article>
+<article class="prob" id="p-deduplicate-a-long-list-keeping-order" data-pid="m4-4-deduplicate-a-long-list-keeping-order" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Deduplicate a long list, keeping order</h3></header>
+<div class="prob-q"><p>Both remove repeats from 10,000 ids while keeping first-seen order. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import random
+random.seed(2)
+ids = [random.randrange(3_000) for _ in range(10_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = []
+for x in ids:
+    if x not in out:
+        out.append(x)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = list(dict.fromkeys(ids))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How long is <code>out</code> when the loop is near the end, and what does <code>x not in out</code> cost then?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>243.44 ms</td></tr><tr><td>B</td><td>956.28 µs</td></tr></table></div><p>A checks membership in a growing <strong>list</strong>, so each check costs up to 3,000 comparisons: O(n × distinct). B inserts each id into a dict (a hash table), O(1) each, and dicts keep insertion order, so <code>list(dict.fromkeys(ids))</code> is the idiomatic ordered dedupe. An explicit <code>seen = set()</code> loop has the same complexity and is the version to write when you also need to do something with each new item.</p></div></details>
+</article>
+<article class="prob" id="p-changed-added-and-removed-documents" data-pid="m4-4-changed-added-and-removed-documents" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. Changed, added and removed documents</h3></header>
+<div class="prob-q"><p>A RAG index must be refreshed. Given <code>old</code> and <code>new</code>, dicts from document id to a content hash, write <code>diff_index(old, new)</code> returning a dict with sorted lists <code>"added"</code>, <code>"removed"</code> and <code>"changed"</code> (in both, different hash). Only these documents need re-embedding or deleting.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def diff_index(old, new):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">old = {"a": "h1", "b": "h2", "c": "h3"}
+new = {"b": "h2", "c": "h9", "d": "h4"}
+assert diff_index(old, new) == {"added": ["d"], "removed": ["a"], "changed": ["c"]}
+assert diff_index({}, {}) == {"added": [], "removed": [], "changed": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">old = {&quot;a&quot;: &quot;h1&quot;, &quot;b&quot;: &quot;h2&quot;, &quot;c&quot;: &quot;h3&quot;}
+new = {&quot;b&quot;: &quot;h2&quot;, &quot;c&quot;: &quot;h9&quot;, &quot;d&quot;: &quot;h4&quot;}
+assert diff_index(old, new) == {&quot;added&quot;: [&quot;d&quot;], &quot;removed&quot;: [&quot;a&quot;], &quot;changed&quot;: [&quot;c&quot;]}
+assert diff_index({}, {}) == {&quot;added&quot;: [], &quot;removed&quot;: [], &quot;changed&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use the key views: <code>new.keys() - old.keys()</code>, <code>old.keys() - new.keys()</code>, and <code>old.keys() &amp; new.keys()</code> for the candidates for "changed".</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def diff_index(old, new):
+    both = old.keys() &amp; new.keys()
+    return {
+        &quot;added&quot;: sorted(new.keys() - old.keys()),
+        &quot;removed&quot;: sorted(old.keys() - new.keys()),
+        &quot;changed&quot;: sorted(k for k in both if old[k] != new[k]),
+    }</code></pre></div><p>Set differences on the key views find added and removed documents in O(n), and only the shared ids need a value comparison. Comparing content <strong>hashes</strong> (for example a SHA-256 of the text) instead of the text itself keeps the stored state small. Re-embedding only what changed is the difference between an index refresh that costs a few cents and one that re-embeds the whole corpus; incremental indexing in LlamaIndex and LangChain's indexing API work this way.</p></div></details>
+</article>
+<article class="prob" id="p-pairs-counted-twice" data-pid="m4-4-pairs-counted-twice" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Pairs counted twice</h3></header>
+<div class="prob-q"><p><code>count_pairs</code> counts how often two products are bought together. <code>("milk", "bread")</code> and <code>("bread", "milk")</code> are counted as different pairs. Fix it so the order inside a pair does not matter.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def count_pairs(baskets):
+    counts = {}
+    for basket in baskets:
+        items = list(basket)
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                pair = (items[i], items[j])
+                counts[pair] = counts.get(pair, 0) + 1
+    return counts
+</textarea>
+<script type="text/plain" class="prob-tests">baskets = [["milk", "bread"], ["bread", "milk", "eggs"], ["eggs", "milk"]]
+c = count_pairs(baskets)
+assert c[frozenset({"milk", "bread"})] == 2
+assert c[frozenset({"milk", "eggs"})] == 2
+assert c[frozenset({"bread", "eggs"})] == 1
+assert len(c) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">baskets = [[&quot;milk&quot;, &quot;bread&quot;], [&quot;bread&quot;, &quot;milk&quot;, &quot;eggs&quot;], [&quot;eggs&quot;, &quot;milk&quot;]]
+c = count_pairs(baskets)
+assert c[frozenset({&quot;milk&quot;, &quot;bread&quot;})] == 2
+assert c[frozenset({&quot;milk&quot;, &quot;eggs&quot;})] == 2
+assert c[frozenset({&quot;bread&quot;, &quot;eggs&quot;})] == 1
+assert len(c) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a key that is the same whatever the order: a <code>frozenset</code> of the two items.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def count_pairs(baskets):
+    counts = {}
+    for basket in baskets:
+        items = list(basket)
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                pair = frozenset((items[i], items[j]))
+                counts[pair] = counts.get(pair, 0) + 1
+    return counts</code></pre></div><p>A tuple remembers order, so the same pair in two orders makes two keys. A <code>frozenset</code> has no order and is hashable, so both orders give one key. <code>tuple(sorted(...))</code> would also work and is easier to read in printed output. This co-occurrence counting is the first step of market-basket analysis (association rules) and of building co-occurrence features for recommendation; <code>itertools.combinations(items, 2)</code> replaces the two index loops.</p></div></details>
+</article>
+<article class="prob" id="p-membership-with-a-set-literal" data-pid="m4-4-membership-with-a-set-literal" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Membership with a set literal</h3></header>
+<div class="prob-q"><p>Simplify this allow-list check. It must still accept exactly the same names. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def is_allowed(tool):
+    if tool == &quot;search&quot; or tool == &quot;calculator&quot; or tool == &quot;weather&quot; or tool == &quot;translate&quot;:
+        return True
+    else:
+        return False
+</textarea>
+<script type="text/plain" class="prob-tests">assert all(is_allowed(t) for t in ["search", "calculator", "weather", "translate"])
+assert not is_allowed("delete_files") and not is_allowed("Search")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert all(is_allowed(t) for t in [&quot;search&quot;, &quot;calculator&quot;, &quot;weather&quot;, &quot;translate&quot;])
+assert not is_allowed(&quot;delete_files&quot;) and not is_allowed(&quot;Search&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Put the names in a module-level set and test <code>in</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">ALLOWED_TOOLS = frozenset({&quot;search&quot;, &quot;calculator&quot;, &quot;weather&quot;, &quot;translate&quot;})
+
+def is_allowed(tool):
+    return tool in ALLOWED_TOOLS</code></pre></div><p>The chain of <code>==</code> comparisons is a hand-written linear search; a set states the rule as data, gives O(1) lookups, and can be shown, logged or loaded from configuration. Making it a <code>frozenset</code> at module level means nothing can add a tool to the allow-list by accident at run time, which matters for an agent's security boundary. Comparison is still exact and case-sensitive, so <code>"Search"</code> stays rejected.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-when-1-1-0-and-true-collide" data-pid="m4-4-when-1-1-0-and-true-collide" data-type="predict" data-level="hard" data-answer="{0, True} 2
+{1.0} {&#x27;a&#x27;: 1, True: &#x27;y&#x27;}
+3 [&#x27;1&#x27;, 1, 2]
+True False">
+<header class="prob-head"><h3>12. When 1, 1.0 and True collide</h3></header>
+<div class="code"><pre><code class="py">flags = {True, 1, 1.0, 0, False}
+print(flags, len(flags))
+print({1.0, 1, True}, {&quot;a&quot;: 1, True: &quot;x&quot;, 1: &quot;y&quot;})
+mixed = [1, &quot;1&quot;, 1.0, True, 2]
+print(len(set(mixed)), sorted(set(mixed), key=repr))
+print(hash(1) == hash(1.0) == hash(True), 0.1 + 0.2 in {0.3})</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Equal values must hash alike, and <code>True == 1 == 1.0</code>. A set keeps the first of equal elements it saw.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{0, True} 2
+{1.0} {&#x27;a&#x27;: 1, True: &#x27;y&#x27;}
+3 [&#x27;1&#x27;, 1, 2]
+True False</pre></div><p><code>True</code>, <code>1</code> and <code>1.0</code> are equal and hash alike, so they are <strong>one</strong> element; the set keeps the first that arrived (<code>True</code> in the first set, <code>1.0</code> in the second), and the same applies to <code>0</code> and <code>False</code>. In the dict, <code>True</code> and <code>1</code> are the same key, so the later value <code>"y"</code> overwrites <code>"x"</code> while the key stays <code>True</code>. <code>"1"</code> is a string, different from the number. Finally, <code>0.1 + 0.2</code> is not exactly <code>0.3</code> (1.1), so it is not found: sets compare exactly, so never use them to deduplicate floats that were computed, round first.</p></div></details>
+</article>
+<article class="prob" id="p-near-duplicate-chunks-with-shingles" data-pid="m4-4-near-duplicate-chunks-with-shingles" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Near-duplicate chunks with shingles</h3></header>
+<div class="prob-q"><p>Write <code>shingles(text, k=3)</code> returning the set of all <code>k</code>-word sequences (as tuples) of the lower-cased words, and <code>near_duplicates(chunks, threshold)</code> returning the sorted list of index pairs <code>(i, j)</code>, <code>i &lt; j</code>, whose shingle sets have Jaccard similarity at least <code>threshold</code>. Texts shorter than <code>k</code> words have one shingle: the tuple of all their words.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def shingles(text, k=3):
+    pass
+
+def near_duplicates(chunks, threshold):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert shingles("a b c d") == {("a", "b", "c"), ("b", "c", "d")}
+assert shingles("Hi there", k=3) == {("hi", "there")}
+chunks = [
+    "Refunds are processed within five business days of the request",
+    "refunds are processed within five business days of your request",
+    "Contact support to change your shipping address",
+    "Refunds are processed within five business days",
+]
+assert near_duplicates(chunks, 0.5) == [(0, 1), (0, 3), (1, 3)]
+assert near_duplicates(chunks, 0.99) == []
+assert near_duplicates([], 0.5) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert shingles(&quot;a b c d&quot;) == {(&quot;a&quot;, &quot;b&quot;, &quot;c&quot;), (&quot;b&quot;, &quot;c&quot;, &quot;d&quot;)}
+assert shingles(&quot;Hi there&quot;, k=3) == {(&quot;hi&quot;, &quot;there&quot;)}
+chunks = [
+    &quot;Refunds are processed within five business days of the request&quot;,
+    &quot;refunds are processed within five business days of your request&quot;,
+    &quot;Contact support to change your shipping address&quot;,
+    &quot;Refunds are processed within five business days&quot;,
+]
+assert near_duplicates(chunks, 0.5) == [(0, 1), (0, 3), (1, 3)]
+assert near_duplicates(chunks, 0.99) == []
+assert near_duplicates([], 0.5) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Shingles: <code>{tuple(words[i:i + k]) for i in range(len(words) - k + 1)}</code>, with a special case for short texts.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute every chunk's shingle set once, then compare each pair <code>i &lt; j</code> with <code>len(a &amp; b) / len(a | b)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def shingles(text, k=3):
+    words = text.lower().split()
+    if len(words) &lt; k:
+        return {tuple(words)}
+    return {tuple(words[i:i + k]) for i in range(len(words) - k + 1)}
+
+def near_duplicates(chunks, threshold):
+    sets = [shingles(c) for c in chunks]
+    out = []
+    for i in range(len(sets)):
+        for j in range(i + 1, len(sets)):
+            union = sets[i] | sets[j]
+            if union and len(sets[i] &amp; sets[j]) / len(union) &gt;= threshold:
+                out.append((i, j))
+    return out</code></pre></div><p>Word shingles turn "how similar is this text" into "how much do these sets overlap", and tuples are used because a list cannot go in a set. Chunks 0 and 1 differ in one word, so most shingles survive; chunk 3 is a truncated copy, so its shingles are a subset of chunk 0's, and shares the same five shingles with chunk 1. Comparing every pair is O(n²), fine for hundreds of chunks; at corpus scale, MinHash with locality-sensitive hashing estimates Jaccard similarity and only compares likely candidates. Removing near-duplicate chunks before indexing stops a RAG system from filling its context with the same passage several times.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-allow-list-with-three-h" data-pid="m4-4-read-the-code-an-allow-list-with-three-h" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: an allow-list with three holes</h3></header>
+<div class="prob-q"><p>This guards which tools an agent may call. A security review found three problems: a tool can be enabled for everyone at run time by mistake, a tool name with different case or spaces slips past the deny-list, and the user's effective permissions are printed in a different order on each run, which breaks the audit log diff. Fix all three without changing which tools are allowed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">BASE_TOOLS = {&quot;search&quot;, &quot;calculator&quot;}
+DENIED = [&quot;delete_files&quot;, &quot;send_email&quot;]
+
+
+def tools_for(user_extra):
+    allowed = BASE_TOOLS
+    allowed |= set(user_extra)
+    return allowed - set(DENIED)
+
+
+def can_call(user_extra, tool):
+    return tool in tools_for(user_extra)
+
+
+def audit_line(user, user_extra):
+    return f&quot;{user}: {&#x27;, &#x27;.join(tools_for(user_extra))}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert tools_for(["weather"]) == {"search", "calculator", "weather"}
+assert tools_for([]) == {"search", "calculator"}
+assert not can_call(["Delete_Files "], "delete_files")
+assert not can_call(["Send_Email"], "send_email")
+assert can_call(["Weather"], "weather")
+assert audit_line("ana", ["weather"]) == "ana: calculator, search, weather"
+assert BASE_TOOLS == {"search", "calculator"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert tools_for([&quot;weather&quot;]) == {&quot;search&quot;, &quot;calculator&quot;, &quot;weather&quot;}
+assert tools_for([]) == {&quot;search&quot;, &quot;calculator&quot;}
+assert not can_call([&quot;Delete_Files &quot;], &quot;delete_files&quot;)
+assert not can_call([&quot;Send_Email&quot;], &quot;send_email&quot;)
+assert can_call([&quot;Weather&quot;], &quot;weather&quot;)
+assert audit_line(&quot;ana&quot;, [&quot;weather&quot;]) == &quot;ana: calculator, search, weather&quot;
+assert BASE_TOOLS == {&quot;search&quot;, &quot;calculator&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>allowed = BASE_TOOLS</code> is an alias, and <code>|=</code> changes that shared set in place (2.2).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Normalise names (<code>strip().lower()</code>) before comparing them with the deny-list and the allow-list.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The audit line joins a set: sort it first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">BASE_TOOLS = frozenset({&quot;search&quot;, &quot;calculator&quot;})
+DENIED = frozenset({&quot;delete_files&quot;, &quot;send_email&quot;})
+
+
+def normalise(name):
+    return name.strip().lower()
+
+
+def tools_for(user_extra):
+    return (BASE_TOOLS | {normalise(t) for t in user_extra}) - DENIED
+
+
+def can_call(user_extra, tool):
+    return normalise(tool) in tools_for(user_extra)
+
+
+def audit_line(user, user_extra):
+    return f&quot;{user}: {&#x27;, &#x27;.join(sorted(tools_for(user_extra)))}&quot;</code></pre></div><p>Hole one is aliasing (2.2): <code>allowed = BASE_TOOLS</code> then <code>allowed |= ...</code> adds the user's extra tools to the <strong>global</strong> base set, so one user's grant leaks to every later user. The <code>|</code> operator builds a new set, and making the base a <code>frozenset</code> turns any future in-place change into an error. Hole two is normalisation: sets compare exactly, so <code>"Delete_Files "</code> is not <code>"delete_files"</code>; normalising both the grants and the requested tool closes the bypass. Hole three is order: joining a set gives a hash-dependent order, so the audit text changes between runs; <code>sorted</code> makes it deterministic. All three are real classes of bugs in agent permission code.</p></div></details>
+</article>
+<article class="prob" id="p-hashable-records-for-deduplication" data-pid="m4-4-hashable-records-for-deduplication" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. Hashable records for deduplication</h3></header>
+<div class="prob-q"><p>Rows from two CRM exports are dicts that may contain list values (tags). Write <code>dedupe_rows(rows, keys)</code> that keeps the first row for each distinct combination of the values in <code>keys</code>, in input order. Two rows are the same if their values for <code>keys</code> are equal, treating a list of tags as <strong>unordered</strong> (so <code>["a", "b"]</code> equals <code>["b", "a"]</code>). Missing keys count as <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def dedupe_rows(rows, keys):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [{"email": "ana@x.io", "tags": ["vip", "eu"], "src": "crm1"},
+        {"email": "ana@x.io", "tags": ["eu", "vip"], "src": "crm2"},
+        {"email": "ana@x.io", "tags": ["eu"], "src": "crm2"},
+        {"email": "ben@x.io", "src": "crm1"},
+        {"email": "ben@x.io", "tags": None, "src": "crm2"}]
+out = dedupe_rows(rows, ["email", "tags"])
+assert [r["src"] for r in out] == ["crm1", "crm2", "crm1"]
+assert len(dedupe_rows(rows, ["email"])) == 2
+assert dedupe_rows([], ["email"]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [{&quot;email&quot;: &quot;ana@x.io&quot;, &quot;tags&quot;: [&quot;vip&quot;, &quot;eu&quot;], &quot;src&quot;: &quot;crm1&quot;},
+        {&quot;email&quot;: &quot;ana@x.io&quot;, &quot;tags&quot;: [&quot;eu&quot;, &quot;vip&quot;], &quot;src&quot;: &quot;crm2&quot;},
+        {&quot;email&quot;: &quot;ana@x.io&quot;, &quot;tags&quot;: [&quot;eu&quot;], &quot;src&quot;: &quot;crm2&quot;},
+        {&quot;email&quot;: &quot;ben@x.io&quot;, &quot;src&quot;: &quot;crm1&quot;},
+        {&quot;email&quot;: &quot;ben@x.io&quot;, &quot;tags&quot;: None, &quot;src&quot;: &quot;crm2&quot;}]
+out = dedupe_rows(rows, [&quot;email&quot;, &quot;tags&quot;])
+assert [r[&quot;src&quot;] for r in out] == [&quot;crm1&quot;, &quot;crm2&quot;, &quot;crm1&quot;]
+assert len(dedupe_rows(rows, [&quot;email&quot;])) == 2
+assert dedupe_rows([], [&quot;email&quot;]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a hashable key per row: a tuple of the values for <code>keys</code>, turning lists into <code>frozenset</code>s.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>row.get(k)</code> gives <code>None</code> for a missing key, so a missing <code>tags</code> and <code>tags: None</code> produce the same key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def to_hashable(value):
+    return frozenset(value) if isinstance(value, list) else value
+
+def dedupe_rows(rows, keys):
+    seen = set()
+    out = []
+    for row in rows:
+        key = tuple(to_hashable(row.get(k)) for k in keys)
+        if key not in seen:
+            seen.add(key)
+            out.append(row)
+    return out</code></pre></div><p>Rows are dicts, which cannot go in a set, so deduplication needs a hashable <strong>key</strong> that captures exactly what "the same" means: a tuple over the chosen columns, with lists converted to <code>frozenset</code> to ignore their order. Choosing <code>frozenset</code> also ignores duplicates inside the list; if <code>["eu", "eu"]</code> must differ from <code>["eu"]</code>, use <code>tuple(sorted(value))</code> instead. Defining equality explicitly like this is the core of record linkage. In pandas, <code>drop_duplicates</code> fails on list columns for the same unhashable reason, and the fix is the same conversion.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-why-is-x-in-some-set-o-1-but-x-in-some-l" data-pid="m4-4-why-is-x-in-some-set-o-1-but-x-in-some-l" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Why is <code>x in some_set</code> O(1) but <code>x in some_list</code> O(n)?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A list stores items in order with no index of values, so finding <code>x</code> means comparing it with items one by one. A set is a hash table: Python computes <code>hash(x)</code>, maps it to a slot and compares only the item(s) there, so the cost does not depend on how many items the set holds. It is O(1) on <strong>average</strong>; with many collisions (bad hash functions, or adversarial keys) it degrades, which is why Python randomises string hashes. The trade-offs: sets use more memory, keep no order, and need hashable items. Mention the practical rule: build the set once outside a loop.</p></div></details>
+</article>
+<article class="prob" id="p-what-does-it-mean-for-an-object-to-be-ha" data-pid="m4-4-what-does-it-mean-for-an-object-to-be-ha" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What does it mean for an object to be hashable, and what is the contract between <code>__eq__</code> and <code>__hash__</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Hashable means the object has a hash value that never changes during its lifetime, so it can be found again in a set or dict. The contract: objects that compare equal must have equal hashes (the reverse need not hold; different objects may collide). That is why mutable containers like lists, dicts and sets are unhashable: their equality depends on contents that can change. It also explains <code>{1, 1.0, True}</code> having one element, since those are equal and hash alike. For your own classes (Module 9), defining <code>__eq__</code> without <code>__hash__</code> makes instances unhashable, and you should only define <code>__hash__</code> from fields that never change; frozen dataclasses do this for you.</p></div></details>
+</article>
+<article class="prob" id="p-a-model-s-predicted-class-names-come-out" data-pid="m4-4-a-model-s-predicted-class-names-come-out" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. A model's predicted class names come out wrong after you reload it. What might sets have to do with it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>If the class list was built with <code>list(set(labels))</code>, its order depends on the per-process string hash seed (<code>PYTHONHASHSEED</code>), so the integer each class received during training can differ from the one assumed at prediction time, and predictions get decoded to the wrong names. No error is raised; accuracy just looks terrible or labels are swapped. Fixes: build the class list with <code>sorted(set(...))</code> or first-seen order, save it with the model (as scikit-learn does in <code>classes_</code>), and add a test that decodes known examples after reload. The general lesson: never let anything that must be reproducible depend on set or hash iteration order.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A set is a hash table: <code>in</code>, <code>add</code> and <code>discard</code> are O(1) on average because the slot is computed from the value.</li><li>Only hashable values can go in a set. Equal values must hash alike, so <code>1</code>, <code>1.0</code> and <code>True</code> are one element.</li><li>Replace list membership in loops with a set built once. <code>dict.fromkeys</code> deduplicates while keeping order.</li><li><code>|</code>, <code>&amp;</code>, <code>-</code>, <code>^</code> are UNION, INTERSECT, EXCEPT and "in exactly one". Dict key views support them too.</li><li>Set order is not meaningful and string order can change between runs: sort before you print, number or save anything.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

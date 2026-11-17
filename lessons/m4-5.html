@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.5 · Dicts: the basics</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.5 Dicts: the basics</h1>
+  <p>A dict maps keys to values with O(1) lookups and keeps insertion order. How to read values safely, why views are live and why you cannot change a dict while looping over it, merging with clear precedence, and the hash join: the SQL join you can write in four lines.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a dict is</h2>
+<p>A dict maps <strong>keys</strong> to <strong>values</strong>. Under the hood it is a hash table, like a set (4.4), where each key's slot also stores its value. So <code>d[key]</code>, <code>d[key] = value</code>, <code>del d[key]</code> and <code>key in d</code> are all <strong>O(1) on average</strong>, however many items the dict holds. Keys must be hashable (strings, numbers, tuples of those, frozensets); values can be anything at all, including lists and other dicts.</p>
+<p>Since Python 3.7 dicts also <strong>keep insertion order</strong>: iterating gives keys in the order they were first added. CPython achieves this with a "compact" layout: a small hash index points into a separate array of entries stored in insertion order, which also uses less memory than the old design. Assigning a new value to an existing key keeps its position; deleting a key and adding it again moves it to the end.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dict_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">prices = {&quot;basic&quot;: 0, &quot;pro&quot;: 20, &quot;team&quot;: 50}
+print(prices[&quot;pro&quot;], &quot;team&quot; in prices, 20 in prices, len(prices))   # `in` checks keys, not values
+prices[&quot;enterprise&quot;] = 200          # new key: goes at the end
+prices[&quot;basic&quot;] = 5                 # existing key: same position
+del prices[&quot;pro&quot;]
+prices[&quot;pro&quot;] = 25                  # re-added: now at the end
+print(list(prices))</code></pre><div class="out"><span class="ol">Output</span><pre>20 True False 3
+[&#x27;basic&#x27;, &#x27;team&#x27;, &#x27;enterprise&#x27;, &#x27;pro&#x27;]</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A dict is a lookup table with a <strong>primary key</strong>: <code>prices["pro"]</code> is <code>SELECT price FROM prices WHERE plan = 'pro'</code> against an indexed key, and a missing key is "no row". In Power BI it is the dimension side of a relationship: you look up attributes by the key, and the key must be unique, which a dict guarantees (a repeated key overwrites).</p></div></div>
+</section>
+<section class="sec" id="reading">
+<h2><span class="n">2</span>Reading values safely</h2>
+<p>There are four ways to read, and choosing well is most of writing robust dict code:</p>
+<div class="tbl"><table>
+      <tr><th>Expression</th><th>Missing key</th><th>Use when</th></tr>
+      <tr><td><code>d[k]</code></td><td>raises <code>KeyError</code></td><td>the key must be there; a missing key is a bug</td></tr>
+      <tr><td><code>d.get(k)</code> / <code>d.get(k, default)</code></td><td>returns <code>None</code> / <code>default</code></td><td>the key is optional</td></tr>
+      <tr><td><code>k in d</code></td><td><code>False</code></td><td>you only need to know if it exists</td></tr>
+      <tr><td><code>d.setdefault(k, default)</code></td><td>inserts <code>default</code> and returns it</td><td>read, creating the entry if needed (4.6)</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">reading.py</span><button class="copy">Copy</button></div><pre><code class="py">cfg = {&quot;model&quot;: &quot;small&quot;, &quot;timeout&quot;: 0, &quot;stop&quot;: None}
+print(cfg.get(&quot;timeout&quot;, 30), cfg.get(&quot;retries&quot;, 3))   # 0 is a real value and is kept
+print(cfg.get(&quot;stop&quot;, [&quot;###&quot;]), &quot;stop&quot; in cfg)        # the key exists, with value None
+try:
+    cfg[&quot;retries&quot;]
+except KeyError as e:
+    print(&quot;KeyError:&quot;, e)
+print(cfg.get(&quot;retries&quot;) is None, (cfg.get(&quot;timeout&quot;) or 30))  # `or` throws away the 0</code></pre><div class="out"><span class="ol">Output</span><pre>0 3
+None True
+KeyError: &#x27;retries&#x27;
+True 30</pre></div></div>
+<p>Two subtleties. <code>d.get(k, default)</code> returns the default only when the key is <strong>absent</strong>; if the key is present with the value <code>None</code>, you get <code>None</code>. When "absent" and "present but None" must be distinguished, use <code>k in d</code> or a sentinel default (2.1). And never write <code>d.get(k) or default</code> for values that can legitimately be <code>0</code>, <code>""</code> or <code>[]</code>: <code>or</code> replaces them too (1.1).</p>
+<p>For <strong>nested</strong> JSON, chained <code>get</code> calls with <code>{}</code> defaults avoid a crash at each level: <code>resp.get("usage", {}).get("total_tokens", 0)</code>. That works for one or two levels; for deep paths, write a helper (problem 6).</p>
+</section>
+<section class="sec" id="iterating">
+<h2><span class="n">3</span>Iterating, and changing a dict safely</h2>
+<p>Looping over a dict gives its <strong>keys</strong>. <code>d.items()</code> gives <code>(key, value)</code> pairs, which you unpack in the loop header (4.3), and <code>d.values()</code> gives the values. These three are <strong>views</strong>: live windows onto the dict, not copies. They are cheap, they reflect later changes, and <code>keys()</code> and <code>items()</code> support set operations (4.4).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">views.py</span><button class="copy">Copy</button></div><pre><code class="py">counts = {&quot;refund&quot;: 3, &quot;login&quot;: 0, &quot;invoice&quot;: 7}
+keys = counts.keys()
+counts[&quot;shipping&quot;] = 2
+print(list(keys))                          # the view sees the new key
+for word, n in counts.items():
+    print(f&quot;{word}:{n}&quot;, end=&quot; &quot;)
+print()
+print(sum(counts.values()), sorted(counts.keys() - {&quot;login&quot;}))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;refund&#x27;, &#x27;login&#x27;, &#x27;invoice&#x27;, &#x27;shipping&#x27;]
+refund:3 login:0 invoice:7 shipping:2 
+12 [&#x27;invoice&#x27;, &#x27;refund&#x27;, &#x27;shipping&#x27;]</pre></div></div>
+<p>Because a view is live, you <strong>cannot add or remove keys while iterating</strong> over a dict or its views: Python detects the size change and raises <code>RuntimeError: dictionary changed size during iteration</code>. Changing the <strong>value</strong> of an existing key is fine. To delete while looping, loop over a snapshot (<code>list(d)</code>), or better, build a new dict with a comprehension.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">change_while_iterating.py</span><button class="copy">Copy</button></div><pre><code class="py">vocab = {&quot;the&quot;: 120, &quot;refund&quot;: 9, &quot;xqzt&quot;: 1, &quot;a&quot;: 95, &quot;tyop&quot;: 1}
+try:
+    for word, n in vocab.items():
+        if n &lt; 2:
+            del vocab[word]
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)
+
+vocab = {&quot;the&quot;: 120, &quot;refund&quot;: 9, &quot;xqzt&quot;: 1, &quot;a&quot;: 95, &quot;tyop&quot;: 1}
+kept = {w: n for w, n in vocab.items() if n &gt;= 2}        # a new dict
+for word in list(vocab):                                  # or: loop over a snapshot
+    if vocab[word] &lt; 2:
+        del vocab[word]
+print(kept == vocab, list(kept))</code></pre><div class="out"><span class="ol">Output</span><pre>RuntimeError: dictionary changed size during iteration
+True [&#x27;the&#x27;, &#x27;refund&#x27;, &#x27;a&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="merging">
+<h2><span class="n">4</span>Merging and updating</h2>
+<p>All the ways of combining dicts follow one rule: <strong>for a repeated key, the later value wins</strong>. They differ in whether they build a new dict or change an existing one:</p>
+<ul><li><strong>New dict:</strong> <code>a | b</code> (Python 3.9+), <code>{**a, **b}</code>, <code>dict(a, **b)</code> (only for string keys).</li><li><strong>Change <code>a</code> in place:</strong> <code>a |= b</code> or <code>a.update(b)</code>. <code>update</code> also accepts keyword arguments and lists of pairs.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">merging.py</span><button class="copy">Copy</button></div><pre><code class="py">defaults = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2, &quot;stop&quot;: [&quot;###&quot;]}
+env = {&quot;model&quot;: &quot;medium&quot;}
+user = {&quot;temperature&quot;: 0.9}
+merged = defaults | env | user                 # later wins: user over env over defaults
+print(merged)
+print(merged[&quot;stop&quot;] is defaults[&quot;stop&quot;])      # shallow: nested values are shared (2.3)
+defaults.update(max_tokens=512)
+print(list(defaults))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;model&#x27;: &#x27;medium&#x27;, &#x27;temperature&#x27;: 0.9, &#x27;stop&#x27;: [&#x27;###&#x27;]}
+True
+[&#x27;model&#x27;, &#x27;temperature&#x27;, &#x27;stop&#x27;, &#x27;max_tokens&#x27;]</pre></div></div>
+<p>Write the layers from <strong>lowest to highest priority</strong>, left to right, and the precedence reads naturally. Getting the order backwards (<code>overrides | defaults</code>) silently makes the defaults win, a bug that produces no error (problem 10). Every one of these merges is shallow: nested dicts and lists are shared, so use a recursive merge for nested settings (2.3, <code>merge_settings</code>).</p>
+</section>
+<section class="sec" id="building">
+<h2><span class="n">5</span>Building and reshaping dicts</h2>
+<p>Common ways to build a dict: a literal, <code>dict(zip(keys, values))</code> for two parallel lists, <code>dict(pairs)</code> for a list of <code>(key, value)</code> pairs, and a comprehension <code>{k: f(k) for k in items}</code> when you compute values. Two reshaping patterns come up constantly:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">building.py</span><button class="copy">Copy</button></div><pre><code class="py">classes = [&quot;eggs&quot;, &quot;ham&quot;, &quot;spam&quot;]
+label_to_id = {label: i for i, label in enumerate(classes)}
+id_to_label = dict(enumerate(classes))
+print(label_to_id, id_to_label)
+
+scores = {&quot;faq&quot;: 0.71, &quot;guide&quot;: 0.93, &quot;terms&quot;: 0.12}
+by_score = dict(sorted(scores.items(), key=lambda kv: kv[1], reverse=True))
+print(by_score, next(iter(by_score)))
+
+owners = {&quot;faq&quot;: &quot;ana&quot;, &quot;guide&quot;: &quot;ben&quot;, &quot;terms&quot;: &quot;ana&quot;}
+inverted = {owner: doc for doc, owner in owners.items()}   # duplicates: the last one wins
+print(inverted)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;eggs&#x27;: 0, &#x27;ham&#x27;: 1, &#x27;spam&#x27;: 2} {0: &#x27;eggs&#x27;, 1: &#x27;ham&#x27;, 2: &#x27;spam&#x27;}
+{&#x27;guide&#x27;: 0.93, &#x27;faq&#x27;: 0.71, &#x27;terms&#x27;: 0.12} guide
+{&#x27;ana&#x27;: &#x27;terms&#x27;, &#x27;ben&#x27;: &#x27;guide&#x27;}</pre></div></div>
+<p><strong>Inverting</strong> a dict (values become keys) silently loses entries when values repeat: <code>"ana"</code> owns two documents but the inverted dict keeps only the last. When values can repeat, invert into lists (<code>{owner: [docs]}</code>, 4.6), or check for duplicates and raise (problem 2). <strong>Sorting</strong> a dict means building a new dict from sorted items: the dict itself has no sort method, but it keeps whatever insertion order you build it with.</p>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">Equality ignores order</div><p>Two dicts are equal when they have the same keys with equal values, in any order: <code>{"a": 1, "b": 2} == {"b": 2, "a": 1}</code> is <code>True</code>. So insertion order affects iteration and printing, never equality. (<code>collections.OrderedDict</code> is the exception: comparing two OrderedDicts also compares order.)</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-square-brackets-get-and-in" data-pid="m4-5-square-brackets-get-and-in" data-type="predict" data-level="easy" data-answer="small None n/a
+True None empty
+0
+KeyError: &#x27;choices&#x27;">
+<header class="prob-head"><h3>1. Square brackets, get and in</h3></header>
+<div class="code"><pre><code class="py">resp = {&quot;model&quot;: &quot;small&quot;, &quot;usage&quot;: {&quot;prompt_tokens&quot;: 12, &quot;completion_tokens&quot;: 0}, &quot;error&quot;: None}
+print(resp[&quot;model&quot;], resp.get(&quot;id&quot;), resp.get(&quot;id&quot;, &quot;n/a&quot;))
+print(&quot;error&quot; in resp, resp.get(&quot;error&quot;, &quot;none&quot;), resp[&quot;usage&quot;][&quot;completion_tokens&quot;] or &quot;empty&quot;)
+print(resp.get(&quot;usage&quot;, {}).get(&quot;total_tokens&quot;, 0))
+try:
+    resp[&quot;choices&quot;][0]
+except KeyError as e:
+    print(&quot;KeyError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>get</code> returns the default only when the key is absent, not when its value is <code>None</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>or</code> treats 0 as false.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>small None n/a
+True None empty
+0
+KeyError: &#x27;choices&#x27;</pre></div><p><code>get</code> with no default returns <code>None</code> for an absent key, and the given default otherwise. <code>"error"</code> is present with value <code>None</code>, so <code>get("error", "none")</code> returns <code>None</code>, not <code>"none"</code>. <code>0 or "empty"</code> gives <code>"empty"</code>, which would be a bug if 0 completion tokens were meaningful. The chained <code>get</code> returns 0 because <code>total_tokens</code> is absent. Indexing a missing key raises <code>KeyError</code> naming the key.</p></div></details>
+</article>
+<article class="prob" id="p-invert-a-label-map-refusing-duplicates" data-pid="m4-5-invert-a-label-map-refusing-duplicates" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Invert a label map, refusing duplicates</h3></header>
+<div class="prob-q"><p>Write <code>invert(mapping)</code> that turns <code>{label: id}</code> into <code>{id: label}</code>, and raises <code>ValueError</code> naming the repeated id if two labels share an id (inverting would silently lose one).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def invert(mapping):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+assert invert({"ham": 0, "spam": 1}) == {0: "ham", 1: "spam"}
+assert invert({}) == {}
+msg = raises(ValueError, invert, {"ham": 0, "spam": 1, "eggs": 0})
+assert msg and "0" in msg</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+assert invert({&quot;ham&quot;: 0, &quot;spam&quot;: 1}) == {0: &quot;ham&quot;, 1: &quot;spam&quot;}
+assert invert({}) == {}
+msg = raises(ValueError, invert, {&quot;ham&quot;: 0, &quot;spam&quot;: 1, &quot;eggs&quot;: 0})
+assert msg and &quot;0&quot; in msg</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the result in a loop; before storing <code>out[value] = key</code>, check whether <code>value</code> is already a key of <code>out</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def invert(mapping):
+    out = {}
+    for key, value in mapping.items():
+        if value in out:
+            raise ValueError(f&quot;id {value!r} is used by both {out[value]!r} and {key!r}&quot;)
+        out[value] = key
+    return out</code></pre></div><p>A comprehension <code>{v: k for k, v in mapping.items()}</code> would be shorter, but it silently keeps only the last label for a repeated id, which in a label map means one class disappears from decoded predictions. Checking <code>value in out</code> is O(1) per item, so the safe version is still O(n). The error message names both labels, which is what you need to fix the data.</p></div></details>
+</article>
+<article class="prob" id="p-optional-settings-that-crash" data-pid="m4-5-optional-settings-that-crash" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Optional settings that crash</h3></header>
+<div class="prob-q"><p><code>client_settings(cfg)</code> builds settings for an LLM client. Configs that leave out <code>timeout</code> or <code>retries</code> crash. Missing values should default to <code>timeout=30</code> and <code>retries=3</code>, but a <code>timeout</code> of <code>0</code> (no timeout) must be kept.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def client_settings(cfg):
+    return {&quot;timeout&quot;: cfg[&quot;timeout&quot;], &quot;retries&quot;: cfg[&quot;retries&quot;]}
+</textarea>
+<script type="text/plain" class="prob-tests">assert client_settings({}) == {"timeout": 30, "retries": 3}
+assert client_settings({"timeout": 0}) == {"timeout": 0, "retries": 3}
+assert client_settings({"timeout": 5, "retries": 0}) == {"timeout": 5, "retries": 0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert client_settings({}) == {&quot;timeout&quot;: 30, &quot;retries&quot;: 3}
+assert client_settings({&quot;timeout&quot;: 0}) == {&quot;timeout&quot;: 0, &quot;retries&quot;: 3}
+assert client_settings({&quot;timeout&quot;: 5, &quot;retries&quot;: 0}) == {&quot;timeout&quot;: 5, &quot;retries&quot;: 0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>get</code> with a default handles absent keys. Do not use <code>or</code>, or the 0s disappear.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def client_settings(cfg):
+    return {&quot;timeout&quot;: cfg.get(&quot;timeout&quot;, 30), &quot;retries&quot;: cfg.get(&quot;retries&quot;, 3)}</code></pre></div><p><code>cfg["timeout"]</code> treats a missing key as an error, but these settings are optional, so <code>get</code> with the documented default is the right tool. The tempting <code>cfg.get("timeout") or 30</code> would turn <code>timeout=0</code> and <code>retries=0</code> into the defaults, overriding an explicit choice (1.1, the COALESCE trap).</p></div></details>
+</article>
+<article class="prob" id="p-views-are-live" data-pid="m4-5-views-are-live" data-type="predict" data-level="easy" data-answer="[&#x27;apple&#x27;, &#x27;pear&#x27;, &#x27;plum&#x27;] [9, 0, 5]
+True 3
+{&#x27;pear&#x27;} dict_keys">
+<header class="prob-head"><h3>4. Views are live</h3></header>
+<div class="code"><pre><code class="py">stock = {&quot;apple&quot;: 3, &quot;pear&quot;: 0}
+ks = stock.keys()
+vs = stock.values()
+items = stock.items()
+stock[&quot;plum&quot;] = 5
+stock[&quot;apple&quot;] = 9
+print(list(ks), list(vs))
+print((&quot;apple&quot;, 9) in items, len(items))
+print(ks &amp; {&quot;pear&quot;, &quot;kiwi&quot;}, type(ks).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A view does not copy anything; it reads the dict each time you use it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;apple&#x27;, &#x27;pear&#x27;, &#x27;plum&#x27;] [9, 0, 5]
+True 3
+{&#x27;pear&#x27;} dict_keys</pre></div><p>The views were created before the changes, but they show the current dict: the new key <code>"plum"</code> and the new value for <code>"apple"</code> both appear. <code>items()</code> supports <code>in</code> with a <code>(key, value)</code> pair, and <code>keys()</code> supports set operations directly. If you need a snapshot that will not change, copy it: <code>list(d)</code>, <code>dict(d)</code> or <code>list(d.items())</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-pruning-a-vocabulary-while-looping-over-" data-pid="m4-5-pruning-a-vocabulary-while-looping-over-" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Pruning a vocabulary while looping over it</h3></header>
+<div class="prob-q"><p><code>prune(vocab, min_count)</code> should remove rare words from the vocabulary dict <strong>in place</strong>. It raises <code>RuntimeError</code>. Fix it, keeping it in place (the same dict object).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def prune(vocab, min_count):
+    for word, count in vocab.items():
+        if count &lt; min_count:
+            del vocab[word]
+</textarea>
+<script type="text/plain" class="prob-tests">v = {"the": 120, "refund": 9, "xqzt": 1, "a": 95, "tyop": 1}
+ref = v
+prune(v, 2)
+assert v == {"the": 120, "refund": 9, "a": 95} and v is ref
+prune(v, 1000)
+assert v == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">v = {&quot;the&quot;: 120, &quot;refund&quot;: 9, &quot;xqzt&quot;: 1, &quot;a&quot;: 95, &quot;tyop&quot;: 1}
+ref = v
+prune(v, 2)
+assert v == {&quot;the&quot;: 120, &quot;refund&quot;: 9, &quot;a&quot;: 95} and v is ref
+prune(v, 1000)
+assert v == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>You cannot delete keys while iterating over the dict itself. Collect the keys to delete first, or loop over a copy of the keys.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def prune(vocab, min_count):
+    for word in [w for w, c in vocab.items() if c &lt; min_count]:
+        del vocab[word]</code></pre></div><p>Deleting during iteration changes the dict's size under the running iterator, which Python refuses to continue with. Building the list of rare words first finishes the iteration before any deletion starts. If the function did not have to work in place, <code>{w: c for w, c in vocab.items() if c &gt;= min_count}</code> would be the clearest version. Pruning rare tokens is a standard step when building a vocabulary for bag-of-words features (scikit-learn's <code>min_df</code>).</p></div></details>
+</article>
+<article class="prob" id="p-get-a-value-deep-inside-json" data-pid="m4-5-get-a-value-deep-inside-json" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Get a value deep inside JSON</h3></header>
+<div class="prob-q"><p>Write <code>dig(data, path, default=None)</code> that follows <code>path</code>, a list of keys and list positions, through nested dicts and lists, and returns <code>default</code> as soon as any step is missing (a missing key, a position out of range, or a value that is not a container).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def dig(data, path, default=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">resp = {"choices": [{"message": {"content": "Hi", "tool_calls": []}}], "usage": {"total_tokens": 42}}
+assert dig(resp, ["choices", 0, "message", "content"]) == "Hi"
+assert dig(resp, ["usage", "total_tokens"]) == 42
+assert dig(resp, ["choices", 1, "message"], "none") == "none"
+assert dig(resp, ["choices", 0, "message", "tool_calls", 0, "name"]) is None
+assert dig(resp, ["usage", "total_tokens", "x"], -1) == -1
+assert dig(resp, []) is resp</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">resp = {&quot;choices&quot;: [{&quot;message&quot;: {&quot;content&quot;: &quot;Hi&quot;, &quot;tool_calls&quot;: []}}], &quot;usage&quot;: {&quot;total_tokens&quot;: 42}}
+assert dig(resp, [&quot;choices&quot;, 0, &quot;message&quot;, &quot;content&quot;]) == &quot;Hi&quot;
+assert dig(resp, [&quot;usage&quot;, &quot;total_tokens&quot;]) == 42
+assert dig(resp, [&quot;choices&quot;, 1, &quot;message&quot;], &quot;none&quot;) == &quot;none&quot;
+assert dig(resp, [&quot;choices&quot;, 0, &quot;message&quot;, &quot;tool_calls&quot;, 0, &quot;name&quot;]) is None
+assert dig(resp, [&quot;usage&quot;, &quot;total_tokens&quot;, &quot;x&quot;], -1) == -1
+assert dig(resp, []) is resp</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk the path one step at a time. For each step, the current value must be a dict containing the key, or a list where the position is in range.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def dig(data, path, default=None):
+    current = data
+    for step in path:
+        if isinstance(current, dict) and step in current:
+            current = current[step]
+        elif isinstance(current, list) and isinstance(step, int) and -len(current) &lt;= step &lt; len(current):
+            current = current[step]
+        else:
+            return default
+    return current</code></pre></div><p>LLM API responses are deeply nested and their shape varies (a refusal has no <code>tool_calls</code>, an error has no <code>choices</code>), so a single helper beats a pyramid of <code>if "choices" in resp and resp["choices"] and ...</code>. Checking before stepping (look before you leap) keeps the logic explicit; the other style, <code>try: ... except (KeyError, IndexError, TypeError): return default</code>, is shorter but can hide a real bug inside a step (Module 8 compares the two). The path as a list also makes the lookup easy to log when it fails.</p></div></details>
+</article>
+<article class="prob" id="p-dict-order-step-by-step" data-pid="m4-5-dict-order-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Dict order, step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>list(d)</code> (the key order) and <code>d.get("b")</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">d = {&quot;b&quot;: 1}
+d[&quot;a&quot;] = 2
+d[&quot;b&quot;] = 3
+del d[&quot;b&quot;]
+d[&quot;b&quot;] = 4
+d |= {&quot;a&quot;: 0, &quot;c&quot;: 5}</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>list(d)</code></th><th><code>d.get(&quot;b&quot;)</code></th></tr><tr><td>d[&#x27;a&#x27;] = 2</td><td><input class="cell" data-a="[&#x27;b&#x27;, &#x27;a&#x27;]" data-s="[&#x27;b&#x27;, &#x27;a&#x27;]" aria-label="list(d) at d[&#x27;a&#x27;] = 2" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="d.get(&quot;b&quot;) at d[&#x27;a&#x27;] = 2" autocomplete="off"></td></tr><tr><td>d[&#x27;b&#x27;] = 3</td><td><input class="cell" data-a="[&#x27;b&#x27;, &#x27;a&#x27;]" data-s="[&#x27;b&#x27;, &#x27;a&#x27;]" aria-label="list(d) at d[&#x27;b&#x27;] = 3" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="d.get(&quot;b&quot;) at d[&#x27;b&#x27;] = 3" autocomplete="off"></td></tr><tr><td>del d[&#x27;b&#x27;]</td><td><input class="cell" data-a="[&#x27;a&#x27;]" data-s="[&#x27;a&#x27;]" aria-label="list(d) at del d[&#x27;b&#x27;]" autocomplete="off"></td><td><input class="cell" data-a="None" data-s="None" aria-label="d.get(&quot;b&quot;) at del d[&#x27;b&#x27;]" autocomplete="off"></td></tr><tr><td>d[&#x27;b&#x27;] = 4</td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;]" aria-label="list(d) at d[&#x27;b&#x27;] = 4" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="d.get(&quot;b&quot;) at d[&#x27;b&#x27;] = 4" autocomplete="off"></td></tr><tr><td>d |= {...}</td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]" aria-label="list(d) at d |= {...}" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="d.get(&quot;b&quot;) at d |= {...}" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Updating an existing key keeps its place. Deleting and re-adding moves it to the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>list(d)</code></th><th><code>d.get(&quot;b&quot;)</code></th></tr><tr><td>d[&#x27;a&#x27;] = 2</td><td><code>[&#x27;b&#x27;, &#x27;a&#x27;]</code></td><td><code>1</code></td></tr><tr><td>d[&#x27;b&#x27;] = 3</td><td><code>[&#x27;b&#x27;, &#x27;a&#x27;]</code></td><td><code>3</code></td></tr><tr><td>del d[&#x27;b&#x27;]</td><td><code>[&#x27;a&#x27;]</code></td><td><code>None</code></td></tr><tr><td>d[&#x27;b&#x27;] = 4</td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;]</code></td><td><code>4</code></td></tr><tr><td>d |= {...}</td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]</code></td><td><code>4</code></td></tr></table></div><p>Adding <code>"a"</code> appends it after <code>"b"</code>. Updating <code>"b"</code> keeps its first position. Deleting <code>"b"</code> and adding it again puts it at the <strong>end</strong>. <code>|=</code> updates <code>"a"</code> in place (same position, new value 0) and appends the new key <code>"c"</code>. Insertion order is about when a key <strong>first</strong> entered the dict, which matters whenever dict order ends up in output: JSON, CSV headers, prompts.</p></div></details>
+</article>
+<article class="prob" id="p-lookups-in-a-list-of-pairs-or-a-dict" data-pid="m4-5-lookups-in-a-list-of-pairs-or-a-dict" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Lookups in a list of pairs or a dict</h3></header>
+<div class="prob-q"><p>Both look up the price for 5,000 product codes among 20,000 products. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">pairs = [(f&quot;p{i}&quot;, i * 1.5) for i in range(20_000)]
+queries = [f&quot;p{i}&quot; for i in range(0, 20_000, 4)]
+table = dict(pairs)
+def find(code):
+    for c, price in pairs:
+        if c == code:
+            return price</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">prices = [find(q) for q in queries]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">prices = [table[q] for q in queries]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many pairs does <code>find</code> look at, on average, per query?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>2.02 s</td></tr><tr><td>B</td><td>586.90 µs</td></tr></table></div><p><code>find</code> scans the list of pairs until it hits the code: about half the list per query, so roughly 5,000 × 10,000 comparisons. The dict computes each key's slot directly: 5,000 O(1) lookups. Building <code>table</code> costs one pass, which is paid back after a handful of lookups. "A list of <code>(key, value)</code> pairs that I search" is almost always a dict waiting to be written.</p></div></details>
+</article>
+<article class="prob" id="p-label-maps-that-are-stable" data-pid="m4-5-label-maps-that-are-stable" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. Label maps that are stable</h3></header>
+<div class="prob-q"><p>Write <code>label_maps(labels)</code> that takes any iterable of class labels (with repeats) and returns <code>(label_to_id, id_to_label)</code>, numbering the distinct labels in <strong>sorted</strong> order from 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def label_maps(labels):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">l2i, i2l = label_maps(["spam", "ham", "spam", "eggs"])
+assert l2i == {"eggs": 0, "ham": 1, "spam": 2}
+assert i2l == {0: "eggs", 1: "ham", 2: "spam"}
+assert all(i2l[l2i[x]] == x for x in l2i)
+assert label_maps([]) == ({}, {})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">l2i, i2l = label_maps([&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;eggs&quot;])
+assert l2i == {&quot;eggs&quot;: 0, &quot;ham&quot;: 1, &quot;spam&quot;: 2}
+assert i2l == {0: &quot;eggs&quot;, 1: &quot;ham&quot;, 2: &quot;spam&quot;}
+assert all(i2l[l2i[x]] == x for x in l2i)
+assert label_maps([]) == ({}, {})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>classes = sorted(set(labels))</code> (4.4), then build both dicts from <code>enumerate(classes)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def label_maps(labels):
+    classes = sorted(set(labels))
+    label_to_id = {label: i for i, label in enumerate(classes)}
+    id_to_label = dict(enumerate(classes))
+    return label_to_id, id_to_label</code></pre></div><p>Sorting makes the numbering deterministic across runs (4.4, problem 6), and building both directions from the same <code>classes</code> list guarantees they are exact inverses, which the third test checks. <code>dict(enumerate(classes))</code> is the shortest way to build "position to item". Save <code>classes</code> (or <code>id_to_label</code>) with the model; it is the only way to decode predictions back to names later.</p></div></details>
+</article>
+<article class="prob" id="p-defaults-that-override-the-user" data-pid="m4-5-defaults-that-override-the-user" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Defaults that override the user</h3></header>
+<div class="prob-q"><p><code>effective_config(defaults, user)</code> should return the user's settings on top of the defaults. Users report that their temperature is ignored. Fix the precedence, and make sure neither input dict is changed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def effective_config(defaults, user):
+    cfg = user
+    cfg.update(defaults)
+    return cfg
+</textarea>
+<script type="text/plain" class="prob-tests">d = {"model": "small", "temperature": 0.2}
+u = {"temperature": 0.9, "stop": ["###"]}
+out = effective_config(d, u)
+assert out == {"model": "small", "temperature": 0.9, "stop": ["###"]}
+assert d == {"model": "small", "temperature": 0.2}
+assert u == {"temperature": 0.9, "stop": ["###"]}
+assert out is not d and out is not u</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">d = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+u = {&quot;temperature&quot;: 0.9, &quot;stop&quot;: [&quot;###&quot;]}
+out = effective_config(d, u)
+assert out == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.9, &quot;stop&quot;: [&quot;###&quot;]}
+assert d == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+assert u == {&quot;temperature&quot;: 0.9, &quot;stop&quot;: [&quot;###&quot;]}
+assert out is not d and out is not u</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two bugs: <code>update</code> lets the <strong>argument</strong> win, and <code>cfg = user</code> is an alias, not a copy.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def effective_config(defaults, user):
+    return defaults | user</code></pre></div><p><code>cfg.update(defaults)</code> writes every default over the user's values, so the defaults win: precedence backwards. And <code>cfg = user</code> is an alias (2.2), so the user's own dict is changed too. <code>defaults | user</code> fixes both: it builds a new dict, and the right-hand side wins. Read merges left to right as "start from this, then apply that".</p></div></details>
+</article>
+<article class="prob" id="p-an-if-chain-that-is-really-a-lookup" data-pid="m4-5-an-if-chain-that-is-really-a-lookup" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. An if chain that is really a lookup</h3></header>
+<div class="prob-q"><p>Replace the chain with a dict lookup, keeping exactly the same results, including the fallback. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def region_name(code):
+    if code == &quot;eu&quot;:
+        return &quot;Europe&quot;
+    elif code == &quot;us&quot;:
+        return &quot;United States&quot;
+    elif code == &quot;apac&quot;:
+        return &quot;Asia-Pacific&quot;
+    elif code == &quot;latam&quot;:
+        return &quot;Latin America&quot;
+    else:
+        return &quot;Unknown&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert [region_name(c) for c in ["eu", "us", "apac", "latam"]] == ["Europe", "United States", "Asia-Pacific", "Latin America"]
+assert region_name("mars") == "Unknown" and region_name("EU") == "Unknown"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert [region_name(c) for c in [&quot;eu&quot;, &quot;us&quot;, &quot;apac&quot;, &quot;latam&quot;]] == [&quot;Europe&quot;, &quot;United States&quot;, &quot;Asia-Pacific&quot;, &quot;Latin America&quot;]
+assert region_name(&quot;mars&quot;) == &quot;Unknown&quot; and region_name(&quot;EU&quot;) == &quot;Unknown&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A module-level dict, and <code>get</code> with the fallback as default.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">REGIONS = {&quot;eu&quot;: &quot;Europe&quot;, &quot;us&quot;: &quot;United States&quot;, &quot;apac&quot;: &quot;Asia-Pacific&quot;, &quot;latam&quot;: &quot;Latin America&quot;}
+
+def region_name(code):
+    return REGIONS.get(code, &quot;Unknown&quot;)</code></pre></div><p>The chain encoded a table as control flow; the dict states it as data, which can be extended, tested, loaded from a file or a database, and shown in a dropdown. <code>get</code> with a default replaces the <code>else</code>. This is the same refactor as the dispatch table in 3.5, with values instead of functions.</p></div></details>
+</article>
+<article class="prob" id="p-equality-order-and-duplicate-keys" data-pid="m4-5-equality-order-and-duplicate-keys" data-type="predict" data-level="medium" data-answer="True False
+False True
+{&#x27;k&#x27;: 2} {&#x27;k&#x27;: 2}
+{1: &#x27;bool&#x27;}">
+<header class="prob-head"><h3>12. Equality, order and duplicate keys</h3></header>
+<div class="code"><pre><code class="py">from collections import OrderedDict
+
+a = {&quot;x&quot;: 1, &quot;y&quot;: 2}
+b = {&quot;y&quot;: 2, &quot;x&quot;: 1}
+print(a == b, list(a) == list(b))
+print(OrderedDict(a) == OrderedDict(b), OrderedDict(a) == b)
+print({&quot;k&quot;: 1, &quot;k&quot;: 2}, dict([(&quot;k&quot;, 1), (&quot;k&quot;, 2)]))
+print({1: &quot;int&quot;, 1.0: &quot;float&quot;, True: &quot;bool&quot;})</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Plain dict equality ignores order. A repeated key keeps its first position and its last value.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two OrderedDicts compare order; an OrderedDict compared with a plain dict does not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True False
+False True
+{&#x27;k&#x27;: 2} {&#x27;k&#x27;: 2}
+{1: &#x27;bool&#x27;}</pre></div><p><code>a == b</code> is <code>True</code> although their key orders differ. Two <code>OrderedDict</code>s with different orders are <strong>not</strong> equal, but an <code>OrderedDict</code> compared with a plain dict ignores order. A repeated key in a literal or a list of pairs keeps the <strong>first</strong> position and the <strong>last</strong> value. <code>1</code>, <code>1.0</code> and <code>True</code> are the same key (4.4), so the dict has one entry: the key object stays <code>1</code> (the first one inserted) and the value is the last one written, <code>"bool"</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-top-k-entries-of-a-dict" data-pid="m4-5-top-k-entries-of-a-dict" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Top-k entries of a dict</h3></header>
+<div class="prob-q"><p>Write <code>top_k(scores, k)</code> that returns a <strong>new dict</strong> of the <code>k</code> entries with the highest values, ordered from highest to lowest, breaking ties by key ascending. Use <code>heapq.nlargest</code> (4.2) so a large dict is not fully sorted.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import heapq
+
+def top_k(scores, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">s = {"faq": 0.71, "guide": 0.93, "terms": 0.12, "blog": 0.93, "api": 0.5}
+assert list(top_k(s, 3).items()) == [("blog", 0.93), ("guide", 0.93), ("faq", 0.71)]
+assert top_k(s, 0) == {} and len(top_k(s, 10)) == 5
+assert top_k({}, 2) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = {&quot;faq&quot;: 0.71, &quot;guide&quot;: 0.93, &quot;terms&quot;: 0.12, &quot;blog&quot;: 0.93, &quot;api&quot;: 0.5}
+assert list(top_k(s, 3).items()) == [(&quot;blog&quot;, 0.93), (&quot;guide&quot;, 0.93), (&quot;faq&quot;, 0.71)]
+assert top_k(s, 0) == {} and len(top_k(s, 10)) == 5
+assert top_k({}, 2) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>heapq.nlargest(k, scores.items(), key=...)</code> returns pairs. The key must rank higher values first and, for equal values, smaller keys first.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A key of <code>(value, negated key)</code> is not possible for strings. <code>nsmallest</code> with <code>(-value, key)</code> is.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+def top_k(scores, k):
+    best = heapq.nsmallest(k, scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    return dict(best)</code></pre></div><p>Strings cannot be negated, so "value descending, key ascending" is expressed as the <strong>smallest</strong> <code>(-value, key)</code> tuples, which <code>nsmallest</code> returns already in that order. Building a dict from the ordered pairs keeps that order, so the result reads highest first. <code>nsmallest(0, ...)</code> is an empty list, so <code>k = 0</code> needs no special case (unlike the <code>-0</code> slice trap, 4.1). Retrieval code does this after scoring chunks: keep the top few, in a deterministic order.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-token-accounting-with-thre" data-pid="m4-5-read-the-code-token-accounting-with-thre" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: token accounting with three bugs</h3></header>
+<div class="prob-q"><p>This module tracks token usage per user per model for billing. Usage for new models is lost, the monthly report crashes, and cleaning up zero entries raises <code>RuntimeError</code>. Read the module, find the three bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def record(usage, user, model, tokens):
+    per_user = usage.get(user, {})
+    per_user[model] = per_user.get(model, 0) + tokens
+
+
+def report(usage):
+    lines = []
+    for user in sorted(usage):
+        total = sum(usage[user].values())
+        top = max(usage[user], key=usage[user].get)
+        lines.append(f&quot;{user}: {total} tokens, mostly {top}&quot;)
+    return lines
+
+
+def drop_unused(usage):
+    for user, per_model in usage.items():
+        if sum(per_model.values()) == 0:
+            del usage[user]
+</textarea>
+<script type="text/plain" class="prob-tests">usage = {}
+record(usage, "ana", "small", 120)
+record(usage, "ana", "large", 300)
+record(usage, "ana", "small", 30)
+record(usage, "ben", "small", 0)
+assert usage == {"ana": {"small": 150, "large": 300}, "ben": {"small": 0}}
+assert report(usage) == ["ana: 450 tokens, mostly large", "ben: 0 tokens, mostly small"]
+usage["cy"] = {}
+assert report(usage)[-1] == "cy: 0 tokens, mostly none"
+drop_unused(usage)
+assert usage == {"ana": {"small": 150, "large": 300}}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">usage = {}
+record(usage, &quot;ana&quot;, &quot;small&quot;, 120)
+record(usage, &quot;ana&quot;, &quot;large&quot;, 300)
+record(usage, &quot;ana&quot;, &quot;small&quot;, 30)
+record(usage, &quot;ben&quot;, &quot;small&quot;, 0)
+assert usage == {&quot;ana&quot;: {&quot;small&quot;: 150, &quot;large&quot;: 300}, &quot;ben&quot;: {&quot;small&quot;: 0}}
+assert report(usage) == [&quot;ana: 450 tokens, mostly large&quot;, &quot;ben: 0 tokens, mostly small&quot;]
+usage[&quot;cy&quot;] = {}
+assert report(usage)[-1] == &quot;cy: 0 tokens, mostly none&quot;
+drop_unused(usage)
+assert usage == {&quot;ana&quot;: {&quot;small&quot;: 150, &quot;large&quot;: 300}}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>usage.get(user, {})</code> returns a <strong>new</strong> empty dict for a new user, which is never stored in <code>usage</code>. <code>setdefault</code> stores it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>max</code> of an empty dict raises. Give it a <code>default</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>drop_unused</code> deletes while iterating over <code>usage.items()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def record(usage, user, model, tokens):
+    per_user = usage.setdefault(user, {})
+    per_user[model] = per_user.get(model, 0) + tokens
+
+
+def report(usage):
+    lines = []
+    for user in sorted(usage):
+        total = sum(usage[user].values())
+        top = max(usage[user], key=usage[user].get, default=&quot;none&quot;)
+        lines.append(f&quot;{user}: {total} tokens, mostly {top}&quot;)
+    return lines
+
+
+def drop_unused(usage):
+    for user in [u for u, per_model in usage.items() if sum(per_model.values()) == 0]:
+        del usage[user]</code></pre></div><p>Bug one: <code>get(user, {})</code> returns a fresh dict that is never put <strong>into</strong> <code>usage</code>, so all usage of a new user (and each later call) vanishes; <code>setdefault(user, {})</code> returns the existing inner dict or stores and returns a new one, which is exactly "get or create" (4.6). Bug two: <code>max</code> over a user with no models raises <code>ValueError</code>; <code>default=</code> handles it. Bug three: deleting during iteration over <code>items()</code> raises <code>RuntimeError</code>; collect the users first. Billing code is where "silently lost" is the worst kind of bug, which is why the first one matters most.</p></div></details>
+</article>
+<article class="prob" id="p-a-hash-join-of-two-tables" data-pid="m4-5-a-hash-join-of-two-tables" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. A hash join of two tables</h3></header>
+<div class="prob-q"><p>Write <code>inner_join(left, right, key)</code> for two lists of dicts: return a list of merged dicts (right's fields added to left's) for every pair with equal values of <code>key</code>, in the order of <code>left</code>, and for duplicate matches in the order of <code>right</code>. It must run in O(len(left) + len(right) + output), so build a dict index on <code>right</code> first. Rows without the key are skipped.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def inner_join(left, right, key):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">orders = [{"order": 1, "cust": "c1"}, {"order": 2, "cust": "c9"}, {"order": 3, "cust": "c2"}, {"order": 4}]
+customers = [{"cust": "c1", "name": "Ana"}, {"cust": "c2", "name": "Ben"}, {"cust": "c1", "name": "Ana (old)"}]
+out = inner_join(orders, customers, "cust")
+assert out == [{"order": 1, "cust": "c1", "name": "Ana"}, {"order": 1, "cust": "c1", "name": "Ana (old)"},
+               {"order": 3, "cust": "c2", "name": "Ben"}]
+assert orders[0] == {"order": 1, "cust": "c1"}
+assert inner_join([], customers, "cust") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">orders = [{&quot;order&quot;: 1, &quot;cust&quot;: &quot;c1&quot;}, {&quot;order&quot;: 2, &quot;cust&quot;: &quot;c9&quot;}, {&quot;order&quot;: 3, &quot;cust&quot;: &quot;c2&quot;}, {&quot;order&quot;: 4}]
+customers = [{&quot;cust&quot;: &quot;c1&quot;, &quot;name&quot;: &quot;Ana&quot;}, {&quot;cust&quot;: &quot;c2&quot;, &quot;name&quot;: &quot;Ben&quot;}, {&quot;cust&quot;: &quot;c1&quot;, &quot;name&quot;: &quot;Ana (old)&quot;}]
+out = inner_join(orders, customers, &quot;cust&quot;)
+assert out == [{&quot;order&quot;: 1, &quot;cust&quot;: &quot;c1&quot;, &quot;name&quot;: &quot;Ana&quot;}, {&quot;order&quot;: 1, &quot;cust&quot;: &quot;c1&quot;, &quot;name&quot;: &quot;Ana (old)&quot;},
+               {&quot;order&quot;: 3, &quot;cust&quot;: &quot;c2&quot;, &quot;name&quot;: &quot;Ben&quot;}]
+assert orders[0] == {&quot;order&quot;: 1, &quot;cust&quot;: &quot;c1&quot;}
+assert inner_join([], customers, &quot;cust&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Index the right side: a dict from key value to the <strong>list</strong> of right rows with that value (<code>setdefault(value, []).append(row)</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then for each left row, look up its key and emit <code>{**left_row, **right_row}</code> for each match.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def inner_join(left, right, key):
+    index = {}
+    for row in right:
+        if key in row:
+            index.setdefault(row[key], []).append(row)
+    out = []
+    for row in left:
+        for match in index.get(row.get(key), []) if key in row else []:
+            out.append({**row, **match})
+    return out</code></pre></div><p>A nested loop join compares every left row with every right row: O(n × m). Building a dict index on one side makes each lookup O(1), so the whole join is O(n + m + output): this is the <strong>hash join</strong> that databases use when joining on equality without a usable index. The index maps each key value to a <strong>list</strong> because keys can repeat on the right, which produces one output row per match, exactly like SQL. <code>{**row, **match}</code> builds new dicts, so the inputs are untouched (2.4), and the right side wins on clashing column names. pandas <code>merge</code> does this on whole columns.</p></div></details>
+</article>
+<article class="prob" id="p-building-dicts-with-repeats" data-pid="m4-5-building-dicts-with-repeats" data-type="predict" data-level="hard" data-answer="{&#x27;a&#x27;: None, &#x27;b&#x27;: None, &#x27;c&#x27;: None}
+{&#x27;a&#x27;: 3, &#x27;b&#x27;: 1, &#x27;c&#x27;: 2}
+{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}
+{&#x27;x&#x27;: [1, 2]} {&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+True {&#x27;k&#x27;: []}">
+<header class="prob-head"><h3>16. Building dicts with repeats</h3></header>
+<div class="code"><pre><code class="py">print(dict.fromkeys(&quot;abca&quot;))
+print({c: i for i, c in enumerate(&quot;abca&quot;)})
+print(dict(zip(&quot;abc&quot;, [1, 2])))
+d = {}
+d[&quot;x&quot;] = d.get(&quot;x&quot;, []) + [1]
+d[&quot;x&quot;] = d.get(&quot;x&quot;, []) + [2]
+print(d, {**{&quot;x&quot;: 1}, &quot;x&quot;: 2, **{&quot;y&quot;: 3}})
+e = {}
+print(e.setdefault(&quot;k&quot;, []) is e.setdefault(&quot;k&quot;, [&quot;other&quot;]), e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A repeated key keeps the first position and the last value. <code>zip</code> stops at the shorter input.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>setdefault</code> only stores its default the first time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;a&#x27;: None, &#x27;b&#x27;: None, &#x27;c&#x27;: None}
+{&#x27;a&#x27;: 3, &#x27;b&#x27;: 1, &#x27;c&#x27;: 2}
+{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}
+{&#x27;x&#x27;: [1, 2]} {&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+True {&#x27;k&#x27;: []}</pre></div><p><code>fromkeys</code> keeps each character once in first-seen order. The comprehension also keeps first positions, but the value for <code>"a"</code> is overwritten by the later index 3. <code>zip</code> stops at the shorter iterable, so <code>"c"</code> is dropped without an error (1.2's <code>strict=True</code> would catch it). Building the list with <code>d.get("x", []) + [...]</code> creates a new list each time and stores it, which works but copies. In the literal, later keys override earlier ones, including those spread from another dict. The second <code>setdefault</code> finds the existing key, ignores <code>["other"]</code> and returns the same list.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-how-does-a-python-dict-give-o-1-lookups-" data-pid="m4-5-how-does-a-python-dict-give-o-1-lookups-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How does a Python dict give O(1) lookups and keep insertion order at the same time?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It is a hash table: the key's hash picks a slot, collisions are resolved by probing, and the table resizes as it fills, so lookups, inserts and deletes are O(1) on average. Since CPython 3.6 (and guaranteed by the language from 3.7), it uses a <strong>compact</strong> layout: a small index array of slots points into a separate, dense array of entries stored in insertion order. Lookups go through the index; iteration walks the dense entries, which gives insertion order and uses less memory than storing entries directly in the sparse table. Keys must be hashable and must not change their hash. Mention that deleting and re-inserting a key moves it to the end, and that equality ignores order.</p></div></details>
+</article>
+<article class="prob" id="p-a-key-might-be-missing-when-do-you-use-d" data-pid="m4-5-a-key-might-be-missing-when-do-you-use-d" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. A key might be missing. When do you use <code>d[k]</code>, <code>get</code>, <code>setdefault</code>, <code>defaultdict</code> or <code>try/except KeyError</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>d[k]</code> when the key must exist and a missing key is a bug you want to surface. <code>d.get(k, default)</code> for optional keys when you only read. <code>setdefault(k, default)</code> when you want to read <strong>and</strong> create the entry if absent in one step, typically to append to a list (<code>d.setdefault(k, []).append(x)</code>). <code>collections.defaultdict(factory)</code> when a whole dict should create entries on first access, such as counters and grouping (4.6). <code>try/except KeyError</code> when the key is normally present and the missing case is rare and needs special handling (EAFP style, Module 8). Pitfalls worth mentioning: <code>get(k) or default</code> swallows falsy values, and <code>defaultdict</code> creates entries even on plain reads.</p></div></details>
+</article>
+<article class="prob" id="p-explain-the-hash-join-when-is-it-better-" data-pid="m4-5-explain-the-hash-join-when-is-it-better-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Explain the hash join. When is it better than a nested loop join, and what does it cost?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>For an equality join, build a hash table (a dict) from the smaller input, keyed by the join column, mapping each key to its rows; then scan the larger input and look each row's key up. That is O(n + m) time plus the output, versus O(n × m) for comparing every pair in nested loops. The cost is memory for the hash table, which is why databases build it on the smaller side and spill to disk when it does not fit. It only works for equality conditions (not <code>&lt;</code> or ranges, where sort-merge joins or indexes are used). In Python this is the dict-of-lists index pattern, and pandas <code>merge</code> does the same on whole columns. Mention duplicates on both sides multiply output rows, exactly as in SQL.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A dict is a hash table of keys with values: lookups by key are O(1), keys must be hashable, and insertion order is kept.</li><li><code>d[k]</code> for required keys, <code>get</code> for optional ones, <code>in</code> to test, <code>setdefault</code> to read-or-create. Never <code>get(k) or default</code> for values that can be 0.</li><li>Views (<code>keys</code>, <code>values</code>, <code>items</code>) are live. Never add or delete keys while iterating: loop over a snapshot or build a new dict.</li><li>Merges are later-wins and shallow: write layers from lowest to highest priority, <code>defaults | env | user</code>.</li><li>Inverting loses repeated values; sorting builds a new dict; a dict index of lists turns a nested-loop join into a hash join.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

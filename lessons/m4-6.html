@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.6 · Dict tools: counting and grouping</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-6" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.6 Dict tools: counting and grouping</h1>
+  <p><code>Counter</code> for counting, <code>defaultdict</code> for creating entries on first use, and the GROUP BY patterns built on them: grouping, multi-key grouping and several aggregates in one pass. Plus an LRU cache with <code>OrderedDict</code> and rank fusion for hybrid search.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="counter">
+<h2><span class="n">1</span>Counting with <code>Counter</code></h2>
+<p><code>Counter(iterable)</code> counts how many times each hashable item appears. It is a dict subclass, so everything from 4.5 works, with a few changes that make counting painless. Step by step: building it walks the iterable once (in C, which is fast) and adds 1 for each item. Reading a <strong>missing</strong> item returns <code>0</code> instead of raising, and does not insert it. <code>most_common(n)</code> returns the top <code>n</code> pairs, highest count first, with ties in first-seen order.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">counter_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+labels = [&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;eggs&quot;, &quot;ham&quot;, &quot;spam&quot;]
+c = Counter(labels)
+print(c, c[&quot;spam&quot;], c[&quot;unknown&quot;])           # missing items count as 0
+print(c.most_common(2), c.total())
+c.update([&quot;eggs&quot;, &quot;eggs&quot;])                  # update ADDS counts (unlike dict.update)
+c[&quot;ham&quot;] -= 1
+print(c.most_common(), &quot;unknown&quot; in c)</code></pre><div class="out"><span class="ol">Output</span><pre>Counter({&#x27;spam&#x27;: 3, &#x27;ham&#x27;: 2, &#x27;eggs&#x27;: 1}) 3 0
+[(&#x27;spam&#x27;, 3), (&#x27;ham&#x27;, 2)] 6
+[(&#x27;spam&#x27;, 3), (&#x27;eggs&#x27;, 3), (&#x27;ham&#x27;, 1)] False</pre></div></div>
+<p>Counters also do arithmetic, which turns many comparisons into one line: <code>c1 + c2</code> adds counts, <code>c1 - c2</code> subtracts and <strong>drops anything that ends at zero or below</strong>, <code>c1 &amp; c2</code> keeps the minimum of each count and <code>c1 | c2</code> the maximum. Note that <code>update</code> and <code>+</code> <strong>add</strong> counts, the opposite of <code>dict.update</code>, which replaces values.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">counter_math.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+train = Counter({&quot;spam&quot;: 600, &quot;ham&quot;: 400})
+test = Counter({&quot;spam&quot;: 50, &quot;ham&quot;: 150, &quot;eggs&quot;: 5})
+print(train + test)
+print(test - train, train - test)           # zero or negative results disappear
+print(test &amp; train, sorted((train | test).items()))</code></pre><div class="out"><span class="ol">Output</span><pre>Counter({&#x27;spam&#x27;: 650, &#x27;ham&#x27;: 550, &#x27;eggs&#x27;: 5})
+Counter({&#x27;eggs&#x27;: 5}) Counter({&#x27;spam&#x27;: 550, &#x27;ham&#x27;: 250})
+Counter({&#x27;ham&#x27;: 150, &#x27;spam&#x27;: 50}) [(&#x27;eggs&#x27;, 5), (&#x27;ham&#x27;, 400), (&#x27;spam&#x27;, 600)]</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p><code>Counter(labels)</code> is <code>SELECT label, COUNT(*) FROM t GROUP BY label</code>, and <code>most_common(3)</code> adds <code>ORDER BY COUNT(*) DESC LIMIT 3</code>. In pandas it is <code>s.value_counts()</code>; in Power BI, a count measure on a table visual grouped by the label column.</p></div></div>
+</section>
+<section class="sec" id="defaultdict">
+<h2><span class="n">2</span><code>defaultdict</code>: values created on first access</h2>
+<p>A <code>defaultdict(factory)</code> behaves like a dict, except that accessing a <strong>missing</strong> key with <code>d[key]</code> calls <code>factory()</code> (with no arguments), stores the result under that key, and returns it. So <code>defaultdict(list)</code> gives every new key an empty list, <code>defaultdict(int)</code> a 0, <code>defaultdict(set)</code> an empty set. That removes the "if the key is not there yet, create it" step from every grouping and counting loop.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">defaultdict_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+by_team = defaultdict(list)
+for ticket, team in [(&quot;T1&quot;, &quot;billing&quot;), (&quot;T2&quot;, &quot;auth&quot;), (&quot;T3&quot;, &quot;billing&quot;)]:
+    by_team[team].append(ticket)             # no need to create the list first
+print(by_team[&quot;billing&quot;], dict(by_team))
+
+tokens = defaultdict(int)
+for model, n in [(&quot;small&quot;, 120), (&quot;large&quot;, 300), (&quot;small&quot;, 30)]:
+    tokens[model] += n
+print(dict(tokens))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;T1&#x27;, &#x27;T3&#x27;] {&#x27;billing&#x27;: [&#x27;T1&#x27;, &#x27;T3&#x27;], &#x27;auth&#x27;: [&#x27;T2&#x27;]}
+{&#x27;small&#x27;: 150, &#x27;large&#x27;: 300}</pre></div></div>
+<p>The trap: <strong>any</strong> <code>d[key]</code> on a missing key creates an entry, including reads that were only meant to check. A report that does <code>if d[key]:</code> for keys that may not exist quietly fills the dict with empty entries, which then show up in counts, JSON output and plots. Use <code>key in d</code> or <code>d.get(key)</code> to read without creating (problem 9). And convert to a plain dict before returning or serialising, so callers do not inherit the auto-creating behaviour.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">phantom_keys.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+seen = defaultdict(list)
+seen[&quot;a&quot;].append(1)
+if seen[&quot;b&quot;]:                 # a &quot;harmless&quot; read...
+    pass
+print(dict(seen), &quot;c&quot; in seen, seen.get(&quot;c&quot;), dict(seen))   # in and get do not create</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;a&#x27;: [1], &#x27;b&#x27;: []} False None {&#x27;a&#x27;: [1], &#x27;b&#x27;: []}</pre></div></div>
+</section>
+<section class="sec" id="choose">
+<h2><span class="n">3</span><code>get</code>, <code>setdefault</code>, <code>defaultdict</code> or <code>Counter</code>?</h2>
+<div class="tbl"><table>
+      <tr><th>Tool</th><th>Best for</th><th>Watch out for</th></tr>
+      <tr><td><code>d.get(k, 0) + 1</code></td><td>an occasional count in a plain dict</td><td>verbose when repeated everywhere</td></tr>
+      <tr><td><code>d.setdefault(k, []).append(x)</code></td><td>grouping into a plain dict, one place in the code</td><td>builds the default object on every call, even when unused</td></tr>
+      <tr><td><code>defaultdict(list)</code></td><td>grouping or accumulating in a whole loop</td><td>reads create entries; convert with <code>dict()</code> before returning</td></tr>
+      <tr><td><code>Counter(items)</code></td><td>counting, top-k by count, comparing distributions</td><td><code>update</code> adds; subtraction drops non-positive counts</td></tr>
+    </table></div>
+<p>All four give O(1) work per item. The choice is about clarity and the behaviour on missing keys: a plain dict raises or needs a default every time, <code>defaultdict</code> creates silently, <code>Counter</code> treats missing as zero without creating. In function signatures and return values, prefer plain dicts (or <code>Counter</code>, which callers understand); keep <code>defaultdict</code> as an implementation detail inside the function.</p>
+</section>
+<section class="sec" id="groupby">
+<h2><span class="n">4</span>GROUP BY patterns</h2>
+<p>Most "per something" questions in data code are a group-by: a key that decides the group, and something computed per group. Built on a dict, every variant is one pass over the data, O(n):</p>
+<ul><li><strong>Collect members:</strong> <code>defaultdict(list)</code>, appending each item under its key.</li><li><strong>Several keys:</strong> use a <strong>tuple</strong> as the key, <code>(region, month)</code> (4.3), or nested dicts when you want to look up level by level.</li><li><strong>Aggregates:</strong> keep running values per group (count, sum, min, max) and compute derived ones like the mean at the end, so you never store all the members (problem 13).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">group_by.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+sales = [(&quot;eu&quot;, &quot;jan&quot;, 120.0), (&quot;us&quot;, &quot;jan&quot;, 80.0), (&quot;eu&quot;, &quot;feb&quot;, 60.0), (&quot;eu&quot;, &quot;jan&quot;, 30.0)]
+
+totals = defaultdict(float)
+for region, month, amount in sales:
+    totals[(region, month)] += amount
+print(dict(totals))
+
+nested = defaultdict(lambda: defaultdict(float))
+for region, month, amount in sales:
+    nested[region][month] += amount
+print({r: dict(m) for r, m in nested.items()})</code></pre><div class="out"><span class="ol">Output</span><pre>{(&#x27;eu&#x27;, &#x27;jan&#x27;): 150.0, (&#x27;us&#x27;, &#x27;jan&#x27;): 80.0, (&#x27;eu&#x27;, &#x27;feb&#x27;): 60.0}
+{&#x27;eu&#x27;: {&#x27;jan&#x27;: 150.0, &#x27;feb&#x27;: 60.0}, &#x27;us&#x27;: {&#x27;jan&#x27;: 80.0}}</pre></div></div>
+<p><code>itertools.groupby</code> sounds like the same thing but is not: it groups only <strong>consecutive</strong> items with equal keys, so unsorted input produces several groups for the same key. Use it on data that is already sorted by the key (a sorted log, a query with <code>ORDER BY</code>), or sort first; otherwise use the dict patterns above.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">itertools_groupby.py</span><button class="copy">Copy</button></div><pre><code class="py">from itertools import groupby
+
+events = [&quot;login&quot;, &quot;query&quot;, &quot;query&quot;, &quot;login&quot;, &quot;query&quot;]
+print([(k, len(list(g))) for k, g in groupby(events)])           # consecutive runs
+print([(k, len(list(g))) for k, g in groupby(sorted(events))])   # true groups</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;login&#x27;, 1), (&#x27;query&#x27;, 2), (&#x27;login&#x27;, 1), (&#x27;query&#x27;, 1)]
+[(&#x27;login&#x27;, 2), (&#x27;query&#x27;, 3)]</pre></div></div>
+</section>
+<section class="sec" id="ordered">
+<h2><span class="n">5</span><code>OrderedDict</code> for caches, and <code>ChainMap</code> for layered lookups</h2>
+<p>Plain dicts keep insertion order, so <code>OrderedDict</code> is rarely needed today. It still has two methods that plain dicts lack and that make it the classic building block of an <strong>LRU cache</strong>: <code>move_to_end(key)</code> marks a key as most recently used in O(1), and <code>popitem(last=False)</code> removes the <strong>oldest</strong> entry in O(1). An LRU cache keeps the <code>n</code> most recently used results and evicts the least recently used when full (problem 14).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">ordered_dict.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import OrderedDict
+
+cache = OrderedDict()
+for key in [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]:
+    cache[key] = key.upper()
+cache.move_to_end(&quot;a&quot;)          # &quot;a&quot; was just used: it is now the newest
+oldest = cache.popitem(last=False)
+print(oldest, list(cache))</code></pre><div class="out"><span class="ol">Output</span><pre>(&#x27;b&#x27;, &#x27;B&#x27;) [&#x27;c&#x27;, &#x27;a&#x27;]</pre></div></div>
+<p><code>collections.ChainMap(user, env, defaults)</code> looks a key up in each mapping in order and returns the first hit, <strong>without copying or merging</strong> anything. Later changes to the underlying dicts show through immediately, which suits layered configuration that can change at run time. For a one-off merged snapshot, <code>defaults | env | user</code> (4.5) is simpler.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-counter-basics" data-pid="m4-6-counter-basics" data-type="predict" data-level="easy" data-answer="[(&#x27;the&#x27;, 3), (&#x27;refund&#x27;, 2)] 0 False
+6 3
+3 [(&#x27;the&#x27;, 3)]
+Counter({&#x27;l&#x27;: 2, &#x27;h&#x27;: 1, &#x27;e&#x27;: 1, &#x27;o&#x27;: 1})">
+<header class="prob-head"><h3>1. Counter basics</h3></header>
+<div class="code"><pre><code class="py">from collections import Counter
+
+words = &quot;the refund the policy refund the&quot;.split()
+c = Counter(words)
+print(c.most_common(2), c[&quot;missing&quot;], &quot;missing&quot; in c)
+print(c.total(), len(c))
+c.update({&quot;policy&quot;: 2})
+print(c[&quot;policy&quot;], c.most_common(1))
+print(Counter(&quot;hello&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>update</code> adds counts. A string is an iterable of characters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[(&#x27;the&#x27;, 3), (&#x27;refund&#x27;, 2)] 0 False
+6 3
+3 [(&#x27;the&#x27;, 3)]
+Counter({&#x27;l&#x27;: 2, &#x27;h&#x27;: 1, &#x27;e&#x27;: 1, &#x27;o&#x27;: 1})</pre></div><p><code>"the"</code> appears 3 times and <code>"refund"</code> twice. Reading a missing word gives 0 without inserting it, so <code>in</code> stays <code>False</code>. <code>total()</code> is the sum of all counts (6) and <code>len</code> the number of distinct words (3). <code>update</code> adds 2 to <code>"policy"</code>, giving 3, which ties with <code>"the"</code>; <code>most_common</code> breaks the tie by first-seen order, so <code>"the"</code> stays first. <code>Counter("hello")</code> counts characters, a common surprise when someone passes a string instead of a list of words.</p></div></details>
+</article>
+<article class="prob" id="p-most-common-words-across-documents" data-pid="m4-6-most-common-words-across-documents" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Most common words across documents</h3></header>
+<div class="prob-q"><p>Write <code>top_words(texts, n, stopwords=())</code> that counts lower-cased words across all texts, ignoring words in <code>stopwords</code>, and returns the <code>n</code> most common as <code>(word, count)</code> pairs.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from collections import Counter
+
+def top_words(texts, n, stopwords=()):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">docs = ["Refund the order", "the refund was late", "Late refund again"]
+assert top_words(docs, 2, stopwords={"the"}) == [("refund", 3), ("late", 2)]
+assert top_words(docs, 1) == [("refund", 3)]
+assert top_words([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [&quot;Refund the order&quot;, &quot;the refund was late&quot;, &quot;Late refund again&quot;]
+assert top_words(docs, 2, stopwords={&quot;the&quot;}) == [(&quot;refund&quot;, 3), (&quot;late&quot;, 2)]
+assert top_words(docs, 1) == [(&quot;refund&quot;, 3)]
+assert top_words([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Counter(w for text in texts for w in text.lower().split() if w not in stop)</code>, then <code>most_common(n)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+def top_words(texts, n, stopwords=()):
+    stop = set(stopwords)
+    return Counter(w for text in texts for w in text.lower().split() if w not in stop).most_common(n)</code></pre></div><p><code>Counter</code> takes any iterable, so a generator expression (Module 6) feeds it words without building a list first. Converting <code>stopwords</code> to a set once makes each check O(1) (4.4). In the second test, <code>"refund"</code> (3) beats <code>"the"</code> (2) even without stopwords. Real text needs better tokenisation than <code>split</code> (punctuation stays attached), which is lesson 5.5's regex territory.</p></div></details>
+</article>
+<article class="prob" id="p-groups-that-share-one-list" data-pid="m4-6-groups-that-share-one-list" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Groups that share one list</h3></header>
+<div class="prob-q"><p><code>group_by_status</code> should map each status to the list of its ticket ids. Every status ends up with every id. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def group_by_status(tickets):
+    groups = dict.fromkeys([t[&quot;status&quot;] for t in tickets], [])
+    for t in tickets:
+        groups[t[&quot;status&quot;]].append(t[&quot;id&quot;])
+    return groups
+</textarea>
+<script type="text/plain" class="prob-tests">tickets = [{"id": 1, "status": "open"}, {"id": 2, "status": "closed"}, {"id": 3, "status": "open"}]
+assert group_by_status(tickets) == {"open": [1, 3], "closed": [2]}
+assert group_by_status([]) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tickets = [{&quot;id&quot;: 1, &quot;status&quot;: &quot;open&quot;}, {&quot;id&quot;: 2, &quot;status&quot;: &quot;closed&quot;}, {&quot;id&quot;: 3, &quot;status&quot;: &quot;open&quot;}]
+assert group_by_status(tickets) == {&quot;open&quot;: [1, 3], &quot;closed&quot;: [2]}
+assert group_by_status([]) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(keys, [])</code> uses one list object for every key (2.2). Create the list per key instead.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def group_by_status(tickets):
+    groups = defaultdict(list)
+    for t in tickets:
+        groups[t[&quot;status&quot;]].append(t[&quot;id&quot;])
+    return dict(groups)</code></pre></div><p><code>dict.fromkeys</code> evaluates <code>[]</code> once, so every status points at the same list and every append lands in all of them. <code>defaultdict(list)</code> calls <code>list()</code> separately for each new key. Returning <code>dict(groups)</code> gives callers a plain dict, so a later lookup of a missing status raises normally instead of silently inserting an empty group.</p></div></details>
+</article>
+<article class="prob" id="p-defaultdict-creates-entries-when-you-rea" data-pid="m4-6-defaultdict-creates-entries-when-you-rea" data-type="predict" data-level="easy" data-answer="1 [] 2
+False None 2
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 1} &lt;class &#x27;int&#x27;&gt;">
+<header class="prob-head"><h3>4. defaultdict creates entries when you read</h3></header>
+<div class="code"><pre><code class="py">from collections import defaultdict
+
+d = defaultdict(list)
+d[&quot;a&quot;].append(1)
+print(len(d), d[&quot;b&quot;], len(d))
+print(&quot;c&quot; in d, d.get(&quot;c&quot;), len(d))
+counts = defaultdict(int, {&quot;x&quot;: 2})
+counts[&quot;y&quot;] += 1
+print(dict(counts), counts.default_factory)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only <code>d[key]</code> on a missing key calls the factory. <code>in</code> and <code>get</code> never do.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 [] 2
+False None 2
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 1} &lt;class &#x27;int&#x27;&gt;</pre></div><p>Reading <code>d["b"]</code> creates an empty list under <code>"b"</code>, so the length goes from 1 to 2 just by looking. <code>in</code> and <code>get</code> do not create anything. A <code>defaultdict</code> can start from existing data, and <code>+=</code> on a missing key reads (creating 0) then writes 1. <code>default_factory</code> is the function it calls, here the <code>int</code> type itself.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-tokens-per-model" data-pid="m4-6-tokens-per-model" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Tokens per model</h3></header>
+<div class="prob-q"><p>Write <code>tokens_per_model(calls)</code> where each call is a dict with <code>model</code> and <code>usage</code> (a dict with <code>prompt_tokens</code> and <code>completion_tokens</code>, either of which may be missing). Return a <strong>plain</strong> dict from model to total tokens, with keys in sorted order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from collections import defaultdict
+
+def tokens_per_model(calls):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">calls = [{"model": "small", "usage": {"prompt_tokens": 100, "completion_tokens": 20}},
+         {"model": "large", "usage": {"prompt_tokens": 300}},
+         {"model": "small", "usage": {"completion_tokens": 5}}]
+out = tokens_per_model(calls)
+assert out == {"large": 300, "small": 125} and list(out) == ["large", "small"]
+assert type(out) is dict
+assert tokens_per_model([]) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = [{&quot;model&quot;: &quot;small&quot;, &quot;usage&quot;: {&quot;prompt_tokens&quot;: 100, &quot;completion_tokens&quot;: 20}},
+         {&quot;model&quot;: &quot;large&quot;, &quot;usage&quot;: {&quot;prompt_tokens&quot;: 300}},
+         {&quot;model&quot;: &quot;small&quot;, &quot;usage&quot;: {&quot;completion_tokens&quot;: 5}}]
+out = tokens_per_model(calls)
+assert out == {&quot;large&quot;: 300, &quot;small&quot;: 125} and list(out) == [&quot;large&quot;, &quot;small&quot;]
+assert type(out) is dict
+assert tokens_per_model([]) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Accumulate in a <code>defaultdict(int)</code> with <code>usage.get(..., 0)</code>, then build <code>dict(sorted(totals.items()))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def tokens_per_model(calls):
+    totals = defaultdict(int)
+    for call in calls:
+        usage = call[&quot;usage&quot;]
+        totals[call[&quot;model&quot;]] += usage.get(&quot;prompt_tokens&quot;, 0) + usage.get(&quot;completion_tokens&quot;, 0)
+    return dict(sorted(totals.items()))</code></pre></div><p><code>defaultdict(int)</code> removes the "first time for this model" branch, and <code>get(..., 0)</code> treats missing token fields as zero instead of crashing. Returning <code>dict(sorted(...))</code> gives callers a plain dict with a deterministic order, so the same input always prints and serialises the same way. Per-model token totals are the input to any LLM cost report: multiply each by that model's price per token.</p></div></details>
+</article>
+<article class="prob" id="p-balanced-class-weights" data-pid="m4-6-balanced-class-weights" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Balanced class weights</h3></header>
+<div class="prob-q"><p>For imbalanced training data, write <code>class_weights(labels)</code> returning a dict from class to weight <code>n_samples / (n_classes * count_of_class)</code>, the "balanced" rule scikit-learn uses, with keys in sorted order and weights rounded to 4 decimals.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from collections import Counter
+
+def class_weights(labels):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">y = ["ham"] * 8 + ["spam"] * 2
+assert class_weights(y) == {"ham": 0.625, "spam": 2.5}
+w = class_weights(["a", "b", "c", "c"])
+assert w == {"a": 1.3333, "b": 1.3333, "c": 0.6667}
+assert class_weights([]) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">y = [&quot;ham&quot;] * 8 + [&quot;spam&quot;] * 2
+assert class_weights(y) == {&quot;ham&quot;: 0.625, &quot;spam&quot;: 2.5}
+w = class_weights([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;c&quot;])
+assert w == {&quot;a&quot;: 1.3333, &quot;b&quot;: 1.3333, &quot;c&quot;: 0.6667}
+assert class_weights([]) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count once with <code>Counter</code>. <code>n_samples</code> is <code>len(labels)</code> and <code>n_classes</code> is <code>len(counts)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+def class_weights(labels):
+    counts = Counter(labels)
+    n, k = len(labels), len(counts)
+    return {c: round(n / (k * counts[c]), 4) for c in sorted(counts)}</code></pre></div><p>The rare class gets a weight above 1 and the common class one below 1, so each class contributes equally to the loss in total: 8 × 0.625 = 2 × 2.5 = 5. This is scikit-learn's <code>class_weight="balanced"</code> (<code>compute_class_weight</code>), used when a model would otherwise learn to always predict the majority class. With no labels, <code>counts</code> is empty and the comprehension returns <code>{}</code> without dividing by zero.</p></div></details>
+</article>
+<article class="prob" id="p-counter-operations-step-by-step" data-pid="m4-6-counter-operations-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Counter operations, step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>sorted(c.items())</code> and <code>c.total()</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from collections import Counter
+c = Counter([&quot;a&quot;, &quot;b&quot;, &quot;a&quot;])
+c.update([&quot;b&quot;, &quot;c&quot;])
+c[&quot;a&quot;] -= 3
+c = +c
+c = c - Counter({&quot;b&quot;: 1, &quot;z&quot;: 5})</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>sorted(c.items())</code></th><th><code>c.total()</code></th></tr><tr><td>c.update([&#x27;b&#x27;, &#x27;c&#x27;])</td><td><input class="cell" data-a="[(&#x27;a&#x27;, 2), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" data-s="[(&#x27;a&#x27;, 2), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" aria-label="sorted(c.items()) at c.update([&#x27;b&#x27;, &#x27;c&#x27;])" autocomplete="off"></td><td><input class="cell" data-a="5" data-s="5" aria-label="c.total() at c.update([&#x27;b&#x27;, &#x27;c&#x27;])" autocomplete="off"></td></tr><tr><td>c[&#x27;a&#x27;] -= 3</td><td><input class="cell" data-a="[(&#x27;a&#x27;, -1), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" data-s="[(&#x27;a&#x27;, -1), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" aria-label="sorted(c.items()) at c[&#x27;a&#x27;] -= 3" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="c.total() at c[&#x27;a&#x27;] -= 3" autocomplete="off"></td></tr><tr><td>c = +c</td><td><input class="cell" data-a="[(&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" data-s="[(&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]" aria-label="sorted(c.items()) at c = +c" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="c.total() at c = +c" autocomplete="off"></td></tr><tr><td>c = c - Counter(...)</td><td><input class="cell" data-a="[(&#x27;b&#x27;, 1), (&#x27;c&#x27;, 1)]" data-s="[(&#x27;b&#x27;, 1), (&#x27;c&#x27;, 1)]" aria-label="sorted(c.items()) at c = c - Counter(...)" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="c.total() at c = c - Counter(...)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>update</code> adds. <code>c["a"] -= 3</code> can go negative. Unary <code>+</code> keeps only positive counts. Subtraction also drops counts that end at zero or below.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>sorted(c.items())</code></th><th><code>c.total()</code></th></tr><tr><td>c.update([&#x27;b&#x27;, &#x27;c&#x27;])</td><td><code>[(&#x27;a&#x27;, 2), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]</code></td><td><code>5</code></td></tr><tr><td>c[&#x27;a&#x27;] -= 3</td><td><code>[(&#x27;a&#x27;, -1), (&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]</code></td><td><code>2</code></td></tr><tr><td>c = +c</td><td><code>[(&#x27;b&#x27;, 2), (&#x27;c&#x27;, 1)]</code></td><td><code>3</code></td></tr><tr><td>c = c - Counter(...)</td><td><code>[(&#x27;b&#x27;, 1), (&#x27;c&#x27;, 1)]</code></td><td><code>2</code></td></tr></table></div><p>After <code>update</code>, the counts are a 2, b 2, c 1. Plain item assignment allows a <strong>negative</strong> count: a becomes -1, and the total drops to 2. Unary <code>+c</code> builds a new Counter with only the positive counts, so a disappears. Subtracting removes 1 from b, and <code>"z"</code>, which <code>c</code> did not have, would be negative, so it is dropped. Remember the split: methods and item assignment keep zero and negative counts, the operators <code>+</code>, <code>-</code>, <code>&amp;</code>, <code>|</code> and unary <code>+</code> drop them.</p></div></details>
+</article>
+<article class="prob" id="p-counting-with-a-dict-loop-or-counter" data-pid="m4-6-counting-with-a-dict-loop-or-counter" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Counting with a dict loop or <code>Counter</code></h3></header>
+<div class="prob-q"><p>Both count one million labels. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from collections import Counter
+random.seed(3)
+labels = [random.choice([&quot;spam&quot;, &quot;ham&quot;, &quot;eggs&quot;, &quot;bacon&quot;]) for _ in range(1_000_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">counts = {}
+for x in labels:
+    counts[x] = counts.get(x, 0) + 1</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">counts = Counter(labels)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Where does each version do its per-item work: in Python bytecode or in C?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>190.13 ms</td></tr><tr><td>B</td><td>153.92 ms</td></tr></table></div><p>The loop runs Python bytecode for every label: a method call to <code>get</code>, an addition and a store. <code>Counter(labels)</code> hands the whole list to a helper written in C, so the per-item work happens without the interpreter loop. Same result, same O(n), and a noticeably smaller constant here; recent Pythons have made the plain loop faster than it used to be, so the gap is smaller than old benchmarks suggest. For counting in a pandas column, <code>value_counts()</code> is faster again, because it works on the underlying array.</p></div></details>
+</article>
+<article class="prob" id="p-a-report-that-invents-empty-groups" data-pid="m4-6-a-report-that-invents-empty-groups" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. A report that invents empty groups</h3></header>
+<div class="prob-q"><p><code>active_teams</code> should list the teams that have open tickets, without changing the grouping. After calling it, <code>groups</code> contains extra empty teams, which then appear in the dashboard. Fix it so checking a team never adds it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">from collections import defaultdict
+
+def build_groups(tickets):
+    groups = defaultdict(list)
+    for t in tickets:
+        if t[&quot;open&quot;]:
+            groups[t[&quot;team&quot;]].append(t[&quot;id&quot;])
+    return groups
+
+def active_teams(groups, teams):
+    return [team for team in teams if groups[team]]
+</textarea>
+<script type="text/plain" class="prob-tests">tickets = [{"id": 1, "team": "billing", "open": True}, {"id": 2, "team": "auth", "open": False}]
+g = build_groups(tickets)
+assert active_teams(g, ["billing", "auth", "infra"]) == ["billing"]
+assert sorted(g) == ["billing"]
+assert type(build_groups([])) is dict</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tickets = [{&quot;id&quot;: 1, &quot;team&quot;: &quot;billing&quot;, &quot;open&quot;: True}, {&quot;id&quot;: 2, &quot;team&quot;: &quot;auth&quot;, &quot;open&quot;: False}]
+g = build_groups(tickets)
+assert active_teams(g, [&quot;billing&quot;, &quot;auth&quot;, &quot;infra&quot;]) == [&quot;billing&quot;]
+assert sorted(g) == [&quot;billing&quot;]
+assert type(build_groups([])) is dict</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>groups[team]</code> on a missing team creates an empty list. <code>get</code> reads without creating.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>build_groups</code> should also return a plain dict, as the last test asks.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def build_groups(tickets):
+    groups = defaultdict(list)
+    for t in tickets:
+        if t[&quot;open&quot;]:
+            groups[t[&quot;team&quot;]].append(t[&quot;id&quot;])
+    return dict(groups)
+
+def active_teams(groups, teams):
+    return [team for team in teams if groups.get(team)]</code></pre></div><p>Each <code>groups[team]</code> for a team with no open tickets called the factory and stored an empty list, so a read-only check changed the data. <code>get</code> returns <code>None</code> for missing teams and never inserts. Returning a plain dict from <code>build_groups</code> removes the auto-creating behaviour from the caller's hands entirely: <code>groups["infra"]</code> would now raise a clear <code>KeyError</code> instead of quietly adding a team. This exact bug inflates group counts in many dashboards.</p></div></details>
+</article>
+<article class="prob" id="p-revenue-by-region-and-month" data-pid="m4-6-revenue-by-region-and-month" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Revenue by region and month</h3></header>
+<div class="prob-q"><p>Write <code>revenue_table(sales)</code> for <code>(region, month, amount)</code> tuples, returning a <strong>nested plain dict</strong> <code>{region: {month: total}}</code>, with regions sorted and months in first-seen order within each region.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from collections import defaultdict
+
+def revenue_table(sales):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">sales = [("us", "jan", 80.0), ("eu", "jan", 120.0), ("eu", "feb", 60.0), ("eu", "jan", 30.0), ("us", "mar", 10.0)]
+t = revenue_table(sales)
+assert t == {"eu": {"jan": 150.0, "feb": 60.0}, "us": {"jan": 80.0, "mar": 10.0}}
+assert list(t) == ["eu", "us"] and list(t["eu"]) == ["jan", "feb"]
+assert all(type(m) is dict for m in t.values())</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sales = [(&quot;us&quot;, &quot;jan&quot;, 80.0), (&quot;eu&quot;, &quot;jan&quot;, 120.0), (&quot;eu&quot;, &quot;feb&quot;, 60.0), (&quot;eu&quot;, &quot;jan&quot;, 30.0), (&quot;us&quot;, &quot;mar&quot;, 10.0)]
+t = revenue_table(sales)
+assert t == {&quot;eu&quot;: {&quot;jan&quot;: 150.0, &quot;feb&quot;: 60.0}, &quot;us&quot;: {&quot;jan&quot;: 80.0, &quot;mar&quot;: 10.0}}
+assert list(t) == [&quot;eu&quot;, &quot;us&quot;] and list(t[&quot;eu&quot;]) == [&quot;jan&quot;, &quot;feb&quot;]
+assert all(type(m) is dict for m in t.values())</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>defaultdict(lambda: defaultdict(float))</code> creates the inner dict automatically.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert both levels at the end: <code>{r: dict(m) for r, m in sorted(outer.items())}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def revenue_table(sales):
+    outer = defaultdict(lambda: defaultdict(float))
+    for region, month, amount in sales:
+        outer[region][month] += amount
+    return {region: dict(months) for region, months in sorted(outer.items())}</code></pre></div><p>The factory must itself build a new <code>defaultdict(float)</code>, hence the <code>lambda</code>: <code>defaultdict(defaultdict)</code> would create inner dicts with no factory of their own. Both levels are converted, so the caller gets plain dicts that print, compare and serialise normally. This is a pivot table (<code>pd.pivot_table</code> or a Power BI matrix visual with region on rows and month on columns) built from one pass.</p></div></details>
+</article>
+<article class="prob" id="p-counting-and-grouping-by-hand" data-pid="m4-6-counting-and-grouping-by-hand" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Counting and grouping by hand</h3></header>
+<div class="prob-q"><p>Rewrite with <code>Counter</code> and <code>defaultdict</code>, same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def summarise_errors(logs):
+    counts = {}
+    examples = {}
+    for line in logs:
+        level, msg = line.split(&quot;: &quot;, 1)
+        if level in counts:
+            counts[level] = counts[level] + 1
+        else:
+            counts[level] = 1
+        if level not in examples:
+            examples[level] = []
+        examples[level].append(msg)
+    return counts, examples
+</textarea>
+<script type="text/plain" class="prob-tests">logs = ["ERROR: timeout", "WARN: slow", "ERROR: rate limited"]
+counts, examples = summarise_errors(logs)
+assert counts == {"ERROR": 2, "WARN": 1}
+assert examples == {"ERROR": ["timeout", "rate limited"], "WARN": ["slow"]}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">logs = [&quot;ERROR: timeout&quot;, &quot;WARN: slow&quot;, &quot;ERROR: rate limited&quot;]
+counts, examples = summarise_errors(logs)
+assert counts == {&quot;ERROR&quot;: 2, &quot;WARN&quot;: 1}
+assert examples == {&quot;ERROR&quot;: [&quot;timeout&quot;, &quot;rate limited&quot;], &quot;WARN&quot;: [&quot;slow&quot;]}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One <code>defaultdict(list)</code> for the messages is enough: the counts are just the lengths of the lists.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter, defaultdict
+
+def summarise_errors(logs):
+    examples = defaultdict(list)
+    for line in logs:
+        level, msg = line.split(&quot;: &quot;, 1)
+        examples[level].append(msg)
+    counts = Counter({level: len(msgs) for level, msgs in examples.items()})
+    return counts, dict(examples)</code></pre></div><p>The two hand-written "create if missing" branches collapse into one <code>defaultdict(list)</code>, and the counts do not need their own bookkeeping because they are derivable from the groups. Keeping one source of truth removes the chance of the two dicts disagreeing. <code>split(": ", 1)</code> splits only at the first separator, so messages may contain <code>": "</code> (lesson 5.2). A <code>Counter</code> compares equal to a plain dict with the same counts, which is why the test passes.</p></div></details>
+</article>
+<article class="prob" id="p-itertools-groupby-needs-sorted-input" data-pid="m4-6-itertools-groupby-needs-sorted-input" data-type="predict" data-level="medium" data-answer="[(&#x27;billing&#x27;, [1]), (&#x27;auth&#x27;, [2]), (&#x27;billing&#x27;, [3, 4]), (&#x27;auth&#x27;, [5])]
+[(&#x27;auth&#x27;, [2, 5]), (&#x27;billing&#x27;, [1, 3, 4])]
+[(&#x27;auth&#x27;, []), (&#x27;billing&#x27;, [])]">
+<header class="prob-head"><h3>12. itertools.groupby needs sorted input</h3></header>
+<div class="code"><pre><code class="py">from itertools import groupby
+
+tickets = [(&quot;billing&quot;, 1), (&quot;auth&quot;, 2), (&quot;billing&quot;, 3), (&quot;billing&quot;, 4), (&quot;auth&quot;, 5)]
+print([(team, [i for _, i in grp]) for team, grp in groupby(tickets, key=lambda t: t[0])])
+ordered = sorted(tickets, key=lambda t: t[0])
+print([(team, [i for _, i in grp]) for team, grp in groupby(ordered, key=lambda t: t[0])])
+groups = groupby(ordered, key=lambda t: t[0])
+kept = [(team, grp) for team, grp in groups]
+print([(team, list(grp)) for team, grp in kept])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>groupby</code> starts a new group whenever the key changes. Each group is a lazy iterator that shares the underlying iterator.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[(&#x27;billing&#x27;, [1]), (&#x27;auth&#x27;, [2]), (&#x27;billing&#x27;, [3, 4]), (&#x27;auth&#x27;, [5])]
+[(&#x27;auth&#x27;, [2, 5]), (&#x27;billing&#x27;, [1, 3, 4])]
+[(&#x27;auth&#x27;, []), (&#x27;billing&#x27;, [])]</pre></div><p>On unsorted input <code>billing</code> appears as two separate groups, because <code>groupby</code> only merges <strong>consecutive</strong> items with the same key. Sorting by the key first gives true groups (and the sort is stable, so the ids stay in order). The last line is the subtle trap: each group is a lazy view of one shared iterator, so storing the groups and consuming them later finds them already exhausted, except possibly the last one. Turn each group into a list immediately, as the first two lines do.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-several-aggregates-per-group-in-one-pass" data-pid="m4-6-several-aggregates-per-group-in-one-pass" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Several aggregates per group in one pass</h3></header>
+<div class="prob-q"><p>Write <code>group_stats(rows, by, value)</code> for a list of dicts: group by the field <code>by</code> and return a dict from group to <code>{"count": ..., "sum": ..., "mean": ..., "min": ..., "max": ...}</code> for the field <code>value</code>, groups in sorted order. Rows missing the value field are skipped. Do it in one pass without storing the values of each group.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def group_stats(rows, by, value):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [{"model": "small", "ms": 120}, {"model": "large", "ms": 900}, {"model": "small", "ms": 80},
+        {"model": "small"}, {"model": "large", "ms": 700}]
+assert group_stats(rows, "model", "ms") == {
+    "large": {"count": 2, "sum": 1600, "mean": 800.0, "min": 700, "max": 900},
+    "small": {"count": 2, "sum": 200, "mean": 100.0, "min": 80, "max": 120},
+}
+assert group_stats([], "model", "ms") == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [{&quot;model&quot;: &quot;small&quot;, &quot;ms&quot;: 120}, {&quot;model&quot;: &quot;large&quot;, &quot;ms&quot;: 900}, {&quot;model&quot;: &quot;small&quot;, &quot;ms&quot;: 80},
+        {&quot;model&quot;: &quot;small&quot;}, {&quot;model&quot;: &quot;large&quot;, &quot;ms&quot;: 700}]
+assert group_stats(rows, &quot;model&quot;, &quot;ms&quot;) == {
+    &quot;large&quot;: {&quot;count&quot;: 2, &quot;sum&quot;: 1600, &quot;mean&quot;: 800.0, &quot;min&quot;: 700, &quot;max&quot;: 900},
+    &quot;small&quot;: {&quot;count&quot;: 2, &quot;sum&quot;: 200, &quot;mean&quot;: 100.0, &quot;min&quot;: 80, &quot;max&quot;: 120},
+}
+assert group_stats([], &quot;model&quot;, &quot;ms&quot;) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep running <code>count</code>, <code>sum</code>, <code>min</code> and <code>max</code> per group in a dict of dicts; compute <code>mean</code> at the end.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the first value of a group, <code>min</code> and <code>max</code> start from that value.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def group_stats(rows, by, value):
+    acc = {}
+    for row in rows:
+        if value not in row:
+            continue
+        v = row[value]
+        s = acc.get(row[by])
+        if s is None:
+            acc[row[by]] = {&quot;count&quot;: 1, &quot;sum&quot;: v, &quot;min&quot;: v, &quot;max&quot;: v}
+        else:
+            s[&quot;count&quot;] += 1
+            s[&quot;sum&quot;] += v
+            s[&quot;min&quot;] = min(s[&quot;min&quot;], v)
+            s[&quot;max&quot;] = max(s[&quot;max&quot;], v)
+    return {g: {**s, &quot;mean&quot;: s[&quot;sum&quot;] / s[&quot;count&quot;]} for g, s in sorted(acc.items())}</code></pre></div><p>Each aggregate is updated in O(1) per row, so the whole function is O(n) time and O(number of groups) memory: the values of a group are never stored, which is what lets this run over a stream or a huge file. The mean is derived from <code>sum</code> and <code>count</code> at the end instead of being averaged incrementally. This is exactly how a database executes <code>SELECT model, COUNT(ms), SUM(ms), AVG(ms), MIN(ms), MAX(ms) FROM rows GROUP BY model</code> with hash aggregation, and what <code>df.groupby("model")["ms"].agg(["count", "sum", "mean", "min", "max"])</code> does in pandas. Note that rows missing the value are skipped, which matches SQL's behaviour of ignoring NULLs in aggregates.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-lru-cache-that-forgets-" data-pid="m4-6-read-the-code-an-lru-cache-that-forgets-" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: an LRU cache that forgets the wrong things</h3></header>
+<div class="prob-q"><p>This caches embeddings so repeated texts are not sent to the API again, keeping at most <code>capacity</code> entries. It evicts entries that were just used and keeps stale ones, and its hit counter is wrong. Read the module, find the bugs, and fix them so it is a correct LRU cache.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">from collections import OrderedDict
+
+
+def make_embedding_cache(embed, capacity):
+    store = OrderedDict()
+    stats = {&quot;hits&quot;: 0, &quot;misses&quot;: 0}
+
+    def get(text):
+        if text in store:
+            stats[&quot;hits&quot;] =+ 1
+            return store[text]
+        stats[&quot;misses&quot;] += 1
+        vector = embed(text)
+        store[text] = vector
+        if len(store) &gt; capacity:
+            store.popitem()
+        return vector
+
+    return get, stats
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def embed(t):
+    calls.append(t)
+    return [len(t)]
+get, stats = make_embedding_cache(embed, capacity=2)
+get("a"); get("bb"); get("a")
+get("ccc")
+get("a")
+assert calls == ["a", "bb", "ccc"]
+get("bb")
+assert calls == ["a", "bb", "ccc", "bb"]
+assert stats == {"hits": 2, "misses": 4}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def embed(t):
+    calls.append(t)
+    return [len(t)]
+get, stats = make_embedding_cache(embed, capacity=2)
+get(&quot;a&quot;); get(&quot;bb&quot;); get(&quot;a&quot;)
+get(&quot;ccc&quot;)
+get(&quot;a&quot;)
+assert calls == [&quot;a&quot;, &quot;bb&quot;, &quot;ccc&quot;]
+get(&quot;bb&quot;)
+assert calls == [&quot;a&quot;, &quot;bb&quot;, &quot;ccc&quot;, &quot;bb&quot;]
+assert stats == {&quot;hits&quot;: 2, &quot;misses&quot;: 4}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On a hit, the entry must become the most recently used: <code>store.move_to_end(text)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>popitem()</code> with no argument removes the <strong>newest</strong> entry. Which one should an LRU cache remove?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look closely at <code>=+ 1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import OrderedDict
+
+
+def make_embedding_cache(embed, capacity):
+    store = OrderedDict()
+    stats = {&quot;hits&quot;: 0, &quot;misses&quot;: 0}
+
+    def get(text):
+        if text in store:
+            stats[&quot;hits&quot;] += 1
+            store.move_to_end(text)
+            return store[text]
+        stats[&quot;misses&quot;] += 1
+        vector = embed(text)
+        store[text] = vector
+        if len(store) &gt; capacity:
+            store.popitem(last=False)
+        return vector
+
+    return get, stats</code></pre></div><p>Three bugs. A hit did not refresh the entry, so the order was "first inserted" rather than "last used", which is FIFO, not LRU. <code>popitem()</code> defaults to <code>last=True</code> and removed the entry just inserted, so a full cache threw away every new vector; <code>last=False</code> removes the oldest. And <code>stats["hits"] =+ 1</code> is <code>= +1</code>: it sets the counter to 1 instead of adding, a typo Python accepts silently. Walking the test: after <code>a, bb, a</code>, the order is <code>bb, a</code>; inserting <code>ccc</code> evicts <code>bb</code>; <code>a</code> is a hit; <code>bb</code> is a miss again. In production use <code>functools.lru_cache</code> for pure functions, or a shared cache such as Redis when several processes need the same embeddings.</p></div></details>
+</article>
+<article class="prob" id="p-reciprocal-rank-fusion" data-pid="m4-6-reciprocal-rank-fusion" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>15. Reciprocal rank fusion</h3></header>
+<div class="prob-q"><p>Hybrid search runs a keyword search and a vector search, each returning document ids best first. Write <code>rrf(rankings, k=60)</code> that fuses any number of ranked lists: each document gets <code>sum(1 / (k + rank))</code> over the lists it appears in, with rank starting at 1. Return the document ids ordered by fused score, highest first, ties broken by id ascending.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">from collections import defaultdict
+
+def rrf(rankings, k=60):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">bm25 = ["d3", "d1", "d7"]
+vector = ["d1", "d9", "d3"]
+assert rrf([bm25, vector]) == ["d1", "d3", "d9", "d7"]
+assert rrf([["a", "b"]], k=0) == ["a", "b"]
+assert rrf([]) == []
+assert rrf([["x"], ["y"]]) == ["x", "y"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">bm25 = [&quot;d3&quot;, &quot;d1&quot;, &quot;d7&quot;]
+vector = [&quot;d1&quot;, &quot;d9&quot;, &quot;d3&quot;]
+assert rrf([bm25, vector]) == [&quot;d1&quot;, &quot;d3&quot;, &quot;d9&quot;, &quot;d7&quot;]
+assert rrf([[&quot;a&quot;, &quot;b&quot;]], k=0) == [&quot;a&quot;, &quot;b&quot;]
+assert rrf([]) == []
+assert rrf([[&quot;x&quot;], [&quot;y&quot;]]) == [&quot;x&quot;, &quot;y&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>scores = defaultdict(float)</code>; for each list, <code>for rank, doc in enumerate(ranking, start=1): scores[doc] += 1 / (k + rank)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Sort with the key <code>(-score, doc)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def rrf(rankings, k=60):
+    scores = defaultdict(float)
+    for ranking in rankings:
+        for rank, doc in enumerate(ranking, start=1):
+            scores[doc] += 1 / (k + rank)
+    return sorted(scores, key=lambda doc: (-scores[doc], doc))</code></pre></div><p>RRF only uses <strong>ranks</strong>, not raw scores, which is why it works for combining BM25 scores and cosine similarities that live on completely different scales. A document ranked well by both lists (<code>d1</code>: 2nd and 1st) beats one ranked first by only one list. The constant <code>k = 60</code> comes from the original paper (Cormack and others, 2009) and dampens the advantage of the very top ranks. <code>defaultdict(float)</code> accumulates scores for documents seen in any list, and the tuple key makes ties deterministic. Elasticsearch, OpenSearch and many vector databases offer RRF for hybrid search.</p></div></details>
+</article>
+<article class="prob" id="p-counter-arithmetic-and-equality" data-pid="m4-6-counter-arithmetic-and-equality" data-type="predict" data-level="hard" data-answer="Counter({&#x27;x&#x27;: 2}) Counter({&#x27;y&#x27;: 3, &#x27;z&#x27;: 2})
+Counter({&#x27;x&#x27;: 2, &#x27;z&#x27;: -2, &#x27;y&#x27;: -3})
+Counter({&#x27;x&#x27;: 1, &#x27;y&#x27;: 1}) Counter({&#x27;y&#x27;: 4, &#x27;x&#x27;: 3, &#x27;z&#x27;: 2})
+True False
+[&#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]">
+<header class="prob-head"><h3>16. Counter arithmetic and equality</h3></header>
+<div class="code"><pre><code class="py">from collections import Counter
+
+a = Counter(x=3, y=1)
+b = Counter(x=1, y=4, z=2)
+print(a - b, b - a)
+c = Counter(a)
+c.subtract(b)
+print(c)
+print(a &amp; b, a | b)
+print(Counter(x=1, y=0) == Counter(x=1), Counter(x=1, y=0) == {&quot;x&quot;: 1})
+print(sorted(Counter(&quot;abracadabra&quot;).elements())[:6])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>-</code> operator drops counts at zero or below; <code>subtract()</code> keeps them.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>&amp;</code> takes the minimum per key and <code>|</code> the maximum, keeping only positive results.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Counter({&#x27;x&#x27;: 2}) Counter({&#x27;y&#x27;: 3, &#x27;z&#x27;: 2})
+Counter({&#x27;x&#x27;: 2, &#x27;z&#x27;: -2, &#x27;y&#x27;: -3})
+Counter({&#x27;x&#x27;: 1, &#x27;y&#x27;: 1}) Counter({&#x27;y&#x27;: 4, &#x27;x&#x27;: 3, &#x27;z&#x27;: 2})
+True False
+[&#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]</pre></div><p><code>a - b</code> keeps only <code>x</code> (3 − 1 = 2), because <code>y</code> would be −3; <code>b - a</code> keeps <code>y</code> (3) and <code>z</code> (2). <code>subtract</code> is the method version and keeps zero and negative counts. <code>&amp;</code> and <code>|</code> give per-key minimum and maximum. Since Python 3.10, two Counters compare equal when their positive and zero counts match, treating a missing key as 0, so <code>Counter(x=1, y=0) == Counter(x=1)</code> is <code>True</code>; comparing with a plain dict uses ordinary dict equality, where the extra <code>y</code> key makes them differ. <code>elements()</code> repeats each item by its count, which is handy for turning counts back into a list.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-counter-defaultdict-int-or-a-plain-dict-" data-pid="m4-6-counter-defaultdict-int-or-a-plain-dict-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. <code>Counter</code>, <code>defaultdict(int)</code> or a plain dict with <code>get</code>: how do you choose for counting?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>All three are O(1) per item. <code>Counter</code> is the most expressive: it counts a whole iterable in one call (implemented in C, so it is fastest for bulk counting), treats missing items as 0 without inserting them, and adds <code>most_common</code>, <code>total</code> and count arithmetic. <code>defaultdict(int)</code> is best when counting is mixed with other per-key logic in a loop; its catch is that any read of a missing key inserts it. A plain dict with <code>d.get(k, 0) + 1</code> needs no import and has no hidden behaviour, which suits small or one-off code. Mention returning plain dicts or Counters from functions, never a <code>defaultdict</code>, so callers do not inherit auto-creation.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-compute-group-by-with-seve" data-pid="m4-6-how-would-you-compute-group-by-with-seve" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How would you compute GROUP BY with several aggregates in pure Python, and when would you switch to pandas?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>One pass with a dict keyed by the group (a tuple for several columns): keep running aggregates per group (count, sum, min, max, and for variance also a sum of squares, or Welford's online algorithm), and derive the mean and other statistics at the end. That is O(n) time and O(number of groups) memory, and it works on streams that do not fit in memory. Switch to pandas (or SQL, or Polars) when the data fits in memory as columns and you want vectorised speed, many aggregates, joins and readable code: <code>df.groupby(["region", "month"]).agg(...)</code>. Stay in pure Python for streaming logs, small data in a service, or when you cannot add a dependency. Mention that SQL engines implement GROUP BY with exactly this hash-aggregation idea.</p></div></details>
+</article>
+<article class="prob" id="p-design-an-lru-cache-what-data-structures" data-pid="m4-6-design-an-lru-cache-what-data-structures" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Design an LRU cache. What data structures do you use, and what is the cost of each operation?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>You need O(1) lookup by key and O(1) "move this entry to most recent" and "remove the least recent". The classic design combines a hash map from key to node with a doubly linked list ordered by recency: a hit moves the node to the front, an insert adds at the front, and eviction removes from the back, all O(1). In Python, <code>OrderedDict</code> provides exactly that combination internally, with <code>move_to_end</code> and <code>popitem(last=False)</code>, and <code>functools.lru_cache</code> gives it for pure functions as a decorator. Discuss capacity and memory (cache entries keep objects alive), thread safety (a lock around updates, Module 14), what to use as the key (normalise and hash inputs, 2.2), and when a shared cache such as Redis is needed instead because several processes serve requests.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>Counter</code> counts in one call, treats missing items as 0, and gives <code>most_common</code>, <code>total</code> and count arithmetic. <code>update</code> adds.</li><li><code>defaultdict(factory)</code> creates values on first access. Reads with <code>d[k]</code> create entries too: use <code>in</code> or <code>get</code>, and return plain dicts.</li><li>GROUP BY in Python: a dict keyed by the group (a tuple for several columns) with running aggregates, one pass, O(n).</li><li><code>itertools.groupby</code> only groups consecutive items: sort by the key first, and consume each group immediately.</li><li><code>OrderedDict.move_to_end</code> and <code>popitem(last=False)</code> make an O(1) LRU cache; RRF fuses ranked lists using ranks only.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

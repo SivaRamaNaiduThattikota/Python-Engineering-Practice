@@ -117,7 +117,11 @@ def run_jobs(jobs):
     with tempfile.TemporaryDirectory() as d:
         jp, rp = Path(d, "jobs.json"), Path(d, "res.json")
         jp.write_text(json.dumps(jobs), encoding="utf-8")
-        subprocess.run(["node", str(ROOT / "build" / "run_py.mjs"), str(jp), str(rp)], check=True, cwd=ROOT / "build")
+        try:
+            subprocess.run(["node", str(ROOT / "build" / "run_py.mjs"), str(jp), str(rp)], check=True,
+                           cwd=ROOT / "build", timeout=420)
+        except subprocess.TimeoutExpired:
+            sys.exit("Python run timed out: a starter, solution or example probably never stops (infinite loop?)")
         return json.loads(rp.read_text(encoding="utf-8"))
 
 

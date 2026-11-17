@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.1 · Lists: indexing, slicing and methods</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.1 Lists: indexing, slicing and methods</h1>
+  <p>How a list is stored and why that makes some operations instant and others slow, the exact rules for indexes and slices (including the <code>xs[-0:]</code> trap), slice assignment, which methods change the list, and when a list is the wrong tool.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="model">
+<h2><span class="n">1</span>What a list is in memory</h2>
+<p>In CPython, a list is a <strong>dynamic array of references</strong>: the list object stores its length, how much room it has, and a pointer to one contiguous block of slots. Each slot holds a <strong>reference</strong> to an item stored somewhere else (2.1), which is why one list can hold a string, a float and a dict side by side, and why copying a list copies the references, not the items (2.3).</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 120" role="img" aria-label="A list object holds a length, a capacity and a pointer to an array of references. Each slot points at an object stored elsewhere.">
+  <defs><marker id="l1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <rect x="10" y="20" width="130" height="64" rx="12" class="box a"/>
+  <text x="75" y="44" class="w mid">list object</text><text x="75" y="64" class="w mid">len 3, room for 4</text>
+  <rect x="170" y="34" width="60" height="36" rx="6" class="box"/><text x="200" y="57" class="tk">[0]</text>
+  <rect x="230" y="34" width="60" height="36" rx="6" class="box"/><text x="260" y="57" class="tk">[1]</text>
+  <rect x="290" y="34" width="60" height="36" rx="6" class="box"/><text x="320" y="57" class="tk">[2]</text>
+  <rect x="350" y="34" width="60" height="36" rx="6" class="box" style="stroke-dasharray:4 3"/><text x="380" y="57" class="mid">spare</text>
+  <rect x="440" y="10" width="90" height="26" rx="8" class="box b"/><text x="485" y="28" class="w mid">"rag"</text>
+  <rect x="440" y="44" width="90" height="26" rx="8" class="box b"/><text x="485" y="62" class="w mid">0.92</text>
+  <rect x="440" y="78" width="90" height="26" rx="8" class="box b"/><text x="485" y="96" class="w mid">{...}</text>
+  <path d="M140 52 L166 52" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#l1)"/>
+  <path d="M200 70 C 250 110, 400 30, 436 24" style="stroke:var(--label2);stroke-width:1.5;fill:none" marker-end="url(#l1)"/>
+  <path d="M260 70 C 300 100, 400 60, 436 57" style="stroke:var(--label2);stroke-width:1.5;fill:none" marker-end="url(#l1)"/>
+  <path d="M320 70 C 360 100, 410 95, 436 91" style="stroke:var(--label2);stroke-width:1.5;fill:none" marker-end="url(#l1)"/>
+</svg></div><figcaption>A list is a block of slots, each pointing at an object. The block has spare room at the end.</figcaption></figure>
+<p>Every performance rule of lists follows from that picture:</p>
+<ul><li><strong><code>xs[i]</code> is O(1).</strong> The slot's address is "start + i times slot size", one calculation whatever the length.</li><li><strong><code>append</code> is amortized O(1).</strong> There is usually spare room at the end, so appending just fills the next slot. When the room runs out, Python allocates a bigger block (with extra room to spare) and moves the references over. That resize is O(n), but it happens rarely enough that the average cost per append stays constant.</li><li><strong><code>insert(0, x)</code> and <code>pop(0)</code> are O(n).</strong> Every other reference has to shift one slot to make or close the gap.</li><li><strong><code>x in xs</code>, <code>xs.index(x)</code>, <code>xs.remove(x)</code> are O(n).</strong> Nothing tells Python where a value is, so it checks slots one by one (2.1: identity first, then equality).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">growth.py</span><button class="copy">Copy</button></div><pre><code class="py">import sys
+
+xs = []
+sizes = []
+for i in range(12):
+    xs.append(i)
+    sizes.append(sys.getsizeof(xs))
+print(sizes)                    # the size only jumps now and then: spare room in action
+print(len(xs), xs[7], xs[-1])</code></pre><div class="out"><span class="ol">Output</span><pre>[44, 44, 44, 44, 60, 60, 60, 60, 92, 92, 92, 92]
+12 7 11</pre></div></div>
+<p>The exact byte numbers depend on the Python version and platform, so do not memorise them. What matters is the pattern: the size stays flat for several appends, then jumps. Each jump is one resize, and between jumps an append only fills a spare slot.</p>
+</section>
+<section class="sec" id="indexing">
+<h2><span class="n">2</span>Indexing, step by step</h2>
+<p>Valid indexes for a list of length <code>n</code> run from <code>0</code> to <code>n - 1</code>. A <strong>negative</strong> index counts from the end: Python converts <code>xs[-k]</code> to <code>xs[n - k]</code>, so <code>-1</code> is the last item and <code>-n</code> the first. Anything outside <code>-n .. n - 1</code> raises <code>IndexError</code>.</p>
+<div class="tbl"><table>
+      <tr><th>item</th><td><code>"sys"</code></td><td><code>"user"</code></td><td><code>"asst"</code></td><td><code>"user"</code></td><td><code>"asst"</code></td></tr>
+      <tr><th>positive index</th><td>0</td><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+      <tr><th>negative index</th><td>-5</td><td>-4</td><td>-3</td><td>-2</td><td>-1</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">indexing.py</span><button class="copy">Copy</button></div><pre><code class="py">roles = [&quot;sys&quot;, &quot;user&quot;, &quot;asst&quot;, &quot;user&quot;, &quot;asst&quot;]
+print(roles[0], roles[-1], roles[-2], roles[len(roles) - 1])
+try:
+    roles[5]
+except IndexError as e:
+    print(&quot;IndexError:&quot;, e)
+print(roles.index(&quot;user&quot;), roles.count(&quot;asst&quot;))   # first position of a value, and how many</code></pre><div class="out"><span class="ol">Output</span><pre>sys asst user asst
+IndexError: list index out of range
+1 2</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>Unlike SQL rows, list items have a guaranteed order and a position. <code>roles[-1]</code> is "the last row" without an <code>ORDER BY ... DESC</code> and <code>TOP 1</code>. But a list index is only meaningful while the list does not change: delete one item and every later index shifts, which is the source of the classic delete-while-looping bug (problem 6).</p></div></div>
+</section>
+<section class="sec" id="slicing">
+<h2><span class="n">3</span>Slicing rules</h2>
+<p><code>xs[start:stop:step]</code> builds a <strong>new list</strong> (a shallow copy, 2.3) with the items from <code>start</code> <strong>up to but not including</strong> <code>stop</code>, taking every <code>step</code>-th one. Each part is optional, and the rules for filling them in are what you need to predict any slice:</p>
+<ul><li>With a positive <code>step</code> (default 1): a missing <code>start</code> means 0, a missing <code>stop</code> means "to the end".</li><li>With a negative <code>step</code>: the slice walks <strong>backwards</strong>, a missing <code>start</code> means "the last item" and a missing <code>stop</code> means "past the beginning". <code>xs[::-1]</code> is a reversed copy.</li><li>Negative <code>start</code> and <code>stop</code> count from the end, exactly like indexes.</li><li>Out-of-range bounds are <strong>clamped</strong>, never an error: <code>xs[2:100]</code> on a 5-item list gives the last three items, and <code>xs[10:20]</code> gives <code>[]</code>.</li><li>If <code>start</code> is already at or past <code>stop</code> in the direction of travel, the slice is empty.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">slicing.py</span><button class="copy">Copy</button></div><pre><code class="py">t = [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;, &quot;e&quot;, &quot;f&quot;]
+print(t[1:4], t[:2], t[4:], t[-2:])
+print(t[::2], t[1::2], t[::-1], t[4:1:-1])
+print(t[2:100], t[10:20], t[4:2])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;] [&#x27;e&#x27;, &#x27;f&#x27;] [&#x27;e&#x27;, &#x27;f&#x27;]
+[&#x27;a&#x27;, &#x27;c&#x27;, &#x27;e&#x27;] [&#x27;b&#x27;, &#x27;d&#x27;, &#x27;f&#x27;] [&#x27;f&#x27;, &#x27;e&#x27;, &#x27;d&#x27;, &#x27;c&#x27;, &#x27;b&#x27;, &#x27;a&#x27;] [&#x27;e&#x27;, &#x27;d&#x27;, &#x27;c&#x27;]
+[&#x27;c&#x27;, &#x27;d&#x27;, &#x27;e&#x27;, &#x27;f&#x27;] [] []</pre></div></div>
+<p><strong>The <code>-0</code> trap.</strong> "The last <code>n</code> items" is usually written <code>xs[-n:]</code>. It works for every <code>n</code> from 1 up, but for <code>n = 0</code> the start is <code>-0</code>, which is just <code>0</code>, so <code>xs[-0:]</code> is <code>xs[0:]</code>: the <strong>whole list</strong>, the opposite of what you meant. Code that trims chat history or keeps "the last k scores" hits this whenever <code>k</code> can be 0. Write <code>xs[len(xs) - n:]</code> or guard <code>n == 0</code> explicitly.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">minus_zero.py</span><button class="copy">Copy</button></div><pre><code class="py">history = [&quot;m1&quot;, &quot;m2&quot;, &quot;m3&quot;, &quot;m4&quot;]
+for n in [2, 1, 0]:
+    print(n, history[-n:], history[len(history) - n:])</code></pre><div class="out"><span class="ol">Output</span><pre>2 [&#x27;m3&#x27;, &#x27;m4&#x27;] [&#x27;m3&#x27;, &#x27;m4&#x27;]
+1 [&#x27;m4&#x27;] [&#x27;m4&#x27;]
+0 [&#x27;m1&#x27;, &#x27;m2&#x27;, &#x27;m3&#x27;, &#x27;m4&#x27;] []</pre></div></div>
+</section>
+<section class="sec" id="assign">
+<h2><span class="n">4</span>Slice assignment and <code>del</code></h2>
+<p>On the left of <code>=</code>, a slice means "replace this part of the list <strong>in place</strong>". The right side can be any iterable, and the list grows or shrinks to fit, so slice assignment can insert, replace or delete. <code>del xs[a:b]</code> removes a range in place. With a step other than 1 ("extended slices"), the right side must have exactly as many items as the slice selects.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">slice_assignment.py</span><button class="copy">Copy</button></div><pre><code class="py">xs = [0, 1, 2, 3, 4]
+xs[1:3] = [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]      # replace two items with three: the list grows
+print(xs)
+xs[:0] = [&quot;start&quot;]             # an empty slice at the front: insert
+print(xs)
+del xs[-2:]                    # remove the last two
+print(xs)
+xs[::2] = [None] * len(xs[::2])  # extended slice: lengths must match
+print(xs)
+try:
+    xs[::2] = [1]
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[0, &#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, 3, 4]
+[&#x27;start&#x27;, 0, &#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, 3, 4]
+[&#x27;start&#x27;, 0, &#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]
+[None, 0, None, &#x27;b&#x27;, None]
+ValueError: attempt to assign sequence of size 1 to extended slice of size 3</pre></div></div>
+<p><code>xs[:] = new_items</code> replaces the whole contents while keeping the <strong>same list object</strong>, which is how you change a list in place for every alias (2.2, <code>normalise_inplace</code>). By contrast, <code>xs = xs[2:]</code> builds a new list and moves only the local name: callers holding the old list see no change (problem 14).</p>
+</section>
+<section class="sec" id="methods">
+<h2><span class="n">5</span>Methods: which change the list, and what they cost</h2>
+<div class="tbl"><table>
+      <tr><th>Method</th><th>Changes the list?</th><th>Returns</th><th>Cost</th></tr>
+      <tr><td><code>append(x)</code></td><td>yes</td><td><code>None</code></td><td>O(1) amortized</td></tr>
+      <tr><td><code>extend(iterable)</code>, <code>+=</code></td><td>yes</td><td><code>None</code></td><td>O(k) for k new items</td></tr>
+      <tr><td><code>insert(i, x)</code></td><td>yes</td><td><code>None</code></td><td>O(n): shifts everything after i</td></tr>
+      <tr><td><code>pop()</code> / <code>pop(i)</code></td><td>yes</td><td>the removed item</td><td>O(1) at the end, O(n) elsewhere</td></tr>
+      <tr><td><code>remove(x)</code></td><td>yes</td><td><code>None</code></td><td>O(n): search, then shift</td></tr>
+      <tr><td><code>sort()</code>, <code>reverse()</code>, <code>clear()</code></td><td>yes</td><td><code>None</code></td><td>O(n log n), O(n), O(n)</td></tr>
+      <tr><td><code>index(x)</code>, <code>count(x)</code>, <code>x in xs</code></td><td>no</td><td>a position, a count, a bool</td><td>O(n)</td></tr>
+      <tr><td><code>xs + ys</code>, <code>xs * k</code>, slicing, <code>sorted(xs)</code></td><td>no</td><td>a new list</td><td>O(size of result)</td></tr>
+    </table></div>
+<p>The most common mix-up is <code>append</code> versus <code>extend</code>. <code>append(x)</code> adds <strong>one item</strong>, whatever <code>x</code> is, so appending a list nests it. <code>extend(iterable)</code> adds <strong>each item</strong> of the iterable, so extending with a string adds its characters one by one. When you collect chunks from several documents, you almost always mean <code>extend</code> (problem 2).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">append_extend.py</span><button class="copy">Copy</button></div><pre><code class="py">chunks = []
+chunks.append([&quot;c1&quot;, &quot;c2&quot;])        # one item: a nested list
+chunks.extend([&quot;c3&quot;, &quot;c4&quot;])        # two items
+chunks.extend(&quot;ab&quot;)                # a string is an iterable of characters
+print(chunks, len(chunks))
+last = chunks.pop()
+print(last, chunks.pop(0), chunks)</code></pre><div class="out"><span class="ol">Output</span><pre>[[&#x27;c1&#x27;, &#x27;c2&#x27;], &#x27;c3&#x27;, &#x27;c4&#x27;, &#x27;a&#x27;, &#x27;b&#x27;] 5
+b [&#x27;c1&#x27;, &#x27;c2&#x27;] [&#x27;c3&#x27;, &#x27;c4&#x27;, &#x27;a&#x27;]</pre></div></div>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">When a list is the wrong tool</div><p>Use <code>collections.deque</code> when you add or remove at the <strong>front</strong> (a queue, a breadth-first search) or need a fixed-size <strong>window</strong> (<code>deque(maxlen=20)</code> keeps the last 20 chat turns and drops older ones automatically). Use a <code>set</code> or <code>dict</code> when you mostly ask "is <code>x</code> in here?" (4.4, 4.5). Use a numpy array for large numeric data, where whole-array operations run in C (2.2).</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-indexes-and-slices-on-chat-roles" data-pid="m4-1-indexes-and-slices-on-chat-roles" data-type="predict" data-level="easy" data-answer="&lt;/s&gt; ? how
+[&#x27;how&#x27;, &#x27;do&#x27;, &#x27;refunds&#x27;, &#x27;work&#x27;, &#x27;?&#x27;]
+[&#x27;work&#x27;, &#x27;?&#x27;, &#x27;&lt;/s&gt;&#x27;] [&#x27;&lt;s&gt;&#x27;, &#x27;refunds&#x27;, &#x27;&lt;/s&gt;&#x27;]
+[&#x27;?&#x27;, &#x27;&lt;/s&gt;&#x27;] [] [&#x27;&lt;/s&gt;&#x27;, &#x27;?&#x27;]">
+<header class="prob-head"><h3>1. Indexes and slices on chat roles</h3></header>
+<div class="code"><pre><code class="py">tokens = [&quot;&lt;s&gt;&quot;, &quot;how&quot;, &quot;do&quot;, &quot;refunds&quot;, &quot;work&quot;, &quot;?&quot;, &quot;&lt;/s&gt;&quot;]
+print(tokens[-1], tokens[-2], tokens[1])
+print(tokens[1:-1])
+print(tokens[-3:], tokens[::3])
+print(tokens[5:10], tokens[4:2], tokens[::-1][:2])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>stop</code> is never included; out-of-range bounds are clamped; a reversed copy starts from the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>&lt;/s&gt; ? how
+[&#x27;how&#x27;, &#x27;do&#x27;, &#x27;refunds&#x27;, &#x27;work&#x27;, &#x27;?&#x27;]
+[&#x27;work&#x27;, &#x27;?&#x27;, &#x27;&lt;/s&gt;&#x27;] [&#x27;&lt;s&gt;&#x27;, &#x27;refunds&#x27;, &#x27;&lt;/s&gt;&#x27;]
+[&#x27;?&#x27;, &#x27;&lt;/s&gt;&#x27;] [] [&#x27;&lt;/s&gt;&#x27;, &#x27;?&#x27;]</pre></div><p><code>tokens[1:-1]</code> drops the first and the last item, a common way to strip start and end markers. <code>[-3:]</code> is the last three, and <code>[::3]</code> takes positions 0, 3 and 6. <code>tokens[5:10]</code> is clamped to positions 5 and 6. <code>tokens[4:2]</code> is empty because 4 is already past 2 going forwards. <code>tokens[::-1][:2]</code> reverses first, then takes two.</p></div></details>
+</article>
+<article class="prob" id="p-chunks-collected-as-nested-lists" data-pid="m4-1-chunks-collected-as-nested-lists" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. Chunks collected as nested lists</h3></header>
+<div class="prob-q"><p><code>collect_chunks(docs, chunker)</code> should return one flat list of chunks from all documents. It returns a list of lists, which breaks the embedding step that expects strings. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def collect_chunks(docs, chunker):
+    all_chunks = []
+    for doc in docs:
+        all_chunks.append(chunker(doc))
+    return all_chunks
+</textarea>
+<script type="text/plain" class="prob-tests">split = lambda d: d.split(". ")
+out = collect_chunks(["A. B", "C"], split)
+assert out == ["A", "B", "C"]
+assert all(isinstance(c, str) for c in out)
+assert collect_chunks([], split) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">split = lambda d: d.split(&quot;. &quot;)
+out = collect_chunks([&quot;A. B&quot;, &quot;C&quot;], split)
+assert out == [&quot;A&quot;, &quot;B&quot;, &quot;C&quot;]
+assert all(isinstance(c, str) for c in out)
+assert collect_chunks([], split) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>append</code> adds one item. Which method adds each item of a list?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def collect_chunks(docs, chunker):
+    all_chunks = []
+    for doc in docs:
+        all_chunks.extend(chunker(doc))
+    return all_chunks</code></pre></div><p><code>chunker(doc)</code> returns a list, and <code>append</code> adds that list as <strong>one</strong> item. <code>extend</code> adds each chunk separately. A flat comprehension, <code>[c for doc in docs for c in chunker(doc)]</code>, does the same in one expression (lesson 6.2). This bug is easy to miss because <code>len(all_chunks)</code> looks plausible: it equals the number of documents instead of the number of chunks.</p></div></details>
+</article>
+<article class="prob" id="p-the-last-n-turns-safely" data-pid="m4-1-the-last-n-turns-safely" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. The last n turns, safely</h3></header>
+<div class="prob-q"><p>Write <code>last_turns(history, n)</code> that returns a new list with the system message (if <code>history[0]["role"] == "system"</code>) followed by the last <code>n</code> <strong>other</strong> messages. <code>n = 0</code> must give just the system message (or <code>[]</code>). Watch out for the <code>-0</code> trap.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def last_turns(history, n):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">h = [{"role": "system", "content": "S"}, {"role": "user", "content": "1"}, {"role": "assistant", "content": "2"},
+     {"role": "user", "content": "3"}]
+assert [m["content"] for m in last_turns(h, 2)] == ["S", "2", "3"]
+assert [m["content"] for m in last_turns(h, 0)] == ["S"]
+assert [m["content"] for m in last_turns(h, 10)] == ["S", "1", "2", "3"]
+assert last_turns(h[1:], 1) == [{"role": "user", "content": "3"}]
+assert last_turns([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">h = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;S&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;1&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;2&quot;},
+     {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;3&quot;}]
+assert [m[&quot;content&quot;] for m in last_turns(h, 2)] == [&quot;S&quot;, &quot;2&quot;, &quot;3&quot;]
+assert [m[&quot;content&quot;] for m in last_turns(h, 0)] == [&quot;S&quot;]
+assert [m[&quot;content&quot;] for m in last_turns(h, 10)] == [&quot;S&quot;, &quot;1&quot;, &quot;2&quot;, &quot;3&quot;]
+assert last_turns(h[1:], 1) == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;3&quot;}]
+assert last_turns([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Split off the system message first: <code>head = history[:1]</code> if it is a system message, <code>rest</code> is everything else.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>rest[len(rest) - n:]</code> is safe for <code>n = 0</code>, but what if <code>n &gt; len(rest)</code>? A negative start is counted from the end, so use <code>max(0, ...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def last_turns(history, n):
+    has_system = bool(history) and history[0][&quot;role&quot;] == &quot;system&quot;
+    head = history[:1] if has_system else []
+    rest = history[1:] if has_system else history
+    return head + rest[max(0, len(rest) - n):]</code></pre></div><p><code>rest[-n:]</code> would return everything for <code>n = 0</code>, exactly the opposite of "no turns". Computing the start as <code>len(rest) - n</code> avoids that, and <code>max(0, ...)</code> stops a large <code>n</code> from producing a negative start, which would count from the end instead of meaning "from the beginning". Slicing (<code>history[:1]</code>, <code>history[1:]</code>) also handles the empty list without special cases, because slices never raise. Building the result with <code>+</code> returns a new list and leaves the caller's history alone (2.4).</p></div></details>
+</article>
+<article class="prob" id="p-methods-that-return-none" data-pid="m4-1-methods-that-return-none" data-type="predict" data-level="easy" data-answer="[2, 3, 1] None [3, 2, 1]
+[1, 3, 2] None 1 0">
+<header class="prob-head"><h3>4. Methods that return None</h3></header>
+<div class="code"><pre><code class="py">x = [3, 1, 2]
+y = x.sort()
+z = sorted(x, reverse=True)
+x.append(x.pop(0))
+print(x, y, z)
+w = x.reverse()
+print(x, w, x.index(3), x.count(9))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sort</code>, <code>append</code> and <code>reverse</code> change the list and return <code>None</code>; <code>pop</code> returns the item it removed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[2, 3, 1] None [3, 2, 1]
+[1, 3, 2] None 1 0</pre></div><p><code>x.sort()</code> sorts <code>x</code> to <code>[1, 2, 3]</code> and returns <code>None</code>, so <code>y</code> is <code>None</code>. <code>sorted</code> returns a new list. <code>x.pop(0)</code> removes and returns <code>1</code>, and <code>append</code> puts it at the end: <code>[2, 3, 1]</code>. <code>reverse()</code> reverses in place to <code>[1, 3, 2]</code> and returns <code>None</code>. <code>index(3)</code> finds position 1, and <code>count(9)</code> is 0 rather than an error.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-sliding-windows-over-a-series" data-pid="m4-1-sliding-windows-over-a-series" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Sliding windows over a series</h3></header>
+<div class="prob-q"><p>Write <code>windows(xs, size, step=1)</code> that returns the list of slices <code>xs[i:i + size]</code> for every start <code>i</code> that gives a <strong>full</strong> window, moving <code>step</code> positions each time. Used to build training examples from a time series. Raise <code>ValueError</code> if <code>size</code> or <code>step</code> is less than 1.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def windows(xs, size, step=1):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+s = [1, 2, 3, 4, 5]
+assert windows(s, 3) == [[1, 2, 3], [2, 3, 4], [3, 4, 5]]
+assert windows(s, 2, 2) == [[1, 2], [3, 4]]
+assert windows(s, 6) == []
+assert windows(s, 5) == [[1, 2, 3, 4, 5]]
+assert raises(ValueError, windows, s, 0) and raises(ValueError, windows, s, 2, 0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+s = [1, 2, 3, 4, 5]
+assert windows(s, 3) == [[1, 2, 3], [2, 3, 4], [3, 4, 5]]
+assert windows(s, 2, 2) == [[1, 2], [3, 4]]
+assert windows(s, 6) == []
+assert windows(s, 5) == [[1, 2, 3, 4, 5]]
+assert raises(ValueError, windows, s, 0) and raises(ValueError, windows, s, 2, 0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last full window starts at <code>len(xs) - size</code>, so the starts are <code>range(0, len(xs) - size + 1, step)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def windows(xs, size, step=1):
+    if size &lt; 1 or step &lt; 1:
+        raise ValueError(&quot;size and step must be at least 1&quot;)
+    return [xs[i:i + size] for i in range(0, len(xs) - size + 1, step)]</code></pre></div><p>The range of starts does the "full windows only" work: if <code>size &gt; len(xs)</code>, the stop of the range is 0 or negative, so it is empty and no window is produced, without any special case. Each window is a new list (a slice), so changing one cannot affect the series or the other windows. With numpy, <code>np.lib.stride_tricks.sliding_window_view</code> produces the same windows as <strong>views</strong> without copying, which is much faster for long series but shares memory (2.2).</p></div></details>
+</article>
+<article class="prob" id="p-deleting-by-position-shifts-the-rest" data-pid="m4-1-deleting-by-position-shifts-the-rest" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Deleting by position shifts the rest</h3></header>
+<div class="prob-q"><p><code>drop_rows(rows, bad_positions)</code> should remove the rows at the given positions, in place. It removes the wrong rows and sometimes crashes. Fix it, keeping it in place (the same list object).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def drop_rows(rows, bad_positions):
+    for i in bad_positions:
+        del rows[i]
+</textarea>
+<script type="text/plain" class="prob-tests">rows = ["r0", "r1", "r2", "r3", "r4"]
+ref = rows
+drop_rows(rows, [1, 3])
+assert rows == ["r0", "r2", "r4"] and rows is ref
+data = list("abcde")
+drop_rows(data, [4, 0])
+assert data == ["b", "c", "d"]
+drop_rows(data, [])
+assert data == ["b", "c", "d"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [&quot;r0&quot;, &quot;r1&quot;, &quot;r2&quot;, &quot;r3&quot;, &quot;r4&quot;]
+ref = rows
+drop_rows(rows, [1, 3])
+assert rows == [&quot;r0&quot;, &quot;r2&quot;, &quot;r4&quot;] and rows is ref
+data = list(&quot;abcde&quot;)
+drop_rows(data, [4, 0])
+assert data == [&quot;b&quot;, &quot;c&quot;, &quot;d&quot;]
+drop_rows(data, [])
+assert data == [&quot;b&quot;, &quot;c&quot;, &quot;d&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After <code>del rows[1]</code>, which row is now at position 3?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Delete from the highest position down, or rebuild the contents with slice assignment.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def drop_rows(rows, bad_positions):
+    bad = set(bad_positions)
+    rows[:] = [r for i, r in enumerate(rows) if i not in bad]</code></pre></div><p>Each <code>del</code> shifts every later row one position to the left, so the next position points at a different row than intended, and a position near the end can be past the new end (<code>IndexError</code>). Two correct fixes: delete in <strong>descending</strong> order (<code>for i in sorted(bad_positions, reverse=True)</code>), so earlier positions are not affected, or rebuild the contents in one pass with slice assignment, which is O(n) overall instead of O(n) per deletion. The set makes each membership check O(1) (4.4).</p></div></details>
+</article>
+<article class="prob" id="p-slice-assignment-step-by-step" data-pid="m4-1-slice-assignment-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Slice assignment, step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>xs</code> and <code>len(xs)</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">xs = [0, 1, 2, 3, 4]
+xs[1:3] = [&quot;a&quot;]
+xs[:0] = [9, 9]
+del xs[::2]
+xs[len(xs):] = [7]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>xs</code></th><th><code>len(xs)</code></th></tr><tr><td>xs[1:3] = [&#x27;a&#x27;]</td><td><input class="cell" data-a="[0, &#x27;a&#x27;, 3, 4]" data-s="[0, &#x27;a&#x27;, 3, 4]" aria-label="xs at xs[1:3] = [&#x27;a&#x27;]" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="len(xs) at xs[1:3] = [&#x27;a&#x27;]" autocomplete="off"></td></tr><tr><td>xs[:0] = [9, 9]</td><td><input class="cell" data-a="[9, 9, 0, &#x27;a&#x27;, 3, 4]" data-s="[9, 9, 0, &#x27;a&#x27;, 3, 4]" aria-label="xs at xs[:0] = [9, 9]" autocomplete="off"></td><td><input class="cell" data-a="6" data-s="6" aria-label="len(xs) at xs[:0] = [9, 9]" autocomplete="off"></td></tr><tr><td>del xs[::2]</td><td><input class="cell" data-a="[9, &#x27;a&#x27;, 4]" data-s="[9, &#x27;a&#x27;, 4]" aria-label="xs at del xs[::2]" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="len(xs) at del xs[::2]" autocomplete="off"></td></tr><tr><td>xs[len(xs):] = [7]</td><td><input class="cell" data-a="[9, &#x27;a&#x27;, 4, 7]" data-s="[9, &#x27;a&#x27;, 4, 7]" aria-label="xs at xs[len(xs):] = [7]" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="len(xs) at xs[len(xs):] = [7]" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Slice assignment replaces exactly the selected part, whatever the lengths. <code>del xs[::2]</code> removes every other item, starting at position 0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>xs</code></th><th><code>len(xs)</code></th></tr><tr><td>xs[1:3] = [&#x27;a&#x27;]</td><td><code>[0, &#x27;a&#x27;, 3, 4]</code></td><td><code>4</code></td></tr><tr><td>xs[:0] = [9, 9]</td><td><code>[9, 9, 0, &#x27;a&#x27;, 3, 4]</code></td><td><code>6</code></td></tr><tr><td>del xs[::2]</td><td><code>[9, &#x27;a&#x27;, 4]</code></td><td><code>3</code></td></tr><tr><td>xs[len(xs):] = [7]</td><td><code>[9, &#x27;a&#x27;, 4, 7]</code></td><td><code>4</code></td></tr></table></div><p><code>xs[1:3] = ["a"]</code> replaces two items with one, so the list shrinks to <code>[0, "a", 3, 4]</code>. <code>xs[:0] = ...</code> replaces an empty slice at the front, which inserts. <code>del xs[::2]</code> deletes positions 0, 2 and 4 of <code>[9, 9, 0, "a", 3, 4]</code>, leaving <code>[9, "a", 4]</code>. <code>xs[len(xs):] = [7]</code> replaces the empty slice at the end, which is the same as <code>extend</code>. Every one of these changes the same list object in place.</p></div></details>
+</article>
+<article class="prob" id="p-a-queue-built-on-a-list" data-pid="m4-1-a-queue-built-on-a-list" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. A queue built on a list</h3></header>
+<div class="prob-q"><p>Both process 50,000 queued jobs in arrival order. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+jobs = list(range(50_000))</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">q = list(jobs)
+while q:
+    job = q.pop(0)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">q = deque(jobs)
+while q:
+    job = q.popleft()</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>pop(0)</code> have to do with every remaining item?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.55 s</td></tr><tr><td>B</td><td>4.52 ms</td></tr></table></div><p><code>list.pop(0)</code> removes the first slot and shifts every remaining reference one place left: O(n) per pop, O(n²) for the whole queue. A <code>deque</code> is built for both ends, so <code>popleft()</code> is O(1). Breadth-first search, job queues and streaming windows all want a deque. <code>list.pop()</code> from the <strong>end</strong> is O(1), so a list is fine as a stack.</p></div></details>
+</article>
+<article class="prob" id="p-keep-the-newest-messages-within-a-token-" data-pid="m4-1-keep-the-newest-messages-within-a-token-" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Keep the newest messages within a token budget</h3></header>
+<div class="prob-q"><p>Write <code>fit_budget(messages, budget, count=len)</code> that returns a new list containing the system message (if the first message has role <code>"system"</code>, always kept) plus as many of the <strong>newest</strong> other messages as fit, so that the total <code>count(m["content"])</code> of everything kept is at most <code>budget</code>. Keep chronological order. Stop at the first message that does not fit (do not skip ahead to older, smaller ones).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def fit_budget(messages, budget, count=len):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">msgs = [{"role": "system", "content": "abc"}, {"role": "user", "content": "aaaaaa"},
+        {"role": "assistant", "content": "bb"}, {"role": "user", "content": "cccc"}]
+assert [m["content"] for m in fit_budget(msgs, 9)] == ["abc", "bb", "cccc"]
+assert [m["content"] for m in fit_budget(msgs, 7)] == ["abc", "cccc"]
+assert [m["content"] for m in fit_budget(msgs, 3)] == ["abc"]
+assert [m["content"] for m in fit_budget(msgs[1:], 6)] == ["bb", "cccc"]
+words = lambda text: len(text.split())
+assert len(fit_budget(msgs, 100, count=words)) == 4</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">msgs = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;abc&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;aaaaaa&quot;},
+        {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;bb&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;cccc&quot;}]
+assert [m[&quot;content&quot;] for m in fit_budget(msgs, 9)] == [&quot;abc&quot;, &quot;bb&quot;, &quot;cccc&quot;]
+assert [m[&quot;content&quot;] for m in fit_budget(msgs, 7)] == [&quot;abc&quot;, &quot;cccc&quot;]
+assert [m[&quot;content&quot;] for m in fit_budget(msgs, 3)] == [&quot;abc&quot;]
+assert [m[&quot;content&quot;] for m in fit_budget(msgs[1:], 6)] == [&quot;bb&quot;, &quot;cccc&quot;]
+words = lambda text: len(text.split())
+assert len(fit_budget(msgs, 100, count=words)) == 4</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk the non-system messages from newest to oldest (<code>reversed(rest)</code>), adding while the total stays within the budget.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>You collected newest first; reverse once at the end, or insert into a deque on the left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def fit_budget(messages, budget, count=len):
+    has_system = bool(messages) and messages[0][&quot;role&quot;] == &quot;system&quot;
+    head = messages[:1] if has_system else []
+    rest = messages[1:] if has_system else messages
+    used = sum(count(m[&quot;content&quot;]) for m in head)
+    kept = []
+    for m in reversed(rest):
+        cost = count(m[&quot;content&quot;])
+        if used + cost &gt; budget:
+            break
+        kept.append(m)
+        used += cost
+    kept.reverse()
+    return head + kept</code></pre></div><p>Walking backwards with <code>reversed(rest)</code> (a lazy iterator, no copy) visits the newest messages first, and <code>break</code> stops at the first one that does not fit, so the kept turns are always a contiguous recent window: skipping ahead to an older small message would put a reply in context without the question it answers. Appending then reversing once is O(n); inserting at position 0 for each message would be O(n²). <code>count</code> is a parameter (3.5), so the same function works with a real tokenizer, such as <code>lambda t: len(enc.encode(t))</code> with tiktoken.</p></div></details>
+</article>
+<article class="prob" id="p-index-loops-to-slices" data-pid="m4-1-index-loops-to-slices" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>10. Index loops to slices</h3></header>
+<div class="prob-q"><p>Rewrite with slicing, <code>reversed</code> and <code>enumerate</code> instead of manual indexes. Same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def summary(scores):
+    top3 = []
+    i = 0
+    while i &lt; 3 and i &lt; len(scores):
+        top3.append(scores[i])
+        i += 1
+    backwards = []
+    for j in range(len(scores) - 1, -1, -1):
+        backwards.append(scores[j])
+    evens = []
+    for k in range(len(scores)):
+        if k % 2 == 0:
+            evens.append(scores[k])
+    return top3, backwards, evens
+</textarea>
+<script type="text/plain" class="prob-tests">assert summary([5, 4, 3, 2, 1]) == ([5, 4, 3], [1, 2, 3, 4, 5], [5, 3, 1])
+assert summary([7]) == ([7], [7], [7])
+assert summary([]) == ([], [], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert summary([5, 4, 3, 2, 1]) == ([5, 4, 3], [1, 2, 3, 4, 5], [5, 3, 1])
+assert summary([7]) == ([7], [7], [7])
+assert summary([]) == ([], [], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Three slices: the first three, a reversed copy, and every second item from position 0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summary(scores):
+    return scores[:3], scores[::-1], scores[::2]</code></pre></div><p>Each loop re-implemented a slice by hand, including its clamping (<code>i &lt; len(scores)</code>) and its step. Slices express the intent directly, clamp automatically (so the empty and short lists need no special handling), run in C, and return new lists, exactly like the loops did. When you see <code>range(len(xs) - 1, -1, -1)</code>, think <code>xs[::-1]</code> or <code>reversed(xs)</code>.</p></div></details>
+</article>
+<article class="prob" id="p-list-slice-versus-numpy-slice" data-pid="m4-1-list-slice-versus-numpy-slice" data-type="predict" data-level="medium" data-answer="[10, 20, 30, 40] [-1, 30]
+[10 -1 30 40] [-1 30]
+False True">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. List slice versus numpy slice</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+
+lst = [10, 20, 30, 40]
+arr = np.array(lst)
+ls = lst[1:3]
+sl = arr[1:3]
+ls[0] = -1
+sl[0] = -1
+print(lst, ls)
+print(arr, sl)
+print(lst[::-1] is lst, np.shares_memory(arr[::-1], arr))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A list slice is a new list. A numpy basic slice is a view (2.2).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[10, 20, 30, 40] [-1, 30]
+[10 -1 30 40] [-1 30]
+False True</pre></div><p>Changing the list slice does not touch <code>lst</code>, because a list slice is a new list holding copies of the references. The numpy slice is a <strong>view</strong> of the same memory, so <code>sl[0] = -1</code> writes into <code>arr</code>. Even a reversed numpy slice is a view (it just walks the memory backwards), while a reversed list slice is always a new list. Code that moves between lists and arrays has to keep both rules in mind.</p></div></details>
+</article>
+<article class="prob" id="p-batch-boundaries-for-an-embedding-job" data-pid="m4-1-batch-boundaries-for-an-embedding-job" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. Batch boundaries for an embedding job</h3></header>
+<div class="prob-q"><p>Write <code>batch_bounds(n, batch_size)</code> that returns a list of <code>(start, stop)</code> pairs covering positions <code>0</code> to <code>n</code>, each batch <code>batch_size</code> long except possibly the last. These are used as <code>items[start:stop]</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def batch_bounds(n, batch_size):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert batch_bounds(10, 4) == [(0, 4), (4, 8), (8, 10)]
+assert batch_bounds(8, 4) == [(0, 4), (4, 8)]
+assert batch_bounds(0, 4) == []
+assert batch_bounds(3, 10) == [(0, 3)]
+items = list("abcdefghij")
+assert [items[a:b] for a, b in batch_bounds(len(items), 4)][-1] == ["i", "j"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert batch_bounds(10, 4) == [(0, 4), (4, 8), (8, 10)]
+assert batch_bounds(8, 4) == [(0, 4), (4, 8)]
+assert batch_bounds(0, 4) == []
+assert batch_bounds(3, 10) == [(0, 3)]
+items = list(&quot;abcdefghij&quot;)
+assert [items[a:b] for a, b in batch_bounds(len(items), 4)][-1] == [&quot;i&quot;, &quot;j&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Starts are <code>range(0, n, batch_size)</code>; the stop is <code>min(start + batch_size, n)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def batch_bounds(n, batch_size):
+    return [(start, min(start + batch_size, n)) for start in range(0, n, batch_size)]</code></pre></div><p>Returning bounds instead of the batches themselves avoids copying the data and lets the same bounds index several aligned lists (texts, ids, metadata) in step. <code>min(..., n)</code> makes the last pair exact, although slicing would clamp <code>items[8:12]</code> anyway; exact bounds matter when they are logged or used for numpy arrays and progress bars. The count of batches is the ceiling division from 1.P: <code>-(-n // batch_size)</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-slice-edge-cases" data-pid="m4-1-slice-edge-cases" data-type="predict" data-level="hard" data-answer="[1, 2, 3, 4, 5] [] [1, 2]
+[5, 4, 3, 2, 1] [4, 2] [5, 3, 1]
+[2, 4] (1, 5, 2)
+True False">
+<header class="prob-head"><h3>13. Slice edge cases</h3></header>
+<div class="code"><pre><code class="py">xs = [1, 2, 3, 4, 5]
+print(xs[-0:], xs[len(xs):], xs[-100:2])
+print(xs[10:-10:-1], xs[3:0:-2], xs[::-2])
+s = slice(1, None, 2)
+print(xs[s], s.indices(len(xs)))
+print(xs[::-1][::-1] == xs, xs[::-1][::-1] is xs)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>-0</code> is <code>0</code>. With a negative step, bounds beyond the ends are clamped to the ends in the walking direction.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>slice.indices(n)</code> shows the actual <code>(start, stop, step)</code> Python uses for a sequence of length <code>n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[1, 2, 3, 4, 5] [] [1, 2]
+[5, 4, 3, 2, 1] [4, 2] [5, 3, 1]
+[2, 4] (1, 5, 2)
+True False</pre></div><p><code>xs[-0:]</code> is the whole list (the trap), <code>xs[len(xs):]</code> is empty, and <code>xs[-100:2]</code> clamps the start to 0. With a negative step, <code>10</code> clamps to the last item and <code>-10</code> to "before the first", so <code>xs[10:-10:-1]</code> is the whole list reversed; <code>xs[3:0:-2]</code> walks from position 3 down to (not including) 0 by twos. A <code>slice</code> object is just the three numbers, reusable and nameable (<code>HEADER = slice(0, 3)</code>), and <code>.indices</code> shows how Python normalises it. Reversing twice gives an equal list, but a new one each time.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-context-window-that-neve" data-pid="m4-1-read-the-code-a-context-window-that-neve" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a context window that never shrinks</h3></header>
+<div class="prob-q"><p>This module keeps a rolling window of recent messages for each chat. The caller's window keeps growing past <code>max_turns</code>, and asking for the <code>0</code> most recent messages returns everything. Read the module, find both bugs and fix them. <code>add</code> must change the caller's list in place.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def add(window, message, max_turns):
+    &quot;&quot;&quot;Append a message, then drop the oldest so at most max_turns remain.&quot;&quot;&quot;
+    window.append(message)
+    if len(window) &gt; max_turns:
+        window = window[-max_turns:]
+    return None
+
+
+def recent(window, n):
+    &quot;&quot;&quot;The n most recent messages, oldest first.&quot;&quot;&quot;
+    return window[-n:]
+
+
+def as_prompt(window, n):
+    return &quot;\n&quot;.join(f&quot;{m[&#x27;role&#x27;]}: {m[&#x27;content&#x27;]}&quot; for m in recent(window, n))
+</textarea>
+<script type="text/plain" class="prob-tests">w = []
+for i in range(5):
+    add(w, {"role": "user", "content": f"m{i}"}, max_turns=3)
+assert [m["content"] for m in w] == ["m2", "m3", "m4"]
+assert [m["content"] for m in recent(w, 2)] == ["m3", "m4"]
+assert recent(w, 0) == []
+assert as_prompt(w, 1) == "user: m4"
+assert recent(w, 10) == w</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">w = []
+for i in range(5):
+    add(w, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;m{i}&quot;}, max_turns=3)
+assert [m[&quot;content&quot;] for m in w] == [&quot;m2&quot;, &quot;m3&quot;, &quot;m4&quot;]
+assert [m[&quot;content&quot;] for m in recent(w, 2)] == [&quot;m3&quot;, &quot;m4&quot;]
+assert recent(w, 0) == []
+assert as_prompt(w, 1) == &quot;user: m4&quot;
+assert recent(w, 10) == w</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>window = window[-max_turns:]</code> builds a new list and moves the <strong>local</strong> name. What does the caller still hold?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Delete the oldest items in place with <code>del window[:len(window) - max_turns]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For <code>recent</code>, avoid the <code>-0</code> start the same way as problem 3.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def add(window, message, max_turns):
+    &quot;&quot;&quot;Append a message, then drop the oldest so at most max_turns remain.&quot;&quot;&quot;
+    window.append(message)
+    if len(window) &gt; max_turns:
+        del window[:len(window) - max_turns]
+    return None
+
+
+def recent(window, n):
+    &quot;&quot;&quot;The n most recent messages, oldest first.&quot;&quot;&quot;
+    return window[max(0, len(window) - n):]
+
+
+def as_prompt(window, n):
+    return &quot;\n&quot;.join(f&quot;{m[&#x27;role&#x27;]}: {m[&#x27;content&#x27;]}&quot; for m in recent(window, n))</code></pre></div><p>Bug one is rebinding instead of changing (2.2, 2.4): <code>window = window[-max_turns:]</code> makes a trimmed <strong>copy</strong> and points the local name at it, while the caller's list keeps every message. <code>del window[:k]</code> removes the oldest <code>k</code> items from the caller's own list. Bug two is the <code>-0</code> trap: <code>window[-0:]</code> is the whole window. In production you would use <code>collections.deque(maxlen=max_turns)</code>, which drops the oldest item automatically on each append, in O(1).</p></div></details>
+</article>
+<article class="prob" id="p-rotate-a-list-in-place" data-pid="m4-1-rotate-a-list-in-place" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Rotate a list in place</h3></header>
+<div class="prob-q"><p>Write <code>rotate(xs, k)</code> that rotates <code>xs</code> <strong>to the right</strong> by <code>k</code> positions <strong>in place</strong> (the same list object) and returns <code>None</code>. <code>k</code> may be larger than the length or negative (negative rotates left). An empty list stays empty.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def rotate(xs, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a = [1, 2, 3, 4, 5]
+ref = a
+assert rotate(a, 2) is None
+assert a == [4, 5, 1, 2, 3] and a is ref
+b = [1, 2, 3]
+rotate(b, 7)
+assert b == [3, 1, 2]
+c = [1, 2, 3, 4]
+rotate(c, -1)
+assert c == [2, 3, 4, 1]
+e = []
+rotate(e, 3)
+assert e == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = [1, 2, 3, 4, 5]
+ref = a
+assert rotate(a, 2) is None
+assert a == [4, 5, 1, 2, 3] and a is ref
+b = [1, 2, 3]
+rotate(b, 7)
+assert b == [3, 1, 2]
+c = [1, 2, 3, 4]
+rotate(c, -1)
+assert c == [2, 3, 4, 1]
+e = []
+rotate(e, 3)
+assert e == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Rotating by <code>k</code> and by <code>k % len(xs)</code> give the same result, and Python's <code>%</code> already turns a negative <code>k</code> into the right positive amount (1.1).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The rotated list is <code>xs[-k:] + xs[:-k]</code>. Put it back with slice assignment, and beware <code>k == 0</code> (the <code>-0</code> trap again).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def rotate(xs, k):
+    if not xs:
+        return None
+    k %= len(xs)
+    xs[:] = xs[len(xs) - k:] + xs[:len(xs) - k]</code></pre></div><p><code>k % len(xs)</code> reduces any rotation to <code>0 .. n - 1</code>, and because Python's modulo takes the sign of the divisor, <code>-1 % 4</code> is 3: rotating left by one is rotating right by three. Using <code>len(xs) - k</code> as the split point instead of <code>-k</code> avoids the <code>-0</code> trap when <code>k</code> becomes 0. Slice assignment keeps the same list object. This uses O(n) extra memory for the temporary slices; the classic interview follow-up is the O(1)-memory version, which reverses the whole list and then reverses each part. <code>collections.deque.rotate(k)</code> does it for deques.</p></div></details>
+</article>
+<article class="prob" id="p-merge-two-sorted-lists" data-pid="m4-1-merge-two-sorted-lists" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Merge two sorted lists</h3></header>
+<div class="prob-q"><p>Write <code>merge_sorted(a, b)</code> that returns one sorted list from two already-sorted lists in O(len(a) + len(b)) time, <strong>without</strong> calling <code>sort</code> or <code>sorted</code>. Equal items from <code>a</code> come before those from <code>b</code>. Used to combine ranked results from two retrievers that are already in score order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">def merge_sorted(a, b):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert merge_sorted([1, 4, 9], [2, 3, 10, 11]) == [1, 2, 3, 4, 9, 10, 11]
+assert merge_sorted([], [1, 2]) == [1, 2] and merge_sorted([3], []) == [3]
+left = [(1, "a"), (2, "a")]
+right = [(1, "b")]
+assert merge_sorted([x[0] for x in left], [x[0] for x in right]) == [1, 1, 2]
+big = merge_sorted(list(range(0, 2000, 2)), list(range(1, 2000, 2)))
+assert big == list(range(2000))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert merge_sorted([1, 4, 9], [2, 3, 10, 11]) == [1, 2, 3, 4, 9, 10, 11]
+assert merge_sorted([], [1, 2]) == [1, 2] and merge_sorted([3], []) == [3]
+left = [(1, &quot;a&quot;), (2, &quot;a&quot;)]
+right = [(1, &quot;b&quot;)]
+assert merge_sorted([x[0] for x in left], [x[0] for x in right]) == [1, 1, 2]
+big = merge_sorted(list(range(0, 2000, 2)), list(range(1, 2000, 2)))
+assert big == list(range(2000))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two positions <code>i</code> and <code>j</code>. While both lists have items left, append the smaller current item and advance that position.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When one list runs out, the rest of the other is already sorted: add it with a slice and <code>extend</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def merge_sorted(a, b):
+    out = []
+    i = j = 0
+    while i &lt; len(a) and j &lt; len(b):
+        if b[j] &lt; a[i]:
+            out.append(b[j])
+            j += 1
+        else:
+            out.append(a[i])
+            i += 1
+    out.extend(a[i:])
+    out.extend(b[j:])
+    return out</code></pre></div><p>Each comparison moves one position forward, so the loop runs at most <code>len(a) + len(b)</code> times: O(n + m), better than concatenating and sorting (O((n + m) log(n + m))). Taking from <code>a</code> unless <code>b</code>'s item is <strong>strictly</strong> smaller keeps the merge stable: equal items from <code>a</code> come first. Extending with the two leftover slices handles the tail in one step, since only one of them is non-empty. This "two pointers" pattern is the merge step of merge sort, <code>heapq.merge</code> does it lazily for many lists, and it is how hybrid search combines ranked lists before rank fusion (Module 16).</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-why-is-list-append-o-1-but-list-insert-0" data-pid="m4-1-why-is-list-append-o-1-but-list-insert-0" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why is <code>list.append</code> O(1) but <code>list.insert(0, x)</code> O(n)?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A CPython list is a dynamic array of references with spare capacity at the end. <code>append</code> writes into the next free slot, which is O(1); when the capacity runs out, the list allocates a larger block (growing by a fraction of its size) and copies the references, which is O(n) but rare enough that the cost averages out to O(1) per append (amortized). <code>insert(0, x)</code> must shift every existing reference one slot to the right to open the gap, so it is O(n) every time, and <code>pop(0)</code> shifts them back. For fast operations at both ends, use <code>collections.deque</code>. Follow-ups worth mentioning: indexing is O(1) because slots are contiguous, and <code>x in list</code> is O(n) because there is no index of values.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-xs-n-break-for-n-0-and-how-do-y" data-pid="m4-1-why-does-xs-n-break-for-n-0-and-how-do-y" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why does <code>xs[-n:]</code> break for <code>n = 0</code>, and how do you write "the last n items" safely?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Because <code>-0</code> equals <code>0</code>, so <code>xs[-0:]</code> means <code>xs[0:]</code>, the whole list, while "the last 0 items" should be empty. It only fails for exactly that value, so it slips through tests that use <code>n &gt;= 1</code>. Safe forms: <code>xs[len(xs) - n:]</code> (with <code>max(0, ...)</code> if <code>n</code> can exceed the length), or <code>xs[-n:] if n else []</code>, or for a rolling window a <code>deque(maxlen=n)</code>. Mention where it bites in practice: trimming chat history, "keep the last k checkpoints", or taking the last k scores for early stopping.</p></div></details>
+</article>
+<article class="prob" id="p-when-do-you-use-a-python-list-and-when-a" data-pid="m4-1-when-do-you-use-a-python-list-and-when-a" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. When do you use a Python list, and when a numpy array, for numeric data?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A list stores references to separate Python objects, can mix types, grows cheaply with <code>append</code>, and is ideal for building up results, small data, or heterogeneous records. A numpy array stores raw numbers of one dtype in one block, so it uses far less memory and runs whole-array operations (<code>arr * 2</code>, <code>arr.mean()</code>, matrix products) in compiled code, often 10 to 100 times faster than Python loops. But arrays have a fixed size (appending copies the whole array), and basic slices are <strong>views</strong> that share memory, while list slices are copies. A common pattern: collect in a list, then convert once with <code>np.array(values)</code>. Mention that object-dtype arrays lose most of the benefit, and that pandas is built on the same array model.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A list is a dynamic array of references: indexing and <code>append</code> are O(1); <code>insert(0)</code>, <code>pop(0)</code>, <code>in</code>, <code>remove</code> and <code>index</code> are O(n).</li><li>Negative indexes count from the end. Slices never raise: they clamp. <code>stop</code> is never included.</li><li><code>xs[-n:]</code> is the whole list when <code>n == 0</code>. Use <code>xs[len(xs) - n:]</code> or guard zero.</li><li>Slice assignment and <code>del</code> change the list in place and can grow or shrink it. <code>xs = xs[...]</code> only moves your local name.</li><li><code>append</code> adds one item; <code>extend</code> adds each item. Use <code>deque</code> for queues and windows, sets and dicts for membership, numpy for big numbers.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

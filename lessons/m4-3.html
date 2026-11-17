@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.3 · Tuples and unpacking</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.3 Tuples and unpacking</h1>
+  <p>What makes something a tuple (the comma, not the brackets), how packing and unpacking work step by step, star unpacking, named tuples as lightweight records, and tuples as composite keys, the Python version of a SQL composite primary key.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 9 medium · 6 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a tuple is, and what makes one</h2>
+<p>A tuple is an <strong>immutable</strong> sequence: a fixed-size array of references (like a list, 4.1) that can never change after it is created. You cannot assign to a position, append, remove or sort it in place. Indexing, slicing, <code>len</code>, <code>in</code>, <code>count</code> and <code>index</code> all work as for lists, and slicing a tuple returns a new tuple.</p>
+<p>The part that trips people up: <strong>the comma makes the tuple, not the parentheses</strong>. Parentheses are only needed when the expression would otherwise be ambiguous, and for the empty tuple <code>()</code>. A one-item tuple needs a trailing comma, and a stray trailing comma creates a tuple you did not mean to create.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">comma.py</span><button class="copy">Copy</button></div><pre><code class="py">a = (1)          # just the number 1 in brackets
+b = (1,)         # a one-item tuple
+c = 1, 2         # a tuple without any brackets
+d = ()           # the empty tuple
+e = &quot;rag&quot;,       # a trailing comma: a tuple again
+print(type(a).__name__, type(b).__name__, c, d, e)
+
+config_name = &quot;prod&quot;,       # a typo that makes a tuple instead of a string
+print(f&quot;loading {config_name}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>int tuple (1, 2) () (&#x27;rag&#x27;,)
+loading (&#x27;prod&#x27;,)</pre></div></div>
+<p>Why choose a tuple over a list? Three concrete reasons. <strong>Safety</strong>: nobody can change it, so it can be shared and returned without the copying worries of Module 2. <strong>Hashability</strong>: a tuple of hashable items can be a dict key or a set member (the last section). <strong>Meaning</strong>: by convention, a list is "many items of the same kind" and a tuple is "a fixed record whose positions mean different things", like <code>(latitude, longitude)</code> or <code>(name, score)</code>. Tuples are also slightly smaller and faster to create, and a tuple of constants is built once at compile time (problem 7).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A tuple is like one <strong>row</strong> of a table: a fixed set of columns in a fixed order, each with its own meaning. A list is like a <strong>column</strong>: many values of the same kind. A list of tuples is a small table, which is exactly what a database driver returns from <code>cursor.fetchall()</code>.</p></div></div>
+</section>
+<section class="sec" id="unpack">
+<h2><span class="n">2</span>Packing and unpacking, step by step</h2>
+<p><strong>Unpacking</strong> assigns the items of any iterable to several names: <code>x, y = point</code>. Step by step, Python evaluates the whole right-hand side first, then checks that it yields exactly as many items as there are names, then assigns them from left to right. Too many or too few items raise <code>ValueError</code> with a message that says which.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">unpacking.py</span><button class="copy">Copy</button></div><pre><code class="py">point = 3, 4                    # packing
+x, y = point                    # unpacking
+name, (lo, hi) = &quot;latency&quot;, (12, 48)   # nested: the shape on the left matches the right
+print(x, y, name, lo, hi)
+
+for i, (doc, score) in enumerate([(&quot;faq&quot;, 0.9), (&quot;guide&quot;, 0.7)], start=1):
+    print(i, doc, score)
+
+for bad in [&quot;a, b = (1, 2, 3)&quot;, &quot;a, b, c = (1, 2)&quot;, &quot;a, b = 5&quot;]:
+    try:
+        exec(bad)
+    except (ValueError, TypeError) as e:
+        print(f&quot;{bad:18} -&gt; {type(e).__name__}: {e}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>3 4 latency 12 48
+1 faq 0.9
+2 guide 0.7
+a, b = (1, 2, 3)   -&gt; ValueError: too many values to unpack (expected 2, got 3)
+a, b, c = (1, 2)   -&gt; ValueError: not enough values to unpack (expected 3, got 2)
+a, b = 5           -&gt; TypeError: cannot unpack non-iterable int object</pre></div></div>
+<p>Swapping two variables is the most famous use: <code>a, b = b, a</code>. The right side <code>b, a</code> is evaluated completely first, using the <strong>old</strong> values, and only then are the names assigned. That is why no temporary variable is needed. The same rule makes <code>a, b = b, a + b</code> (the Fibonacci step) correct: both new values are computed from the old ones before either name changes.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">swap.py</span><button class="copy">Copy</button></div><pre><code class="py">a, b = 0, 1
+for _ in range(6):
+    a, b = b, a + b
+print(a, b)</code></pre><div class="out"><span class="ol">Output</span><pre>8 13</pre></div></div>
+</section>
+<section class="sec" id="star">
+<h2><span class="n">3</span>Star unpacking</h2>
+<p>A starred name on the left collects <strong>all the leftover items into a list</strong>. It can appear at the start, the end or the middle, but only once, because otherwise the split would be ambiguous. If nothing is left over it is an empty list, never <code>None</code>, and it is always a <strong>list</strong>, even when the right side is a tuple or a string.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">star_unpacking.py</span><button class="copy">Copy</button></div><pre><code class="py">first, *rest = [&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;user&quot;]
+*history, last = [&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;user&quot;]
+head, *middle, tail = &quot;abcde&quot;
+only, *nothing = (&quot;x&quot;,)
+print(first, rest)
+print(history, last)
+print(head, middle, tail, only, nothing)
+
+header, *rows = [(&quot;id&quot;, &quot;score&quot;), (1, 0.9), (2, 0.4)]   # a CSV-like table
+print(header, rows)</code></pre><div class="out"><span class="ol">Output</span><pre>system [&#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;user&#x27;]
+[&#x27;system&#x27;, &#x27;user&#x27;, &#x27;assistant&#x27;] user
+a [&#x27;b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;] e x []
+(&#x27;id&#x27;, &#x27;score&#x27;) [(1, 0.9), (2, 0.4)]</pre></div></div>
+<p>The same star works in literals and calls, in the other direction: it spreads an iterable into separate items. <code>[*a, *b]</code> concatenates any iterables into a list, <code>(*a, x)</code> builds a tuple, <code>{**d1, **d2}</code> merges dicts, and <code>f(*args)</code> spreads arguments (3.2). And <code>zip(*rows)</code> uses it to turn rows into columns: each row becomes one argument of <code>zip</code>, which then pairs up the first items, the second items and so on (problem 13).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">star_spread.py</span><button class="copy">Copy</button></div><pre><code class="py">rows = [(&quot;faq&quot;, 0.9, 120), (&quot;guide&quot;, 0.7, 340), (&quot;terms&quot;, 0.2, 80)]
+names, scores, tokens = zip(*rows)
+print(names, scores, tokens)
+print([*names, &quot;extra&quot;], (*scores, 1.0))</code></pre><div class="out"><span class="ol">Output</span><pre>(&#x27;faq&#x27;, &#x27;guide&#x27;, &#x27;terms&#x27;) (0.9, 0.7, 0.2) (120, 340, 80)
+[&#x27;faq&#x27;, &#x27;guide&#x27;, &#x27;terms&#x27;, &#x27;extra&#x27;] (0.9, 0.7, 0.2, 1.0)</pre></div></div>
+</section>
+<section class="sec" id="named">
+<h2><span class="n">4</span>Named tuples: records without a class</h2>
+<p>Positions are fine for two or three fields, but <code>result[2]</code> says nothing about what the value is. A <strong>named tuple</strong> gives each position a name while staying a real tuple: immutable, hashable, unpackable, and comparable to plain tuples. <code>typing.NamedTuple</code> is the modern way to write one, with type hints; <code>collections.namedtuple</code> is the older factory function.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">named_tuple.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import NamedTuple
+
+class Metrics(NamedTuple):
+    precision: float
+    recall: float
+    support: int = 0
+
+m = Metrics(0.82, 0.61, support=140)
+print(m.recall, m[1], m)
+p, r, n = m                                  # still a tuple: unpacks by position
+print(p, r, n, m == (0.82, 0.61, 140))
+better = m._replace(recall=0.7)              # &quot;changing&quot; means building a new one
+print(better, m.recall, m._asdict())
+try:
+    m.recall = 0.9
+except AttributeError as e:
+    print(&quot;AttributeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>0.61 0.61 Metrics(precision=0.82, recall=0.61, support=140)
+0.82 0.61 140 True
+Metrics(precision=0.82, recall=0.7, support=140) 0.61 {&#x27;precision&#x27;: 0.82, &#x27;recall&#x27;: 0.61, &#x27;support&#x27;: 140}
+AttributeError: can&#x27;t set attribute</pre></div></div>
+<p>Named tuples shine for <strong>function results</strong> (<code>return Metrics(p, r, n)</code> instead of a bare tuple whose order a caller can confuse, problem 4) and for rows of fixed shape. Their limits: they are immutable (<code>_replace</code> builds a new one), and because they are tuples, <code>m == (0.82, 0.61, 140)</code> is <code>True</code>: they compare equal to any tuple with the same values, which can hide mix-ups between two different record types. When you need mutability, validation or methods, use a dataclass (Module 11).</p>
+</section>
+<section class="sec" id="keys">
+<h2><span class="n">5</span>Tuples as keys</h2>
+<p>A tuple is <strong>hashable when all its items are hashable</strong>, so it can be a dict key or a set member. That makes tuples the natural <strong>composite key</strong>: "one entry per user per day" is a dict keyed by <code>(user_id, day)</code>, exactly like a composite primary key in SQL. Tuples also compare <strong>lexicographically</strong>: first items first, and only if they are equal, the second items, and so on, which is why tuple keys sort by several rules at once (3.5).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tuple_keys.py</span><button class="copy">Copy</button></div><pre><code class="py">usage = {}
+events = [(&quot;ana&quot;, &quot;2025-06-01&quot;, 120), (&quot;ben&quot;, &quot;2025-06-01&quot;, 50), (&quot;ana&quot;, &quot;2025-06-01&quot;, 30), (&quot;ana&quot;, &quot;2025-06-02&quot;, 70)]
+for user, day, tokens in events:
+    key = (user, day)                     # composite key
+    usage[key] = usage.get(key, 0) + tokens
+print(usage)
+
+print((1, &quot;b&quot;) &lt; (1, &quot;c&quot;), (1, 2) &lt; (1, 2, 0), (2,) &gt; (1, 99))
+try:
+    hash((&quot;ana&quot;, [&quot;tag&quot;]))
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{(&#x27;ana&#x27;, &#x27;2025-06-01&#x27;): 150, (&#x27;ben&#x27;, &#x27;2025-06-01&#x27;): 50, (&#x27;ana&#x27;, &#x27;2025-06-02&#x27;): 70}
+True True True
+TypeError: unhashable type: &#x27;list&#x27;</pre></div></div>
+<p>Remember the caveat from 2.2: a tuple is only as immutable as its contents. <code>("ana", ["tag"])</code> cannot be a key, because the list inside could change. When building cache keys from data that may contain lists or dicts, convert them first (2.2, <code>freeze</code>).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-what-is-a-tuple" data-pid="m4-3-what-is-a-tuple" data-type="predict" data-level="easy" data-answer="int tuple tuple str tuple
+1 2 1 4">
+<header class="prob-head"><h3>1. What is a tuple?</h3></header>
+<div class="code"><pre><code class="py">a = (5)
+b = (5,)
+c = 5, 6
+d = (&quot;prod&quot;)
+e = &quot;prod&quot;,
+print(type(a).__name__, type(b).__name__, type(c).__name__, type(d).__name__, type(e).__name__)
+print(len(b), len(c), len(e), len(d))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look for commas, not brackets.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>int tuple tuple str tuple
+1 2 1 4</pre></div><p><code>(5)</code> and <code>("prod")</code> are just a number and a string inside brackets. <code>(5,)</code>, <code>5, 6</code> and <code>"prod",</code> all contain a comma, so they are tuples. <code>len(d)</code> is 4 because <code>d</code> is the string <code>"prod"</code>. The trailing-comma tuple is a real bug source: <code>name = "prod",</code> makes <code>name</code> a tuple, and the error shows up far away, for example when a path is built from it.</p></div></details>
+</article>
+<article class="prob" id="p-split-a-full-name" data-pid="m4-3-split-a-full-name" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Split a full name</h3></header>
+<div class="prob-q"><p>Write <code>first_last(full_name)</code> that returns a tuple <code>(first, last)</code>: the first and last words of the name, ignoring middle names and extra spaces. A one-word name gives <code>(word, "")</code>, and an empty string gives <code>("", "")</code>. Use star unpacking.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def first_last(full_name):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert first_last("Ana Maria Lopez") == ("Ana", "Lopez")
+assert first_last("  Ben   Ortiz ") == ("Ben", "Ortiz")
+assert first_last("Cher") == ("Cher", "")
+assert first_last("") == ("", "")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert first_last(&quot;Ana Maria Lopez&quot;) == (&quot;Ana&quot;, &quot;Lopez&quot;)
+assert first_last(&quot;  Ben   Ortiz &quot;) == (&quot;Ben&quot;, &quot;Ortiz&quot;)
+assert first_last(&quot;Cher&quot;) == (&quot;Cher&quot;, &quot;&quot;)
+assert first_last(&quot;&quot;) == (&quot;&quot;, &quot;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>first, *rest = words</code> puts everything after the first word in <code>rest</code>. The last name is then <code>rest[-1]</code> if there is one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def first_last(full_name):
+    words = full_name.split()
+    if not words:
+        return &quot;&quot;, &quot;&quot;
+    first, *rest = words
+    return first, rest[-1] if rest else &quot;&quot;</code></pre></div><p><code>split()</code> with no argument splits on any run of whitespace and ignores leading and trailing spaces. Star unpacking takes the first word and leaves the rest in a list, which is empty for a one-word name, so <code>rest[-1] if rest else ""</code> covers both cases. <code>return first, ...</code> packs the two values into a tuple. Real names are messier (prefixes, particles such as "de la", non-Western order), which is why CRM systems store name parts separately instead of splitting them.</p></div></details>
+</article>
+<article class="prob" id="p-when-unpacking-fails" data-pid="m4-3-when-unpacking-fails" data-type="predict" data-level="easy" data-answer="faq.md 0.92 128
+doc, score = row -&gt; too many values to unpack (expected 2, got 3)
+doc, score, tokens, extra = row -&gt; not enough values to unpack (expected 4, got 3)
+a, b = &#x27;ab&#x27; -&gt; ok
+a, b = &#x27;abc&#x27; -&gt; too many values to unpack (expected 2)">
+<header class="prob-head"><h3>3. When unpacking fails</h3></header>
+<div class="code"><pre><code class="py">row = (&quot;faq.md&quot;, 0.92, 128)
+doc, score, tokens = row
+print(doc, score, tokens)
+for bad in [&quot;doc, score = row&quot;, &quot;doc, score, tokens, extra = row&quot;, &quot;a, b = &#x27;ab&#x27;&quot;, &quot;a, b = &#x27;abc&#x27;&quot;]:
+    try:
+        exec(bad)
+        print(bad, &quot;-&gt; ok&quot;)
+    except ValueError as e:
+        print(bad, &quot;-&gt;&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Unpacking works on any iterable, including a string. The count must match exactly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>faq.md 0.92 128
+doc, score = row -&gt; too many values to unpack (expected 2, got 3)
+doc, score, tokens, extra = row -&gt; not enough values to unpack (expected 4, got 3)
+a, b = &#x27;ab&#x27; -&gt; ok
+a, b = &#x27;abc&#x27; -&gt; too many values to unpack (expected 2)</pre></div><p>The number of names must equal the number of items. Too few names gives "too many values to unpack (expected 2)", too many names gives "not enough values to unpack". A two-character string unpacks fine into two names, because a string is an iterable of characters; three characters into two names fails. These messages appear constantly when a function's return shape changes and a caller was not updated.</p></div></details>
+</article>
+<article class="prob" id="p-metrics-returned-in-a-confusing-order" data-pid="m4-3-metrics-returned-in-a-confusing-order" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>4. Metrics returned in a confusing order</h3></header>
+<div class="prob-q"><p><code>evaluate</code> returns <code>(recall, precision, f1)</code>, and callers keep unpacking it as <code>precision, recall, f1</code>, reporting swapped numbers. Return a <code>NamedTuple</code> called <code>Metrics</code> with fields <code>precision</code>, <code>recall</code>, <code>f1</code>, so callers can use names.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def evaluate(tp, fp, fn):
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return recall, precision, f1
+</textarea>
+<script type="text/plain" class="prob-tests">m = evaluate(tp=8, fp=2, fn=8)
+assert m.precision == 0.8 and m.recall == 0.5
+assert abs(m.f1 - 0.6153846153846154) < 1e-12
+p, r, f = m
+assert (p, r) == (0.8, 0.5)
+assert evaluate(0, 0, 0) == (0.0, 0.0, 0.0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">m = evaluate(tp=8, fp=2, fn=8)
+assert m.precision == 0.8 and m.recall == 0.5
+assert abs(m.f1 - 0.6153846153846154) &lt; 1e-12
+p, r, f = m
+assert (p, r) == (0.8, 0.5)
+assert evaluate(0, 0, 0) == (0.0, 0.0, 0.0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define <code>class Metrics(NamedTuple):</code> with three float fields, in the order <code>precision, recall, f1</code>, and return <code>Metrics(...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import NamedTuple
+
+class Metrics(NamedTuple):
+    precision: float
+    recall: float
+    f1: float
+
+def evaluate(tp, fp, fn):
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return Metrics(precision, recall, f1)</code></pre></div><p>A bare tuple forces every caller to remember positions, and precision and recall are both floats between 0 and 1, so a swap never raises an error: it just produces a wrong report. With a named tuple, <code>m.precision</code> cannot be confused, and old callers that unpack still work because it is still a tuple. Fixing the order to <code>precision, recall</code> also matches the usual convention (scikit-learn's <code>precision_recall_fscore_support</code> returns them in that order).</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-summarise-tool-calls-with-nested-unpacki" data-pid="m4-3-summarise-tool-calls-with-nested-unpacki" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Summarise tool calls with nested unpacking</h3></header>
+<div class="prob-q"><p>An agent logs each tool call as <code>(tool_name, arguments, (latency_ms, tokens))</code>. Write <code>summarise(calls)</code> returning a dict from tool name to a tuple <code>(count, total_tokens, max_latency_ms)</code>. Unpack each record in the <code>for</code> line itself.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def summarise(calls):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">log = [("search", {"q": "a"}, (120, 400)), ("calc", {"e": "1+1"}, (5, 20)), ("search", {"q": "b"}, (300, 380))]
+assert summarise(log) == {"search": (2, 780, 300), "calc": (1, 20, 5)}
+assert summarise([]) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">log = [(&quot;search&quot;, {&quot;q&quot;: &quot;a&quot;}, (120, 400)), (&quot;calc&quot;, {&quot;e&quot;: &quot;1+1&quot;}, (5, 20)), (&quot;search&quot;, {&quot;q&quot;: &quot;b&quot;}, (300, 380))]
+assert summarise(log) == {&quot;search&quot;: (2, 780, 300), &quot;calc&quot;: (1, 20, 5)}
+assert summarise([]) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>for name, _args, (latency, tokens) in calls:</code> unpacks the nested tuple directly. <code>_args</code> signals "not used".</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the running tuple in the dict and rebuild it each time: tuples cannot be changed in place.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summarise(calls):
+    out = {}
+    for name, _args, (latency, tokens) in calls:
+        count, total, worst = out.get(name, (0, 0, 0))
+        out[name] = (count + 1, total + tokens, max(worst, latency))
+    return out</code></pre></div><p>The loop header mirrors the shape of each record, so the body works with names instead of <code>call[2][1]</code>. Because a tuple cannot change, each update unpacks the current totals and stores a <strong>new</strong> tuple; for many updates a small mutable object (a list, a dict or a dataclass) would avoid rebuilding, but the immutable version cannot be corrupted by another part of the code holding a reference. The leading underscore in <code>_args</code> is a convention that tells readers and linters the value is intentionally unused.</p></div></details>
+</article>
+<article class="prob" id="p-swaps-and-star-unpacking" data-pid="m4-3-swaps-and-star-unpacking" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>6. Swaps and star unpacking</h3></header>
+<div class="prob-q"><p>Fill in <code>a</code>, <code>b</code> and <code>rest</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">a, b, rest = 1, 2, []
+a, b = b, a
+a, b = b, a + b
+a, *rest = [b, a, 7, 8]
+*rest, b = rest</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>rest</code></th></tr><tr><td>a, b = b, a</td><td><input class="cell" data-a="2" data-s="2" aria-label="a at a, b = b, a" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="b at a, b = b, a" autocomplete="off"></td><td><input class="cell" data-a="[]" data-s="[]" aria-label="rest at a, b = b, a" autocomplete="off"></td></tr><tr><td>a, b = b, a + b</td><td><input class="cell" data-a="1" data-s="1" aria-label="a at a, b = b, a + b" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="b at a, b = b, a + b" autocomplete="off"></td><td><input class="cell" data-a="[]" data-s="[]" aria-label="rest at a, b = b, a + b" autocomplete="off"></td></tr><tr><td>a, *rest = [b, a, 7, 8]</td><td><input class="cell" data-a="3" data-s="3" aria-label="a at a, *rest = [b, a, 7, 8]" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="b at a, *rest = [b, a, 7, 8]" autocomplete="off"></td><td><input class="cell" data-a="[1, 7, 8]" data-s="[1, 7, 8]" aria-label="rest at a, *rest = [b, a, 7, 8]" autocomplete="off"></td></tr><tr><td>*rest, b = rest</td><td><input class="cell" data-a="3" data-s="3" aria-label="a at *rest, b = rest" autocomplete="off"></td><td><input class="cell" data-a="8" data-s="8" aria-label="b at *rest, b = rest" autocomplete="off"></td><td><input class="cell" data-a="[1, 7]" data-s="[1, 7]" aria-label="rest at *rest, b = rest" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The whole right side is evaluated with the old values before any name changes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>rest</code></th></tr><tr><td>a, b = b, a</td><td><code>2</code></td><td><code>1</code></td><td><code>[]</code></td></tr><tr><td>a, b = b, a + b</td><td><code>1</code></td><td><code>3</code></td><td><code>[]</code></td></tr><tr><td>a, *rest = [b, a, 7, 8]</td><td><code>3</code></td><td><code>3</code></td><td><code>[1, 7, 8]</code></td></tr><tr><td>*rest, b = rest</td><td><code>3</code></td><td><code>8</code></td><td><code>[1, 7]</code></td></tr></table></div><p>The swap gives <code>a = 2, b = 1</code>. Then <code>b, a + b</code> is computed from the old values as <code>(1, 3)</code>, so <code>a = 1, b = 3</code>. <code>[b, a, 7, 8]</code> is built as <code>[3, 1, 7, 8]</code> before assigning, so <code>a = 3</code> and <code>rest = [1, 7, 8]</code>. Finally <code>*rest, b = rest</code> reads the current <code>rest</code> first, then assigns its last item to <code>b</code> and the others to a new list <code>rest</code>.</p></div></details>
+</article>
+<article class="prob" id="p-creating-a-tuple-or-a-list-of-constants" data-pid="m4-3-creating-a-tuple-or-a-list-of-constants" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>7. Creating a tuple or a list of constants</h3></header>
+<div class="prob-q"><p>Both build a small record of five constants a million times. Which loop is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">n = 1_000_000</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for _ in range(n):
+    rec = [200, &quot;OK&quot;, 0.25, True, None]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">for _ in range(n):
+    rec = (200, &quot;OK&quot;, 0.25, True, None)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A tuple of constants can never change. What can the compiler do with it?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>213.40 ms</td></tr><tr><td>B</td><td>69.83 ms</td></tr></table></div><p>Because a tuple of constants is immutable, the compiler builds it <strong>once</strong>, when the code is compiled, and stores it as a constant: each pass of the loop just loads that one object. A list must be a new object every time (someone might change it), so each pass allocates a list and fills five slots. You can see the difference with <code>dis.dis</code>: <code>LOAD_CONST</code> for the tuple versus <code>BUILD_LIST</code> for the list. This is a small effect per object, but it is one reason tuples suit fixed records and constant tables.</p></div></details>
+</article>
+<article class="prob" id="p-one-event-per-user-per-day" data-pid="m4-3-one-event-per-user-per-day" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. One event per user per day</h3></header>
+<div class="prob-q"><p>Write <code>first_per_day(events)</code> where each event is a dict with <code>user</code>, <code>ts</code> (ISO timestamp string such as <code>"2025-06-01T09:30"</code>) and <code>action</code>. Return the list of events that are the <strong>first</strong> for their <code>(user, day)</code> pair, in input order. Events are already in time order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def first_per_day(events):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ev = [{"user": "ana", "ts": "2025-06-01T09:30", "action": "login"},
+      {"user": "ana", "ts": "2025-06-01T11:00", "action": "query"},
+      {"user": "ben", "ts": "2025-06-01T10:00", "action": "login"},
+      {"user": "ana", "ts": "2025-06-02T08:15", "action": "query"}]
+assert [e["ts"] for e in first_per_day(ev)] == ["2025-06-01T09:30", "2025-06-01T10:00", "2025-06-02T08:15"]
+assert first_per_day([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ev = [{&quot;user&quot;: &quot;ana&quot;, &quot;ts&quot;: &quot;2025-06-01T09:30&quot;, &quot;action&quot;: &quot;login&quot;},
+      {&quot;user&quot;: &quot;ana&quot;, &quot;ts&quot;: &quot;2025-06-01T11:00&quot;, &quot;action&quot;: &quot;query&quot;},
+      {&quot;user&quot;: &quot;ben&quot;, &quot;ts&quot;: &quot;2025-06-01T10:00&quot;, &quot;action&quot;: &quot;login&quot;},
+      {&quot;user&quot;: &quot;ana&quot;, &quot;ts&quot;: &quot;2025-06-02T08:15&quot;, &quot;action&quot;: &quot;query&quot;}]
+assert [e[&quot;ts&quot;] for e in first_per_day(ev)] == [&quot;2025-06-01T09:30&quot;, &quot;2025-06-01T10:00&quot;, &quot;2025-06-02T08:15&quot;]
+assert first_per_day([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The day is the part before <code>"T"</code>. Keep a set of <code>(user, day)</code> tuples you have already seen.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def first_per_day(events):
+    seen = set()
+    out = []
+    for e in events:
+        key = (e[&quot;user&quot;], e[&quot;ts&quot;].split(&quot;T&quot;)[0])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out</code></pre></div><p>The tuple <code>(user, day)</code> is the composite key: two events collide only when <strong>both</strong> parts match, which a single string key would also do (<code>f"{user}|{day}"</code>) but with the risk of a separator appearing inside a value. Tuples need no separator and keep the parts typed. This is SQL's <code>ROW_NUMBER() OVER (PARTITION BY user, day ORDER BY ts) = 1</code>; in pandas, <code>df.drop_duplicates(subset=["user", "day"])</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-cache-key-that-is-a-list" data-pid="m4-3-a-cache-key-that-is-a-list" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. A cache key that is a list</h3></header>
+<div class="prob-q"><p>The response cache builds its key from the model name, the prompt and the stop sequences, and crashes with <code>TypeError: unhashable type: 'list'</code>. Fix <code>cache_key</code> so it returns a hashable key; equal requests must give equal keys.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">_cache = {}
+
+def cache_key(model, prompt, stop):
+    return [model, prompt, stop]
+
+def cached(model, prompt, stop, compute):
+    key = cache_key(model, prompt, stop)
+    if key not in _cache:
+        _cache[key] = compute(prompt)
+    return _cache[key]
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def fake(prompt):
+    calls.append(prompt)
+    return prompt.upper()
+assert cached("small", "hi", ["###", "END"], fake) == "HI"
+assert cached("small", "hi", ["###", "END"], fake) == "HI"
+assert cached("large", "hi", ["###", "END"], fake) == "HI"
+assert calls == ["hi", "hi"]
+assert hash(cache_key("m", "p", ["a"])) == hash(cache_key("m", "p", ["a"]))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def fake(prompt):
+    calls.append(prompt)
+    return prompt.upper()
+assert cached(&quot;small&quot;, &quot;hi&quot;, [&quot;###&quot;, &quot;END&quot;], fake) == &quot;HI&quot;
+assert cached(&quot;small&quot;, &quot;hi&quot;, [&quot;###&quot;, &quot;END&quot;], fake) == &quot;HI&quot;
+assert cached(&quot;large&quot;, &quot;hi&quot;, [&quot;###&quot;, &quot;END&quot;], fake) == &quot;HI&quot;
+assert calls == [&quot;hi&quot;, &quot;hi&quot;]
+assert hash(cache_key(&quot;m&quot;, &quot;p&quot;, [&quot;a&quot;])) == hash(cache_key(&quot;m&quot;, &quot;p&quot;, [&quot;a&quot;]))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A list cannot be a dict key, and neither can a tuple that <strong>contains</strong> a list. Convert <code>stop</code> too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">_cache = {}
+
+def cache_key(model, prompt, stop):
+    return (model, prompt, tuple(stop))
+
+def cached(model, prompt, stop, compute):
+    key = cache_key(model, prompt, stop)
+    if key not in _cache:
+        _cache[key] = compute(prompt)
+    return _cache[key]</code></pre></div><p>Dict keys must be hashable, so the outer list must become a tuple. But <code>(model, prompt, stop)</code> would still fail, because a tuple is only hashable when everything inside it is, and <code>stop</code> is a list (2.2). <code>tuple(stop)</code> fixes the inner level. Including the model in the key matters: the same prompt sent to a different model must not reuse an answer, as the third call shows. For nested argument dicts, use the recursive <code>freeze</code> from 2.2.</p></div></details>
+</article>
+<article class="prob" id="p-indexes-to-unpacking" data-pid="m4-3-indexes-to-unpacking" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>10. Indexes to unpacking</h3></header>
+<div class="prob-q"><p>Replace the index lookups with unpacking, so each value has a name. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def report(rows):
+    lines = []
+    for row in rows:
+        if row[2] &gt;= 0.5:
+            lines.append(f&quot;{row[0]} ({row[1]}): {row[2]:.2f}&quot;)
+    return lines
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [("faq.md", "billing", 0.91), ("old.md", "misc", 0.32), ("guide.md", "auth", 0.5)]
+assert report(rows) == ["faq.md (billing): 0.91", "guide.md (auth): 0.50"]
+assert report([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [(&quot;faq.md&quot;, &quot;billing&quot;, 0.91), (&quot;old.md&quot;, &quot;misc&quot;, 0.32), (&quot;guide.md&quot;, &quot;auth&quot;, 0.5)]
+assert report(rows) == [&quot;faq.md (billing): 0.91&quot;, &quot;guide.md (auth): 0.50&quot;]
+assert report([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>for doc, topic, score in rows:</code> and a comprehension.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def report(rows):
+    return [f&quot;{doc} ({topic}): {score:.2f}&quot; for doc, topic, score in rows if score &gt;= 0.5]</code></pre></div><p><code>row[2]</code> forces the reader to remember that position 2 is the score; <code>score</code> says it. Unpacking in the loop header also checks the shape: a row with the wrong number of fields now raises immediately instead of silently reading the wrong position. When the same record type is used in many places, a named tuple (problem 4) makes the names permanent.</p></div></details>
+</article>
+<article class="prob" id="p-named-tuples-are-tuples" data-pid="m4-3-named-tuples-are-tuples" data-type="predict" data-level="medium" data-answer="Hit(doc=&#x27;faq.md&#x27;, score=0.9) 0.9 faq.md
+True True
+Hit(doc=&#x27;faq.md&#x27;, score=0.95) Hit(doc=&#x27;faq.md&#x27;, score=0.9)
+Hit(doc=&#x27;a&#x27;, score=0.5)
+cached">
+<header class="prob-head"><h3>11. Named tuples are tuples</h3></header>
+<div class="code"><pre><code class="py">from collections import namedtuple
+
+Hit = namedtuple(&quot;Hit&quot;, [&quot;doc&quot;, &quot;score&quot;])
+h = Hit(&quot;faq.md&quot;, 0.9)
+print(h, h.score, h[0])
+print(h == (&quot;faq.md&quot;, 0.9), isinstance(h, tuple))
+h2 = h._replace(score=0.95)
+print(h2, h)
+print(sorted([Hit(&quot;b&quot;, 0.5), Hit(&quot;a&quot;, 0.5), Hit(&quot;c&quot;, 0.9)])[0])
+print({h: &quot;cached&quot;}[(&quot;faq.md&quot;, 0.9)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A named tuple compares, sorts and hashes exactly like the plain tuple of its values.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Hit(doc=&#x27;faq.md&#x27;, score=0.9) 0.9 faq.md
+True True
+Hit(doc=&#x27;faq.md&#x27;, score=0.95) Hit(doc=&#x27;faq.md&#x27;, score=0.9)
+Hit(doc=&#x27;a&#x27;, score=0.5)
+cached</pre></div><p><code>Hit</code> is a subclass of <code>tuple</code>, so it equals the plain tuple with the same values, hashes the same (the plain tuple finds the cached entry), and sorts by its fields in order: <code>doc</code> first, so <code>Hit("a", 0.5)</code> comes first. <code>_replace</code> returns a new named tuple and leaves <code>h</code> unchanged. That equality with plain tuples is convenient, and also a trap: two different record types with the same values compare equal.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-assignment-order-in-multiple-targets" data-pid="m4-3-assignment-order-in-multiple-targets" data-type="predict" data-level="hard" data-answer="1 [0, 9, 0]
+1 [9, 0, 0]
+[2, 2, 7]">
+<header class="prob-head"><h3>12. Assignment order in multiple targets</h3></header>
+<div class="code"><pre><code class="py">xs = [0, 0, 0]
+i = 0
+i, xs[i] = 1, 9
+print(i, xs)
+
+xs = [0, 0, 0]
+i = 0
+xs[i], i = 9, 1
+print(i, xs)
+
+a = [1, 2, 3]
+a[0], a[a[0]] = 2, 7
+print(a)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The right side is evaluated first. Then the targets on the left are assigned <strong>from left to right</strong>, and each target expression is evaluated when its turn comes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 [0, 9, 0]
+1 [9, 0, 0]
+[2, 2, 7]</pre></div><p>In <code>i, xs[i] = 1, 9</code>, <code>i</code> is assigned 1 first, and only then is <code>xs[i]</code> evaluated as a target, so 9 goes into <code>xs[1]</code>. Swapping the targets, <code>xs[i], i = 9, 1</code>, uses the old <code>i</code> (0) for the list position. In the last example, <code>a[0]</code> becomes 2 first, so <code>a[a[0]]</code> means <code>a[2]</code>, which becomes 7. Code like this is legal but confusing: it is a favourite of tricky interviews and a source of real bugs when someone "swaps" a value and an index on one line.</p></div></details>
+</article>
+<article class="prob" id="p-transpose-rows-into-columns" data-pid="m4-3-transpose-rows-into-columns" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. Transpose rows into columns</h3></header>
+<div class="prob-q"><p>Write <code>columns(rows)</code> that turns a list of equal-length rows into a list of column tuples, using <code>zip</code> and star unpacking, and raises <code>ValueError</code> if the rows have different lengths. Also write <code>unzip_pairs(pairs)</code> that turns <code>[(name, score), ...]</code> into two lists <code>(names, scores)</code>, returning <code>([], [])</code> for no pairs.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def columns(rows):
+    pass
+
+def unzip_pairs(pairs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert columns([(1, "a"), (2, "b"), (3, "c")]) == [(1, 2, 3), ("a", "b", "c")]
+assert columns([]) == []
+assert raises(ValueError, columns, [(1, 2), (3,)])
+assert unzip_pairs([("faq", 0.9), ("guide", 0.7)]) == (["faq", "guide"], [0.9, 0.7])
+assert unzip_pairs([]) == ([], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert columns([(1, &quot;a&quot;), (2, &quot;b&quot;), (3, &quot;c&quot;)]) == [(1, 2, 3), (&quot;a&quot;, &quot;b&quot;, &quot;c&quot;)]
+assert columns([]) == []
+assert raises(ValueError, columns, [(1, 2), (3,)])
+assert unzip_pairs([(&quot;faq&quot;, 0.9), (&quot;guide&quot;, 0.7)]) == ([&quot;faq&quot;, &quot;guide&quot;], [0.9, 0.7])
+assert unzip_pairs([]) == ([], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>zip(*rows, strict=True)</code> (1.2) passes each row as a separate argument and refuses rows of different length.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>names, scores = zip(*pairs)</code> fails for an empty list: <code>zip()</code> produces nothing, so there is nothing to unpack.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def columns(rows):
+    return list(zip(*rows, strict=True))
+
+def unzip_pairs(pairs):
+    if not pairs:
+        return [], []
+    names, scores = zip(*pairs)
+    return list(names), list(scores)</code></pre></div><p><code>zip(*rows)</code> spreads the rows into separate arguments, and <code>zip</code> then yields the first items of every row, then the second items, which is a transpose. <code>strict=True</code> turns a ragged table into an error instead of silently dropping the extra values. The empty case is the classic trap: <code>zip(*[])</code> is <code>zip()</code>, which yields nothing, so <code>names, scores = ...</code> raises "not enough values to unpack". The guard makes the function total. For real tables, <code>pandas.DataFrame(rows).T</code> or <code>numpy.array(rows).T</code> do this on whole arrays.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-parsing-tool-calls" data-pid="m4-3-read-the-code-parsing-tool-calls" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: parsing tool calls</h3></header>
+<div class="prob-q"><p>This parses lines like <code>search refund policy</code> produced by a simple agent into <code>(tool, args)</code> pairs, and caches results per call. Two bugs: the default tool list is treated as single characters, and the cache crashes with <code>TypeError: unhashable type: 'list'</code>. Read the module, find both, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">DEFAULT_TOOLS = (&quot;search&quot;)
+
+
+def parse(line, allowed=DEFAULT_TOOLS):
+    tool, *args = line.split()
+    if tool not in allowed:
+        raise ValueError(f&quot;unknown tool {tool!r}&quot;)
+    return tool, args
+
+
+_results = {}
+
+
+def run(line, impl):
+    call = parse(line)
+    if call not in _results:
+        tool, args = call
+        _results[call] = impl(tool, *args)
+    return _results[call]
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert parse("search refund policy") == ("search", ("refund", "policy"))
+assert raises(ValueError, parse, "s")
+assert raises(ValueError, parse, "delete everything")
+calls = []
+def impl(tool, *args):
+    calls.append(args)
+    return f"{tool}:{'+'.join(args)}"
+assert run("search refund policy", impl) == "search:refund+policy"
+assert run("search refund policy", impl) == "search:refund+policy"
+assert calls == [("refund", "policy")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert parse(&quot;search refund policy&quot;) == (&quot;search&quot;, (&quot;refund&quot;, &quot;policy&quot;))
+assert raises(ValueError, parse, &quot;s&quot;)
+assert raises(ValueError, parse, &quot;delete everything&quot;)
+calls = []
+def impl(tool, *args):
+    calls.append(args)
+    return f&quot;{tool}:{&#x27;+&#x27;.join(args)}&quot;
+assert run(&quot;search refund policy&quot;, impl) == &quot;search:refund+policy&quot;
+assert run(&quot;search refund policy&quot;, impl) == &quot;search:refund+policy&quot;
+assert calls == [(&quot;refund&quot;, &quot;policy&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What is <code>("search")</code>? Then what does <code>"s" in ("search")</code> check?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Star unpacking always produces a <strong>list</strong>. A tuple containing a list cannot be a dict key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">DEFAULT_TOOLS = (&quot;search&quot;,)
+
+
+def parse(line, allowed=DEFAULT_TOOLS):
+    tool, *args = line.split()
+    if tool not in allowed:
+        raise ValueError(f&quot;unknown tool {tool!r}&quot;)
+    return tool, tuple(args)
+
+
+_results = {}
+
+
+def run(line, impl):
+    call = parse(line)
+    if call not in _results:
+        tool, args = call
+        _results[call] = impl(tool, *args)
+    return _results[call]</code></pre></div><p><code>("search")</code> is just a string, so <code>tool not in allowed</code> became a <strong>substring</strong> test: <code>"s"</code>, <code>"ear"</code> and <code>"search"</code> all passed as tools, a real security hole for an agent that should only run allowed tools. The trailing comma makes it a one-item tuple, where <code>in</code> checks whole items. Bug two: star unpacking always gives a list, so <code>(tool, args)</code> contains a list and cannot be a dict key. Converting with <code>tuple(args)</code> makes the call hashable and also matches what the tests expect from <code>parse</code>. Allow-lists should be sets (<code>{"search", "calc"}</code>, 4.4), which avoids the comma trap entirely and makes membership O(1).</p></div></details>
+</article>
+<article class="prob" id="p-a-confusion-matrix-from-pairs" data-pid="m4-3-a-confusion-matrix-from-pairs" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. A confusion matrix from pairs</h3></header>
+<div class="prob-q"><p>Write <code>confusion(pairs)</code> for <code>(actual, predicted)</code> label pairs, returning a dict keyed by <code>(actual, predicted)</code> tuples with counts, and <code>per_class(conf, label)</code> returning a <code>NamedTuple</code> <code>PRF(precision, recall, support)</code> for one label, where support is the number of items whose <strong>actual</strong> label is <code>label</code>. Use 0.0 when a ratio has a zero denominator.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">from typing import NamedTuple
+
+def confusion(pairs):
+    pass
+
+def per_class(conf, label):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">pairs = [("spam", "spam"), ("spam", "ham"), ("ham", "ham"), ("ham", "spam"), ("spam", "spam"), ("ham", "ham")]
+c = confusion(pairs)
+assert c == {("spam", "spam"): 2, ("spam", "ham"): 1, ("ham", "ham"): 2, ("ham", "spam"): 1}
+s = per_class(c, "spam")
+assert (round(s.precision, 4), round(s.recall, 4), s.support) == (0.6667, 0.6667, 3)
+assert per_class(c, "eggs") == (0.0, 0.0, 0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">pairs = [(&quot;spam&quot;, &quot;spam&quot;), (&quot;spam&quot;, &quot;ham&quot;), (&quot;ham&quot;, &quot;ham&quot;), (&quot;ham&quot;, &quot;spam&quot;), (&quot;spam&quot;, &quot;spam&quot;), (&quot;ham&quot;, &quot;ham&quot;)]
+c = confusion(pairs)
+assert c == {(&quot;spam&quot;, &quot;spam&quot;): 2, (&quot;spam&quot;, &quot;ham&quot;): 1, (&quot;ham&quot;, &quot;ham&quot;): 2, (&quot;ham&quot;, &quot;spam&quot;): 1}
+s = per_class(c, &quot;spam&quot;)
+assert (round(s.precision, 4), round(s.recall, 4), s.support) == (0.6667, 0.6667, 3)
+assert per_class(c, &quot;eggs&quot;) == (0.0, 0.0, 0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count with <code>conf[(a, p)] = conf.get((a, p), 0) + 1</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>True positives are <code>conf.get((label, label), 0)</code>. Predicted-as-label sums keys whose second item is <code>label</code>; support sums keys whose first item is <code>label</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import NamedTuple
+
+
+class PRF(NamedTuple):
+    precision: float
+    recall: float
+    support: int
+
+
+def confusion(pairs):
+    conf = {}
+    for actual, predicted in pairs:
+        conf[(actual, predicted)] = conf.get((actual, predicted), 0) + 1
+    return conf
+
+
+def per_class(conf, label):
+    tp = conf.get((label, label), 0)
+    predicted = sum(n for (a, p), n in conf.items() if p == label)
+    support = sum(n for (a, p), n in conf.items() if a == label)
+    precision = tp / predicted if predicted else 0.0
+    recall = tp / support if support else 0.0
+    return PRF(precision, recall, support)</code></pre></div><p>The tuple key <code>(actual, predicted)</code> is one cell of the confusion matrix, and unpacking <code>(a, p), n</code> in the comprehensions reads each cell by name. Precision divides by everything <strong>predicted</strong> as the label (a column of the matrix), recall by everything <strong>actually</strong> the label (a row). Returning a named tuple keeps the three numbers from being confused (problem 4) while still comparing equal to a plain tuple, which the last test uses. scikit-learn's <code>confusion_matrix</code> and <code>classification_report</code> compute the same numbers on arrays.</p></div></details>
+</article>
+<article class="prob" id="p-comparing-and-hashing-tuples" data-pid="m4-3-comparing-and-hashing-tuples" data-type="predict" data-level="hard" data-answer="True True True
+[(1, &#x27;z&#x27;), (2, &#x27;a&#x27;), (2, &#x27;b&#x27;)]
+TypeError: &#x27;&lt;&#x27; not supported between instances of &#x27;NoneType&#x27; and &#x27;int&#x27;
+True
+True
+TypeError: unhashable type: &#x27;list&#x27;">
+<header class="prob-head"><h3>16. Comparing and hashing tuples</h3></header>
+<div class="code"><pre><code class="py">print((1, &quot;a&quot;) &lt; (1, &quot;b&quot;), (1, 2) &lt; (1, 2, 0), (2,) &gt; (1, 99))
+print(sorted([(2, &quot;b&quot;), (1, &quot;z&quot;), (2, &quot;a&quot;)]))
+try:
+    print((1, None) &lt; (1, 2))
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print((1, None) &lt; (2, None))
+print(hash((1, (2, 3))) == hash((1, (2, 3))))
+try:
+    hash((1, [2]))
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Comparison stops at the first position where the items differ. Later positions are never compared.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True True True
+[(1, &#x27;z&#x27;), (2, &#x27;a&#x27;), (2, &#x27;b&#x27;)]
+TypeError: &#x27;&lt;&#x27; not supported between instances of &#x27;NoneType&#x27; and &#x27;int&#x27;
+True
+True
+TypeError: unhashable type: &#x27;list&#x27;</pre></div><p>Tuples compare position by position and stop at the first difference: <code>(1, 2) &lt; (1, 2, 0)</code> because a shorter tuple that is a prefix of a longer one comes first, and <code>(2,) &gt; (1, 99)</code> is decided by <code>2 &gt; 1</code> alone. Comparing <code>(1, None)</code> with <code>(1, 2)</code> reaches <code>None &lt; 2</code>, which Python refuses. <code>(1, None) &lt; (2, None)</code> never compares the <code>None</code>s, because the first items already differ, so it works. That is why a tuple sort key with <code>None</code> in it can work on one dataset and crash on another. Hashing a tuple hashes every item, so a list anywhere inside makes it unhashable.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-when-do-you-use-a-tuple-and-when-a-list" data-pid="m4-3-when-do-you-use-a-tuple-and-when-a-list" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When do you use a tuple, and when a list?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A list is for a variable-length collection of similar items that you add to, remove from or sort. A tuple is for a fixed-length record whose positions mean different things, and for anything that must not change: return values, constants, composite dict keys and set members. Tuples are immutable (safe to share, no defensive copies), hashable when their contents are, slightly smaller, and a tuple of constants is built once at compile time. Caveats: a tuple's immutability is shallow (a list inside can still change and makes it unhashable), and for records with more than two or three fields a named tuple or dataclass is clearer than positions.</p></div></details>
+</article>
+<article class="prob" id="p-why-can-a-tuple-be-a-dict-key-but-a-list" data-pid="m4-3-why-can-a-tuple-be-a-dict-key-but-a-list" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why can a tuple be a dict key but a list cannot? Can every tuple be a key?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Dict keys are found by hash, and the hash must never change while the key is in the dict, so keys must be immutable in everything that affects equality. A list can change, so lists are unhashable by design. A tuple cannot change which objects it holds, so its hash is computed from its items' hashes. But that only works if every item is hashable: <code>(1, "a")</code> is a valid key, <code>(1, [2])</code> raises <code>TypeError: unhashable type: 'list'</code>. To key by nested data, convert inner lists to tuples (and dicts to sorted item tuples or frozensets) first.</p></div></details>
+</article>
+<article class="prob" id="p-how-does-a-b-b-a-work-and-is-it-the-same" data-pid="m4-3-how-does-a-b-b-a-work-and-is-it-the-same" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How does <code>a, b = b, a</code> work, and is it the same as <code>a = b; b = a</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>No. In <code>a, b = b, a</code>, the entire right side is evaluated first, producing the old values of <code>b</code> and <code>a</code>; only then are the targets assigned, left to right. So the values swap without a temporary variable. <code>a = b; b = a</code> assigns <code>a</code> first, and the second statement then copies the new <code>a</code> back into <code>b</code>, so both end up with the old value of <code>b</code>. Under the hood CPython does not even build a tuple for a two- or three-item swap: it evaluates both values onto its stack and swaps them there. Mention the left-to-right assignment order, which explains surprises like <code>i, xs[i] = 1, 9</code>.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>The comma makes a tuple, not the brackets: <code>(1,)</code> is a tuple, <code>(1)</code> is not, and a stray trailing comma creates one.</li><li>Unpacking evaluates the whole right side first, then assigns left to right; counts must match exactly.</li><li><code>first, *rest = items</code> collects leftovers into a list; <code>*</code> in literals and calls spreads; <code>zip(*rows)</code> transposes.</li><li>Named tuples give positions names while staying tuples: immutable, hashable, and equal to plain tuples with the same values.</li><li>Tuples of hashable items make composite keys, like a SQL composite primary key, and compare position by position.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

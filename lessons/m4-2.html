@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4.2 · Lists: sorting, searching and cost</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m4-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 4 · List, tuple, set, dict</span></div>
+  <h1>4.2 Lists: sorting, searching and cost</h1>
+  <p>How Python's sort behaves on real data (stable, and much faster on data that is already partly sorted), binary search with <code>bisect</code>, top-k without sorting everything, why NaN quietly breaks a sort, and how to reason about and measure cost.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="sort">
+<h2><span class="n">1</span><code>sort</code>, <code>sorted</code> and stability</h2>
+<p><code>xs.sort()</code> sorts the list <strong>in place</strong> and returns <code>None</code>; <code>sorted(iterable)</code> builds a <strong>new</strong> list from any iterable (2.2). Both take <code>key=</code> (3.5) and <code>reverse=True</code>. Both are <strong>stable</strong>: items whose keys are equal keep the order they had before the sort. Stability is what lets you sort by several rules in separate passes, least important first, and it holds even with <code>reverse=True</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">stability.py</span><button class="copy">Copy</button></div><pre><code class="py">tickets = [(&quot;billing&quot;, &quot;B-7&quot;), (&quot;auth&quot;, &quot;A-2&quot;), (&quot;billing&quot;, &quot;B-3&quot;), (&quot;auth&quot;, &quot;A-9&quot;)]
+print(sorted(tickets, key=lambda t: t[0]))                 # B-7 stays before B-3, A-2 before A-9
+print(sorted(tickets, key=lambda t: t[0], reverse=True))   # still stable within each team
+
+by_id = sorted(tickets, key=lambda t: t[1])                # secondary rule first
+print(sorted(by_id, key=lambda t: t[0]))                   # primary rule second: both hold</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;auth&#x27;, &#x27;A-2&#x27;), (&#x27;auth&#x27;, &#x27;A-9&#x27;), (&#x27;billing&#x27;, &#x27;B-7&#x27;), (&#x27;billing&#x27;, &#x27;B-3&#x27;)]
+[(&#x27;billing&#x27;, &#x27;B-7&#x27;), (&#x27;billing&#x27;, &#x27;B-3&#x27;), (&#x27;auth&#x27;, &#x27;A-2&#x27;), (&#x27;auth&#x27;, &#x27;A-9&#x27;)]
+[(&#x27;auth&#x27;, &#x27;A-2&#x27;), (&#x27;auth&#x27;, &#x27;A-9&#x27;), (&#x27;billing&#x27;, &#x27;B-3&#x27;), (&#x27;billing&#x27;, &#x27;B-7&#x27;)]</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p><code>ORDER BY team, id</code> in SQL is one tuple key in Python: <code>key=lambda t: (t[0], t[1])</code>. SQL makes no promise about the order of rows with equal sort values unless you list enough columns; Python's stability <strong>is</strong> that promise, which is why the two-pass trick works and why a sort never shuffles ties.</p></div></div>
+</section>
+<section class="sec" id="timsort">
+<h2><span class="n">2</span>How the sort behaves on real data</h2>
+<p>Python uses <strong>Timsort</strong>. Step by step: it scans the list for <strong>runs</strong>, stretches that are already ascending (or strictly descending, which it reverses), extends short runs with insertion sort, and then merges runs pairwise, much like merge sort. The consequences you can rely on:</p>
+<ul><li><strong>Worst case O(n log n)</strong> comparisons, and never the O(n²) worst case some quicksorts have.</li><li><strong>Adaptive:</strong> already sorted or reversed data takes about n comparisons, O(n). Data that is "mostly sorted" (log lines appended in time order with a few late arrivals, scores that change a little between runs) is much cheaper than random data.</li><li><strong>Stable</strong>, as above, and it only uses <code>&lt;</code> between keys.</li></ul>
+<p>You can watch this by counting comparisons. <code>functools.cmp_to_key</code> wraps an old-style comparison function, and ours counts every call:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">comparisons.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from functools import cmp_to_key
+
+def count_comparisons(data):
+    calls = 0
+    def cmp(a, b):
+        nonlocal calls
+        calls += 1
+        return (a &gt; b) - (a &lt; b)
+    sorted(data, key=cmp_to_key(cmp))
+    return calls
+
+n = 1000
+ordered = list(range(n))
+random.seed(0)
+shuffled = random.sample(ordered, n)
+nearly = ordered[:]
+for i in range(0, n, 100):                 # a few items out of place
+    nearly[i], nearly[i + 1] = nearly[i + 1], nearly[i]
+print(&quot;sorted  &quot;, count_comparisons(ordered))
+print(&quot;reversed&quot;, count_comparisons(ordered[::-1]))
+print(&quot;nearly  &quot;, count_comparisons(nearly))
+print(&quot;shuffled&quot;, count_comparisons(shuffled))</code></pre><div class="out"><span class="ol">Output</span><pre>sorted   999
+reversed 999
+nearly   1255
+shuffled 8667</pre></div></div>
+<p>Sorted and reversed input cost about n comparisons; random input costs many more, roughly <code>n * log2(n)</code>, and the nearly sorted case sits in between. The rule of thumb: <strong>sorting is cheap, but not free</strong>. Sort once and reuse the result rather than sorting inside a loop, and do not sort at all when you only need the minimum, the maximum or a few top items (next sections).</p>
+</section>
+<section class="sec" id="search">
+<h2><span class="n">3</span>Searching: linear scans and binary search</h2>
+<p><code>x in xs</code>, <code>xs.index(x)</code> and <code>xs.count(x)</code> scan from the front: O(n). If you search a list many times, either put the values in a <code>set</code> or <code>dict</code> (O(1) per lookup, 4.4) or, when you need <strong>order-based</strong> questions ("where would this value go?", "how many values are below 0.5?", "all events between two times"), keep the list <strong>sorted</strong> and use <strong>binary search</strong>.</p>
+<p>Binary search step by step: look at the middle item of the range. If the target is smaller, keep only the left half; otherwise keep the right half. Repeat until the range is empty. Each step halves the range, so a million items need about 20 steps. The <code>bisect</code> module implements it correctly (writing it yourself is a famous source of off-by-one bugs, problem 8):</p>
+<ul><li><code>bisect_left(xs, x)</code>: the first position where <code>x</code> could be inserted and keep <code>xs</code> sorted, which is <strong>before</strong> any items equal to <code>x</code>.</li><li><code>bisect_right(xs, x)</code> (or plain <code>bisect</code>): the position <strong>after</strong> any items equal to <code>x</code>.</li><li><code>insort(xs, x)</code>: insert <code>x</code> at the right place. Finding the place is O(log n), but inserting still shifts items, O(n).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bisect_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_left, bisect_right, insort
+
+latencies = [12, 15, 15, 15, 20, 31, 48]       # sorted
+print(bisect_left(latencies, 15), bisect_right(latencies, 15))
+print(bisect_right(latencies, 15) - bisect_left(latencies, 15))   # how many are exactly 15
+print(bisect_left(latencies, 30), len(latencies) - bisect_left(latencies, 30))  # values &gt;= 30
+insort(latencies, 18)
+print(latencies)</code></pre><div class="out"><span class="ol">Output</span><pre>1 4
+3
+5 2
+[12, 15, 15, 15, 18, 20, 31, 48]</pre></div></div>
+<p>The two "how many" lines are the useful pattern: with a sorted list, <strong>counts in a range</strong> are a subtraction of two bisect positions, O(log n) each, instead of a scan. Since Python 3.10 the <code>bisect</code> functions also take <code>key=</code>, so you can search a sorted list of records by one field.</p>
+</section>
+<section class="sec" id="topk">
+<h2><span class="n">4</span>Top-k without sorting everything</h2>
+<p>To get the 10 best of a million scores, sorting all of them is O(n log n) work to keep 10 items. <code>heapq.nlargest(k, xs)</code> walks the data once while keeping only the best <code>k</code> in a small heap, about O(n log k) time and O(k) memory, and it works on any iterable, including a generator that never fits in memory (Module 6). <code>heapq.nsmallest</code> is the mirror. For a single best item, <code>max</code> and <code>min</code> are O(n) and simplest of all.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">top_k.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+scores = {&quot;d1&quot;: 0.31, &quot;d2&quot;: 0.92, &quot;d3&quot;: 0.77, &quot;d4&quot;: 0.92, &quot;d5&quot;: 0.15}
+print(heapq.nlargest(3, scores.items(), key=lambda kv: kv[1]))
+print(heapq.nsmallest(2, scores, key=scores.get))
+print(max(scores, key=scores.get))</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;d2&#x27;, 0.92), (&#x27;d4&#x27;, 0.92), (&#x27;d3&#x27;, 0.77)]
+[&#x27;d5&#x27;, &#x27;d1&#x27;]
+d2</pre></div></div>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">Rules of thumb for k</div><p>For k = 1, use <code>max</code> / <code>min</code>. For small k (say up to a few hundred) on big data, use <code>heapq.nlargest</code>. When k is a large fraction of n, plain <code>sorted(...)[:k]</code> is just as fast. For numpy arrays, <code>np.argpartition(arr, -k)[-k:]</code> finds the top-k positions in O(n), then you sort only those k.</p></div></div>
+</section>
+<section class="sec" id="nan">
+<h2><span class="n">5</span>What breaks a sort: NaN and mixed types</h2>
+<p>A sort assumes its comparisons are consistent: if <code>a &lt; b</code> and <code>b &lt; c</code>, then <code>a &lt; c</code>. <strong>NaN breaks that</strong>, because every comparison with NaN is <code>False</code> (2.1). Python does not raise an error; it just produces an order that is not sorted, and where the NaNs end up depends on the input. Mixed types fail loudly instead: Python 3 refuses to compare, say, <code>None</code> with a number (3.5).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">nan_sort.py</span><button class="copy">Copy</button></div><pre><code class="py">nan = float(&quot;nan&quot;)
+scores = [0.3, nan, 0.9, 0.1, nan, 0.5]
+print(sorted(scores))                          # NOT sorted, and no error
+import math
+clean = sorted(s for s in scores if not math.isnan(s))
+print(clean)
+print(sorted(scores, key=lambda s: (math.isnan(s), s)))   # NaNs last, the rest in order</code></pre><div class="out"><span class="ol">Output</span><pre>[0.3, nan, 0.1, 0.9, nan, 0.5]
+[0.1, 0.3, 0.5, 0.9]
+[0.1, 0.3, 0.5, 0.9, nan, nan]</pre></div></div>
+<p>This matters in ML, where a model can output NaN for a bad input and a ranking step silently mis-orders every item around it. Filter NaNs out, or sort with a key that puts them in a group of their own, as above. (numpy's <code>np.sort</code> and pandas put NaN at the end by design.)</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-stable-sorting-with-reverse" data-pid="m4-2-stable-sorting-with-reverse" data-type="predict" data-level="easy" data-answer="[&#x27;exp-b&#x27;, &#x27;exp-d&#x27;, &#x27;exp-a&#x27;, &#x27;exp-c&#x27;]
+[&#x27;exp-a&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-d&#x27;]
+[&#x27;exp-a&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-d&#x27;]
+[&#x27;exp-d&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-a&#x27;]">
+<header class="prob-head"><h3>1. Stable sorting with reverse</h3></header>
+<div class="code"><pre><code class="py">runs = [(&quot;exp-a&quot;, 0.81), (&quot;exp-b&quot;, 0.79), (&quot;exp-c&quot;, 0.81), (&quot;exp-d&quot;, 0.79)]
+print([r[0] for r in sorted(runs, key=lambda r: r[1])])
+print([r[0] for r in sorted(runs, key=lambda r: r[1], reverse=True)])
+print([r[0] for r in sorted(runs, key=lambda r: -r[1])])
+print([r[0] for r in sorted(runs, reverse=True)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Equal keys keep their original order, even with <code>reverse=True</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without a key, tuples compare by their first element, the name.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;exp-b&#x27;, &#x27;exp-d&#x27;, &#x27;exp-a&#x27;, &#x27;exp-c&#x27;]
+[&#x27;exp-a&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-d&#x27;]
+[&#x27;exp-a&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-d&#x27;]
+[&#x27;exp-d&#x27;, &#x27;exp-c&#x27;, &#x27;exp-b&#x27;, &#x27;exp-a&#x27;]</pre></div><p>With <code>key=score</code>, the two 0.79 runs keep their original order (b before d), and so do the 0.81 runs (a before c). <code>reverse=True</code> puts 0.81 first and still keeps each group in its original order, which is exactly what the negated key does too. Without a key, the tuples are compared as wholes, by name first, so <code>reverse=True</code> simply orders names from d down to a.</p></div></details>
+</article>
+<article class="prob" id="p-map-a-score-to-a-band-with-bisect" data-pid="m4-2-map-a-score-to-a-band-with-bisect" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Map a score to a band with bisect</h3></header>
+<div class="prob-q"><p>Write <code>band(score, cutoffs, labels)</code> where <code>cutoffs</code> is sorted, <code>len(labels) == len(cutoffs) + 1</code>, and a score below <code>cutoffs[0]</code> gets <code>labels[0]</code>, a score at or above <code>cutoffs[i]</code> (and below the next cutoff) gets <code>labels[i + 1]</code>. Use <code>bisect</code>, not an <code>if</code> chain.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from bisect import bisect_right
+
+def band(score, cutoffs, labels):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">cut = [0.4, 0.7, 0.9]
+lab = ["low", "medium", "high", "critical"]
+assert [band(s, cut, lab) for s in [0.1, 0.4, 0.69, 0.7, 0.95, 0.9]] == ["low", "medium", "medium", "high", "critical", "critical"]
+assert band(0.5, [], ["only"]) == "only"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">cut = [0.4, 0.7, 0.9]
+lab = [&quot;low&quot;, &quot;medium&quot;, &quot;high&quot;, &quot;critical&quot;]
+assert [band(s, cut, lab) for s in [0.1, 0.4, 0.69, 0.7, 0.95, 0.9]] == [&quot;low&quot;, &quot;medium&quot;, &quot;medium&quot;, &quot;high&quot;, &quot;critical&quot;, &quot;critical&quot;]
+assert band(0.5, [], [&quot;only&quot;]) == &quot;only&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>bisect_right(cutoffs, score)</code> counts how many cutoffs are less than or equal to the score. That count is the label index.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_right
+
+def band(score, cutoffs, labels):
+    return labels[bisect_right(cutoffs, score)]</code></pre></div><p><code>bisect_right</code> returns the number of cutoffs <code>&lt;=</code> score, which is exactly the index of the band, so a score equal to a cutoff moves up into the next band (0.4 is <code>"medium"</code>). With <code>bisect_left</code>, an exact cutoff would stay in the lower band; choosing between them is choosing which side the boundary belongs to. The Python docs use this exact pattern for exam grades; in ML it turns probabilities into risk bands, and pandas <code>pd.cut</code> does it for whole columns.</p></div></details>
+</article>
+<article class="prob" id="p-chunk-files-sorted-in-the-wrong-order" data-pid="m4-2-chunk-files-sorted-in-the-wrong-order" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>3. Chunk files sorted in the wrong order</h3></header>
+<div class="prob-q"><p>Chunk files are named like <code>doc_2.txt</code>, <code>doc_10.txt</code>. Sorting them puts <code>doc_10</code> before <code>doc_2</code>, so the document is reassembled in the wrong order. Fix <code>ordered</code> so files sort by the number in their name.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def ordered(names):
+    return sorted(names)
+</textarea>
+<script type="text/plain" class="prob-tests">files = ["doc_10.txt", "doc_2.txt", "doc_1.txt", "doc_33.txt", "doc_3.txt"]
+assert ordered(files) == ["doc_1.txt", "doc_2.txt", "doc_3.txt", "doc_10.txt", "doc_33.txt"]
+assert ordered([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">files = [&quot;doc_10.txt&quot;, &quot;doc_2.txt&quot;, &quot;doc_1.txt&quot;, &quot;doc_33.txt&quot;, &quot;doc_3.txt&quot;]
+assert ordered(files) == [&quot;doc_1.txt&quot;, &quot;doc_2.txt&quot;, &quot;doc_3.txt&quot;, &quot;doc_10.txt&quot;, &quot;doc_33.txt&quot;]
+assert ordered([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Strings compare character by character, so <code>"1" &lt; "2"</code> decides <code>doc_10</code> versus <code>doc_2</code>. Sort by the number instead.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Take the part between <code>_</code> and <code>.</code>: <code>name.split("_")[1].split(".")[0]</code>, and convert it with <code>int</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def ordered(names):
+    return sorted(names, key=lambda n: int(n.split(&quot;_&quot;)[1].split(&quot;.&quot;)[0]))</code></pre></div><p>String order is lexicographic: <code>"doc_10"</code> and <code>"doc_2"</code> differ first at <code>"1"</code> versus <code>"2"</code>, so 10 sorts first. A numeric key fixes it. Version strings have the same problem (<code>"1.10" &lt; "1.9"</code> as strings); the fix there is <code>key=lambda v: tuple(int(p) for p in v.split("."))</code>. For general "natural sort" of arbitrary names, split each name into text and number parts with a regex (lesson 5.5).</p></div></details>
+</article>
+<article class="prob" id="p-bisect-left-and-bisect-right-with-duplic" data-pid="m4-2-bisect-left-and-bisect-right-with-duplic" data-type="predict" data-level="easy" data-answer="1 4
+0 5
+4 4
+[3, 3, 3]">
+<header class="prob-head"><h3>4. bisect_left and bisect_right with duplicates</h3></header>
+<div class="code"><pre><code class="py">from bisect import bisect_left, bisect_right
+
+xs = [1, 3, 3, 3, 7]
+print(bisect_left(xs, 3), bisect_right(xs, 3))
+print(bisect_left(xs, 0), bisect_right(xs, 9))
+print(bisect_left(xs, 5), bisect_right(xs, 5))
+print(xs[bisect_left(xs, 3):bisect_right(xs, 3)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Left means "before all the equal items", right means "after them". For a missing value they agree.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 4
+0 5
+4 4
+[3, 3, 3]</pre></div><p>For 3, the left insertion point is position 1 and the right one is position 4, so the slice between them is exactly the three 3s. Values below everything go to 0; above everything, to <code>len(xs)</code>. A value not present (5) has a single insertion point, so both functions return 4. Slicing between the two positions is the standard way to fetch all items equal to a value, or in a range, from a sorted list.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-rank-with-ties" data-pid="m4-2-rank-with-ties" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Rank with ties</h3></header>
+<div class="prob-q"><p>Write <code>ranks(scores)</code> that returns the rank of each score in the original order, where rank 1 is the highest and tied scores share the best rank they would get (competition ranking: 1, 2, 2, 4). Do it with one sort.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def ranks(scores):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert ranks([0.9, 0.7, 0.8, 0.7]) == [1, 3, 2, 3]
+assert ranks([5, 5, 5]) == [1, 1, 1]
+assert ranks([1, 2, 3, 4]) == [4, 3, 2, 1]
+assert ranks([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert ranks([0.9, 0.7, 0.8, 0.7]) == [1, 3, 2, 3]
+assert ranks([5, 5, 5]) == [1, 1, 1]
+assert ranks([1, 2, 3, 4]) == [4, 3, 2, 1]
+assert ranks([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Sort the positions by score, highest first: <code>order = sorted(range(len(scores)), key=lambda i: -scores[i])</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk <code>order</code>; when a score equals the previous one, reuse the previous rank, otherwise the rank is the current position + 1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def ranks(scores):
+    order = sorted(range(len(scores)), key=lambda i: -scores[i])
+    out = [0] * len(scores)
+    for pos, i in enumerate(order):
+        if pos &gt; 0 and scores[i] == scores[order[pos - 1]]:
+            out[i] = out[order[pos - 1]]
+        else:
+            out[i] = pos + 1
+    return out</code></pre></div><p>Sorting the <strong>positions</strong> (an "argsort") rather than the scores keeps track of where each score came from, so the ranks can be written back in the original order. Equal scores are adjacent after the sort, so one comparison with the previous item detects ties. This is SQL's <code>RANK()</code> window function; <code>DENSE_RANK()</code> would give 1, 2, 2, 3. In pandas, <code>s.rank(method="min", ascending=False)</code> does this one, and numpy's <code>argsort</code> is the array version of <code>order</code>.</p></div></details>
+</article>
+<article class="prob" id="p-top-10-of-a-million" data-pid="m4-2-top-10-of-a-million" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">RAG</span><h3>6. Top 10 of a million</h3></header>
+<div class="prob-q"><p>Both return the 10 highest of one million similarity scores. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import random, heapq
+random.seed(1)
+scores = [random.random() for _ in range(1_000_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">top = sorted(scores, reverse=True)[:10]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">top = heapq.nlargest(10, scores)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How much of the million items does each approach have to put in order?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>349.50 ms</td></tr><tr><td>B</td><td>24.84 ms</td></tr></table></div><p><code>sorted</code> puts all million scores in order, O(n log n), to keep ten. <code>nlargest</code> keeps a heap of only the best 10 and compares each new score with the heap's smallest item, which usually rejects it immediately: about O(n log k) with tiny constant work per item. Retrieval systems face this exact choice after scoring every chunk; vector databases go further and avoid scoring every item at all, with approximate indexes.</p></div></details>
+</article>
+<article class="prob" id="p-events-in-a-time-range" data-pid="m4-2-events-in-a-time-range" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Events in a time range</h3></header>
+<div class="prob-q"><p><code>times</code> is a sorted list of event timestamps (seconds). Write <code>count_between(times, start, end)</code> returning how many events have <code>start &lt;= t &lt; end</code>, and <code>events_between(times, start, end)</code> returning them as a list. Both must use <code>bisect</code>, so each query is O(log n) plus the size of the answer.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from bisect import bisect_left
+
+def count_between(times, start, end):
+    pass
+
+def events_between(times, start, end):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = [10, 12, 12, 15, 20, 20, 31]
+assert count_between(t, 12, 20) == 3
+assert events_between(t, 12, 20) == [12, 12, 15]
+assert count_between(t, 0, 100) == 7 and count_between(t, 21, 31) == 0
+assert events_between(t, 20, 21) == [20, 20]
+assert count_between([], 1, 2) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = [10, 12, 12, 15, 20, 20, 31]
+assert count_between(t, 12, 20) == 3
+assert events_between(t, 12, 20) == [12, 12, 15]
+assert count_between(t, 0, 100) == 7 and count_between(t, 21, 31) == 0
+assert events_between(t, 20, 21) == [20, 20]
+assert count_between([], 1, 2) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For a half-open range <code>[start, end)</code>, both bounds use <code>bisect_left</code>: the first position <code>&gt;= start</code> and the first position <code>&gt;= end</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_left
+
+def count_between(times, start, end):
+    return max(0, bisect_left(times, end) - bisect_left(times, start))
+
+def events_between(times, start, end):
+    return times[bisect_left(times, start):bisect_left(times, end)]</code></pre></div><p><code>bisect_left(times, start)</code> is the first event at or after <code>start</code>, and <code>bisect_left(times, end)</code> the first event at or after <code>end</code>, which is exactly where the half-open range stops: events at <code>end</code> are excluded. Counting is a subtraction, with no scan. <code>max(0, ...)</code> handles a backwards range. This is how time-series stores answer "events in the last hour" on sorted data, and the same reason a database index on a timestamp makes range queries fast.</p></div></details>
+</article>
+<article class="prob" id="p-a-binary-search-that-misses-items" data-pid="m4-2-a-binary-search-that-misses-items" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>8. A binary search that misses items</h3></header>
+<div class="prob-q"><p>This hand-written binary search should return the position of <code>target</code> in the sorted list, or -1. It reports -1 for some items that are in the list. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def find(xs, target):
+    lo, hi = 0, len(xs) - 1
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if xs[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return lo if xs and xs[lo] == target else -1
+</textarea>
+<script type="text/plain" class="prob-tests">xs = [2, 5, 8, 12, 16, 23, 38]
+assert [find(xs, x) for x in xs] == list(range(len(xs)))
+assert find(xs, 7) == -1 and find(xs, 1) == -1 and find(xs, 40) == -1
+assert find([], 3) == -1 and find([4], 4) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">xs = [2, 5, 8, 12, 16, 23, 38]
+assert [find(xs, x) for x in xs] == list(range(len(xs)))
+assert find(xs, 7) == -1 and find(xs, 1) == -1 and find(xs, 40) == -1
+assert find([], 3) == -1 and find([4], 4) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hi = mid - 1</code> throws away position <code>mid</code>. What if <code>xs[mid]</code> <strong>is</strong> the target?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use the half-open convention: <code>lo, hi = 0, len(xs)</code>, <code>while lo &lt; hi</code>, then <code>lo = mid + 1</code> or <code>hi = mid</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def find(xs, target):
+    lo, hi = 0, len(xs)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if xs[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo if lo &lt; len(xs) and xs[lo] == target else -1</code></pre></div><p>When <code>xs[mid]</code> equals the target, the <code>else</code> branch runs <code>hi = mid - 1</code> and the target's own position is excluded, so the search can finish on a neighbour and report -1. The other classic mistake is the mirror image, <code>lo = mid</code>, which never shrinks the range once <code>hi == lo + 1</code> and loops <strong>forever</strong>. The half-open version avoids both with one invariant: the answer is always in <code>[lo, hi)</code>, every pass strictly shrinks it, and at the end <code>lo</code> is the leftmost position where <code>target</code> could go, exactly what <code>bisect_left</code> returns. In real code call <code>bisect_left</code>; in interviews, state the invariant out loud, because that is what they are checking.</p></div></details>
+</article>
+<article class="prob" id="p-binary-search-step-by-step" data-pid="m4-2-binary-search-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Binary search, step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>lo</code>, <code>hi</code> and the item looked at (<code>seen</code>) after each pass, searching for 23 in a list of 7 items.</p></div>
+<div class="code"><pre><code class="py">xs = [2, 5, 8, 12, 16, 23, 38]
+target = 23
+lo, hi = 0, len(xs)
+while lo &lt; hi:
+    mid = (lo + hi) // 2
+    if xs[mid] &lt; target:
+        lo = mid + 1
+    else:
+        hi = mid
+    seen = xs[mid]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>lo</code></th><th><code>hi</code></th><th><code>seen</code></th></tr><tr><td>pass looking at position 3</td><td><input class="cell" data-a="4" data-s="4" aria-label="lo at pass looking at position 3" autocomplete="off"></td><td><input class="cell" data-a="7" data-s="7" aria-label="hi at pass looking at position 3" autocomplete="off"></td><td><input class="cell" data-a="12" data-s="12" aria-label="seen at pass looking at position 3" autocomplete="off"></td></tr><tr><td>pass looking at position 5</td><td><input class="cell" data-a="4" data-s="4" aria-label="lo at pass looking at position 5" autocomplete="off"></td><td><input class="cell" data-a="5" data-s="5" aria-label="hi at pass looking at position 5" autocomplete="off"></td><td><input class="cell" data-a="23" data-s="23" aria-label="seen at pass looking at position 5" autocomplete="off"></td></tr><tr><td>pass looking at position 4</td><td><input class="cell" data-a="5" data-s="5" aria-label="lo at pass looking at position 4" autocomplete="off"></td><td><input class="cell" data-a="5" data-s="5" aria-label="hi at pass looking at position 4" autocomplete="off"></td><td><input class="cell" data-a="16" data-s="16" aria-label="seen at pass looking at position 4" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each pass looks at <code>xs[mid]</code>: smaller than 23 means the answer is to the right (<code>lo = mid + 1</code>), otherwise <code>hi = mid</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>lo</code></th><th><code>hi</code></th><th><code>seen</code></th></tr><tr><td>pass looking at position 3</td><td><code>4</code></td><td><code>7</code></td><td><code>12</code></td></tr><tr><td>pass looking at position 5</td><td><code>4</code></td><td><code>5</code></td><td><code>23</code></td></tr><tr><td>pass looking at position 4</td><td><code>5</code></td><td><code>5</code></td><td><code>16</code></td></tr></table></div><p>The range starts as <code>[0, 7)</code>. Position 3 holds 12 &lt; 23, so <code>lo</code> becomes 4. Position 5 holds 23, which is not smaller, so <code>hi</code> becomes 5. Position 4 holds 16 &lt; 23, so <code>lo</code> becomes 5, and now <code>lo == hi == 5</code>: the loop ends at position 5, where 23 is. Three passes for seven items; a million items would take about twenty.</p></div></details>
+</article>
+<article class="prob" id="p-keep-streaming-results-sorted" data-pid="m4-2-keep-streaming-results-sorted" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Keep streaming results sorted</h3></header>
+<div class="prob-q"><p>Results from several retrievers arrive one at a time. Write <code>add_result(results, item)</code> that inserts the dict <code>item</code> into <code>results</code>, which is kept sorted by <code>item["score"]</code> <strong>highest first</strong>, using <code>bisect.insort</code> with a <code>key</code> (no full re-sort). Items with equal scores keep arrival order. Return <code>None</code>; the list is changed in place.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import bisect
+
+def add_result(results, item):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">res = []
+for doc, s in [("a", 0.5), ("b", 0.9), ("c", 0.5), ("d", 0.7), ("e", 0.95)]:
+    assert add_result(res, {"doc": doc, "score": s}) is None
+assert [r["doc"] for r in res] == ["e", "b", "d", "a", "c"]
+assert len(res) == 5 and res[0]["score"] == 0.95
+assert add_result(res, {"doc": "f", "score": 0.5}) is None and res[-1]["doc"] == "f"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">res = []
+for doc, s in [(&quot;a&quot;, 0.5), (&quot;b&quot;, 0.9), (&quot;c&quot;, 0.5), (&quot;d&quot;, 0.7), (&quot;e&quot;, 0.95)]:
+    assert add_result(res, {&quot;doc&quot;: doc, &quot;score&quot;: s}) is None
+assert [r[&quot;doc&quot;] for r in res] == [&quot;e&quot;, &quot;b&quot;, &quot;d&quot;, &quot;a&quot;, &quot;c&quot;]
+assert len(res) == 5 and res[0][&quot;score&quot;] == 0.95
+assert add_result(res, {&quot;doc&quot;: &quot;f&quot;, &quot;score&quot;: 0.5}) is None and res[-1][&quot;doc&quot;] == &quot;f&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>insort</code> keeps a list in <strong>ascending</strong> order of the key. A key of <code>-score</code> makes ascending order mean highest score first.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>insort</code> is <code>insort_right</code>: an equal key goes after the existing ones, which keeps arrival order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import bisect
+
+def add_result(results, item):
+    bisect.insort(results, item, key=lambda r: -r[&quot;score&quot;])</code></pre></div><p><code>insort</code> finds the position by binary search on the keys and inserts there, so the list stays sorted without sorting it again: O(log n) to find the place plus O(n) to shift items, cheaper than O(n log n) for a full sort after every arrival. The negated score turns "ascending" into "highest first", and because <code>insort</code> inserts to the <strong>right</strong> of equal keys, results that tie keep the order they arrived in (<code>a</code> before <code>c</code>). The <code>key</code> parameter needs Python 3.10 or later.</p></div></details>
+</article>
+<article class="prob" id="p-find-the-best-item-and-its-position" data-pid="m4-2-find-the-best-item-and-its-position" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Find the best item and its position</h3></header>
+<div class="prob-q"><p>Shorten this to one expression with the same results, including the tie rule (first occurrence wins). Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def best(scores):
+    best_i = None
+    best_s = None
+    for i in range(len(scores)):
+        if best_s is None or scores[i] &gt; best_s:
+            best_i = i
+            best_s = scores[i]
+    return best_i, best_s
+</textarea>
+<script type="text/plain" class="prob-tests">assert best([0.2, 0.9, 0.4, 0.9]) == (1, 0.9)
+assert best([5]) == (0, 5)
+assert best([]) == (None, None)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert best([0.2, 0.9, 0.4, 0.9]) == (1, 0.9)
+assert best([5]) == (0, 5)
+assert best([]) == (None, None)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>max(enumerate(scores), key=...)</code> returns the <code>(index, value)</code> pair with the largest value, and <code>max</code> keeps the first of equal items.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>max(..., default=(None, None))</code> handles the empty list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def best(scores):
+    return max(enumerate(scores), key=lambda p: p[1], default=(None, None))</code></pre></div><p><code>enumerate</code> pairs each score with its index, <code>key</code> compares by the score, and <code>max</code> returns the <strong>first</strong> maximal item, which matches the loop's strict <code>&gt;</code> tie rule. <code>default</code> covers the empty input without a special case. In numpy, <code>arr.argmax()</code> gives the index the same way, also returning the first maximum.</p></div></details>
+</article>
+<article class="prob" id="p-counting-comparisons" data-pid="m4-2-counting-comparisons" data-type="predict" data-level="medium" data-answer="(7, [1, 2, 3])
+(7, [1, 2, 3])
+(17, [1, 2, 3])">
+<header class="prob-head"><h3>12. Counting comparisons</h3></header>
+<div class="code"><pre><code class="py">from functools import cmp_to_key
+
+def comparisons(data):
+    calls = 0
+    def cmp(a, b):
+        nonlocal calls
+        calls += 1
+        return (a &gt; b) - (a &lt; b)
+    result = sorted(data, key=cmp_to_key(cmp))
+    return calls, result[:3]
+
+print(comparisons([1, 2, 3, 4, 5, 6, 7, 8]))
+print(comparisons([8, 7, 6, 5, 4, 3, 2, 1]))
+print(comparisons([5, 1, 8, 2, 7, 3, 6, 4]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Already-sorted input is one run. Strictly descending input is one run that Timsort simply reverses.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(7, [1, 2, 3])
+(7, [1, 2, 3])
+(17, [1, 2, 3])</pre></div><p>For sorted input, Timsort only confirms the run: n - 1 = 7 comparisons. Strictly descending input is also detected as one run and reversed in place, again 7 comparisons. Shuffled input needs real work, so it costs clearly more. The sorted results are the same in all three cases: only the cost depends on how ordered the input was.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-the-k-th-smallest-in-average-o-n" data-pid="m4-2-the-k-th-smallest-in-average-o-n" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. The k-th smallest in average O(n)</h3></header>
+<div class="prob-q"><p>Write <code>kth_smallest(xs, k)</code> returning the k-th smallest value (k = 1 is the minimum) in <strong>average O(n)</strong> time, without sorting: quickselect. Pick a random pivot, split into items less than, equal to and greater than it, and continue only in the part that contains the answer. Raise <code>ValueError</code> if <code>k</code> is out of range.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import random
+
+def kth_smallest(xs, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+data = [7, 2, 9, 4, 4, 1, 8]
+assert [kth_smallest(data, k) for k in range(1, 8)] == sorted(data)
+assert data == [7, 2, 9, 4, 4, 1, 8]
+assert kth_smallest([5], 1) == 5
+assert raises(ValueError, kth_smallest, data, 0) and raises(ValueError, kth_smallest, data, 8)
+import random as _r
+big = [_r.random() for _ in range(5000)]
+assert kth_smallest(big, 2500) == sorted(big)[2499]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+data = [7, 2, 9, 4, 4, 1, 8]
+assert [kth_smallest(data, k) for k in range(1, 8)] == sorted(data)
+assert data == [7, 2, 9, 4, 4, 1, 8]
+assert kth_smallest([5], 1) == 5
+assert raises(ValueError, kth_smallest, data, 0) and raises(ValueError, kth_smallest, data, 8)
+import random as _r
+big = [_r.random() for _ in range(5000)]
+assert kth_smallest(big, 2500) == sorted(big)[2499]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Three lists: <code>lows</code>, <code>pivots</code>, <code>highs</code>. If <code>k &lt;= len(lows)</code>, the answer is in <code>lows</code>; if it is within the pivots, it is the pivot; otherwise look in <code>highs</code> with <code>k</code> reduced.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A loop that keeps replacing <code>xs</code> and <code>k</code> avoids deep recursion.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+
+def kth_smallest(xs, k):
+    if not 1 &lt;= k &lt;= len(xs):
+        raise ValueError(&quot;k out of range&quot;)
+    items = xs
+    while True:
+        pivot = random.choice(items)
+        lows = [x for x in items if x &lt; pivot]
+        pivots = [x for x in items if x == pivot]
+        if k &lt;= len(lows):
+            items = lows
+        elif k &lt;= len(lows) + len(pivots):
+            return pivot
+        else:
+            k -= len(lows) + len(pivots)
+            items = [x for x in items if x &gt; pivot]</code></pre></div><p>Each pass keeps only the part that can contain the answer, so on average the work is n + n/2 + n/4 + ... = O(2n), compared with O(n log n) for sorting. The random pivot makes the bad case (always picking the extreme) very unlikely; the <code>pivots</code> group handles duplicates, which would otherwise make a two-way split loop forever on data like <code>[4, 4, 4]</code>. The input is never changed, because each pass builds new lists. In practice, <code>heapq.nsmallest(k, xs)[-1]</code> or numpy's <code>np.partition</code> do this job; quickselect is the classic interview follow-up to "can you do better than sorting?".</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-leaderboard-upside-down" data-pid="m4-2-read-the-code-a-leaderboard-upside-down" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>14. Read the code: a leaderboard upside down</h3></header>
+<div class="prob-q"><p>A leaderboard for model evaluation runs, kept sorted with <code>bisect</code>. <code>top</code> returns the worst runs instead of the best, <code>top(board, 0)</code> returns everything, and <code>rank_of</code> gives rank 1 to the worst run. Read the module, find the bugs, and fix them. Higher scores are better; ties keep the order runs were added.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import bisect
+
+
+def add_run(board, name, score):
+    bisect.insort(board, (score, name))
+
+
+def top(board, k):
+    &quot;&quot;&quot;The k best runs as (name, score), best first.&quot;&quot;&quot;
+    return [(name, score) for score, name in board[-k:][::-1]]
+
+
+def rank_of(board, name):
+    &quot;&quot;&quot;1 for the best run.&quot;&quot;&quot;
+    for i, (score, n) in enumerate(board):
+        if n == name:
+            return i + 1
+    raise KeyError(name)
+</textarea>
+<script type="text/plain" class="prob-tests">board = []
+for name, s in [("run-a", 0.71), ("run-b", 0.88), ("run-c", 0.64), ("run-d", 0.88)]:
+    add_run(board, name, s)
+assert top(board, 2) == [("run-b", 0.88), ("run-d", 0.88)]
+assert top(board, 0) == []
+assert rank_of(board, "run-b") == 1 and rank_of(board, "run-d") == 2 and rank_of(board, "run-c") == 4
+assert len(top(board, 10)) == 4</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">board = []
+for name, s in [(&quot;run-a&quot;, 0.71), (&quot;run-b&quot;, 0.88), (&quot;run-c&quot;, 0.64), (&quot;run-d&quot;, 0.88)]:
+    add_run(board, name, s)
+assert top(board, 2) == [(&quot;run-b&quot;, 0.88), (&quot;run-d&quot;, 0.88)]
+assert top(board, 0) == []
+assert rank_of(board, &quot;run-b&quot;) == 1 and rank_of(board, &quot;run-d&quot;) == 2 and rank_of(board, &quot;run-c&quot;) == 4
+assert len(top(board, 10)) == 4</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the board so that <strong>ascending</strong> order means best first, and equal scores keep insertion order: <code>insort</code> with a key of <code>-score</code> on <code>(name, score)</code> pairs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then <code>top</code> is just <code>board[:k]</code>, which is also safe for <code>k = 0</code>, and <code>rank_of</code> is position + 1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import bisect
+
+
+def add_run(board, name, score):
+    bisect.insort(board, (name, score), key=lambda entry: -entry[1])
+
+
+def top(board, k):
+    &quot;&quot;&quot;The k best runs as (name, score), best first.&quot;&quot;&quot;
+    return board[:k]
+
+
+def rank_of(board, name):
+    &quot;&quot;&quot;1 for the best run.&quot;&quot;&quot;
+    for i, (n, score) in enumerate(board):
+        if n == name:
+            return i + 1
+    raise KeyError(name)</code></pre></div><p>The original stored <code>(score, name)</code> ascending, so the best runs were at the <strong>end</strong>: <code>rank_of</code> counted from the worst, and <code>top</code> had to slice from the end, where <code>board[-0:]</code> returned the whole board (4.1). Equal scores were also ordered by <strong>name</strong>, not by when they were added, because the name was part of the tuple being compared. Storing <code>(name, score)</code> with <code>key=-score</code> fixes all three at once: ascending order of the key means best first, <code>insort</code> puts ties after existing entries (arrival order), and <code>top</code> becomes a plain front slice. Choosing the storage order so that the common query is the simple one is a general design habit.</p></div></details>
+</article>
+<article class="prob" id="p-merge-k-ranked-lists" data-pid="m4-2-merge-k-ranked-lists" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Merge k ranked lists</h3></header>
+<div class="prob-q"><p>Results come from <code>k</code> index shards, each already sorted by score <strong>highest first</strong>, as <code>(score, doc_id)</code> pairs. Write <code>merge_shards(shards, limit)</code> returning the overall top <code>limit</code> results, highest first, without concatenating and sorting everything. Use a heap.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import heapq
+
+def merge_shards(shards, limit):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">s1 = [(0.95, "a1"), (0.70, "a2"), (0.10, "a3")]
+s2 = [(0.90, "b1"), (0.85, "b2")]
+s3 = [(0.99, "c1"), (0.20, "c2")]
+assert merge_shards([s1, s2, s3], 4) == [(0.99, "c1"), (0.95, "a1"), (0.90, "b1"), (0.85, "b2")]
+assert merge_shards([s1, s2, s3], 100)[-1] == (0.10, "a3")
+assert merge_shards([[], s2], 1) == [(0.90, "b1")]
+assert merge_shards([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s1 = [(0.95, &quot;a1&quot;), (0.70, &quot;a2&quot;), (0.10, &quot;a3&quot;)]
+s2 = [(0.90, &quot;b1&quot;), (0.85, &quot;b2&quot;)]
+s3 = [(0.99, &quot;c1&quot;), (0.20, &quot;c2&quot;)]
+assert merge_shards([s1, s2, s3], 4) == [(0.99, &quot;c1&quot;), (0.95, &quot;a1&quot;), (0.90, &quot;b1&quot;), (0.85, &quot;b2&quot;)]
+assert merge_shards([s1, s2, s3], 100)[-1] == (0.10, &quot;a3&quot;)
+assert merge_shards([[], s2], 1) == [(0.90, &quot;b1&quot;)]
+assert merge_shards([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>heapq.merge(*shards, key=lambda r: r[0], reverse=True)</code> merges already-sorted iterables lazily.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Take only the first <code>limit</code> items with <code>itertools.islice</code>, so the rest is never even merged.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+from itertools import islice
+
+def merge_shards(shards, limit):
+    merged = heapq.merge(*shards, key=lambda r: r[0], reverse=True)
+    return list(islice(merged, limit))</code></pre></div><p><code>heapq.merge</code> keeps one candidate per shard in a heap and repeatedly yields the best, so producing each result costs O(log k), and it is lazy: <code>islice</code> stops after <code>limit</code> items, so most of the data is never touched. Total work is about O(limit · log k) instead of sorting everything, O(N log N). <code>reverse=True</code> is needed because the inputs are sorted highest first. This is the merge step of distributed search (each shard returns its local top results, a coordinator merges them) and of external sorting when data does not fit in memory.</p></div></details>
+</article>
+<article class="prob" id="p-nan-in-a-ranking" data-pid="m4-2-nan-in-a-ranking" data-type="predict" data-level="hard" data-answer="[0.4, nan, 0.9, 0.7, 0.2]
+True
+0.9 nan nan
+[0.9, 0.7, 0.4, 0.2, nan]">
+<header class="prob-head"><span class="ptag">ML</span><h3>16. NaN in a ranking</h3></header>
+<div class="code"><pre><code class="py">import math
+
+nan = float(&quot;nan&quot;)
+scores = [0.4, nan, 0.9, 0.2, 0.7]
+ranked = sorted(scores, reverse=True)
+print(ranked)
+print(ranked == sorted(ranked, reverse=True))
+print(max(scores), max(scores[1:]), min([nan, 0.1, 0.5]))
+safe = sorted(scores, key=lambda s: (not math.isnan(s), s), reverse=True)
+print(safe)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Every comparison with NaN is <code>False</code>, so NaN never counts as larger or smaller. <code>max</code> keeps its first item unless something is strictly larger.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If you sort the result a second time, does anything change? Would that tell you the first sort was wrong?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0.4, nan, 0.9, 0.7, 0.2]
+True
+0.9 nan nan
+[0.9, 0.7, 0.4, 0.2, nan]</pre></div><p>Because NaN compares <code>False</code> with everything, the sort cannot place it and the values around it end up out of order: <code>0.9</code> sits after <code>0.4</code>. Worse, sorting the broken result again gives back <strong>the same list</strong> (<code>True</code>), so "re-sort and compare" cannot detect the problem, and nothing raises an error. <code>max</code> and <code>min</code> are just as fragile: they keep the first item unless a later one compares strictly better, so a NaN in first place "wins", while a NaN later on is ignored. The output depends on where the NaN happens to be. The safe sort groups NaNs explicitly: the key <code>(not isnan, value)</code> with <code>reverse=True</code> puts real scores first, highest first, and NaNs last.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-are-the-properties-of-python-s-sort" data-pid="m4-2-what-are-the-properties-of-python-s-sort" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What are the properties of Python's sort, and why do they matter?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Python's <code>sort</code>/<code>sorted</code> use Timsort: O(n log n) in the worst case, O(n) on already sorted or reverse-sorted data (it is adaptive, finding existing runs and merging them), and <strong>stable</strong>, so equal keys keep their original order, even with <code>reverse=True</code>. Stability enables multi-key sorting in passes (least important key first) and makes results deterministic for ties. It compares keys only with <code>&lt;</code>, so inconsistent comparisons, such as NaN or mixed types, give wrong orders or <code>TypeError</code>. <code>key=</code> is computed once per item (decorate-sort-undecorate), which is why a key function is much cheaper than a comparison function. <code>sort</code> is in place and returns <code>None</code>; <code>sorted</code> returns a new list from any iterable.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-use-binary-search-bisect-" data-pid="m4-2-when-would-you-use-binary-search-bisect-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When would you use binary search (<code>bisect</code>) in real code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Whenever data is sorted and you ask order-based questions repeatedly: where a value would go, how many values fall in a range, which bucket a value belongs to. Examples: mapping scores to bands or grades with cutoffs, counting events in a time window from a sorted log, looking up the version or price that applies at a date, percentiles in a sorted sample, and keeping a sorted list up to date with <code>insort</code>. Each query is O(log n) instead of an O(n) scan. Mention the difference between <code>bisect_left</code> and <code>bisect_right</code> (which side of equal values), the <code>key=</code> parameter since Python 3.10, and that <code>insort</code> still costs O(n) to insert, so for heavy insert workloads a heap or a sorted container library is better.</p></div></details>
+</article>
+<article class="prob" id="p-you-need-the-top-100-of-100-million-scor" data-pid="m4-2-you-need-the-top-100-of-100-million-scor" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. You need the top 100 of 100 million scores that arrive as a stream. How do you do it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Do not collect and sort everything. Keep a <strong>min-heap of size 100</strong>: push the first 100 scores, then for each new score compare it with the heap's smallest; if it is larger, replace the smallest (<code>heapq.heappushpop</code>). That is O(n log k) time and O(k) memory, and it works on a stream because it never holds more than 100 items. <code>heapq.nlargest(100, stream)</code> implements exactly this. If the data is already in a numpy array, <code>np.argpartition</code> finds the top-k in O(n). If it is distributed, compute a local top-100 per partition and merge them (as in problem 15). Mention ties and NaN handling, and that approximate methods are acceptable when exact top-k is not needed.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>sort</code> (in place, returns <code>None</code>) and <code>sorted</code> (new list) are stable, O(n log n), and close to O(n) on partly sorted data.</li><li>Stability enables multi-key sorts in passes: least important key first, most important last.</li><li><code>in</code>, <code>index</code> and <code>count</code> scan: O(n). On a sorted list, <code>bisect</code> answers "where" and "how many in a range" in O(log n).</li><li>For top-k, use <code>max</code>/<code>min</code> (k = 1), <code>heapq.nlargest</code> (small k), or <code>np.argpartition</code>; do not sort everything to keep a few.</li><li>NaN silently breaks sorting, <code>max</code> and <code>min</code>. Filter it or give it its own key group.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
