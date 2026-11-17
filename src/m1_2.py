@@ -235,7 +235,7 @@ section("medium", "Medium",
         """,
         why="""The last index is `len(items) - 1`, and `range` already stops before `stop`, so `stop` should be
         `len(items)`. Subtracting 1 twice is the most common off-by-one there is. Why not `items[-n:]`? Try it with
-        `n = 0`: `items[-0:]` is `items[0:]`, the whole list. That slicing trap comes back in Module 3."""),
+        `n = 0`: `items[-0:]` is `items[0:]`, the whole list. That slicing trap comes back in Module 4."""),
     trace("Collatz steps", "medium",
         prompt="Fill in `n` and `steps` after each pass.",
         code="""
@@ -313,7 +313,7 @@ section("medium", "Medium",
         answer="b",
         hints=["How many pairs does A compare for 2,000 items? How much work is one sort?"],
         why="""A compares every pair: about n² / 2, so two million comparisons for 2,000 items. B sorts once (about
-        n log n) and then only compares neighbours, since equal values end up next to each other. Module 3 shows the
+        n log n) and then only compares neighbours, since equal values end up next to each other. Module 4 shows the
         fastest version, `len(set(nums)) != len(nums)`, which is one pass."""),
     refactor("Use enumerate and zip", "medium",
         prompt="Rewrite this without manual indexes. Keep the tests green.",
@@ -369,7 +369,7 @@ section("hard", "Hard",
         """,
         why="""`break` only leaves the inner loop, so for "stop everything" put the loops in a function and `return`.
         Starting `j` at `i + 1` skips self-pairs and duplicate pairs. This is the brute force O(n²) answer to the most
-        famous interview question there is. Say so, then give the one-pass dict version (Module 3)."""),
+        famous interview question there is. Say so, then give the one-pass dict version (Module 4)."""),
     write("Primes with a loop else", "hard",
         prompt="""Write `primes_up_to(n)` that returns all primes up to and including `n`. Use a `for ... else` to
         decide whether a number is prime, and only test divisors up to its square root.""",

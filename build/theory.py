@@ -21,12 +21,12 @@ SRC_REPO = "https://github.com/SivaRamaNaiduThattikota/python-core-foundations/b
 # slug, module, title, notebook path. The order here is the reading order.
 PAGES = [
     ("mutability", 2, "Mutability and the object model", "Mutability & the Object Model/theory.ipynb"),
-    ("list", 3, "2A List", "Sequences/List/theory.ipynb"),
-    ("tuple", 3, "2B Tuple", "Sequences/tuple/theory.ipynb"),
-    ("set", 3, "2C Set and frozenset", "Sequences/Set & frozenset/theory.ipynb"),
-    ("dict", 3, "2D Dictionaries", "Sequences/Dictionaries/theory.ipynb"),
-    ("strings", 4, "Strings", "Strings/theory.ipynb"),
-    ("functions", 5, "Functions, scope and closures", "Functions, Scope & Closures/theory.ipynb"),
+    ("functions", 3, "Functions, scope and closures", "Functions, Scope & Closures/theory.ipynb"),
+    ("list", 4, "2A List", "Sequences/List/theory.ipynb"),
+    ("tuple", 4, "2B Tuple", "Sequences/tuple/theory.ipynb"),
+    ("set", 4, "2C Set and frozenset", "Sequences/Set & frozenset/theory.ipynb"),
+    ("dict", 4, "2D Dictionaries", "Sequences/Dictionaries/theory.ipynb"),
+    ("strings", 5, "Strings", "Strings/theory.ipynb"),
     ("comprehensions", 6, "Comprehensions and generators", "Comprehensions & Generators/theory.ipynb"),
     ("decorators", 7, "Decorators", "Decorators/theory.ipynb"),
     ("errors", 8, "Error handling", "Error Handling/theory.ipynb"),

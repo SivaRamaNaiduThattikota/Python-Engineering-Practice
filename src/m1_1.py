@@ -93,7 +93,7 @@ section("rules", "The rules in one screen",
     p("""In the f-string, `!r` shows each value as its **repr**, the form you would type in code, so `"0"` appears as
     `'0'` and the empty string as `''`. Without `!r`, the empty string and the space would print as blanks and you
     could not tell them apart. `:>5` pads the text to 5 characters, aligned right. Compare `print(f"{'0'}")`, which
-    prints `0`, with `print(f"{'0'!r}")`, which prints `'0'`. Strings (Module 4) covers f-string formatting fully."""),
+    prints `0`, with `print(f"{'0'!r}")`, which prints `'0'`. Strings (Module 5) covers f-string formatting fully."""),
     p("""Falsy means "acts as False in an `if`": `None`, `False`, zero of any number type, and empty containers.
     Everything else is truthy, including the string `"0"`, a space, and a list holding a zero."""),
     ex("""
@@ -427,7 +427,7 @@ section("hard", "Hard",
         """,
         why="""It is the digit-sum loop from the trace problem with `base` instead of 10. Taking `abs(n)` first matters:
         `divmod(-10, 2)` floors, so on a negative number the remainders come out in a form you do not want. Building a
-        list and joining once is the standard way to build a string (Module 4 shows why `+=` in a loop is slower).
+        list and joining once is the standard way to build a string (Module 5 shows why `+=` in a loop is slower).
         The last test checks against Python's own `int(s, base)`, a good habit: test your code against a trusted version."""),
     predict("Precedence and chaining", "hard",
         code="""

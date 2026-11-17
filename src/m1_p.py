@@ -267,7 +267,7 @@ section("set", "Practice set",
         """,
         why="""Splitting out `steps` keeps each loop simple. The tie rule comes free from the comparison: with `>` an
         equal later value never replaces the current best. 27 takes 111 steps, far more than its neighbours, which is
-        why it is the famous example. For big limits you would cache steps already computed (Module 5)."""),
+        why it is the famous example. For big limits you would cache steps already computed (Module 3)."""),
     write("Check a card number", "hard", tag="Data work",
         prompt="""Write `luhn_valid(number)` for a string of digits. The Luhn check: starting from the **rightmost**
         digit, double every second digit; if doubling gives more than 9, subtract 9; add everything up. The number is
