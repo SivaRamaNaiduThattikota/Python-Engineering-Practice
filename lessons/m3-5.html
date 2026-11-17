@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3.5 · Functions as values</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m3-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 3 · Functions and closures</span></div>
+  <h1>3.5 Functions as values</h1>
+  <p>Functions are objects you can store, pass and return. That gives you <code>lambda</code>, <code>key=</code> functions for sorting and grouping, <code>map</code> and <code>filter</code>, <code>functools.partial</code>, and dispatch tables: the way agents route a tool name to the code that runs it.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="values">
+<h2><span class="n">1</span>Functions are values</h2>
+<p>Since <code>def</code> simply binds a name to a function object (3.1), a function can go anywhere a value can go. You can assign it to another name, put it in a list or dict, pass it to another function, and return it from a function. A function that <strong>takes or returns a function</strong> is called a <strong>higher-order function</strong>. You have already used several: <code>sorted(key=...)</code>, the factories in 3.4, and <code>with_retry</code> in 3.2.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">functions_as_values.py</span><button class="copy">Copy</button></div><pre><code class="py">def shout(text):
+    return text.upper()
+
+def whisper(text):
+    return text.lower()
+
+styles = {&quot;shout&quot;: shout, &quot;whisper&quot;: whisper}   # functions stored in a dict
+speak = styles[&quot;whisper&quot;]                       # a function assigned to a name
+print(speak(&quot;Hello&quot;), styles[&quot;shout&quot;](&quot;hello&quot;))
+
+def apply_twice(fn, value):                     # a function passed as an argument
+    return fn(fn(value))
+print(apply_twice(lambda s: s + &quot;!&quot;, &quot;hi&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>hello HELLO
+hi!!</pre></div></div>
+<p>The key distinction is between the <strong>function</strong> and the <strong>result of calling it</strong>. <code>styles["shout"]</code> is the function object; <code>styles["shout"]("hello")</code> calls it. Passing <code>shout</code> hands over the function itself; passing <code>shout("x")</code> would hand over a string. A very common beginner bug is <code>sorted(items, key=len())</code> (calling <code>len</code> with no argument) instead of <code>key=len</code>.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>Passing a function is like passing an <strong>expression</strong> to <code>ORDER BY</code>, or a lambda-like expression to DAX iterators: <code>SUMX(Sales, Sales[Qty] * Sales[Price])</code> evaluates the expression once per row. <code>sorted(rows, key=...)</code>, <code>map</code> and <code>max(key=...)</code> work the same way: you give the "per-row expression", and the function applies it to every item.</p></div></div>
+</section>
+<section class="sec" id="lambda">
+<h2><span class="n">2</span><code>lambda</code>: small functions in one expression</h2>
+<p><code>lambda params: expression</code> builds a function object, exactly like <code>def</code>, with three limits: it has no name (its <code>__name__</code> is <code>&lt;lambda&gt;</code>), its body must be <strong>one expression</strong> (no statements, no assignments, no <code>return</code>; the value of the expression is returned), and it cannot hold a docstring or type hints. It exists for short functions you need right where you pass them.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lambda.py</span><button class="copy">Copy</button></div><pre><code class="py">by_score = lambda doc: doc[&quot;score&quot;]          # same as: def by_score(doc): return doc[&quot;score&quot;]
+docs = [{&quot;id&quot;: &quot;a&quot;, &quot;score&quot;: 0.4}, {&quot;id&quot;: &quot;b&quot;, &quot;score&quot;: 0.9}, {&quot;id&quot;: &quot;c&quot;, &quot;score&quot;: 0.7}]
+print(sorted(docs, key=by_score)[0][&quot;id&quot;], by_score.__name__)
+
+print(sorted(docs, key=lambda d: d[&quot;score&quot;], reverse=True)[0][&quot;id&quot;])
+print((lambda x, y=2: x * y)(5))             # parameters and defaults work as usual</code></pre><div class="out"><span class="ol">Output</span><pre>a &lt;lambda&gt;
+b
+10</pre></div></div>
+<p>When <strong>not</strong> to use <code>lambda</code>: when the function needs more than one expression, when it is reused in several places, or when you assign it to a name as above. Style guides (PEP 8) say to use <code>def</code> then, because a named function gives better tracebacks and can have a docstring. A good rule: if you would have to think for more than a second to read the <code>lambda</code>, write a <code>def</code>.</p>
+</section>
+<section class="sec" id="key">
+<h2><span class="n">3</span>Key functions: sort, min, max and group by any rule</h2>
+<p><code>sorted</code>, <code>list.sort</code>, <code>min</code>, <code>max</code> and <code>itertools.groupby</code> all accept <code>key=</code>. Step by step, <code>sorted(items, key=f)</code> calls <code>f</code> <strong>once per item</strong> to get a key, sorts the items by their keys, and returns the items themselves (not the keys). A key can be any comparable value; a <strong>tuple</strong> key sorts by several rules at once, compared element by element, which is how you express "by priority, then by date".</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">key_functions.py</span><button class="copy">Copy</button></div><pre><code class="py">tickets = [
+    {&quot;id&quot;: 1, &quot;priority&quot;: 2, &quot;age_h&quot;: 30},
+    {&quot;id&quot;: 2, &quot;priority&quot;: 1, &quot;age_h&quot;: 5},
+    {&quot;id&quot;: 3, &quot;priority&quot;: 1, &quot;age_h&quot;: 48},
+    {&quot;id&quot;: 4, &quot;priority&quot;: 2, &quot;age_h&quot;: 2},
+]
+# priority ascending, then oldest first (negate a number to reverse just that part)
+order = sorted(tickets, key=lambda t: (t[&quot;priority&quot;], -t[&quot;age_h&quot;]))
+print([t[&quot;id&quot;] for t in order])
+
+print(max(tickets, key=lambda t: t[&quot;age_h&quot;])[&quot;id&quot;])           # the oldest ticket
+words = [&quot;Embedding&quot;, &quot;rag&quot;, &quot;Agent&quot;, &quot;chunk&quot;]
+print(sorted(words), sorted(words, key=str.lower))            # case-insensitive</code></pre><div class="out"><span class="ol">Output</span><pre>[3, 2, 1, 4]
+3
+[&#x27;Agent&#x27;, &#x27;Embedding&#x27;, &#x27;chunk&#x27;, &#x27;rag&#x27;] [&#x27;Agent&#x27;, &#x27;chunk&#x27;, &#x27;Embedding&#x27;, &#x27;rag&#x27;]</pre></div></div>
+<p>Two details explain most surprises. Python's sort is <strong>stable</strong>: items with equal keys keep their original order, so you can sort by a secondary rule first and the primary rule second and get both (lesson 4.2). And <code>str.lower</code> is passed as an <strong>unbound method</strong>, a plain function that takes the string as its argument, so <code>key=str.lower</code> works without any <code>lambda</code>. The <code>operator</code> module has ready-made key functions too: <code>operator.itemgetter("score")</code> is a faster, clearer <code>lambda d: d["score"]</code>, and <code>itemgetter("priority", "age_h")</code> returns a tuple key.</p>
+</section>
+<section class="sec" id="mapfilter">
+<h2><span class="n">4</span><code>map</code>, <code>filter</code>, <code>reduce</code> and comprehensions</h2>
+<p><code>map(fn, iterable)</code> calls <code>fn</code> on each item; <code>filter(pred, iterable)</code> keeps the items for which <code>pred(item)</code> is truthy. Both return <strong>lazy iterators</strong> (Module 6): nothing is computed until you loop over them or wrap them in <code>list()</code>, and they can only be consumed <strong>once</strong>. <code>functools.reduce(fn, iterable, start)</code> folds the items into one value by calling <code>fn(running, item)</code> repeatedly.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">map_filter.py</span><button class="copy">Copy</button></div><pre><code class="py">from functools import reduce
+
+prices = [&quot;12.50&quot;, &quot;7&quot;, &quot;3.25&quot;]
+as_float = map(float, prices)             # lazy: nothing converted yet
+print(as_float)
+print(list(as_float), list(as_float))     # the second list() finds it already used up
+
+lengths = [len(s) for s in [&quot;rag&quot;, &quot;&quot;, &quot;agents&quot;]]
+non_empty = list(filter(None, [&quot;rag&quot;, &quot;&quot;, &quot;agents&quot;]))   # None means &quot;keep truthy items&quot;
+print(lengths, non_empty)
+
+print(reduce(lambda acc, x: acc * x, [2, 3, 4], 1))</code></pre><div class="out"><span class="ol">Output</span><pre>&lt;map object at 0x123fb78&gt;
+[12.5, 7.0, 3.25] []
+[3, 0, 6] [&#x27;rag&#x27;, &#x27;agents&#x27;]
+24</pre></div></div>
+<p>In modern Python a <strong>comprehension</strong> is usually clearer than <code>map</code> or <code>filter</code> with a <code>lambda</code>: <code>[x * 2 for x in xs if x &gt; 0]</code> reads better than <code>list(map(lambda x: x * 2, filter(lambda x: x &gt; 0, xs)))</code>. <code>map</code> is still nice when you already have a named function (<code>map(float, prices)</code>, <code>map(str.strip, lines)</code>), and <code>filter(None, ...)</code> is a common idiom. For <code>reduce</code>, there is almost always a clearer built-in: <code>sum</code>, <code>max</code>, <code>math.prod</code>, <code>"".join</code>, <code>any</code>, <code>all</code>.</p>
+</section>
+<section class="sec" id="partial">
+<h2><span class="n">5</span><code>functools.partial</code> and dispatch tables</h2>
+<p><code>functools.partial(fn, *args, **kwargs)</code> returns a new callable that remembers some arguments and fills them in for you. It is a ready-made factory (3.4): <code>partial(complete, model="large")</code> is a version of <code>complete</code> that always uses the large model. Unlike a <code>lambda</code> in a loop, it stores the <strong>values</strong> right away, so it has no late-binding trap, and it keeps a readable <code>repr</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">partial.py</span><button class="copy">Copy</button></div><pre><code class="py">from functools import partial
+
+def complete(prompt, *, model=&quot;small&quot;, temperature=0.2):
+    return f&quot;{model}@{temperature}: {prompt}&quot;
+
+creative = partial(complete, model=&quot;large&quot;, temperature=0.9)
+print(creative(&quot;Write a haiku&quot;))
+print(creative(&quot;Write a haiku&quot;, temperature=0.5))     # later keywords override
+print(creative.func.__name__, creative.keywords)</code></pre><div class="out"><span class="ol">Output</span><pre>large@0.9: Write a haiku
+large@0.5: Write a haiku
+complete {&#x27;model&#x27;: &#x27;large&#x27;, &#x27;temperature&#x27;: 0.9}</pre></div></div>
+<p>A <strong>dispatch table</strong> is a dict whose values are functions. Instead of a long <code>if name == "search": ... elif ...</code> chain, you look the function up by name and call it. This is exactly how an agent runs tools: the LLM returns a tool name and arguments, the code looks the name up in a registry dict and calls the function with the arguments. Adding a tool means adding one entry, and an unknown name is a single, clear error path.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dispatch.py</span><button class="copy">Copy</button></div><pre><code class="py">def search(query, k=3):
+    return f&quot;top {k} results for {query!r}&quot;
+
+def calculator(expression):
+    allowed = set(&quot;0123456789+-*/(). &quot;)
+    if not set(expression) &lt;= allowed:
+        raise ValueError(&quot;unsupported characters&quot;)
+    return str(eval(expression))         # tiny demo only: never eval untrusted input in real code
+
+TOOLS = {&quot;search&quot;: search, &quot;calculator&quot;: calculator}
+
+def run_tool(call):
+    fn = TOOLS.get(call[&quot;name&quot;])
+    if fn is None:
+        return f&quot;error: unknown tool {call[&#x27;name&#x27;]!r}&quot;
+    return fn(**call[&quot;arguments&quot;])
+
+print(run_tool({&quot;name&quot;: &quot;search&quot;, &quot;arguments&quot;: {&quot;query&quot;: &quot;refund policy&quot;}}))
+print(run_tool({&quot;name&quot;: &quot;calculator&quot;, &quot;arguments&quot;: {&quot;expression&quot;: &quot;2 * (3 + 4)&quot;}}))
+print(run_tool({&quot;name&quot;: &quot;weather&quot;, &quot;arguments&quot;: {}}))</code></pre><div class="out"><span class="ol">Output</span><pre>top 3 results for &#x27;refund policy&#x27;
+14
+error: unknown tool &#x27;weather&#x27;</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">A note on <code>eval</code></div><p>The calculator uses <code>eval</code> only to keep the example tiny, behind a strict character check. In real agent code, never <code>eval</code> text that came from a user or an LLM: use a safe expression parser (for example the <code>ast</code> module or a library such as <code>numexpr</code>). Tool registries are a classic place for injection bugs.</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-the-function-or-its-result" data-pid="m3-5-the-function-or-its-result" data-type="predict" data-level="easy" data-answer="True 0.3
+b
+TypeError: get_score() missing 1 required positional argument: &#x27;d&#x27;">
+<header class="prob-head"><h3>1. The function or its result?</h3></header>
+<div class="code"><pre><code class="py">def get_score(d):
+    return d[&quot;score&quot;]
+
+docs = [{&quot;id&quot;: &quot;a&quot;, &quot;score&quot;: 0.3}, {&quot;id&quot;: &quot;b&quot;, &quot;score&quot;: 0.8}]
+f = get_score
+print(f is get_score, f(docs[0]))
+print(max(docs, key=get_score)[&quot;id&quot;])
+try:
+    max(docs, key=get_score())
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>key=</code> wants a function. What does <code>get_score()</code> with no argument try to do?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True 0.3
+b
+TypeError: get_score() missing 1 required positional argument: &#x27;d&#x27;</pre></div><p><code>f = get_score</code> gives the same function object another name. <code>key=get_score</code> hands the function to <code>max</code>, which calls it once per document. <code>key=get_score()</code> <strong>calls</strong> <code>get_score</code> right away with no argument, so the error happens before <code>max</code> even runs: the <code>TypeError</code> is about the missing <code>d</code>. Passing a function versus passing the result of calling it is the core idea of this lesson.</p></div></details>
+</article>
+<article class="prob" id="p-rank-retrieved-chunks" data-pid="m3-5-rank-retrieved-chunks" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. Rank retrieved chunks</h3></header>
+<div class="prob-q"><p>Write <code>rank(chunks)</code> that returns the chunks sorted by <code>score</code>, highest first. Ties are broken by the shorter <code>text</code> first, then by <code>id</code> ascending. Use a single <code>sorted</code> call with a key function.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def rank(chunks):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">chunks = [
+    {"id": 3, "score": 0.9, "text": "Refunds take five days."},
+    {"id": 1, "score": 0.7, "text": "Contact support."},
+    {"id": 2, "score": 0.9, "text": "Refunds: 5 days."},
+    {"id": 4, "score": 0.9, "text": "Refunds: 5 days."},
+]
+assert [c["id"] for c in rank(chunks)] == [2, 4, 3, 1]
+assert rank([]) == []
+assert chunks[0]["id"] == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">chunks = [
+    {&quot;id&quot;: 3, &quot;score&quot;: 0.9, &quot;text&quot;: &quot;Refunds take five days.&quot;},
+    {&quot;id&quot;: 1, &quot;score&quot;: 0.7, &quot;text&quot;: &quot;Contact support.&quot;},
+    {&quot;id&quot;: 2, &quot;score&quot;: 0.9, &quot;text&quot;: &quot;Refunds: 5 days.&quot;},
+    {&quot;id&quot;: 4, &quot;score&quot;: 0.9, &quot;text&quot;: &quot;Refunds: 5 days.&quot;},
+]
+assert [c[&quot;id&quot;] for c in rank(chunks)] == [2, 4, 3, 1]
+assert rank([]) == []
+assert chunks[0][&quot;id&quot;] == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A tuple key: <code>(-score, len(text), id)</code>. Negating the score sorts it descending while the rest stay ascending.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def rank(chunks):
+    return sorted(chunks, key=lambda c: (-c[&quot;score&quot;], len(c[&quot;text&quot;]), c[&quot;id&quot;]))</code></pre></div><p>The tuple key is compared element by element: score first (negated, so higher comes first), then text length, then id, so one sort expresses all three rules. <code>sorted</code> returns a new list and leaves the input alone (the last test). The negation trick only works for numbers; to reverse a string part of a key you sort twice using stability (lesson 4.2) or use <code>reverse=True</code> on one pass.</p></div></details>
+</article>
+<article class="prob" id="p-map-is-lazy-and-single-use" data-pid="m3-5-map-is-lazy-and-single-use" data-type="predict" data-level="easy" data-answer="map
+[&#x27;alpha&#x27;, &#x27;beta&#x27;, &#x27;gamma&#x27;]
+[]
+[8, 4, 7] [&#x27;  gamma&#x27;]">
+<header class="prob-head"><h3>3. <code>map</code> is lazy and single-use</h3></header>
+<div class="code"><pre><code class="py">lines = [&quot;  alpha &quot;, &quot;beta&quot;, &quot;  gamma&quot;]
+cleaned = map(str.strip, lines)
+print(type(cleaned).__name__)
+print(list(cleaned))
+print(list(cleaned))
+
+lengths = list(map(len, lines))
+kept = list(filter(lambda s: s.strip().startswith(&quot;g&quot;), lines))
+print(lengths, kept)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>map</code> object is an iterator. What is left after one full pass?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>map
+[&#x27;alpha&#x27;, &#x27;beta&#x27;, &#x27;gamma&#x27;]
+[]
+[8, 4, 7] [&#x27;  gamma&#x27;]</pre></div><p><code>map</code> returns a lazy iterator: <code>list(cleaned)</code> runs <code>str.strip</code> on every line, and a second <code>list(cleaned)</code> finds nothing left. Wrap it in <code>list()</code> once if you need the values more than once. <code>str.strip</code> and <code>len</code> are passed as functions without a <code>lambda</code>. This single-use behaviour is the same as the generator trap in 2.4 and Module 6.</p></div></details>
+</article>
+<article class="prob" id="p-a-sort-that-crashes-on-missing-values" data-pid="m3-5-a-sort-that-crashes-on-missing-values" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>4. A sort that crashes on missing values</h3></header>
+<div class="prob-q"><p><code>newest_first(rows)</code> should sort rows by <code>updated</code> (an ISO date string), newest first, with rows that have no <code>updated</code> value at the <strong>end</strong>. It crashes when any row has <code>None</code>. Fix the key function.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def newest_first(rows):
+    return sorted(rows, key=lambda r: r[&quot;updated&quot;], reverse=True)
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [{"id": 1, "updated": "2025-03-01"}, {"id": 2, "updated": None},
+        {"id": 3, "updated": "2025-06-10"}, {"id": 4, "updated": None}]
+assert [r["id"] for r in newest_first(rows)] == [3, 1, 2, 4]
+assert newest_first([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [{&quot;id&quot;: 1, &quot;updated&quot;: &quot;2025-03-01&quot;}, {&quot;id&quot;: 2, &quot;updated&quot;: None},
+        {&quot;id&quot;: 3, &quot;updated&quot;: &quot;2025-06-10&quot;}, {&quot;id&quot;: 4, &quot;updated&quot;: None}]
+assert [r[&quot;id&quot;] for r in newest_first(rows)] == [3, 1, 2, 4]
+assert newest_first([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Comparing a string with <code>None</code> raises <code>TypeError</code>. Make the key a tuple whose first part says whether the value is missing.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With <code>reverse=True</code>, think about which first value puts the missing rows at the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def newest_first(rows):
+    return sorted(rows, key=lambda r: (r[&quot;updated&quot;] is not None, r[&quot;updated&quot;] or &quot;&quot;), reverse=True)</code></pre></div><p>Python 3 refuses to compare <code>None</code> with a string, so any <code>None</code> in the key crashes the whole sort. The tuple <code>(has_value, value)</code> fixes it: rows with a value get <code>True</code>, missing ones <code>False</code>, and with <code>reverse=True</code> the <code>True</code> rows come first, ordered newest first, while the missing ones go last. <code>or ""</code> replaces <code>None</code> with a comparable placeholder. Because the sort is stable, rows with no date keep their original order (2 before 4).</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-a-tool-registry-with-a-dispatch-table" data-pid="m3-5-a-tool-registry-with-a-dispatch-table" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A tool registry with a dispatch table</h3></header>
+<div class="prob-q"><p>Write <code>make_registry()</code> returning <code>(register, call)</code>. <code>register(name, fn)</code> adds a tool, and raises <code>ValueError</code> if the name is taken. <code>call(name, arguments)</code> calls the tool with the <code>arguments</code> dict as keyword arguments, and returns <code>{"ok": True, "result": ...}</code>, or <code>{"ok": False, "error": "..."}</code> when the tool is unknown or the call raises <code>TypeError</code> (wrong arguments from the LLM). Each registry is independent.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def make_registry():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+register, call = make_registry()
+register("search", lambda query, k=3: f"{k} hits for {query}")
+register("add", lambda a, b: a + b)
+assert call("search", {"query": "refunds"}) == {"ok": True, "result": "3 hits for refunds"}
+assert call("add", {"a": 2, "b": 3}) == {"ok": True, "result": 5}
+assert call("weather", {})["ok"] is False and "unknown tool" in call("weather", {})["error"]
+assert call("add", {"a": 2})["ok"] is False
+assert raises(ValueError, register, "add", print)
+_, call2 = make_registry()
+assert call2("add", {"a": 1, "b": 1})["ok"] is False</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+register, call = make_registry()
+register(&quot;search&quot;, lambda query, k=3: f&quot;{k} hits for {query}&quot;)
+register(&quot;add&quot;, lambda a, b: a + b)
+assert call(&quot;search&quot;, {&quot;query&quot;: &quot;refunds&quot;}) == {&quot;ok&quot;: True, &quot;result&quot;: &quot;3 hits for refunds&quot;}
+assert call(&quot;add&quot;, {&quot;a&quot;: 2, &quot;b&quot;: 3}) == {&quot;ok&quot;: True, &quot;result&quot;: 5}
+assert call(&quot;weather&quot;, {})[&quot;ok&quot;] is False and &quot;unknown tool&quot; in call(&quot;weather&quot;, {})[&quot;error&quot;]
+assert call(&quot;add&quot;, {&quot;a&quot;: 2})[&quot;ok&quot;] is False
+assert raises(ValueError, register, &quot;add&quot;, print)
+_, call2 = make_registry()
+assert call2(&quot;add&quot;, {&quot;a&quot;: 1, &quot;b&quot;: 1})[&quot;ok&quot;] is False</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>tools = {}</code> in the factory. <code>call</code> looks the name up with <code>tools.get(name)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap only the actual tool call in <code>try/except TypeError</code>, so other errors are not hidden.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_registry():
+    tools = {}
+
+    def register(name, fn):
+        if name in tools:
+            raise ValueError(f&quot;tool {name!r} already registered&quot;)
+        tools[name] = fn
+
+    def call(name, arguments):
+        fn = tools.get(name)
+        if fn is None:
+            return {&quot;ok&quot;: False, &quot;error&quot;: f&quot;unknown tool {name!r}&quot;}
+        try:
+            return {&quot;ok&quot;: True, &quot;result&quot;: fn(**arguments)}
+        except TypeError as e:
+            return {&quot;ok&quot;: False, &quot;error&quot;: f&quot;bad arguments: {e}&quot;}
+
+    return register, call</code></pre></div><p>The registry is a dict from names to function objects, kept private in a closure (3.4), so two registries never mix. Returning a structured error instead of raising lets the agent loop send the error text back to the LLM, which can then correct its call: that feedback loop is how real agents recover from bad tool calls. Catching only <code>TypeError</code> is deliberate: a bug inside the tool raising something else should not be disguised as "bad arguments". A real version would validate arguments against a schema first (Module 11) and limit what tools may do.</p></div></details>
+</article>
+<article class="prob" id="p-a-pipeline-that-loses-its-steps" data-pid="m3-5-a-pipeline-that-loses-its-steps" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A pipeline that loses its steps</h3></header>
+<div class="prob-q"><p><code>make_pipeline(*steps)</code> should return a function that passes a value through every step in order. Every pipeline only applies the <strong>last</strong> step. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def make_pipeline(*steps):
+    def run(value):
+        for step in steps:
+            result = step(value)
+        return result
+    return run
+</textarea>
+<script type="text/plain" class="prob-tests">clean = make_pipeline(str.strip, str.lower, lambda s: s.replace("  ", " "))
+assert clean("  Hello  World ") == "hello world"
+double_then_inc = make_pipeline(lambda x: x * 2, lambda x: x + 1)
+assert double_then_inc(5) == 11
+assert make_pipeline()("same") == "same"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">clean = make_pipeline(str.strip, str.lower, lambda s: s.replace(&quot;  &quot;, &quot; &quot;))
+assert clean(&quot;  Hello  World &quot;) == &quot;hello world&quot;
+double_then_inc = make_pipeline(lambda x: x * 2, lambda x: x + 1)
+assert double_then_inc(5) == 11
+assert make_pipeline()(&quot;same&quot;) == &quot;same&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each step must receive the output of the previous step, not the original value.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With no steps, the function should return its input unchanged.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_pipeline(*steps):
+    def run(value):
+        for step in steps:
+            value = step(value)
+        return value
+    return run</code></pre></div><p>The loop fed the <strong>original</strong> value into every step and kept only the last result, so earlier steps had no effect. Rebinding <code>value</code> passes each output into the next step. It also fixes the empty pipeline, which used to raise <code>UnboundLocalError</code> because <code>result</code> was never assigned (3.3). Composing functions into a pipeline is the idea behind scikit-learn's <code>Pipeline</code>, text-cleaning chains and LangChain's <code>|</code> operator.</p></div></details>
+</article>
+<article class="prob" id="p-sorting-with-a-key-step-by-step" data-pid="m3-5-sorting-with-a-key-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Sorting with a key, step by step</h3></header>
+<div class="prob-q"><p><code>sorted</code> computes one key per word, then orders the words by their keys. Fill in the key computed for each word, and the final order (it is computed first, at the top, so it is the same on every row).</p></div>
+<div class="code"><pre><code class="py">words = [&quot;agent&quot;, &quot;RAG&quot;, &quot;api&quot;, &quot;Embed&quot;]
+order = sorted(words, key=lambda w: (len(w), w.lower()))
+key = (len(words[0]), words[0].lower())
+key = (len(words[1]), words[1].lower())
+key = (len(words[2]), words[2].lower())
+key = (len(words[3]), words[3].lower())</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>key</code></th><th><code>order</code></th></tr><tr><td>key of &#x27;agent&#x27;</td><td><input class="cell" data-a="(5, &#x27;agent&#x27;)" data-s="(5, &#x27;agent&#x27;)" aria-label="key at key of &#x27;agent&#x27;" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" data-s="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" aria-label="order at key of &#x27;agent&#x27;" autocomplete="off"></td></tr><tr><td>key of &#x27;RAG&#x27;</td><td><input class="cell" data-a="(3, &#x27;rag&#x27;)" data-s="(3, &#x27;rag&#x27;)" aria-label="key at key of &#x27;RAG&#x27;" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" data-s="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" aria-label="order at key of &#x27;RAG&#x27;" autocomplete="off"></td></tr><tr><td>key of &#x27;api&#x27;</td><td><input class="cell" data-a="(3, &#x27;api&#x27;)" data-s="(3, &#x27;api&#x27;)" aria-label="key at key of &#x27;api&#x27;" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" data-s="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" aria-label="order at key of &#x27;api&#x27;" autocomplete="off"></td></tr><tr><td>key of &#x27;Embed&#x27;</td><td><input class="cell" data-a="(5, &#x27;embed&#x27;)" data-s="(5, &#x27;embed&#x27;)" aria-label="key at key of &#x27;Embed&#x27;" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" data-s="[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]" aria-label="order at key of &#x27;Embed&#x27;" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A key here is a tuple <code>(length, lowercase word)</code>. Tuples compare element by element.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>key</code></th><th><code>order</code></th></tr><tr><td>key of &#x27;agent&#x27;</td><td><code>(5, &#x27;agent&#x27;)</code></td><td><code>[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]</code></td></tr><tr><td>key of &#x27;RAG&#x27;</td><td><code>(3, &#x27;rag&#x27;)</code></td><td><code>[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]</code></td></tr><tr><td>key of &#x27;api&#x27;</td><td><code>(3, &#x27;api&#x27;)</code></td><td><code>[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]</code></td></tr><tr><td>key of &#x27;Embed&#x27;</td><td><code>(5, &#x27;embed&#x27;)</code></td><td><code>[&#x27;api&#x27;, &#x27;RAG&#x27;, &#x27;agent&#x27;, &#x27;Embed&#x27;]</code></td></tr></table></div><p>Each key is <code>(length, lowercase word)</code>. Three-letter words come first, and between <code>"RAG"</code> and <code>"api"</code> the second part decides: <code>"api" &lt; "rag"</code>. The five-letter words compare <code>"agent" &lt; "embed"</code>. The sort returns the original words, with their original capitalisation, in key order: <code>["api", "RAG", "agent", "Embed"]</code>. The keys themselves are thrown away once the sort is done.</p></div></details>
+</article>
+<article class="prob" id="p-group-records-by-any-rule" data-pid="m3-5-group-records-by-any-rule" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Group records by any rule</h3></header>
+<div class="prob-q"><p>Write <code>group_by(items, key)</code> that returns a dict from <code>key(item)</code> to the list of items with that key, in first-seen order of keys and items. <code>key</code> is any function, like the <code>key=</code> of <code>sorted</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def group_by(items, key):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">tickets = [{"id": 1, "team": "billing"}, {"id": 2, "team": "auth"}, {"id": 3, "team": "billing"}]
+g = group_by(tickets, key=lambda t: t["team"])
+assert {k: [t["id"] for t in v] for k, v in g.items()} == {"billing": [1, 3], "auth": [2]}
+assert list(group_by(["apple", "avocado", "bean"], key=lambda w: w[0])) == ["a", "b"]
+assert group_by([1, 2, 3, 4], key=lambda n: n % 2 == 0) == {False: [1, 3], True: [2, 4]}
+assert group_by([], key=len) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tickets = [{&quot;id&quot;: 1, &quot;team&quot;: &quot;billing&quot;}, {&quot;id&quot;: 2, &quot;team&quot;: &quot;auth&quot;}, {&quot;id&quot;: 3, &quot;team&quot;: &quot;billing&quot;}]
+g = group_by(tickets, key=lambda t: t[&quot;team&quot;])
+assert {k: [t[&quot;id&quot;] for t in v] for k, v in g.items()} == {&quot;billing&quot;: [1, 3], &quot;auth&quot;: [2]}
+assert list(group_by([&quot;apple&quot;, &quot;avocado&quot;, &quot;bean&quot;], key=lambda w: w[0])) == [&quot;a&quot;, &quot;b&quot;]
+assert group_by([1, 2, 3, 4], key=lambda n: n % 2 == 0) == {False: [1, 3], True: [2, 4]}
+assert group_by([], key=len) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop once; <code>out.setdefault(key(item), []).append(item)</code> (2.P).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def group_by(items, key):
+    out = {}
+    for item in items:
+        out.setdefault(key(item), []).append(item)
+    return out</code></pre></div><p>Taking the grouping rule as a function makes one helper serve every grouping: by team, by first letter, by parity, by month. That is the same design as <code>sorted(key=...)</code> and pandas <code>groupby</code> with a function. Unlike <code>itertools.groupby</code>, this works on unsorted input, because it collects into a dict instead of grouping only <strong>consecutive</strong> equal keys (lesson 6.4).</p></div></details>
+</article>
+<article class="prob" id="p-a-lambda-or-operator-itemgetter-as-the-k" data-pid="m3-5-a-lambda-or-operator-itemgetter-as-the-k" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>9. A lambda or <code>operator.itemgetter</code> as the key</h3></header>
+<div class="prob-q"><p>Both find the highest-scoring record among 500,000 records. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from operator import itemgetter
+rows = [{&quot;id&quot;: i, &quot;score&quot;: random.random()} for i in range(500_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">best = max(rows, key=lambda r: r[&quot;score&quot;])</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">best = max(rows, key=itemgetter(&quot;score&quot;))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Both call the key once per record. What runs inside each call?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>90.17 ms</td></tr><tr><td>B</td><td>50.95 ms</td></tr></table></div><p><code>max</code> calls the key once per record, 500,000 times, and does little else, so the key's own cost is what you are timing. The <code>lambda</code> is a Python function, so each call builds a frame and runs bytecode; <code>itemgetter("score")</code> is implemented in C, so each call is a direct lookup. Inside <code>sorted</code> the difference is often hidden by the cost of the sort itself, but it is still there. Prefer <code>itemgetter</code> / <code>attrgetter</code> for simple field keys: it is at least as fast and states the intent; use a <code>lambda</code> when the key needs logic.</p></div></details>
+</article>
+<article class="prob" id="p-pick-a-scorer-by-name" data-pid="m3-5-pick-a-scorer-by-name" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Pick a scorer by name</h3></header>
+<div class="prob-q"><p><code>evaluate(preds, gold, metric)</code> chooses a metric function by name. Adding a metric means editing a growing <code>if</code> chain, and a typo in the metric name silently returns <code>None</code>. Replace the chain with a dispatch table, and make an unknown name raise <code>ValueError</code> listing the known metrics.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def accuracy(p, g):
+    return sum(a == b for a, b in zip(p, g)) / len(g)
+
+def error_rate(p, g):
+    return 1 - accuracy(p, g)
+
+def evaluate(preds, gold, metric):
+    if metric == &quot;accuracy&quot;:
+        return accuracy(preds, gold)
+    elif metric == &quot;error_rate&quot;:
+        return error_rate(preds, gold)
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+assert evaluate([1, 0, 1], [1, 1, 1], "accuracy") == 2 / 3
+assert abs(evaluate([1, 0, 1], [1, 1, 1], "error_rate") - 1 / 3) < 1e-12
+msg = raises(ValueError, evaluate, [1], [1], "acuracy")
+assert msg and "accuracy" in msg and "error_rate" in msg</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+assert evaluate([1, 0, 1], [1, 1, 1], &quot;accuracy&quot;) == 2 / 3
+assert abs(evaluate([1, 0, 1], [1, 1, 1], &quot;error_rate&quot;) - 1 / 3) &lt; 1e-12
+msg = raises(ValueError, evaluate, [1], [1], &quot;acuracy&quot;)
+assert msg and &quot;accuracy&quot; in msg and &quot;error_rate&quot; in msg</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>METRICS = {"accuracy": accuracy, "error_rate": error_rate}</code>, then look the name up.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def accuracy(p, g):
+    return sum(a == b for a, b in zip(p, g)) / len(g)
+
+def error_rate(p, g):
+    return 1 - accuracy(p, g)
+
+METRICS = {&quot;accuracy&quot;: accuracy, &quot;error_rate&quot;: error_rate}
+
+def evaluate(preds, gold, metric):
+    try:
+        fn = METRICS[metric]
+    except KeyError:
+        raise ValueError(f&quot;unknown metric {metric!r}; choose from {sorted(METRICS)}&quot;) from None
+    return fn(preds, gold)</code></pre></div><p>The <code>if</code> chain had a silent fall-through: an unknown name returned <code>None</code> (3.1), which later shows up as a broken report rather than an error. The dict maps names to functions, so adding a metric is one line, and the list of valid names is available for the error message, the CLI help or a config check. <code>from None</code> hides the internal <code>KeyError</code> so the user sees one clean error (Module 8). scikit-learn's <code>scoring="f1"</code> strings work exactly this way: a registry from names to scorer functions.</p></div></details>
+</article>
+<article class="prob" id="p-comprehension-instead-of-map-and-filter" data-pid="m3-5-comprehension-instead-of-map-and-filter" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Comprehension instead of map and filter</h3></header>
+<div class="prob-q"><p>Rewrite this with one list comprehension, keeping the result identical. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def clean_scores(raw):
+    parsed = map(lambda s: float(s.strip()), filter(lambda s: s.strip() != &quot;&quot;, raw))
+    return list(filter(lambda x: 0.0 &lt;= x &lt;= 1.0, parsed))
+</textarea>
+<script type="text/plain" class="prob-tests">assert clean_scores([" 0.5", "", "1.5", "0.25 ", "  "]) == [0.5, 0.25]
+assert clean_scores([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert clean_scores([&quot; 0.5&quot;, &quot;&quot;, &quot;1.5&quot;, &quot;0.25 &quot;, &quot;  &quot;]) == [0.5, 0.25]
+assert clean_scores([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Filter empty strings, convert, then keep values in range. A nested comprehension or the walrus operator <code>:=</code> can avoid converting twice.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def clean_scores(raw):
+    values = [float(s) for s in raw if s.strip()]
+    return [x for x in values if 0.0 &lt;= x &lt;= 1.0]</code></pre></div><p>Three lambdas inside <code>map</code> and <code>filter</code> force the reader to work inside-out. Two comprehensions read top to bottom: "convert the non-empty strings, keep those in range". <code>float(" 0.5")</code> already ignores surrounding spaces, so the <code>strip()</code> before converting was unnecessary. A single comprehension with <code>:=</code> (<code>[x for s in raw if s.strip() if 0 &lt;= (x := float(s)) &lt;= 1]</code>) also works, but two steps are easier to read and to debug.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-methods-as-functions" data-pid="m3-5-methods-as-functions" data-type="predict" data-level="hard" data-answer="[&#x27;Rag&#x27;, &#x27;AGENT&#x27;, &#x27;embed&#x27;]
+[&#x27;  Rag &#x27;, &#x27; embed&#x27;, &#x27;AGENT&#x27;]
+[&#x27;Rag&#x27;, &#x27;AGENT&#x27;, &#x27;embed&#x27;]
+ABC abc
+(3.0, 4.0)">
+<header class="prob-head"><h3>12. Methods as functions</h3></header>
+<div class="code"><pre><code class="py">from operator import methodcaller, attrgetter
+
+words = [&quot;  Rag &quot;, &quot;AGENT&quot;, &quot; embed&quot;]
+print(list(map(str.strip, words)))
+print(sorted(words, key=str.lower))
+print(list(map(methodcaller(&quot;strip&quot;, &quot; &quot;), words)))
+
+upper = &quot;abc&quot;.upper
+print(upper(), upper.__self__)
+print(attrgetter(&quot;real&quot;, &quot;imag&quot;)(3 + 4j))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>str.strip</code> is a plain function taking the string. <code>"abc".upper</code> is a method already bound to <code>"abc"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(key=str.lower)</code> compares lower-cased versions, including their leading spaces.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;Rag&#x27;, &#x27;AGENT&#x27;, &#x27;embed&#x27;]
+[&#x27;  Rag &#x27;, &#x27; embed&#x27;, &#x27;AGENT&#x27;]
+[&#x27;Rag&#x27;, &#x27;AGENT&#x27;, &#x27;embed&#x27;]
+ABC abc
+(3.0, 4.0)</pre></div><p><code>str.strip</code> taken from the class is an ordinary function whose first argument is the string, so <code>map</code> can call it on each item. Sorting by <code>str.lower</code> compares the lower-cased strings, spaces included, and a space sorts before letters, which puts <code>"  Rag "</code> first. <code>methodcaller("strip", " ")</code> builds a function that calls <code>.strip(" ")</code> on whatever it is given. <code>"abc".upper</code> is a <strong>bound method</strong>: the object is stored in <code>__self__</code>, so calling it needs no argument. <code>attrgetter</code> with several names returns a tuple, which makes it a ready-made multi-field key.</p></div></details>
+</article>
+<article class="prob" id="p-compose-functions" data-pid="m3-5-compose-functions" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Compose functions</h3></header>
+<div class="prob-q"><p>Write <code>compose(*fns)</code> that returns a function applying the functions <strong>right to left</strong>, like maths: <code>compose(f, g, h)(x) == f(g(h(x)))</code>. The rightmost function may take any arguments; each other function receives the previous result. With no functions, return the identity function (one argument, returned unchanged).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def compose(*fns):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">inc = lambda x: x + 1
+dbl = lambda x: x * 2
+assert compose(inc, dbl)(5) == 11
+assert compose(dbl, inc)(5) == 12
+assert compose(str.upper, " ".join)(["a", "b"]) == "A B"
+assert compose(len, max)([3, 9], [1, 2, 3], key=len) == 3
+assert compose()(7) == 7</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">inc = lambda x: x + 1
+dbl = lambda x: x * 2
+assert compose(inc, dbl)(5) == 11
+assert compose(dbl, inc)(5) == 12
+assert compose(str.upper, &quot; &quot;.join)([&quot;a&quot;, &quot;b&quot;]) == &quot;A B&quot;
+assert compose(len, max)([3, 9], [1, 2, 3], key=len) == 3
+assert compose()(7) == 7</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Call the last function with <code>*args, **kwargs</code>, then loop over the rest in reverse, feeding each the result.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>reversed(fns[:-1])</code> walks the remaining functions right to left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def compose(*fns):
+    if not fns:
+        return lambda x: x
+    *rest, last = fns
+    def composed(*args, **kwargs):
+        result = last(*args, **kwargs)
+        for fn in reversed(rest):
+            result = fn(result)
+        return result
+    return composed</code></pre></div><p>Only the innermost function sees the original arguments, so it alone is called with <code>*args, **kwargs</code>; that is why <code>compose(len, max)</code> can forward <code>key=len</code> to <code>max</code>. Star-unpacking <code>*rest, last = fns</code> (lesson 4.3) splits off the last function. The order matters and is a classic interview check: <code>compose(inc, dbl)(5)</code> doubles first. Many libraries offer this (<code>toolz.compose</code>), and the "pipe" style (left to right, as in problem 6) is often easier for readers; in an interview, say which one you implemented.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-callbacks-that-fire-with-t" data-pid="m3-5-read-the-code-callbacks-that-fire-with-t" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>14. Read the code: callbacks that fire with the wrong settings</h3></header>
+<div class="prob-q"><p>This training-loop helper lets you register callbacks that run after each epoch. A sweep registers one early-stopping callback per patience setting, plus a logging callback built with <code>partial</code>. The early-stopping callbacks all use the last patience value, and the logger ignores its prefix. Read the module, find both bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">from functools import partial
+
+
+def train(epochs, losses, callbacks):
+    history = []
+    for epoch in range(epochs):
+        loss = losses[epoch]
+        history.append(loss)
+        messages = [cb(epoch, history) for cb in callbacks]
+        if &quot;stop&quot; in messages:
+            return epoch, messages
+    return epochs - 1, []
+
+
+def make_callbacks(patiences, log):
+    callbacks = []
+    for patience in patiences:
+        def early_stop(epoch, history):
+            best = min(history)
+            since_best = len(history) - 1 - history.index(best)
+            return &quot;stop&quot; if since_best &gt;= patience else &quot;go&quot;
+        callbacks.append(early_stop)
+    callbacks.append(partial(log_epoch, log))
+    return callbacks
+
+
+def log_epoch(log, epoch, history, prefix=&quot;run&quot;):
+    log.append(f&quot;{prefix} epoch {epoch}: {history[-1]}&quot;)
+    return &quot;go&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">log = []
+cbs = make_callbacks([1, 5], log, prefix="sweep")
+stopped, msgs = train(6, [1.0, 0.8, 0.9, 0.95, 0.97, 0.99], cbs)
+assert stopped == 2 and msgs == ["stop", "go", "go"]
+assert log == ["sweep epoch 0: 1.0", "sweep epoch 1: 0.8", "sweep epoch 2: 0.9"]
+cb1 = make_callbacks([3], [], prefix="x")[0]
+assert cb1(3, [1.0, 0.5, 0.6, 0.7]) == "go" and cb1(4, [1.0, 0.5, 0.6, 0.7, 0.8]) == "stop"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">log = []
+cbs = make_callbacks([1, 5], log, prefix=&quot;sweep&quot;)
+stopped, msgs = train(6, [1.0, 0.8, 0.9, 0.95, 0.97, 0.99], cbs)
+assert stopped == 2 and msgs == [&quot;stop&quot;, &quot;go&quot;, &quot;go&quot;]
+assert log == [&quot;sweep epoch 0: 1.0&quot;, &quot;sweep epoch 1: 0.8&quot;, &quot;sweep epoch 2: 0.9&quot;]
+cb1 = make_callbacks([3], [], prefix=&quot;x&quot;)[0]
+assert cb1(3, [1.0, 0.5, 0.6, 0.7]) == &quot;go&quot; and cb1(4, [1.0, 0.5, 0.6, 0.7, 0.8]) == &quot;stop&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each <code>early_stop</code> reads <code>patience</code> when it runs, after the loop has ended. Build each callback with a factory or <code>partial</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>make_callbacks</code> has no <code>prefix</code> parameter. Add one and pass it to <code>partial</code> as a keyword.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from functools import partial
+
+
+def train(epochs, losses, callbacks):
+    history = []
+    for epoch in range(epochs):
+        loss = losses[epoch]
+        history.append(loss)
+        messages = [cb(epoch, history) for cb in callbacks]
+        if &quot;stop&quot; in messages:
+            return epoch, messages
+    return epochs - 1, []
+
+
+def early_stop(epoch, history, *, patience):
+    best = min(history)
+    since_best = len(history) - 1 - history.index(best)
+    return &quot;stop&quot; if since_best &gt;= patience else &quot;go&quot;
+
+
+def make_callbacks(patiences, log, prefix=&quot;run&quot;):
+    callbacks = [partial(early_stop, patience=p) for p in patiences]
+    callbacks.append(partial(log_epoch, log, prefix=prefix))
+    return callbacks
+
+
+def log_epoch(log, epoch, history, prefix=&quot;run&quot;):
+    log.append(f&quot;{prefix} epoch {epoch}: {history[-1]}&quot;)
+    return &quot;go&quot;</code></pre></div><p>Bug one is late binding (3.4): all the <code>early_stop</code> closures share the single <code>patience</code> variable of <code>make_callbacks</code>, which ends at 5, so the patience-1 callback never stops. <code>partial(early_stop, patience=p)</code> stores each value immediately. Moving <code>early_stop</code> to module level with a keyword-only <code>patience</code> also makes it testable on its own (the last test). Bug two is a missing parameter: the test passes <code>prefix="sweep"</code>, but <code>make_callbacks</code> had nowhere to put it, so the starter fails at the call. The fixed version forwards it into <code>partial</code> as a keyword, so each logger carries its own prefix. Keras and PyTorch Lightning callbacks are configured exactly like this, usually as small classes.</p></div></details>
+</article>
+<article class="prob" id="p-a-safe-calculator-tool-without-eval" data-pid="m3-5-a-safe-calculator-tool-without-eval" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. A safe calculator tool without eval</h3></header>
+<div class="prob-q"><p>An agent needs a calculator tool, and <code>eval</code> is not allowed. Write <code>calculate(tokens)</code> for an expression already split into tokens, numbers and the four operators, such as <code>["2", "+", "3", "*", "4"]</code>, evaluated <strong>left to right with no operator precedence</strong> (so that example gives 20). Use a dispatch table from operator symbols to functions from the <code>operator</code> module. Raise <code>ValueError</code> for an unknown operator, and <code>ZeroDivisionError</code> must propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import operator
+
+def calculate(tokens):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert calculate(["2", "+", "3", "*", "4"]) == 20
+assert calculate(["10", "/", "4"]) == 2.5
+assert calculate(["7"]) == 7
+assert calculate(["1.5", "-", "0.5", "*", "3"]) == 3.0
+assert raises(ValueError, calculate, ["2", "^", "3"])
+assert raises(ZeroDivisionError, calculate, ["1", "/", "0"])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert calculate([&quot;2&quot;, &quot;+&quot;, &quot;3&quot;, &quot;*&quot;, &quot;4&quot;]) == 20
+assert calculate([&quot;10&quot;, &quot;/&quot;, &quot;4&quot;]) == 2.5
+assert calculate([&quot;7&quot;]) == 7
+assert calculate([&quot;1.5&quot;, &quot;-&quot;, &quot;0.5&quot;, &quot;*&quot;, &quot;3&quot;]) == 3.0
+assert raises(ValueError, calculate, [&quot;2&quot;, &quot;^&quot;, &quot;3&quot;])
+assert raises(ZeroDivisionError, calculate, [&quot;1&quot;, &quot;/&quot;, &quot;0&quot;])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>OPS = {"+": operator.add, "-": operator.sub, "*": operator.mul, "/": operator.truediv}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start from the first number, then walk the rest in pairs <code>(op, number)</code>: <code>zip(tokens[1::2], tokens[2::2])</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import operator
+
+OPS = {&quot;+&quot;: operator.add, &quot;-&quot;: operator.sub, &quot;*&quot;: operator.mul, &quot;/&quot;: operator.truediv}
+
+def to_number(text):
+    return float(text) if &quot;.&quot; in text else int(text)
+
+def calculate(tokens):
+    result = to_number(tokens[0])
+    for op, text in zip(tokens[1::2], tokens[2::2]):
+        fn = OPS.get(op)
+        if fn is None:
+            raise ValueError(f&quot;unknown operator {op!r}&quot;)
+        result = fn(result, to_number(text))
+    return result</code></pre></div><p>The dispatch table maps each symbol to a real function, so the evaluator never runs arbitrary code: only the four operations in <code>OPS</code> can ever execute, which is the safety property <code>eval</code> cannot give. Supporting a new operator is one dict entry (<code>"%": operator.mod</code>). Slicing with steps pairs each operator with the number after it. Real precedence (<code>*</code> before <code>+</code>) needs a proper parser, for example one built on Python's <code>ast</code> module that walks only allowed node types, which is how safe calculator tools are usually written.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-does-functions-are-first-class-obje" data-pid="m3-5-what-does-functions-are-first-class-obje" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What does "functions are first-class objects" mean, and what does it let you do?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A function is an object like any other: it can be bound to names, stored in lists and dicts, passed as an argument, returned from another function, and given attributes. That enables higher-order functions (<code>sorted(key=...)</code>, <code>map</code>, <code>filter</code>), callbacks, factories and closures, <code>functools.partial</code>, decorators, and dispatch tables that replace long <code>if</code> chains (tool registries, metric registries, command handlers). A good answer gives one concrete example from real work, such as passing a scoring function into an evaluation loop or routing LLM tool calls through a dict.</p></div></details>
+</article>
+<article class="prob" id="p-lambda-or-def-when-do-you-use-each" data-pid="m3-5-lambda-or-def-when-do-you-use-each" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. <code>lambda</code> or <code>def</code>: when do you use each?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Both create function objects. <code>lambda</code> is limited to one expression, has no name in tracebacks (<code>&lt;lambda&gt;</code>), and cannot carry a docstring or annotations. Use it for short, obvious functions passed inline: <code>key=lambda r: r["score"]</code>, a tiny callback. Use <code>def</code> for anything with logic, anything reused, anything you would name (PEP 8 discourages assigning a lambda to a name), and anything that needs testing or documentation. Also mention the better alternatives to many lambdas: <code>operator.itemgetter</code> / <code>attrgetter</code>, <code>functools.partial</code>, bound methods like <code>str.lower</code>, and comprehensions instead of <code>map</code>/<code>filter</code> with a lambda.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-design-the-part-of-an-agen" data-pid="m3-5-how-would-you-design-the-part-of-an-agen" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How would you design the part of an agent that executes the tool calls an LLM returns?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Keep a <strong>registry</strong>: a dict from tool name to a function (often with a schema and description, generated from the function's signature and docstring, 3.1). For each tool call: look up the name (unknown name means a structured error back to the model, not a crash); validate the arguments against the schema before calling (Pydantic), returning validation errors to the model so it can retry; call the function with the validated arguments as keyword arguments; catch and report tool failures, distinguishing bad arguments from internal bugs; and log the call and result for tracing. Safety: never <code>eval</code> model output, give tools the least privilege they need, put timeouts and rate limits on external calls (3.4's limiter), and pass copies or validated objects so tools cannot change the agent's state (2.4).</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Functions are values: store them, pass them, return them. <code>f</code> is the function; <code>f()</code> is the result of calling it.</li><li><code>lambda</code> is a one-expression function for short inline uses. Anything bigger or reused deserves a <code>def</code>.</li><li><code>key=</code> functions run once per item. Tuple keys sort by several rules; <code>operator.itemgetter</code> is a fast, clear field key.</li><li><code>map</code> and <code>filter</code> are lazy and single-use. A comprehension is usually clearer; <code>reduce</code> usually has a clearer built-in.</li><li><code>functools.partial</code> fixes arguments without late-binding traps. Dispatch tables (dicts of functions) replace <code>if</code> chains and power agent tool registries.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

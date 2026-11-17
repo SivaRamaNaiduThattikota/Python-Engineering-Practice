@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3.1 · Defining and calling functions</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m3-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 3 · Functions and closures</span></div>
+  <h1>3.1 Defining and calling functions</h1>
+  <p>What <code>def</code> really does, how Python matches arguments to parameters and what its error messages mean, the missing-return bug, and the function metadata that frameworks like FastAPI read to call your code.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="def">
+<h2><span class="n">1</span>What <code>def</code> does, step by step</h2>
+<p><code>def</code> is not a declaration that exists before the program starts. It is a <strong>statement that runs</strong>, at the moment Python reaches it, like an assignment. Running it does four things, in this order:</p>
+<ul><li><strong>1. Evaluate the defaults.</strong> Every default value in the signature is computed now, once (this is the 2.4 rule about mutable defaults).</li><li><strong>2. Build a function object.</strong> It holds the compiled body (<code>__code__</code>), the defaults (<code>__defaults__</code>), the docstring (<code>__doc__</code>), the name (<code>__name__</code>) and a link to the module's global names.</li><li><strong>3. Bind the name.</strong> The function's name is pointed at that object, exactly like <code>name = object</code> (2.1).</li><li><strong>4. Do not run the body.</strong> The body runs only when the function is <strong>called</strong>, and it runs again from the top on every call.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">def_object.py</span><button class="copy">Copy</button></div><pre><code class="py">def greet(name):
+    return f&quot;Hi, {name}&quot;
+
+print(type(greet).__name__, greet.__name__)
+print(greet)                     # the object itself; nothing has run yet
+print(greet(&quot;Ana&quot;))              # calling it runs the body</code></pre><div class="out"><span class="ol">Output</span><pre>function greet
+&lt;function greet at 0x1207530&gt;
+Hi, Ana</pre></div></div>
+<p>Step 4 surprises people: an error inside the body is not found when <code>def</code> runs, only when the faulty line is actually reached during a call. A function can sit in a module for months with a typo in a branch that is rarely taken.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">body_runs_later.py</span><button class="copy">Copy</button></div><pre><code class="py">def risky(flag):
+    if flag:
+        return undefined_name + 1   # a NameError waiting to happen
+    return &quot;fine&quot;
+
+print(&quot;def ran without any error&quot;)
+print(risky(False))
+try:
+    risky(True)
+except NameError as e:
+    print(&quot;NameError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>def ran without any error
+fine
+NameError: name &#x27;undefined_name&#x27; is not defined</pre></div></div>
+<p>Because <code>def</code> is an assignment in disguise, everything from Module 2 applies to function names too. Running <code>def</code> again builds a <strong>new</strong> function object and moves the name; anything still holding the old object keeps the old code. A <code>def</code> inside a loop builds a new function on every pass. And a function cannot be called before its <code>def</code> has run.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">def_rebinds.py</span><button class="copy">Copy</button></div><pre><code class="py">def greet():
+    return &quot;v1&quot;
+
+old = greet                # another name for the same function object
+def greet():
+    return &quot;v2&quot;            # a NEW function object; the name greet moves to it
+print(old(), greet(), old is greet)
+
+made = []
+for i in range(3):
+    def step():
+        return &quot;step&quot;
+    made.append(step)
+print(len({id(f) for f in made}))   # three different function objects
+
+try:
+    later()
+except NameError as e:
+    print(&quot;NameError:&quot;, e)
+def later():
+    return &quot;too late&quot;</code></pre><div class="out"><span class="ol">Output</span><pre>v1 v2 False
+3
+NameError: name &#x27;later&#x27; is not defined</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p><code>def</code> is like <code>CREATE OR REPLACE PROCEDURE</code>: it runs when the script reaches it, and running it again replaces the definition. One difference matters: in Python, an old reference (here <code>old</code>) keeps calling the old version, while SQL always calls the current procedure by name. In notebooks this is how a stale version of a function keeps running inside a list, a dict or a callback that captured it before you edited it.</p></div></div>
+</section>
+<section class="sec" id="calls">
+<h2><span class="n">2</span>How a call fills the parameters</h2>
+<p>When you call a function, Python builds the parameter values in a fixed order. Knowing the order lets you predict any call, and read any error message, without guessing:</p>
+<ul><li><strong>1. Positional arguments</strong> fill the positional parameters from left to right. If there are more positional arguments than positional slots, the extras go into <code>*args</code> if the function has it, otherwise it is an error.</li><li><strong>2. Keyword arguments</strong> fill parameters by name. A name that was already filled in step 1 is an error ("multiple values"); a name that matches no parameter goes into <code>**kwargs</code> if there is one, otherwise it is an error ("unexpected keyword").</li><li><strong>3. Defaults</strong> fill any parameter that is still empty.</li><li><strong>4. Anything still empty</strong> is an error ("missing required argument").</li></ul>
+<p>Here is that algorithm worked through for one call to <code>embed(texts, model="small", *, batch_size=32)</code>. The <code>*</code> makes <code>batch_size</code> keyword-only: after the <code>*</code>, no positional argument can reach it (lesson 3.2 covers <code>*</code>, <code>/</code>, <code>*args</code> and <code>**kwargs</code> in depth).</p>
+<div class="tbl"><table>
+      <tr><th>Call: <code>embed(["a", "b"], batch_size=8)</code></th><th><code>texts</code></th><th><code>model</code></th><th><code>batch_size</code></th></tr>
+      <tr><td>1. positional, left to right</td><td><code>["a", "b"]</code></td><td>(empty)</td><td>(not reachable by position)</td></tr>
+      <tr><td>2. keywords, by name</td><td><code>["a", "b"]</code></td><td>(empty)</td><td><code>8</code></td></tr>
+      <tr><td>3. defaults</td><td><code>["a", "b"]</code></td><td><code>"small"</code></td><td><code>8</code></td></tr>
+      <tr><td>4. anything missing?</td><td colspan="3">no, so the body runs</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">matching.py</span><button class="copy">Copy</button></div><pre><code class="py">def embed(texts, model=&quot;small&quot;, *, batch_size=32):
+    return f&quot;{len(texts)} texts, {model}, batch {batch_size}&quot;
+
+print(embed([&quot;a&quot;, &quot;b&quot;]))
+print(embed([&quot;a&quot;], &quot;large&quot;, batch_size=8))
+print(embed(batch_size=4, texts=[&quot;x&quot;]))      # keywords can come in any order
+
+for bad in [&#x27;embed()&#x27;, &#x27;embed([&quot;a&quot;], &quot;large&quot;, 64)&#x27;, &#x27;embed([&quot;a&quot;], texts=[&quot;b&quot;])&#x27;, &#x27;embed([&quot;a&quot;], mdl=&quot;x&quot;)&#x27;]:
+    try:
+        eval(bad)
+    except TypeError as e:
+        print(f&quot;{bad:28} -&gt; {e}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>2 texts, small, batch 32
+1 texts, large, batch 8
+1 texts, small, batch 4
+embed()                      -&gt; embed() missing 1 required positional argument: &#x27;texts&#x27;
+embed([&quot;a&quot;], &quot;large&quot;, 64)    -&gt; embed() takes from 1 to 2 positional arguments but 3 were given
+embed([&quot;a&quot;], texts=[&quot;b&quot;])    -&gt; embed() got multiple values for argument &#x27;texts&#x27;
+embed([&quot;a&quot;], mdl=&quot;x&quot;)        -&gt; embed() got an unexpected keyword argument &#x27;mdl&#x27;</pre></div></div>
+<p>Each error message names the function and the exact parameter, and each one is a failed step of the algorithm: <strong>missing</strong> (step 4), <strong>takes from 1 to 2 positional arguments but 3 were given</strong> (step 1: <code>batch_size</code> cannot be filled by position), <strong>multiple values</strong> (step 2: <code>texts</code> was already filled by position) and <strong>unexpected keyword</strong> (step 2: a typo). When an LLM tool call or a framework call fails, one of these four messages is usually the whole story, so it pays to read them word by word instead of skimming.</p>
+<p>One rule is enforced even before the call runs: in the call itself, positional arguments must come before keyword arguments. <code>embed(model="large", ["a"])</code> is a <code>SyntaxError</code>, found when the code is compiled, not when it runs.</p>
+</section>
+<section class="sec" id="returns">
+<h2><span class="n">3</span>What <code>return</code> does</h2>
+<p><code>return expression</code> does three things: it evaluates the expression, <strong>ends the function immediately</strong> (no line after it in that call runs), and hands the resulting <strong>object</strong> back to the caller. Nothing is copied: the caller receives the very object the function built or was given (2.4). If the function reaches the end of its body without a <code>return</code>, or runs a bare <code>return</code>, the result is <code>None</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">return_ends.py</span><button class="copy">Copy</button></div><pre><code class="py">def first_long_word(words, n):
+    for w in words:
+        if len(w) &gt; n:
+            return w            # ends the whole function, not just the loop
+    return None                 # explicit: nothing matched
+
+print(first_long_word([&quot;rag&quot;, &quot;retrieval&quot;, &quot;embedding&quot;], 5))
+print(first_long_word([&quot;rag&quot;], 5))
+
+def no_return():
+    x = 1 + 1                   # computed, then thrown away
+
+print(no_return())</code></pre><div class="out"><span class="ol">Output</span><pre>retrieval
+None
+None</pre></div></div>
+<p>A function returns exactly <strong>one object</strong>. <code>return a, b</code> builds one tuple, and the caller can unpack it into names. That is convenient for two or three values, and it is also where the most common return bug shows up: a branch that forgets to return, so some inputs silently get <code>None</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">missing_return.py</span><button class="copy">Copy</button></div><pre><code class="py">def label(score):
+    if score &gt; 0.6:
+        return &quot;positive&quot;
+    elif score &lt; 0.4:
+        return &quot;negative&quot;
+    # no return here: scores from 0.4 to 0.6 fall off the end
+
+print(label(0.9), label(0.1), label(0.5))
+
+def bounds(xs):
+    return min(xs), max(xs)     # one tuple
+lo, hi = bounds([4, 1, 9])
+print(bounds([4, 1, 9]), lo, hi)</code></pre><div class="out"><span class="ol">Output</span><pre>positive negative None
+(1, 9) 1 9</pre></div></div>
+<p>Two habits prevent the missing-return bug. Make every path end in an explicit <code>return</code>, writing the last case as the plain fall-through (<code>return "neutral"</code>) rather than another <code>elif</code>. And use <strong>guard clauses</strong>: handle the special cases first with an early <code>return</code> or <code>raise</code>, so the main logic is not buried in nested <code>if</code>s.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">guard_clauses.py</span><button class="copy">Copy</button></div><pre><code class="py">def safe_ratio(hits, total):
+    if total &lt; 0 or hits &lt; 0:
+        raise ValueError(&quot;counts must be non-negative&quot;)
+    if total == 0:
+        return 0.0              # guard clause: special case handled first
+    return hits / total         # the main case, not nested
+
+print(safe_ratio(3, 4), safe_ratio(0, 0))</code></pre><div class="out"><span class="ol">Output</span><pre>0.75 0.0</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct"><code>print</code> is not <code>return</code></div><p>In a notebook, a function that <strong>prints</strong> its result looks exactly like one that <strong>returns</strong> it, because both show the value under the cell. But only a returned value can be stored, compared, tested or passed on. <code>total = report(rows)</code> gives <code>None</code> if <code>report</code> only printed. Library functions return; printing is for the outermost layer that talks to a person.</p></div></div>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">Choosing what to return</div><p>Return a tuple for two or three closely related values (<code>lo, hi = bounds(xs)</code>). Beyond that, callers have to remember positions, so return a dict or, better, a dataclass or <code>NamedTuple</code> with named fields (Module 11). And return the same <strong>kind</strong> of thing from every path: a function that returns a list in one branch and <code>None</code> in another forces every caller to check (problem 8).</p></div></div>
+</section>
+<section class="sec" id="metadata">
+<h2><span class="n">4</span>Docstrings, type hints and signatures</h2>
+<p>The first string in a function body is its <strong>docstring</strong>: Python stores it as <code>__doc__</code>, and <code>help(f)</code> and every editor show it. Type hints (<code>query: str</code>, <code>-&gt; list</code>) are stored in <code>__annotations__</code>. Python itself <strong>does not check them</strong> at run time; they are information for people, editors, type checkers (Module 11) and frameworks.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hints_not_enforced.py</span><button class="copy">Copy</button></div><pre><code class="py">def double(x: int) -&gt; int:
+    &quot;Return twice x.&quot;
+    return x * 2
+
+print(double.__doc__, double.__annotations__)
+print(double(21), double(&quot;ab&quot;))    # the hint says int, but nothing stops a str</code></pre><div class="out"><span class="ol">Output</span><pre>Return twice x. {&#x27;x&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: &lt;class &#x27;int&#x27;&gt;}
+42 abab</pre></div></div>
+<p><code>inspect.signature(f)</code> turns a function's parameters into objects you can examine: each parameter's name, its <strong>kind</strong> (positional, keyword-only and so on), its default and its annotation.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">signature.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+def search(query: str, k: int = 5, *, rerank: bool = False):
+    &quot;Search the index and return the top k chunks.&quot;
+    return []
+
+sig = inspect.signature(search)
+print(sig)
+for name, param in sig.parameters.items():
+    print(f&quot;{name:7} {param.kind.name:22} default={param.default!r:8} type={param.annotation.__name__}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>(query: str, k: int = 5, *, rerank: bool = False)
+query   POSITIONAL_OR_KEYWORD  default=&lt;class &#x27;inspect._empty&#x27;&gt; type=str
+k       POSITIONAL_OR_KEYWORD  default=5        type=int
+rerank  KEYWORD_ONLY           default=False    type=bool</pre></div></div>
+<p>This is exactly how <strong>FastAPI</strong> works out that <code>k</code> is an optional query parameter with default 5 that must be an int: it reads the signature of your endpoint function when you register it. Agent frameworks do the same to turn a Python function into a tool description for an LLM, using the docstring as the tool's description. Because functions are objects that describe themselves, a framework can call your code correctly without you writing any glue (problem 15).</p>
+</section>
+<section class="sec" id="recursion">
+<h2><span class="n">5</span>Recursion, step by step</h2>
+<p>A function can call itself. <strong>Recursion</strong> fits data that is nested to an unknown depth, such as JSON from an API or a document tree: handle one level, call the same function on each child, and stop at a <strong>base case</strong> that needs no further call. You already wrote two recursive functions in 2.3 (<code>freeze</code> and <code>with_override</code>).</p>
+<p>What happens on each call: Python creates a new <strong>frame</strong> (a private set of local variables) for that call and puts it on top of the <strong>call stack</strong>. The caller's frame waits underneath, paused at the call. When the inner call returns, its frame is removed and the caller continues with the result. Printing the depth makes the stack visible:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">recursion_trace.py</span><button class="copy">Copy</button></div><pre><code class="py">def depth(obj, level=0):
+    pad = &quot;  &quot; * level
+    if isinstance(obj, dict):
+        print(f&quot;{pad}dict with {len(obj)} keys&quot;)
+        result = 1 + max((depth(v, level + 1) for v in obj.values()), default=0)
+    elif isinstance(obj, list):
+        print(f&quot;{pad}list with {len(obj)} items&quot;)
+        result = 1 + max((depth(v, level + 1) for v in obj), default=0)
+    else:
+        print(f&quot;{pad}value {obj!r}&quot;)
+        result = 0              # base case: a plain value needs no further call
+    return result
+
+print(&quot;depth =&quot;, depth({&quot;a&quot;: {&quot;b&quot;: [1, 2]}, &quot;c&quot;: 3}))</code></pre><div class="out"><span class="ol">Output</span><pre>dict with 2 keys
+  dict with 1 keys
+    list with 2 items
+      value 1
+      value 2
+  value 3
+depth = 3</pre></div></div>
+<p>Each indented line is one frame deeper on the stack. The plain values are the base cases; every dict or list waits for its children and then adds 1. The <code>default=0</code> matters: an empty dict or list has no children, and <code>max</code> of nothing would otherwise raise (problem 6).</p>
+<p>Two limits come with recursion in Python. Each frame costs memory and time, and CPython caps the depth (1,000 frames by default; <code>sys.getrecursionlimit()</code> shows the value). Python also does not optimise tail calls, so even a recursion whose last action is the recursive call still uses one frame per level. A missing or unreachable base case therefore ends in a <code>RecursionError</code> rather than running forever:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">recursion_limit.py</span><button class="copy">Copy</button></div><pre><code class="py">def countdown(n):
+    if n == 0:                  # base case, but a negative start never reaches it
+        return &quot;done&quot;
+    return countdown(n - 1)
+
+print(countdown(5))
+try:
+    countdown(-1)
+except RecursionError as e:
+    print(&quot;RecursionError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>done
+RecursionError: maximum recursion depth exceeded</pre></div></div>
+<p>For very deep data, or for simple repetition, write a loop. A tree can be walked without recursion by keeping your own stack in a list, which has no depth limit:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">explicit_stack.py</span><button class="copy">Copy</button></div><pre><code class="py">def max_depth(obj):
+    best = 0
+    stack = [(obj, 0)]          # (value, depth so far): our own call stack
+    while stack:
+        value, d = stack.pop()
+        if isinstance(value, dict):
+            children = value.values()
+        elif isinstance(value, list):
+            children = value
+        else:
+            best = max(best, d)
+            continue
+        if not children:
+            best = max(best, d + 1)
+        for child in children:
+            stack.append((child, d + 1))
+    return best
+
+print(max_depth({&quot;a&quot;: {&quot;b&quot;: [1, 2]}, &quot;c&quot;: 3}), max_depth([]), max_depth(42))</code></pre><div class="out"><span class="ol">Output</span><pre>3 1 0</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A recursive Python function over a tree is the same idea as a SQL <strong>recursive CTE</strong> walking an org chart or a bill of materials: an anchor query (the base case) plus a recursive part that joins one level deeper, with a depth limit (<code>MAXRECURSION</code> in SQL Server) to stop runaway recursion.</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-redefining-a-function" data-pid="m3-1-redefining-a-function" data-type="predict" data-level="easy" data-answer="whitespace whitespace bpe
+True tokenizer">
+<header class="prob-head"><h3>1. Redefining a function</h3></header>
+<div class="code"><pre><code class="py">def tokenizer():
+    return &quot;whitespace&quot;
+
+current = tokenizer
+registry = {&quot;default&quot;: tokenizer}
+
+def tokenizer():
+    return &quot;bpe&quot;
+
+print(current(), registry[&quot;default&quot;](), tokenizer())
+print(current is registry[&quot;default&quot;], tokenizer.__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The second <code>def</code> builds a new function object and moves only the name <code>tokenizer</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>whitespace whitespace bpe
+True tokenizer</pre></div><p><code>current</code> and the registry both hold the <strong>first</strong> function object, so they still return <code>"whitespace"</code>. Only the name <code>tokenizer</code> moved to the new one. Both objects are named <code>"tokenizer"</code>, because <code>__name__</code> is set from the <code>def</code>. This is why reloading code in a notebook can leave old versions running inside registries, callbacks and caches that captured the function earlier.</p></div></details>
+</article>
+<article class="prob" id="p-scores-in-the-middle-get-none" data-pid="m3-1-scores-in-the-middle-get-none" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Scores in the middle get None</h3></header>
+<div class="prob-q"><p><code>label_sentiment</code> maps a model's probability to a label. Scores from 0.4 to 0.6 should be <code>"neutral"</code>, but they come back as <code>None</code>. Fix it so every input gets a label.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def label_sentiment(p):
+    if p &gt; 0.6:
+        return &quot;positive&quot;
+    elif p &lt; 0.4:
+        return &quot;negative&quot;
+    elif 0.4 &lt;= p &lt;= 0.6:
+        &quot;neutral&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert label_sentiment(0.9) == "positive"
+assert label_sentiment(0.1) == "negative"
+assert label_sentiment(0.5) == "neutral"
+assert label_sentiment(0.4) == "neutral" and label_sentiment(0.6) == "neutral"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert label_sentiment(0.9) == &quot;positive&quot;
+assert label_sentiment(0.1) == &quot;negative&quot;
+assert label_sentiment(0.5) == &quot;neutral&quot;
+assert label_sentiment(0.4) == &quot;neutral&quot; and label_sentiment(0.6) == &quot;neutral&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last branch computes a string and throws it away. What is missing?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Once <code>p &gt; 0.6</code> and <code>p &lt; 0.4</code> are ruled out, does the last case need a condition at all?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def label_sentiment(p):
+    if p &gt; 0.6:
+        return &quot;positive&quot;
+    if p &lt; 0.4:
+        return &quot;negative&quot;
+    return &quot;neutral&quot;</code></pre></div><p><code>"neutral"</code> on its own is an expression statement: it is computed and discarded, and the function falls off the end, returning <code>None</code>. Writing the last case as a plain <code>return "neutral"</code> both fixes the bug and removes a condition that could only drift out of sync with the others. A <code>None</code> label is a nasty ML bug, because it often survives until a metric silently counts it as a wrong class.</p></div></details>
+</article>
+<article class="prob" id="p-reading-call-errors" data-pid="m3-1-reading-call-errors" data-type="predict" data-level="easy" data-answer="2
+TypeError: rerank() takes from 2 to 3 positional arguments but 4 were given
+TypeError: rerank() got multiple values for argument &#x27;query&#x27;
+TypeError: rerank() missing 1 required positional argument: &#x27;docs&#x27;">
+<header class="prob-head"><h3>3. Reading call errors</h3></header>
+<div class="code"><pre><code class="py">def rerank(query, docs, top_n=3, *, model=&quot;cross-encoder&quot;):
+    return len(docs[:top_n])
+
+calls = [
+    &#x27;rerank(&quot;q&quot;, [&quot;a&quot;, &quot;b&quot;])&#x27;,
+    &#x27;rerank(&quot;q&quot;, [&quot;a&quot;, &quot;b&quot;], 1, &quot;other&quot;)&#x27;,
+    &#x27;rerank(&quot;q&quot;, docs=[&quot;a&quot;], query=&quot;q2&quot;)&#x27;,
+    &#x27;rerank(&quot;q&quot;)&#x27;,
+]
+for c in calls:
+    try:
+        print(eval(c))
+    except TypeError as e:
+        print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count the positional arguments each call gives, and remember <code>model</code> can only be given by name.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2
+TypeError: rerank() takes from 2 to 3 positional arguments but 4 were given
+TypeError: rerank() got multiple values for argument &#x27;query&#x27;
+TypeError: rerank() missing 1 required positional argument: &#x27;docs&#x27;</pre></div><p>The first call works. The second passes four positional arguments, but only three parameters accept positions, because <code>model</code> is keyword-only. The third gives <code>query</code> twice: once by position and once by name. The fourth is missing the required <code>docs</code>. These exact messages are what you see when an LLM produces wrong arguments for a tool, so learning to read them pays off.</p></div></details>
+</article>
+<article class="prob" id="p-parse-a-score-from-llm-output" data-pid="m3-1-parse-a-score-from-llm-output" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>4. Parse a score from LLM output</h3></header>
+<div class="prob-q"><p>An LLM was told to answer in the form <code>label: &lt;word&gt;, confidence: &lt;number&gt;</code>. Write <code>parse_label(text)</code> that returns a tuple <code>(label, confidence)</code> with the label lower-cased and the confidence as a float. Extra spaces anywhere must be tolerated.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def parse_label(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_label("label: Positive, confidence: 0.82") == ("positive", 0.82)
+assert parse_label("  label:negative ,confidence:  0.3 ") == ("negative", 0.3)
+lab, conf = parse_label("label: neutral, confidence: 1")
+assert lab == "neutral" and conf == 1.0 and isinstance(conf, float)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_label(&quot;label: Positive, confidence: 0.82&quot;) == (&quot;positive&quot;, 0.82)
+assert parse_label(&quot;  label:negative ,confidence:  0.3 &quot;) == (&quot;negative&quot;, 0.3)
+lab, conf = parse_label(&quot;label: neutral, confidence: 1&quot;)
+assert lab == &quot;neutral&quot; and conf == 1.0 and isinstance(conf, float)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Split on the comma first, then split each part on the colon and <code>strip()</code> the pieces.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_label(text):
+    label_part, conf_part = text.split(&quot;,&quot;)
+    label = label_part.split(&quot;:&quot;)[1].strip().lower()
+    confidence = float(conf_part.split(&quot;:&quot;)[1].strip())
+    return label, confidence</code></pre></div><p>Returning a tuple lets callers unpack it in one line, <code>lab, conf = parse_label(...)</code>, which is the right size for two related values. Unpacking <code>label_part, conf_part = ...</code> also acts as a check: text with no comma, or two commas, raises <code>ValueError</code> instead of producing garbage. Real LLM output drifts from the requested format, which is why production code asks for JSON or uses structured-output features and validates the result (Module 11), but small parsers like this are everywhere.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-chunk-text-with-overlap-and-reject-bad-s" data-pid="m3-1-chunk-text-with-overlap-and-reject-bad-s" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>5. Chunk text with overlap, and reject bad settings</h3></header>
+<div class="prob-q"><p>Write <code>chunk_words(text, size, overlap=0)</code> that splits text into chunks of <code>size</code> words, where each chunk starts <code>size - overlap</code> words after the previous one, and the last chunk may be shorter. Use guard clauses: raise <code>ValueError</code> if <code>size &lt; 1</code>, if <code>overlap &lt; 0</code>, or if <code>overlap &gt;= size</code>. Empty text gives <code>[]</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def chunk_words(text, size, overlap=0):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+t = "a b c d e f g"
+assert chunk_words(t, 3) == ["a b c", "d e f", "g"]
+assert chunk_words(t, 3, 1) == ["a b c", "c d e", "e f g"]
+assert chunk_words("", 3) == []
+assert chunk_words("a b", 5) == ["a b"]
+assert raises(ValueError, chunk_words, t, 3, 3)
+assert raises(ValueError, chunk_words, t, 0)
+assert raises(ValueError, chunk_words, t, 3, -1)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+t = &quot;a b c d e f g&quot;
+assert chunk_words(t, 3) == [&quot;a b c&quot;, &quot;d e f&quot;, &quot;g&quot;]
+assert chunk_words(t, 3, 1) == [&quot;a b c&quot;, &quot;c d e&quot;, &quot;e f g&quot;]
+assert chunk_words(&quot;&quot;, 3) == []
+assert chunk_words(&quot;a b&quot;, 5) == [&quot;a b&quot;]
+assert raises(ValueError, chunk_words, t, 3, 3)
+assert raises(ValueError, chunk_words, t, 0)
+assert raises(ValueError, chunk_words, t, 3, -1)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The start positions are <code>range(0, len(words), step)</code> with <code>step = size - overlap</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Stop once a chunk reaches the last word, or the overlap case produces a final chunk that is only overlap.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if overlap &lt; 0 or overlap &gt;= size:
+        raise ValueError(&quot;overlap must be between 0 and size - 1&quot;)
+    words = text.split()
+    step = size - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(&quot; &quot;.join(words[start:start + size]))
+        if start + size &gt;= len(words):
+            break
+    return chunks</code></pre></div><p>The guard clauses turn settings that would loop forever (<code>overlap == size</code> means a step of 0, and <code>range</code> rejects a step of 0 with its own unclear error) or make no sense into clear errors at the top, before any work. The <code>break</code> is the subtle part: without it, the overlap example would produce a fourth chunk <code>"g"</code> that is entirely overlap with the previous one, which wastes an embedding call and adds a duplicate result to retrieval. Real chunkers (for example in LangChain or LlamaIndex) count tokens rather than words, but follow the same structure.</p></div></details>
+</article>
+<article class="prob" id="p-the-depth-of-an-empty-object" data-pid="m3-1-the-depth-of-an-empty-object" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. The depth of an empty object</h3></header>
+<div class="prob-q"><p><code>depth</code> measures how deeply nested a JSON value is: plain values have depth 0, and each dict or list adds one. It crashes on empty dicts and lists. Fix it without special-casing every caller.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def depth(obj):
+    if isinstance(obj, (dict, list)):
+        children = obj.values() if isinstance(obj, dict) else obj
+        return 1 + max(depth(c) for c in children)
+    return 0
+</textarea>
+<script type="text/plain" class="prob-tests">assert depth(5) == 0
+assert depth({"a": 1}) == 1
+assert depth({"a": {"b": [1, 2]}}) == 3
+assert depth({}) == 1 and depth([]) == 1
+assert depth({"a": [], "b": {"c": {}}}) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert depth(5) == 0
+assert depth({&quot;a&quot;: 1}) == 1
+assert depth({&quot;a&quot;: {&quot;b&quot;: [1, 2]}}) == 3
+assert depth({}) == 1 and depth([]) == 1
+assert depth({&quot;a&quot;: [], &quot;b&quot;: {&quot;c&quot;: {}}}) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>max()</code> do with an empty sequence? Check its <code>default</code> parameter.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def depth(obj):
+    if isinstance(obj, (dict, list)):
+        children = obj.values() if isinstance(obj, dict) else obj
+        return 1 + max((depth(c) for c in children), default=0)
+    return 0</code></pre></div><p><code>max()</code> of an empty iterable raises <code>ValueError: max() iterable argument is empty</code>, and a recursive function meets empty containers constantly, at every leaf of real JSON. <code>default=0</code> says "an empty container has no deeper children". Recursive functions need their base cases to cover <strong>every</strong> kind of leaf, and empty containers are the one people forget.</p></div></details>
+</article>
+<article class="prob" id="p-one-function-one-job" data-pid="m3-1-one-function-one-job" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>7. One function, one job</h3></header>
+<div class="prob-q"><p>This function validates scores, computes statistics and formats a report, all in one block. Split it so each job is its own small function, with <code>report</code> calling them. Behaviour must stay the same. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def report(name, scores):
+    if not scores:
+        raise ValueError(&quot;no scores&quot;)
+    for s in scores:
+        if s &lt; 0 or s &gt; 1:
+            raise ValueError(f&quot;bad score {s}&quot;)
+    total = 0
+    for s in scores:
+        total += s
+    mean = total / len(scores)
+    best = scores[0]
+    for s in scores:
+        if s &gt; best:
+            best = s
+    return f&quot;{name}: mean {mean:.2f}, best {best:.2f}, n={len(scores)}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert report("recall@5", [0.5, 0.75, 1.0]) == "recall@5: mean 0.75, best 1.00, n=3"
+assert raises(ValueError, report, "x", [])
+assert raises(ValueError, report, "x", [0.2, 1.5])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert report(&quot;recall@5&quot;, [0.5, 0.75, 1.0]) == &quot;recall@5: mean 0.75, best 1.00, n=3&quot;
+assert raises(ValueError, report, &quot;x&quot;, [])
+assert raises(ValueError, report, &quot;x&quot;, [0.2, 1.5])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Three jobs: <code>validate_scores(scores)</code>, <code>summarise(scores)</code> returning <code>(mean, best, n)</code>, and <code>report</code> that formats.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def validate_scores(scores):
+    if not scores:
+        raise ValueError(&quot;no scores&quot;)
+    for s in scores:
+        if not 0 &lt;= s &lt;= 1:
+            raise ValueError(f&quot;bad score {s}&quot;)
+
+
+def summarise(scores):
+    return sum(scores) / len(scores), max(scores), len(scores)
+
+
+def report(name, scores):
+    validate_scores(scores)
+    mean, best, n = summarise(scores)
+    return f&quot;{name}: mean {mean:.2f}, best {best:.2f}, n={n}&quot;</code></pre></div><p>Each small function now has one reason to change and can be tested and reused alone: <code>summarise</code> can feed a dashboard, <code>validate_scores</code> can guard other metrics. The loops became <code>sum</code> and <code>max</code>, and the range check became a chained comparison (1.1). Splitting is worth it when the pieces have names that explain them; a function you can only name <code>step2</code> is usually not a real job.</p></div></details>
+</article>
+<article class="prob" id="p-unpacking-a-result-that-can-be-none" data-pid="m3-1-unpacking-a-result-that-can-be-none" data-type="predict" data-level="medium" data-answer="2 9 5.0
+None
+TypeError: cannot unpack non-iterable NoneType object">
+<header class="prob-head"><h3>8. Unpacking a result that can be None</h3></header>
+<div class="code"><pre><code class="py">def stats(xs):
+    if not xs:
+        return None
+    return min(xs), max(xs), sum(xs) / len(xs)
+
+lo, hi, avg = stats([2, 4, 9])
+print(lo, hi, round(avg, 2))
+print(stats([]))
+try:
+    lo, hi, avg = stats([])
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What happens when you try to unpack <code>None</code> into three names?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2 9 5.0
+None
+TypeError: cannot unpack non-iterable NoneType object</pre></div><p>For real data the tuple unpacks fine. For an empty list the function returns <code>None</code>, and unpacking <code>None</code> raises <code>TypeError: cannot unpack non-iterable NoneType object</code>, far away from the cause. Returning different kinds of things from different paths pushes a check onto every caller. Alternatives: raise <code>ValueError</code> for empty input, or return a value of the same shape such as <code>(None, None, None)</code>, and document the choice.</p></div></details>
+</article>
+<article class="prob" id="p-a-helper-function-inside-a-hot-loop" data-pid="m3-1-a-helper-function-inside-a-hot-loop" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>9. A helper function inside a hot loop</h3></header>
+<div class="prob-q"><p>Both sum the squares of a million numbers. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">xs = list(range(1_000_000))
+def square(x):
+    return x * x</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">total = sum(square(x) for x in xs)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">total = sum(x * x for x in xs)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What extra work does every <code>square(x)</code> add, a million times over?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>349.55 ms</td></tr><tr><td>B</td><td>272.95 ms</td></tr></table></div><p>Each Python function call has a fixed cost: building a frame, binding the argument, returning. In A that cost is paid a million times for a one-multiplication body. B does the multiplication inline. Recent Pythons have made calls much cheaper, but not free. This is no reason to avoid functions in general (clarity wins almost everywhere), but in a tight loop over big data it is why numpy's whole-array operations (<code>(arr ** 2).sum()</code>) beat any per-item Python function by a wide margin.</p></div></details>
+</article>
+<article class="prob" id="p-build-chat-messages-with-keyword-only-op" data-pid="m3-1-build-chat-messages-with-keyword-only-op" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Build chat messages with keyword-only options</h3></header>
+<div class="prob-q"><p>Write <code>build_messages(question, *, system=None, history=(), context=None)</code> that returns a new list of chat messages in this order: an optional system message, the history messages, then the user message. If <code>context</code> is given, the user message content is <code>"Context:\n{context}\n\nQuestion: {question}"</code>, otherwise just the question. <code>history</code> must not be changed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def build_messages(question, *, system=None, history=(), context=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">h = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello!"}]
+out = build_messages("Refund time?", system="Be brief.", history=h, context="Refunds take 5 days.")
+assert out[0] == {"role": "system", "content": "Be brief."}
+assert out[1:3] == h and len(h) == 2
+assert out[3] == {"role": "user", "content": "Context:\nRefunds take 5 days.\n\nQuestion: Refund time?"}
+assert build_messages("Hi") == [{"role": "user", "content": "Hi"}]
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert raises(TypeError, build_messages, "Hi", "Be brief.")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">h = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Hello!&quot;}]
+out = build_messages(&quot;Refund time?&quot;, system=&quot;Be brief.&quot;, history=h, context=&quot;Refunds take 5 days.&quot;)
+assert out[0] == {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}
+assert out[1:3] == h and len(h) == 2
+assert out[3] == {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Context:\nRefunds take 5 days.\n\nQuestion: Refund time?&quot;}
+assert build_messages(&quot;Hi&quot;) == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hi&quot;}]
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert raises(TypeError, build_messages, &quot;Hi&quot;, &quot;Be brief.&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start with an empty list, add the parts in order, return it. <code>list(history)</code> makes a new list from the history.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last test passes <code>system</code> by position. The <code>*</code> in the signature is what makes that a <code>TypeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def build_messages(question, *, system=None, history=(), context=None):
+    messages = []
+    if system is not None:
+        messages.append({&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system})
+    messages.extend(history)
+    content = f&quot;Context:\n{context}\n\nQuestion: {question}&quot; if context is not None else question
+    messages.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: content})
+    return messages</code></pre></div><p>Keyword-only options make calls readable (<code>build_messages(q, context=c)</code>) and protect against mistakes: with three optional parameters, a positional call like <code>build_messages(q, "Be brief.")</code> would silently put a system prompt where history belongs. <code>history=()</code> is an immutable default (2.4), and <code>extend</code> copies the history's messages into a <strong>new</strong> list, so the caller's list is never changed. Checking <code>is not None</code> (not truthiness) means an empty-string system prompt is still sent, which is the caller's choice to make.</p></div></details>
+</article>
+<article class="prob" id="p-exponential-backoff-for-api-retries" data-pid="m3-1-exponential-backoff-for-api-retries" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Exponential backoff for API retries</h3></header>
+<div class="prob-q"><p>Write <code>backoff_delays(attempts, *, base=0.5, factor=2.0, cap=8.0)</code> that returns the list of wait times before each retry: <code>base</code>, <code>base * factor</code>, <code>base * factor ** 2</code>, and so on, each limited to <code>cap</code>. <code>attempts</code> is the number of retries; 0 gives <code>[]</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def backoff_delays(attempts, *, base=0.5, factor=2.0, cap=8.0):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert backoff_delays(6) == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
+assert backoff_delays(0) == []
+assert backoff_delays(3, base=1, factor=3, cap=5) == [1, 3, 5]
+assert backoff_delays(2, cap=0.2) == [0.2, 0.2]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert backoff_delays(6) == [0.5, 1.0, 2.0, 4.0, 8.0, 8.0]
+assert backoff_delays(0) == []
+assert backoff_delays(3, base=1, factor=3, cap=5) == [1, 3, 5]
+assert backoff_delays(2, cap=0.2) == [0.2, 0.2]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One comprehension: <code>min(cap, base * factor ** i)</code> for each <code>i</code> in <code>range(attempts)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def backoff_delays(attempts, *, base=0.5, factor=2.0, cap=8.0):
+    return [min(cap, base * factor ** i) for i in range(attempts)]</code></pre></div><p>Waiting longer after each failure stops your client from hammering an API that is already overloaded, and the cap keeps the wait from growing without limit. The tuning knobs are keyword-only with sensible defaults, so the usual call is just <code>backoff_delays(5)</code>. Real clients also add random <strong>jitter</strong> (<code>random.uniform(0, delay)</code>) so that many clients that failed at the same moment do not all retry at the same moment; libraries such as <code>tenacity</code> and the OpenAI and Anthropic SDKs do this for you.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-flatten-nested-json-into-columns" data-pid="m3-1-flatten-nested-json-into-columns" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Flatten nested JSON into columns</h3></header>
+<div class="prob-q"><p>LLM extraction returns nested JSON, but the report needs flat columns. Write <code>flatten(obj, prefix="")</code> that returns a dict from dotted paths to plain values: dict keys join with <code>.</code>, list positions become numbers. Empty dicts and lists produce no columns.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def flatten(obj, prefix=&quot;&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">data = {"id": 7, "customer": {"name": "Ana", "tier": "gold"}, "items": [{"sku": "A1", "qty": 2}, {"sku": "B2", "qty": 1}], "notes": []}
+assert flatten(data) == {
+    "id": 7, "customer.name": "Ana", "customer.tier": "gold",
+    "items.0.sku": "A1", "items.0.qty": 2, "items.1.sku": "B2", "items.1.qty": 1,
+}
+assert flatten(5) == {"": 5}
+assert flatten({"a": None}) == {"a": None}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = {&quot;id&quot;: 7, &quot;customer&quot;: {&quot;name&quot;: &quot;Ana&quot;, &quot;tier&quot;: &quot;gold&quot;}, &quot;items&quot;: [{&quot;sku&quot;: &quot;A1&quot;, &quot;qty&quot;: 2}, {&quot;sku&quot;: &quot;B2&quot;, &quot;qty&quot;: 1}], &quot;notes&quot;: []}
+assert flatten(data) == {
+    &quot;id&quot;: 7, &quot;customer.name&quot;: &quot;Ana&quot;, &quot;customer.tier&quot;: &quot;gold&quot;,
+    &quot;items.0.sku&quot;: &quot;A1&quot;, &quot;items.0.qty&quot;: 2, &quot;items.1.sku&quot;: &quot;B2&quot;, &quot;items.1.qty&quot;: 1,
+}
+assert flatten(5) == {&quot;&quot;: 5}
+assert flatten({&quot;a&quot;: None}) == {&quot;a&quot;: None}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Recursive case: for each key (or index) and child, call <code>flatten(child, new_prefix)</code> and merge the result.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build <code>new_prefix</code> as <code>f"{prefix}.{key}"</code> when <code>prefix</code> is not empty, otherwise just <code>str(key)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def flatten(obj, prefix=&quot;&quot;):
+    if isinstance(obj, dict):
+        pairs = obj.items()
+    elif isinstance(obj, list):
+        pairs = enumerate(obj)
+    else:
+        return {prefix: obj}
+    out = {}
+    for key, child in pairs:
+        path = f&quot;{prefix}.{key}&quot; if prefix else str(key)
+        out.update(flatten(child, path))
+    return out</code></pre></div><p>The function has one base case (a plain value becomes one column) and one recursive case that treats dicts and lists the same way by turning both into <code>(key, child)</code> pairs. That unification is what keeps it short. The default <code>prefix=""</code> is immutable and safe (2.4), and empty containers produce no pairs, so no columns. pandas has this built in as <code>pd.json_normalize</code>, which flattens dicts but keeps lists as values by default; knowing how to write it yourself helps when you need a different rule.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-evaluation-that-stops-e" data-pid="m3-1-read-the-code-an-evaluation-that-stops-e" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Read the code: an evaluation that stops early</h3></header>
+<div class="prob-q"><p>This scores an LLM's answers against gold answers for an evaluation run. It reports 100% accuracy on sets the model obviously gets wrong, and crashes on an empty set. Read the whole function, find both bugs, and fix them so it returns <code>{"accuracy": ..., "errors": [...]}</code> for any input.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def normalise(answer):
+    return &quot; &quot;.join(answer.lower().split())
+
+
+def evaluate(predictions, gold):
+    if len(predictions) != len(gold):
+        raise ValueError(&quot;predictions and gold differ in length&quot;)
+    correct = 0
+    errors = []
+    for i, (pred, ref) in enumerate(zip(predictions, gold)):
+        if normalise(pred) == normalise(ref):
+            correct += 1
+        else:
+            errors.append(i)
+        return {&quot;accuracy&quot;: correct / len(gold), &quot;errors&quot;: errors}
+</textarea>
+<script type="text/plain" class="prob-tests">r = evaluate(["Paris", "4", " Blue  whale "], ["paris", "5", "blue whale"])
+assert r == {"accuracy": 2 / 3, "errors": [1]}
+assert evaluate(["x"], ["y"]) == {"accuracy": 0.0, "errors": [0]}
+assert evaluate([], []) == {"accuracy": 0.0, "errors": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = evaluate([&quot;Paris&quot;, &quot;4&quot;, &quot; Blue  whale &quot;], [&quot;paris&quot;, &quot;5&quot;, &quot;blue whale&quot;])
+assert r == {&quot;accuracy&quot;: 2 / 3, &quot;errors&quot;: [1]}
+assert evaluate([&quot;x&quot;], [&quot;y&quot;]) == {&quot;accuracy&quot;: 0.0, &quot;errors&quot;: [0]}
+assert evaluate([], []) == {&quot;accuracy&quot;: 0.0, &quot;errors&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look at the indentation of the <code>return</code>. How many items does the loop really check?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the lists are empty, the loop body never runs. What does the function return then, and what would the division do?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def normalise(answer):
+    return &quot; &quot;.join(answer.lower().split())
+
+
+def evaluate(predictions, gold):
+    if len(predictions) != len(gold):
+        raise ValueError(&quot;predictions and gold differ in length&quot;)
+    if not gold:
+        return {&quot;accuracy&quot;: 0.0, &quot;errors&quot;: []}
+    correct = 0
+    errors = []
+    for i, (pred, ref) in enumerate(zip(predictions, gold)):
+        if normalise(pred) == normalise(ref):
+            correct += 1
+        else:
+            errors.append(i)
+    return {&quot;accuracy&quot;: correct / len(gold), &quot;errors&quot;: errors}</code></pre></div><p>The <code>return</code> is indented inside the loop, so the function returns after the <strong>first</strong> item: if that one is correct, the "accuracy" is <code>1 / len(gold)</code> at best, and here the first answer matched, so the reported number depended only on item 0. With an empty set the loop never runs, the function falls off the end and returns <code>None</code>; after moving the <code>return</code> out, it would divide by zero instead. The guard clause handles the empty case explicitly. An evaluation that looks better than reality is the most dangerous kind of bug in ML work, because nobody goes looking for it.</p></div></details>
+</article>
+<article class="prob" id="p-what-a-function-object-knows" data-pid="m3-1-what-a-function-object-knows" data-type="predict" data-level="hard" data-answer="score | Add three numbers.
+(2,) {&#x27;c&#x27;: 3}
+(&#x27;a&#x27;, &#x27;b&#x27;)
+14">
+<header class="prob-head"><h3>14. What a function object knows</h3></header>
+<div class="code"><pre><code class="py">def score(a, b=2, *, c=3):
+    &quot;Add three numbers.&quot;
+    return a + b + c
+
+print(score.__name__, &quot;|&quot;, score.__doc__)
+print(score.__defaults__, score.__kwdefaults__)
+print(score.__code__.co_varnames[:score.__code__.co_argcount])
+score.__defaults__ = (10,)
+print(score(1))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Positional defaults and keyword-only defaults are stored separately.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__defaults__</code> can be replaced. The next call uses whatever it holds.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>score | Add three numbers.
+(2,) {&#x27;c&#x27;: 3}
+(&#x27;a&#x27;, &#x27;b&#x27;)
+14</pre></div><p><code>__defaults__</code> holds positional defaults, <code>__kwdefaults__</code> the keyword-only ones. <code>co_argcount</code> counts the positional parameters (<code>a</code> and <code>b</code>, not the keyword-only <code>c</code>). Replacing <code>__defaults__</code> changes the default of <code>b</code> for every later call, so <code>score(1)</code> is <code>1 + 10 + 3</code>. That shows again that defaults are data stored on the function object (2.4), not something re-read from the source. You should never patch defaults in real code, but this is exactly the information tools read to describe a function.</p></div></details>
+</article>
+<article class="prob" id="p-call-a-tool-with-only-the-arguments-it-a" data-pid="m3-1-call-a-tool-with-only-the-arguments-it-a" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Call a tool with only the arguments it accepts</h3></header>
+<div class="prob-q"><p>LLMs often add extra fields when they call a tool. Write <code>call_with(fn, data)</code> that calls <code>fn</code> using only the keys of the dict <code>data</code> that match <code>fn</code>'s parameter names, passed as keyword arguments, and ignores the rest. If <code>fn</code> accepts <code>**kwargs</code>, pass everything. Missing required arguments must still raise <code>TypeError</code>, the normal Python way.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import inspect
+
+def call_with(fn, data):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+def search(query, k=5):
+    return f"{query}:{k}"
+assert call_with(search, {"query": "refunds", "k": 3, "reason": "the user asked"}) == "refunds:3"
+assert call_with(search, {"query": "refunds"}) == "refunds:5"
+assert raises(TypeError, call_with, search, {"k": 3})
+def log_all(**fields):
+    return sorted(fields)
+assert call_with(log_all, {"a": 1, "b": 2}) == ["a", "b"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+def search(query, k=5):
+    return f&quot;{query}:{k}&quot;
+assert call_with(search, {&quot;query&quot;: &quot;refunds&quot;, &quot;k&quot;: 3, &quot;reason&quot;: &quot;the user asked&quot;}) == &quot;refunds:3&quot;
+assert call_with(search, {&quot;query&quot;: &quot;refunds&quot;}) == &quot;refunds:5&quot;
+assert raises(TypeError, call_with, search, {&quot;k&quot;: 3})
+def log_all(**fields):
+    return sorted(fields)
+assert call_with(log_all, {&quot;a&quot;: 1, &quot;b&quot;: 2}) == [&quot;a&quot;, &quot;b&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>inspect.signature(fn).parameters</code> maps names to parameter objects. A parameter's <code>.kind</code> tells you whether it is <code>VAR_KEYWORD</code> (<code>**kwargs</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a key if its name is in the parameters. Then call <code>fn(**kept)</code> and let Python raise for anything missing.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+def call_with(fn, data):
+    params = inspect.signature(fn).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return fn(**data)
+    kept = {k: v for k, v in data.items() if k in params}
+    return fn(**kept)</code></pre></div><p>The signature is read from the function object itself, so the same <code>call_with</code> works for any tool without a list of allowed fields. Filtering extra keys tolerates harmless LLM noise (a <code>"reason"</code> field), while a missing required argument still fails loudly, because the call itself is a normal Python call. This is a simplified version of what FastAPI does for request parameters and what agent frameworks do for tools. Real versions also validate types from the annotations (Pydantic), and should <strong>log</strong> dropped keys, since a dropped key can also be a misspelled real argument.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-does-a-function-return-without-a-re" data-pid="m3-1-what-does-a-function-return-without-a-re" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What does a function return without a <code>return</code> statement, and how does that cause bugs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It returns <code>None</code>, and so does a bare <code>return</code>. Bugs come from paths that forget to return: an <code>if/elif</code> chain without a final <code>return</code>, an expression written where a <code>return</code> was meant, or a <code>return</code> indented inside a loop so it exits early. The <code>None</code> then travels far from its cause and fails later, as <code>TypeError: cannot unpack non-iterable NoneType object</code> or a silently wrong metric. Prevent it by ending every function with an explicit return for the default case, using guard clauses, returning the same kind of value on every path, and letting a type checker (mypy, pyright) flag <code>Optional</code> results that are not checked (Module 11).</p></div></details>
+</article>
+<article class="prob" id="p-recursion-or-a-loop-in-python-how-do-you" data-pid="m3-1-recursion-or-a-loop-in-python-how-do-you" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Recursion or a loop in Python: how do you choose?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Recursion is natural for nested or tree-shaped data of moderate depth: JSON documents, file trees, parse trees, divide-and-conquer algorithms. But CPython limits recursion depth (1,000 by default), does not optimise tail calls, and every call has overhead, so deep recursion raises <code>RecursionError</code> and long recursions are slower than loops. Use a loop for linear repetition, and an explicit stack (a list you push and pop) to walk very deep trees iteratively. Mention that <code>sys.setrecursionlimit</code> exists but only moves the problem, and that <code>functools.cache</code> makes recursive solutions with repeated subproblems fast (dynamic programming, Module 16).</p></div></details>
+</article>
+<article class="prob" id="p-how-does-a-framework-like-fastapi-know-w" data-pid="m3-1-how-does-a-framework-like-fastapi-know-w" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How does a framework like FastAPI know which query parameters your endpoint takes?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Functions are objects that describe themselves. When you register an endpoint, FastAPI calls <code>inspect.signature</code> on your function and reads each parameter's name, its default, and its type annotation. A parameter with a default becomes an optional query parameter, one without becomes required, and the annotation (for example <code>int</code> or a Pydantic model) tells it how to parse and validate the incoming value, which also generates the OpenAPI docs. Nothing runs your function until a request arrives. Mention that the same idea powers agent tools: the signature and docstring of a Python function become the JSON schema the LLM sees, which is why docstrings and type hints matter in GenAI code.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>def</code> runs: it builds a function object and binds the name. Old references keep the old function.</li><li>Arguments fill parameters by position, then by name, then from defaults. The four <code>TypeError</code> messages (missing, too many, multiple values, unexpected) tell you exactly which rule broke.</li><li>Every path should end in an explicit <code>return</code>. Use guard clauses, and return the same kind of value from every path.</li><li>Function objects carry their docstring, defaults and signature. FastAPI and agent frameworks read them to call your code.</li><li>Recursion suits nested data of moderate depth: cover every base case (including empty containers), and use a loop for deep or long repetition.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

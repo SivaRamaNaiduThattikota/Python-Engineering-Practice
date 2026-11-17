@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3.2 · Flexible arguments</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m3-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 3 · Functions and closures</span></div>
+  <h1>3.2 Flexible arguments</h1>
+  <p><code>*args</code>, <code>**kwargs</code>, keyword-only and positional-only parameters, and unpacking at the call site: what each one does step by step, why they exist, and the real bugs they cause and prevent in LLM clients, wrappers and config code.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 8 medium · 6 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="kinds">
+<h2><span class="n">1</span>The five kinds of parameters</h2>
+<p>A signature can contain up to five kinds of parameters, always in this order. Each kind answers one question: <strong>how may a caller pass this value?</strong></p>
+<div class="tbl"><table>
+      <tr><th>Kind</th><th>Written as</th><th>By position?</th><th>By name?</th><th>Typical use</th></tr>
+      <tr><td>positional-only</td><td>before <code>/</code></td><td>yes</td><td>no</td><td>names that must stay free, or may change later</td></tr>
+      <tr><td>positional-or-keyword</td><td>plain <code>x</code></td><td>yes</td><td>yes</td><td>the normal case</td></tr>
+      <tr><td>var-positional</td><td><code>*args</code></td><td>collects extras</td><td>no</td><td>any number of values</td></tr>
+      <tr><td>keyword-only</td><td>after <code>*</code> or <code>*args</code></td><td>no</td><td>yes</td><td>options and flags</td></tr>
+      <tr><td>var-keyword</td><td><code>**kwargs</code></td><td>no</td><td>collects extras</td><td>options passed through to other code</td></tr>
+    </table></div>
+<p>Here is one signature using all five, so you can see the order rule in action. It is the shape of a small database helper: the SQL text first, optional parameters, any extra statements, a timeout that must be named, and driver options passed through untouched:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">five_kinds.py</span><button class="copy">Copy</button></div><pre><code class="py">def run_query(sql, /, params=None, *more_sql, timeout=30, **driver_opts):
+    return {&quot;sql&quot;: sql, &quot;params&quot;: params, &quot;more_sql&quot;: more_sql,
+            &quot;timeout&quot;: timeout, &quot;driver_opts&quot;: driver_opts}
+
+print(run_query(&quot;SELECT 1&quot;))
+print(run_query(&quot;SELECT 1&quot;, {&quot;id&quot;: 7}, &quot;SELECT 2&quot;, timeout=5, fetch_size=500))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;sql&#x27;: &#x27;SELECT 1&#x27;, &#x27;params&#x27;: None, &#x27;more_sql&#x27;: (), &#x27;timeout&#x27;: 30, &#x27;driver_opts&#x27;: {}}
+{&#x27;sql&#x27;: &#x27;SELECT 1&#x27;, &#x27;params&#x27;: {&#x27;id&#x27;: 7}, &#x27;more_sql&#x27;: (&#x27;SELECT 2&#x27;,), &#x27;timeout&#x27;: 5, &#x27;driver_opts&#x27;: {&#x27;fetch_size&#x27;: 500}}</pre></div></div>
+<p>Walk through the second call with the algorithm from 3.1. Positional arguments fill left to right: <code>"SELECT 1"</code> goes to <code>sql</code>, <code>{"id": 7}</code> to <code>params</code>, and <code>"SELECT 2"</code>, the extra one, is collected into the tuple <code>more_sql</code>. Then keywords by name: <code>timeout=5</code> fills the keyword-only <code>timeout</code>, and <code>fetch_size=500</code> matches no parameter, so it is collected into the dict <code>driver_opts</code>. Anything after <code>*more_sql</code> can only be reached by name, which is why <code>timeout</code> is safe from being filled by accident. In practice you rarely use all five in one function, but every signature you meet in a library is some subset of this table.</p>
+</section>
+<section class="sec" id="args">
+<h2><span class="n">2</span><code>*args</code>: collecting extra positional arguments</h2>
+<p>A parameter written <code>*name</code> (by convention <code>*args</code>) collects every positional argument that no earlier parameter took. Step by step, on every call Python builds a <strong>new tuple</strong> from the leftover positional arguments and binds the name to it. With no leftovers it is the empty tuple <code>()</code>, never <code>None</code>. Being a tuple, it cannot be changed, but its items are the caller's own objects (2.4).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">star_args.py</span><button class="copy">Copy</button></div><pre><code class="py">def merge_tags(*tag_lists):
+    print(&quot;received:&quot;, tag_lists)
+    merged = []
+    for tags in tag_lists:
+        for t in tags:
+            if t not in merged:
+                merged.append(t)
+    return merged
+
+print(merge_tags([&quot;faq&quot;, &quot;billing&quot;], [&quot;billing&quot;, &quot;eu&quot;], [&quot;faq&quot;]))
+print(merge_tags())
+groups = [[&quot;a&quot;], [&quot;b&quot;, &quot;a&quot;]]
+print(merge_tags(groups))      # one argument: a list of lists
+print(merge_tags(*groups))     # spread: two arguments</code></pre><div class="out"><span class="ol">Output</span><pre>received: ([&#x27;faq&#x27;, &#x27;billing&#x27;], [&#x27;billing&#x27;, &#x27;eu&#x27;], [&#x27;faq&#x27;])
+[&#x27;faq&#x27;, &#x27;billing&#x27;, &#x27;eu&#x27;]
+received: ()
+[]
+received: ([[&#x27;a&#x27;], [&#x27;b&#x27;, &#x27;a&#x27;]],)
+[[&#x27;a&#x27;], [&#x27;b&#x27;, &#x27;a&#x27;]]
+received: ([&#x27;a&#x27;], [&#x27;b&#x27;, &#x27;a&#x27;])
+[&#x27;a&#x27;, &#x27;b&#x27;]</pre></div></div>
+<p>The last two calls show the most common <code>*args</code> mistake. <code>merge_tags(groups)</code> passes <strong>one</strong> argument, a list that contains lists, so <code>tag_lists</code> is a tuple holding that one list and the loop sees the inner lists as "tags". <code>merge_tags(*groups)</code> <strong>spreads</strong> the list, so each inner list becomes its own argument. When a function takes <code>*args</code> and you already have the values in a list, you almost always want the <code>*</code> at the call.</p>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">When <code>*args</code> is the right design</div><p>Use <code>*args</code> when "any number of the same kind of thing" is the natural way to call the function: <code>print(a, b, c)</code>, <code>max(x, y, z)</code>, <code>os.path.join("a", "b", "c")</code>, <code>merge_tags(t1, t2)</code>. If callers will usually have a list already, take the list as one normal parameter instead. It is simpler, and it does not copy a large list into a tuple on every call (problem 8).</p></div></div>
+</section>
+<section class="sec" id="kwargs">
+<h2><span class="n">3</span><code>**kwargs</code>: collecting extra keyword arguments</h2>
+<p>A parameter written <code>**name</code> (by convention <code>**kwargs</code>) collects every keyword argument that did not match a named parameter. On each call Python builds a <strong>new dict</strong> from those leftovers, with the keys in the order the caller wrote them, and binds the name to it. With no leftovers it is an empty dict. Because it is a new dict, the function may add or remove keys freely without affecting the caller; the values are still the caller's objects.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">star_kwargs.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_request(prompt, **params):
+    params.setdefault(&quot;temperature&quot;, 0.2)     # changes only this call&#x27;s dict
+    return {&quot;prompt&quot;: prompt, **params}
+
+settings = {&quot;max_tokens&quot;: 256, &quot;stop&quot;: [&quot;###&quot;]}
+print(make_request(&quot;hi&quot;))
+print(make_request(&quot;hi&quot;, **settings, top_p=0.9))
+print(settings)                               # untouched: params was a new dict</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;prompt&#x27;: &#x27;hi&#x27;, &#x27;temperature&#x27;: 0.2}
+{&#x27;prompt&#x27;: &#x27;hi&#x27;, &#x27;max_tokens&#x27;: 256, &#x27;stop&#x27;: [&#x27;###&#x27;], &#x27;top_p&#x27;: 0.9, &#x27;temperature&#x27;: 0.2}
+{&#x27;max_tokens&#x27;: 256, &#x27;stop&#x27;: [&#x27;###&#x27;]}</pre></div></div>
+<p>Two rules limit what can go into <code>**kwargs</code>. Keys must be <strong>strings</strong>, because they become parameter names. And a key can never be the name of another parameter of the same function, because then it would not be "extra": Python would try to give that parameter two values. The second rule causes a real bug, shown in the next section.</p>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">The cost of <code>**kwargs</code></div><p><code>**kwargs</code> makes a function accept anything, which also means typos are accepted silently: <code>make_request("hi", temprature=0.9)</code> sends a misspelled key to the API instead of failing in your code. Use it where you truly pass options through to other code (an SDK, a driver, a model constructor). For your own options, prefer named keyword-only parameters, which catch typos at the call.</p></div></div>
+</section>
+<section class="sec" id="markers">
+<h2><span class="n">4</span>Why <code>*</code> and <code>/</code> exist</h2>
+<p>A bare <code>*</code> in a signature collects nothing: it only marks every parameter after it as <strong>keyword-only</strong>. The main reason is the <strong>boolean trap</strong>. A call like <code>train(X, y, True, False)</code> is unreadable, and swapping the two booleans changes behaviour without any error. With keyword-only flags, the call must say <code>train(X, y, normalize=True, verbose=False)</code>, and the positional version fails immediately.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">keyword_only.py</span><button class="copy">Copy</button></div><pre><code class="py">def train(X, y, *, normalize=True, verbose=False):
+    return f&quot;normalize={normalize}, verbose={verbose}&quot;
+
+print(train([[1]], [0], verbose=True))
+try:
+    train([[1]], [0], True, False)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>normalize=True, verbose=True
+TypeError: train() takes 2 positional arguments but 4 were given</pre></div></div>
+<p>A <code>/</code> marks every parameter <strong>before</strong> it as <strong>positional-only</strong>: callers cannot use its name. That sounds like a restriction, but it solves a real problem: a function with <code>**kwargs</code> cannot accept a key that is also the name of one of its parameters. Step by step: Python fills <code>name</code> from the first positional argument, then meets the keyword <code>name=...</code> from the dict and tries to fill <code>name</code> again, which is the "multiple values" error. Making <code>name</code> positional-only takes it out of the keyword namespace, so <code>**fields</code> can receive a <code>name</code> key.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">positional_only.py</span><button class="copy">Copy</button></div><pre><code class="py">def tag_v1(name, **fields):
+    return name, fields
+
+def tag_v2(name, /, **fields):       # name can only be passed by position
+    return name, fields
+
+row = {&quot;name&quot;: &quot;Ana&quot;, &quot;tier&quot;: &quot;gold&quot;}
+try:
+    tag_v1(&quot;customer&quot;, **row)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(tag_v2(&quot;customer&quot;, **row))</code></pre><div class="out"><span class="ol">Output</span><pre>TypeError: tag_v1() got multiple values for argument &#x27;name&#x27;
+(&#x27;customer&#x27;, {&#x27;name&#x27;: &#x27;Ana&#x27;, &#x27;tier&#x27;: &#x27;gold&#x27;})</pre></div></div>
+<p>Positional-only parameters also let a library rename a parameter later without breaking anyone, because no caller can have used the name. Many built-ins are positional-only for that reason: you cannot write <code>len(obj=x)</code>.</p>
+</section>
+<section class="sec" id="unpacking">
+<h2><span class="n">5</span>Unpacking at the call site</h2>
+<p>The same symbols work in the opposite direction in a <strong>call</strong>. <code>f(*seq)</code> spreads any iterable into separate positional arguments; <code>f(**mapping)</code> spreads a dict into keyword arguments. You can use several of each, mixed with normal arguments, and Python processes them left to right with the same matching algorithm as always.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">unpacking.py</span><button class="copy">Copy</button></div><pre><code class="py">def connect(host, port, *, user, timeout=10):
+    return f&quot;{user}@{host}:{port} (timeout {timeout})&quot;
+
+addr = [&quot;db.local&quot;, 1521]
+base = {&quot;user&quot;: &quot;etl&quot;}
+print(connect(*addr, **base))
+print(connect(*addr, **base, timeout=3))
+
+defaults = {&quot;user&quot;: &quot;etl&quot;, &quot;timeout&quot;: 10}
+override = {&quot;timeout&quot;: 3}
+try:
+    connect(*addr, **defaults, **override)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(connect(*addr, **(defaults | override)))</code></pre><div class="out"><span class="ol">Output</span><pre>etl@db.local:1521 (timeout 10)
+etl@db.local:1521 (timeout 3)
+TypeError: __main__.connect() got multiple values for keyword argument &#x27;timeout&#x27;
+etl@db.local:1521 (timeout 3)</pre></div></div>
+<p>The <code>TypeError</code> is worth understanding. In a <strong>call</strong>, <code>**defaults, **override</code> are spread one after the other, and each key becomes a keyword argument; a key that appears in both is the same keyword given twice, which Python refuses with "got multiple values for keyword argument". In a <strong>dict display</strong>, <code>{**defaults, **override}</code> (or <code>defaults | override</code>), a repeated key is allowed and the later value wins. So when you mean "defaults, then overrides", merge first into one dict and spread that dict once.</p>
+</section>
+<section class="sec" id="forwarding">
+<h2><span class="n">6</span>Forwarding: wrappers that accept anything</h2>
+<p>Collecting and spreading combine into the <strong>forwarding</strong> pattern: accept <code>*args, **kwargs</code> and pass them on unchanged with <code>fn(*args, **kwargs)</code>. A wrapper written this way works for any function, whatever its signature, which is how retry helpers, timers, caches, loggers and decorators (Module 7) are built.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">forwarding.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+
+def timed(fn, *args, **kwargs):
+    start = time.perf_counter()
+    result = fn(*args, **kwargs)         # forward exactly what was given
+    elapsed = time.perf_counter() - start
+    print(f&quot;{fn.__name__} took {&#x27;under&#x27; if elapsed &lt; 0.1 else &#x27;over&#x27;} 0.1 s&quot;)
+    return result
+
+def embed(texts, *, model=&quot;small&quot;):
+    return [len(t) for t in texts]
+
+print(timed(embed, [&quot;a&quot;, &quot;bcd&quot;], model=&quot;large&quot;))
+print(timed(sorted, [3, 1, 2], reverse=True))</code></pre><div class="out"><span class="ol">Output</span><pre>embed took under 0.1 s
+[1, 3]
+sorted took under 0.1 s
+[3, 2, 1]</pre></div></div>
+<p>Forwarding has two costs to know about. First, a parameter of the wrapper itself (here <code>fn</code>) can collide with a keyword the wrapped function needs: <code>timed(f, fn=3)</code> gives <code>timed</code> two values for <code>fn</code>. Making the wrapper's own parameters positional-only (<code>def timed(fn, /, *args, **kwargs)</code>) avoids that. Second, <code>*args, **kwargs</code> hides the real signature from editors, type checkers and frameworks that read signatures (3.1). Decorators fix the second problem with <code>functools.wraps</code> (Module 7), and type checkers with <code>ParamSpec</code> (Module 11).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-which-calls-work" data-pid="m3-2-which-calls-work" data-type="predict" data-level="easy" data-answer="Q1 | None | () | 30 | {}
+Q1 | None | (&#x27;Q2&#x27;, &#x27;Q3&#x27;) | 30 | {}
+Q1 | None | () | 5 | {&#x27;retries&#x27;: 2}
+TypeError: run_query() missing 1 required positional argument: &#x27;sql&#x27;
+Q1 | {&#x27;a&#x27;: 1} | (60,) | 30 | {}">
+<header class="prob-head"><h3>1. Which calls work?</h3></header>
+<div class="code"><pre><code class="py">def run_query(sql, /, params=None, *more_sql, timeout=30, **opts):
+    return f&quot;{sql} | {params} | {more_sql} | {timeout} | {opts}&quot;
+
+calls = [
+    &#x27;run_query(&quot;Q1&quot;)&#x27;,
+    &#x27;run_query(&quot;Q1&quot;, None, &quot;Q2&quot;, &quot;Q3&quot;)&#x27;,
+    &#x27;run_query(&quot;Q1&quot;, timeout=5, retries=2)&#x27;,
+    &#x27;run_query(sql=&quot;Q1&quot;)&#x27;,
+    &#x27;run_query(&quot;Q1&quot;, {&quot;a&quot;: 1}, 60)&#x27;,
+]
+for c in calls:
+    try:
+        print(eval(c))
+    except TypeError as e:
+        print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use the table: which parameters can be filled by position, and which only by name?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the last call, can <code>60</code> reach <code>timeout</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Q1 | None | () | 30 | {}
+Q1 | None | (&#x27;Q2&#x27;, &#x27;Q3&#x27;) | 30 | {}
+Q1 | None | () | 5 | {&#x27;retries&#x27;: 2}
+TypeError: run_query() missing 1 required positional argument: &#x27;sql&#x27;
+Q1 | {&#x27;a&#x27;: 1} | (60,) | 30 | {}</pre></div><p>Call 2 puts <code>"Q2"</code> and <code>"Q3"</code> into the tuple <code>more_sql</code>. Call 3 fills the keyword-only <code>timeout</code> and collects <code>retries</code> into <code>opts</code>. Call 4 fails because <code>sql</code> is positional-only, so <code>sql=</code> is not allowed; in fact the keyword is not even treated as an error for <code>sql</code> but collected into <code>**opts</code>, and then <code>sql</code> is reported missing. Call 5 is the trap: <code>60</code> is a positional argument, so it lands in <code>more_sql</code>, not in <code>timeout</code>, and the timeout silently stays 30. That is exactly why options like <code>timeout</code> should sit after the <code>*</code>: by position they can never be reached.</p></div></details>
+</article>
+<article class="prob" id="p-merge-any-number-of-tag-lists" data-pid="m3-2-merge-any-number-of-tag-lists" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Merge any number of tag lists</h3></header>
+<div class="prob-q"><p>Write <code>merge_tags(*tag_lists)</code> that takes any number of tag lists and returns one list of the distinct tags, lower-cased, in first-seen order. With no arguments it returns <code>[]</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def merge_tags(*tag_lists):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert merge_tags(["FAQ", "billing"], ["Billing", "eu"], ["faq"]) == ["faq", "billing", "eu"]
+assert merge_tags() == []
+assert merge_tags(["x"]) == ["x"]
+groups = [["a"], ["b", "A"]]
+assert merge_tags(*groups) == ["a", "b"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert merge_tags([&quot;FAQ&quot;, &quot;billing&quot;], [&quot;Billing&quot;, &quot;eu&quot;], [&quot;faq&quot;]) == [&quot;faq&quot;, &quot;billing&quot;, &quot;eu&quot;]
+assert merge_tags() == []
+assert merge_tags([&quot;x&quot;]) == [&quot;x&quot;]
+groups = [[&quot;a&quot;], [&quot;b&quot;, &quot;A&quot;]]
+assert merge_tags(*groups) == [&quot;a&quot;, &quot;b&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop over <code>tag_lists</code> (a tuple of lists), then over each list. A <code>dict.fromkeys</code> keeps first-seen order (2.2).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def merge_tags(*tag_lists):
+    return list(dict.fromkeys(t.lower() for tags in tag_lists for t in tags))</code></pre></div><p><code>*tag_lists</code> arrives as a tuple of the lists, so the nested comprehension reads "each tag in each list". <code>dict.fromkeys</code> removes repeats while keeping first-seen order, in one pass. The last test is the call-site side: with the lists already in <code>groups</code>, <code>merge_tags(*groups)</code> spreads them into separate arguments.</p></div></details>
+</article>
+<article class="prob" id="p-flags-that-can-be-swapped" data-pid="m3-2-flags-that-can-be-swapped" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. Flags that can be swapped</h3></header>
+<div class="prob-q"><p>Someone called <code>fit(X, y, False, True)</code> meaning "verbose, no normalisation", and silently got the opposite. Change the signature so the two flags can only be passed by name. The tests pass them by keyword and check that passing them by position is now an error.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def fit(X, y, normalize=True, verbose=False):
+    return {&quot;normalize&quot;: normalize, &quot;verbose&quot;: verbose, &quot;n&quot;: len(X)}
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert fit([[1], [2]], [0, 1]) == {"normalize": True, "verbose": False, "n": 2}
+assert fit([[1]], [0], verbose=True) == {"normalize": True, "verbose": True, "n": 1}
+assert raises(TypeError, fit, [[1]], [0], False, True)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert fit([[1], [2]], [0, 1]) == {&quot;normalize&quot;: True, &quot;verbose&quot;: False, &quot;n&quot;: 2}
+assert fit([[1]], [0], verbose=True) == {&quot;normalize&quot;: True, &quot;verbose&quot;: True, &quot;n&quot;: 1}
+assert raises(TypeError, fit, [[1]], [0], False, True)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One character in the signature is enough.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def fit(X, y, *, normalize=True, verbose=False):
+    return {&quot;normalize&quot;: normalize, &quot;verbose&quot;: verbose, &quot;n&quot;: len(X)}</code></pre></div><p>The bare <code>*</code> makes everything after it keyword-only, so <code>fit(X, y, False, True)</code> now raises <code>TypeError: fit() takes 2 positional arguments but 4 were given</code> instead of silently doing the wrong thing. scikit-learn made this change across its whole API (most estimator options became keyword-only in version 1.0) for exactly this reason. Changing a released function like this can break callers, so libraries announce it first.</p></div></details>
+</article>
+<article class="prob" id="p-what-args-and-kwargs-look-like-inside" data-pid="m3-2-what-args-and-kwargs-look-like-inside" data-type="predict" data-level="easy" data-answer="args=() kwargs={}
+args=([1, 2], {&#x27;sep&#x27;: &#x27;-&#x27;}) kwargs={}
+args=(1, 2) kwargs={&#x27;sep&#x27;: &#x27;-&#x27;}
+args=(1, 2, [1, 2]) kwargs={&#x27;x&#x27;: None, &#x27;sep&#x27;: &#x27;-&#x27;}">
+<header class="prob-head"><h3>4. What <code>*args</code> and <code>**kwargs</code> look like inside</h3></header>
+<div class="code"><pre><code class="py">def show(*args, **kwargs):
+    return f&quot;args={args} kwargs={kwargs}&quot;
+
+nums = [1, 2]
+opts = {&quot;sep&quot;: &quot;-&quot;}
+print(show())
+print(show(nums, opts))
+print(show(*nums, **opts))
+print(show(*nums, nums, x=None, **opts))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>*</code> or <code>**</code> at the call, a list or dict is just one ordinary argument.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>args=() kwargs={}
+args=([1, 2], {&#x27;sep&#x27;: &#x27;-&#x27;}) kwargs={}
+args=(1, 2) kwargs={&#x27;sep&#x27;: &#x27;-&#x27;}
+args=(1, 2, [1, 2]) kwargs={&#x27;x&#x27;: None, &#x27;sep&#x27;: &#x27;-&#x27;}</pre></div><p>With no arguments, <code>args</code> is <code>()</code> and <code>kwargs</code> is <code>{}</code>. <code>show(nums, opts)</code> passes two ordinary arguments, so both end up in the tuple and <code>kwargs</code> stays empty. Spreading changes everything: <code>*nums</code> becomes <code>1, 2</code> and <code>**opts</code> becomes <code>sep="-"</code>. Spreads and normal arguments mix freely, and are taken in the order written.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-defaults-plus-overrides-crash-the-call" data-pid="m3-2-defaults-plus-overrides-crash-the-call" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Defaults plus overrides crash the call</h3></header>
+<div class="prob-q"><p><code>run</code> sends a prompt with the base settings plus any overrides. With no overrides it works, but overriding a base setting crashes. Fix it so overrides win.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">BASE = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+
+def send(**params):
+    return params
+
+def run(prompt, **overrides):
+    return send(prompt=prompt, **BASE, **overrides)
+</textarea>
+<script type="text/plain" class="prob-tests">assert run("hi") == {"prompt": "hi", "model": "small", "temperature": 0.2}
+assert run("hi", temperature=0.9) == {"prompt": "hi", "model": "small", "temperature": 0.9}
+assert run("hi", model="large", stop=["###"]) == {"prompt": "hi", "model": "large", "temperature": 0.2, "stop": ["###"]}
+assert BASE == {"model": "small", "temperature": 0.2}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert run(&quot;hi&quot;) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+assert run(&quot;hi&quot;, temperature=0.9) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.9}
+assert run(&quot;hi&quot;, model=&quot;large&quot;, stop=[&quot;###&quot;]) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;model&quot;: &quot;large&quot;, &quot;temperature&quot;: 0.2, &quot;stop&quot;: [&quot;###&quot;]}
+assert BASE == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In a call, the same keyword twice is an error. In a dict display, the later key wins.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">BASE = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+
+def send(**params):
+    return params
+
+def run(prompt, **overrides):
+    return send(prompt=prompt, **(BASE | overrides))</code></pre></div><p><code>send(**BASE, **overrides)</code> spreads two dicts as keyword arguments, and a key in both is the same keyword twice: <code>TypeError: ... got multiple values for keyword argument 'temperature'</code>. <code>BASE | overrides</code> merges first, with the override winning, and the merged dict is spread once. This bug often hides until someone overrides a setting the base already has, which may be weeks after the code was written.</p></div></details>
+</article>
+<article class="prob" id="p-a-hyperparameter-grid-from-keyword-argum" data-pid="m3-2-a-hyperparameter-grid-from-keyword-argum" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A hyperparameter grid from keyword arguments</h3></header>
+<div class="prob-q"><p>Write <code>grid(**options)</code> where each keyword holds a list of values to try. Return a list of dicts, one per combination, with keys in the order they were passed and the <strong>last</strong> option changing fastest. <code>grid(lr=[0.1, 0.01], depth=[3, 5])</code> gives four dicts. With no options, return <code>[{}]</code> (one empty combination).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import itertools
+
+def grid(**options):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert grid(lr=[0.1, 0.01], depth=[3, 5]) == [
+    {"lr": 0.1, "depth": 3}, {"lr": 0.1, "depth": 5}, {"lr": 0.01, "depth": 3}, {"lr": 0.01, "depth": 5}]
+assert grid() == [{}]
+assert grid(k=[5]) == [{"k": 5}]
+assert len(grid(a=[1, 2, 3], b=[1, 2], c=[1, 2])) == 12</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert grid(lr=[0.1, 0.01], depth=[3, 5]) == [
+    {&quot;lr&quot;: 0.1, &quot;depth&quot;: 3}, {&quot;lr&quot;: 0.1, &quot;depth&quot;: 5}, {&quot;lr&quot;: 0.01, &quot;depth&quot;: 3}, {&quot;lr&quot;: 0.01, &quot;depth&quot;: 5}]
+assert grid() == [{}]
+assert grid(k=[5]) == [{&quot;k&quot;: 5}]
+assert len(grid(a=[1, 2, 3], b=[1, 2], c=[1, 2])) == 12</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>options.keys()</code> keeps the order the caller wrote. <code>itertools.product(*options.values())</code> gives every combination as a tuple.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict(zip(keys, combo))</code> turns one tuple back into a dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import itertools
+
+def grid(**options):
+    keys = list(options)
+    return [dict(zip(keys, combo)) for combo in itertools.product(*options.values())]</code></pre></div><p>Two things from this lesson meet here. <code>**options</code> keeps keyword order, so the keys come out in the order the caller wrote them. And <code>itertools.product(*options.values())</code> <strong>spreads</strong> the lists into separate arguments, because <code>product</code> takes each iterable as its own argument (<code>product([0.1, 0.01], [3, 5])</code>). With no options, <code>product()</code> yields one empty tuple, which correctly becomes <code>[{}]</code>. This is the core of scikit-learn's <code>ParameterGrid</code>; for large spaces you would return a generator instead of a list (Module 6) or sample randomly.</p></div></details>
+</article>
+<article class="prob" id="p-a-field-called-name" data-pid="m3-2-a-field-called-name" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A field called <code>name</code></h3></header>
+<div class="prob-q"><p><code>make_node(label, **fields)</code> builds a graph node from a database row. It crashes for rows that have a <code>label</code> column. Fix it so any column name works, including <code>label</code>, without changing how it is called.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def make_node(label, **fields):
+    return {&quot;label&quot;: label, &quot;fields&quot;: fields}
+</textarea>
+<script type="text/plain" class="prob-tests">row = {"id": 7, "label": "VIP", "name": "Ana"}
+assert make_node("customer", **row) == {"label": "customer", "fields": {"id": 7, "label": "VIP", "name": "Ana"}}
+assert make_node("product") == {"label": "product", "fields": {}}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">row = {&quot;id&quot;: 7, &quot;label&quot;: &quot;VIP&quot;, &quot;name&quot;: &quot;Ana&quot;}
+assert make_node(&quot;customer&quot;, **row) == {&quot;label&quot;: &quot;customer&quot;, &quot;fields&quot;: {&quot;id&quot;: 7, &quot;label&quot;: &quot;VIP&quot;, &quot;name&quot;: &quot;Ana&quot;}}
+assert make_node(&quot;product&quot;) == {&quot;label&quot;: &quot;product&quot;, &quot;fields&quot;: {}}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Python tries to give the parameter <code>label</code> two values: one by position, one from the <code>label</code> key.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which marker takes a parameter's name out of the keyword namespace?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_node(label, /, **fields):
+    return {&quot;label&quot;: label, &quot;fields&quot;: fields}</code></pre></div><p>Without <code>/</code>, the <code>label</code> key in <code>**row</code> is matched to the parameter <code>label</code>, which already has a value from the first positional argument: "got multiple values for argument 'label'". The <code>/</code> makes <code>label</code> positional-only, so a keyword named <code>label</code> is not a match for it any more and simply lands in <code>fields</code>. This is the textbook reason positional-only parameters were added (PEP 570): functions that accept arbitrary keyword data need their own parameter names to stay out of the way.</p></div></details>
+</article>
+<article class="prob" id="p-spreading-a-big-list-into-args" data-pid="m3-2-spreading-a-big-list-into-args" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Spreading a big list into <code>*args</code></h3></header>
+<div class="prob-q"><p>Both functions return the first item. Which call is faster for a million items?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">big = list(range(1_000_000))
+def first_star(*xs):
+    return xs[0]
+def first_list(xs):
+    return xs[0]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">x = first_star(*big)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">x = first_list(big)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python have to build to call a function that takes <code>*xs</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>15.00 ms</td></tr><tr><td>B</td><td>0.11 µs</td></tr></table></div><p>Calling <code>first_star(*big)</code> spreads a million values into positional arguments, and the function then collects them into a brand-new tuple: a full copy of a million references on every call. <code>first_list(big)</code> passes one reference to the existing list (2.4). Use <code>*args</code> for a handful of values given by hand, and a normal parameter when callers already have a collection.</p></div></details>
+</article>
+<article class="prob" id="p-retry-any-function-forwarding-its-argume" data-pid="m3-2-retry-any-function-forwarding-its-argume" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Retry any function, forwarding its arguments</h3></header>
+<div class="prob-q"><p>Write <code>with_retry(fn, /, *args, attempts=3, retry_on=(ValueError,), **kwargs)</code> that calls <code>fn(*args, **kwargs)</code>, retries when it raises one of the <code>retry_on</code> exceptions, and re-raises the last error after <code>attempts</code> failures. It must work for any function signature, including functions with their own <code>fn</code> or <code>attempts</code>-free keywords.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def with_retry(fn, /, *args, attempts=3, retry_on=(ValueError,), **kwargs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args, **kw):
+    try:
+        f(*args, **kw)
+    except exc:
+        return True
+    return False
+def flaky_factory(fails):
+    state = {"left": fails}
+    def fn(text, *, fn="label"):
+        if state["left"]:
+            state["left"] -= 1
+            raise ValueError("bad JSON from model")
+        return f"{fn}:{text}"
+    return fn
+assert with_retry(flaky_factory(2), "hi") == "label:hi"
+assert with_retry(flaky_factory(0), "hi", fn="tag") == "tag:hi"
+assert raises(ValueError, with_retry, flaky_factory(5), "hi", attempts=2)
+assert raises(KeyError, with_retry, lambda: {}["x"])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args, **kw):
+    try:
+        f(*args, **kw)
+    except exc:
+        return True
+    return False
+def flaky_factory(fails):
+    state = {&quot;left&quot;: fails}
+    def fn(text, *, fn=&quot;label&quot;):
+        if state[&quot;left&quot;]:
+            state[&quot;left&quot;] -= 1
+            raise ValueError(&quot;bad JSON from model&quot;)
+        return f&quot;{fn}:{text}&quot;
+    return fn
+assert with_retry(flaky_factory(2), &quot;hi&quot;) == &quot;label:hi&quot;
+assert with_retry(flaky_factory(0), &quot;hi&quot;, fn=&quot;tag&quot;) == &quot;tag:hi&quot;
+assert raises(ValueError, with_retry, flaky_factory(5), &quot;hi&quot;, attempts=2)
+assert raises(KeyError, with_retry, lambda: {}[&quot;x&quot;])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop <code>attempts</code> times; <code>return fn(*args, **kwargs)</code> inside <code>try</code>, and remember the last exception in the <code>except</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only catch <code>retry_on</code>: any other error should escape at once. <code>except retry_on as e:</code> works with a tuple.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def with_retry(fn, /, *args, attempts=3, retry_on=(ValueError,), **kwargs):
+    last = None
+    for _ in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except retry_on as e:
+            last = e
+    raise last</code></pre></div><p>The signature does the hard work. <code>fn</code> is positional-only, so the wrapped function can have its own keyword called <code>fn</code> (the second test) and it is forwarded instead of colliding. <code>attempts</code> and <code>retry_on</code> sit after <code>*args</code>, so they are keyword-only and can never swallow one of the wrapped function's positional arguments. Everything else is forwarded untouched with <code>fn(*args, **kwargs)</code>. The remaining collision is real: a wrapped function that itself needs a keyword named <code>attempts</code> cannot get it through this wrapper, which is why libraries like <code>tenacity</code> configure retries in a decorator instead of in the call.</p></div></details>
+</article>
+<article class="prob" id="p-build-a-payload-without-repeating-every-" data-pid="m3-2-build-a-payload-without-repeating-every-" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Build a payload without repeating every option</h3></header>
+<div class="prob-q"><p>This builds an API payload, leaving out options that were not set. It works, but each option is handled by its own <code>if</code>. Keep the same named parameters (callers and editors rely on them), and remove the repetition. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def make_payload(prompt, temperature=None, top_p=None, max_tokens=None, stop=None):
+    payload = {&quot;prompt&quot;: prompt}
+    if temperature is not None:
+        payload[&quot;temperature&quot;] = temperature
+    if top_p is not None:
+        payload[&quot;top_p&quot;] = top_p
+    if max_tokens is not None:
+        payload[&quot;max_tokens&quot;] = max_tokens
+    if stop is not None:
+        payload[&quot;stop&quot;] = stop
+    return payload
+</textarea>
+<script type="text/plain" class="prob-tests">assert make_payload("hi") == {"prompt": "hi"}
+assert make_payload("hi", temperature=0, stop=["###"]) == {"prompt": "hi", "temperature": 0, "stop": ["###"]}
+assert list(make_payload("hi", max_tokens=5, top_p=0.9)) == ["prompt", "top_p", "max_tokens"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert make_payload(&quot;hi&quot;) == {&quot;prompt&quot;: &quot;hi&quot;}
+assert make_payload(&quot;hi&quot;, temperature=0, stop=[&quot;###&quot;]) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;temperature&quot;: 0, &quot;stop&quot;: [&quot;###&quot;]}
+assert list(make_payload(&quot;hi&quot;, max_tokens=5, top_p=0.9)) == [&quot;prompt&quot;, &quot;top_p&quot;, &quot;max_tokens&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Put the options in one dict with <code>dict(temperature=temperature, ...)</code>, then keep the ones that are not <code>None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_payload(prompt, temperature=None, top_p=None, max_tokens=None, stop=None):
+    options = dict(temperature=temperature, top_p=top_p, max_tokens=max_tokens, stop=stop)
+    return {&quot;prompt&quot;: prompt, **{k: v for k, v in options.items() if v is not None}}</code></pre></div><p>The named parameters stay, so typos like <code>temprature=</code> still fail at the call and editors still show the options. Only the repetitive body changed: one dict, one filter with <code>is not None</code> (so <code>temperature=0</code> is kept), one spread. Replacing the signature with <code>**params</code> would be shorter but would lose that safety, which is the trade-off from this lesson. The last test checks the key order, which comes from the order of the <code>dict(...)</code> call.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-repeated-keys-dicts-versus-calls" data-pid="m3-2-repeated-keys-dicts-versus-calls" data-type="predict" data-level="hard" data-answer="{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+TypeError: __main__.f() got multiple values for keyword argument &#x27;x&#x27;
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+TypeError: keywords must be strings">
+<header class="prob-head"><h3>11. Repeated keys: dicts versus calls</h3></header>
+<div class="code"><pre><code class="py">def f(**kw):
+    return kw
+
+a = {&quot;x&quot;: 1}
+b = {&quot;x&quot;: 2, &quot;y&quot;: 3}
+print({**a, **b})
+print(f(**{**a, **b}))
+try:
+    f(**a, **b)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(dict(a, **b))
+try:
+    f(**{1: &quot;one&quot;})
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A dict display allows a repeated key (the last wins); a call does not allow a repeated keyword.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keyword argument names must be strings.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+TypeError: __main__.f() got multiple values for keyword argument &#x27;x&#x27;
+{&#x27;x&#x27;: 2, &#x27;y&#x27;: 3}
+TypeError: keywords must be strings</pre></div><p>In the dict display the later <code>"x"</code> wins. Spreading the merged dict once is a normal call. Spreading the two dicts separately gives <code>x</code> twice, which a call refuses. <code>dict(a, **b)</code> is allowed because <code>a</code> is a positional argument (the starting mapping) and only <code>b</code> is spread, so <code>x</code> is given once as a keyword and overrides the copy. Finally, <code>**{1: "one"}</code> fails because keyword names must be strings. Every one of these appears in real config code.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-tracing-wrapper-that-lea" data-pid="m3-2-read-the-code-a-tracing-wrapper-that-lea" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: a tracing wrapper that leaks a key</h3></header>
+<div class="prob-q"><p><code>traced</code> wraps LLM client functions to log every call. It has two problems: the wrapped functions receive the wrong arguments, and the log lines contain the raw API key, which is a security incident waiting to happen. Fix both. The key must still reach the wrapped function; only the log must hide it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">LOG = []
+SECRET_KEYS = {&quot;api_key&quot;, &quot;authorization&quot;}
+
+
+def traced(fn, /, *args, **kwargs):
+    LOG.append(f&quot;call {fn.__name__} args={args} kwargs={kwargs}&quot;)
+    result = fn(args, kwargs)
+    LOG.append(f&quot;done {fn.__name__}&quot;)
+    return result
+
+
+def complete(prompt, *, model=&quot;small&quot;, api_key):
+    return f&quot;{model} answered {prompt!r} (key ends {api_key[-4:]})&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">out = traced(complete, "hi", model="large", api_key="sk-test-1234")
+assert out == "large answered 'hi' (key ends 1234)"
+assert "sk-test-1234" not in " ".join(LOG)
+assert "'api_key': '***'" in LOG[0] and "'model': 'large'" in LOG[0]
+assert LOG[-1] == "done complete"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">out = traced(complete, &quot;hi&quot;, model=&quot;large&quot;, api_key=&quot;sk-test-1234&quot;)
+assert out == &quot;large answered &#x27;hi&#x27; (key ends 1234)&quot;
+assert &quot;sk-test-1234&quot; not in &quot; &quot;.join(LOG)
+assert &quot;&#x27;api_key&#x27;: &#x27;***&#x27;&quot; in LOG[0] and &quot;&#x27;model&#x27;: &#x27;large&#x27;&quot; in LOG[0]
+assert LOG[-1] == &quot;done complete&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fn(args, kwargs)</code> passes two arguments: a tuple and a dict. How do you spread them instead?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a separate, redacted copy of <code>kwargs</code> for the log line. Do not change <code>kwargs</code> itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">LOG = []
+SECRET_KEYS = {&quot;api_key&quot;, &quot;authorization&quot;}
+
+
+def traced(fn, /, *args, **kwargs):
+    shown = {k: (&quot;***&quot; if k in SECRET_KEYS else v) for k, v in kwargs.items()}
+    LOG.append(f&quot;call {fn.__name__} args={args} kwargs={shown}&quot;)
+    result = fn(*args, **kwargs)
+    LOG.append(f&quot;done {fn.__name__}&quot;)
+    return result
+
+
+def complete(prompt, *, model=&quot;small&quot;, api_key):
+    return f&quot;{model} answered {prompt!r} (key ends {api_key[-4:]})&quot;</code></pre></div><p><code>fn(args, kwargs)</code> passes the tuple as the first positional argument and the dict as the second, so <code>complete</code> gets <code>prompt=("hi",)</code> and complains about a missing <code>api_key</code>: forwarding needs the stars, <code>fn(*args, **kwargs)</code>. The log leak is the more serious bug. The fix builds a <strong>separate</strong> redacted dict for logging; deleting the key from <code>kwargs</code> would also hide it from the log, but then the real call would fail. Secrets in logs are a common finding in LLM application reviews, because tracing wrappers like this one log every argument by default. A real version would also redact secrets inside positional arguments and nested values, and would use the <code>logging</code> module (Module 12).</p></div></details>
+</article>
+<article class="prob" id="p-bind-arguments-exactly-the-way-python-wo" data-pid="m3-2-bind-arguments-exactly-the-way-python-wo" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Bind arguments exactly the way Python would</h3></header>
+<div class="prob-q"><p>Write <code>bind(fn, *args, **kwargs)</code> that returns a dict from parameter name to the value it would receive if <code>fn(*args, **kwargs)</code> were called, <strong>including defaults</strong>, without calling <code>fn</code>. Invalid calls must raise <code>TypeError</code>, just like a real call. Use the <code>inspect</code> module rather than reimplementing the rules.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import inspect
+
+def bind(fn, *args, **kwargs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args, **kw):
+    try:
+        f(*args, **kw)
+    except exc:
+        return True
+    return False
+def run_query(sql, /, params=None, *more, timeout=30, **opts):
+    raise RuntimeError("must not be called")
+assert bind(run_query, "Q1") == {"sql": "Q1", "params": None, "more": (), "timeout": 30, "opts": {}}
+assert bind(run_query, "Q1", {"a": 1}, "Q2", timeout=5, x=1) == {"sql": "Q1", "params": {"a": 1}, "more": ("Q2",), "timeout": 5, "opts": {"x": 1}}
+assert raises(TypeError, bind, run_query)
+assert raises(TypeError, bind, lambda a, *, b: 0, 1, 2)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args, **kw):
+    try:
+        f(*args, **kw)
+    except exc:
+        return True
+    return False
+def run_query(sql, /, params=None, *more, timeout=30, **opts):
+    raise RuntimeError(&quot;must not be called&quot;)
+assert bind(run_query, &quot;Q1&quot;) == {&quot;sql&quot;: &quot;Q1&quot;, &quot;params&quot;: None, &quot;more&quot;: (), &quot;timeout&quot;: 30, &quot;opts&quot;: {}}
+assert bind(run_query, &quot;Q1&quot;, {&quot;a&quot;: 1}, &quot;Q2&quot;, timeout=5, x=1) == {&quot;sql&quot;: &quot;Q1&quot;, &quot;params&quot;: {&quot;a&quot;: 1}, &quot;more&quot;: (&quot;Q2&quot;,), &quot;timeout&quot;: 5, &quot;opts&quot;: {&quot;x&quot;: 1}}
+assert raises(TypeError, bind, run_query)
+assert raises(TypeError, bind, lambda a, *, b: 0, 1, 2)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>inspect.signature(fn).bind(*args, **kwargs)</code> checks the call and returns a <code>BoundArguments</code> object.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>.apply_defaults()</code> fills the missing parameters, and <code>.arguments</code> is the mapping you need.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+def bind(fn, *args, **kwargs):
+    bound = inspect.signature(fn).bind(*args, **kwargs)
+    bound.apply_defaults()
+    return dict(bound.arguments)</code></pre></div><p><code>Signature.bind</code> runs the same matching algorithm Python uses for a real call (positional, then keywords, then the <code>*args</code> and <code>**kwargs</code> collectors) and raises the same kind of <code>TypeError</code> for a bad call, but without running the function. <code>apply_defaults</code> then fills the defaults, including <code>()</code> for <code>*more</code> and <code>{}</code> for <code>**opts</code>. This is how caching decorators build a key that treats <code>f(1, b=2)</code> and <code>f(1, 2)</code> as the same call, and how validation layers check a tool call from an LLM before executing it. Knowing the matching rules well enough to predict this table is also a frequent interview question.</p></div></details>
+</article>
+<article class="prob" id="p-keyword-only-after-args" data-pid="m3-2-keyword-only-after-args" data-type="predict" data-level="hard" data-answer="a b!
+a b -!
+a-b!
+x y z
+only?">
+<header class="prob-head"><h3>14. Keyword-only after <code>*args</code></h3></header>
+<div class="code"><pre><code class="py">def join(*parts, sep=&quot; &quot;, end=&quot;!&quot;):
+    return sep.join(parts) + end
+
+print(join(&quot;a&quot;, &quot;b&quot;))
+print(join(&quot;a&quot;, &quot;b&quot;, &quot;-&quot;))
+print(join(&quot;a&quot;, &quot;b&quot;, sep=&quot;-&quot;))
+print(join(*&quot;xyz&quot;, end=&quot;&quot;))
+print(join(*[&quot;only&quot;], sep=&quot;+&quot;, end=&quot;?&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Everything positional goes into <code>parts</code>. Only a keyword can reach <code>sep</code> or <code>end</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>*"xyz"</code> spreads a string into its characters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>a b!
+a b -!
+a-b!
+x y z
+only?</pre></div><p><code>join("a", "b", "-")</code> does not set the separator: <code>"-"</code> is just a third part, so the result is <code>"a b -!"</code>. Only <code>sep="-"</code> reaches the keyword-only parameter. Spreading a string spreads its characters, because a string is an iterable of one-character strings. With a single part there is nothing to separate, so <code>sep</code> has no visible effect. <code>print</code> itself has exactly this signature (<code>print(*objects, sep=" ", end="\n")</code>), which is why <code>print("a", "-")</code> prints both values rather than using <code>"-"</code> as a separator.</p></div></details>
+</article>
+<article class="prob" id="p-call-a-function-from-command-line-style-" data-pid="m3-2-call-a-function-from-command-line-style-" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Call a function from command-line style arguments</h3></header>
+<div class="prob-q"><p>A small CLI turns <code>["k=5", "rerank=true", "query=refund policy"]</code> into a call. Write <code>call_from_strings(fn, pairs)</code> that splits each <code>"name=value"</code> string, converts the value to the <strong>type of that parameter's default</strong> (<code>int</code>, <code>float</code>, <code>bool</code>, or <code>str</code>; a parameter without a default stays a <code>str</code>), and calls <code>fn</code> with keyword arguments. For <code>bool</code>, accept <code>true</code>/<code>false</code>/<code>1</code>/<code>0</code> in any case. An unknown name must raise <code>TypeError</code> through the normal call.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import inspect
+
+def call_from_strings(fn, pairs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+def search(query, k=10, threshold=0.5, rerank=False):
+    return (query, k, threshold, rerank)
+assert call_from_strings(search, ["k=5", "rerank=TRUE", "query=refund policy"]) == ("refund policy", 5, 0.5, True)
+assert call_from_strings(search, ["query=a=b", "threshold=0.75", "rerank=0"]) == ("a=b", 10, 0.75, False)
+assert raises(TypeError, call_from_strings, search, ["query=x", "kk=3"])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+def search(query, k=10, threshold=0.5, rerank=False):
+    return (query, k, threshold, rerank)
+assert call_from_strings(search, [&quot;k=5&quot;, &quot;rerank=TRUE&quot;, &quot;query=refund policy&quot;]) == (&quot;refund policy&quot;, 5, 0.5, True)
+assert call_from_strings(search, [&quot;query=a=b&quot;, &quot;threshold=0.75&quot;, &quot;rerank=0&quot;]) == (&quot;a=b&quot;, 10, 0.75, False)
+assert raises(TypeError, call_from_strings, search, [&quot;query=x&quot;, &quot;kk=3&quot;])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>name, value = pair.split("=", 1)</code> splits only at the first <code>=</code>, so values may contain <code>=</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look up <code>inspect.signature(fn).parameters.get(name)</code>. If it has a default, use <code>type(param.default)</code> to choose the conversion; <code>bool("false")</code> is <code>True</code>, so booleans need their own rule.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+def to_value(text, default):
+    if isinstance(default, bool):
+        if text.lower() in {&quot;true&quot;, &quot;1&quot;}:
+            return True
+        if text.lower() in {&quot;false&quot;, &quot;0&quot;}:
+            return False
+        raise ValueError(f&quot;not a boolean: {text!r}&quot;)
+    if isinstance(default, (int, float)):
+        return type(default)(text)
+    return text
+
+def call_from_strings(fn, pairs):
+    params = inspect.signature(fn).parameters
+    kwargs = {}
+    for pair in pairs:
+        name, value = pair.split(&quot;=&quot;, 1)
+        param = params.get(name)
+        default = param.default if param is not None else inspect.Parameter.empty
+        kwargs[name] = value if default is inspect.Parameter.empty else to_value(value, default)
+    return fn(**kwargs)</code></pre></div><p>This is a tiny version of what Typer and Click do: they read the signature (3.1) and turn strings into typed keyword arguments. Three details matter. <code>split("=", 1)</code> keeps any later <code>=</code> in the value. The <code>bool</code> check comes <strong>before</strong> the <code>int</code> check, because <code>bool</code> is a subclass of <code>int</code> (1.1), and <code>bool("false")</code> would be <code>True</code>, so booleans need their own parsing. And unknown names are passed through unconverted, so the normal call raises the usual <code>TypeError</code> instead of the helper inventing its own error. Building on <code>**kwargs</code> and the signature means the same helper works for any function.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-do-and-mean-in-a-function-signature" data-pid="m3-2-what-do-and-mean-in-a-function-signature" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What do <code>/</code> and <code>*</code> mean in a function signature, and why would you use each?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Parameters before <code>/</code> are positional-only: callers cannot pass them by name. Parameters after <code>*</code> (or after <code>*args</code>) are keyword-only: callers must pass them by name. Use <code>*</code> for options and especially boolean flags, so calls are readable and arguments cannot be swapped silently (the boolean trap); scikit-learn made most estimator options keyword-only for this reason. Use <code>/</code> when a function also takes <code>**kwargs</code> and must accept keys that match its own parameter names (PEP 570's motivating case), or when you want freedom to rename a parameter later without breaking callers. Mention that many built-ins are positional-only, which is why <code>len(obj=x)</code> fails.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-f-a-b-fail-when-the-dicts-share" data-pid="m3-2-why-does-f-a-b-fail-when-the-dicts-share" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why does <code>f(**a, **b)</code> fail when the dicts share a key, and how should you merge settings for a call?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>In a call, <code>**a, **b</code> spreads both dicts into keyword arguments one after the other, so a key present in both is the same keyword passed twice, and Python raises "got multiple values for keyword argument". The fix is to merge first into one dict where the later value wins, <code>a | b</code> or <code>{**a, **b}</code>, and spread that once: <code>f(**(a | b))</code>. Being explicit about precedence (defaults, then environment, then per-call overrides) avoids silent surprises, and for nested settings you need a recursive merge (2.3), because <code>|</code> replaces nested dicts wholesale.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-the-downside-of-a-public-functio" data-pid="m3-2-what-is-the-downside-of-a-public-functio" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What is the downside of a public function with the signature <code>def f(*args, **kwargs)</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It hides the real interface. Editors cannot autocomplete or show the parameters, type checkers cannot check calls, typos in keyword names are accepted silently and fail later (or never, if the value is just passed on), the docs and <code>help()</code> say nothing, and frameworks that read signatures (FastAPI, Typer, agent tool builders) cannot use it. Errors appear deep inside the function instead of at the call. It is fine for <strong>forwarding</strong> wrappers, which should then restore the wrapped function's metadata with <code>functools.wraps</code> and its types with <code>typing.ParamSpec</code>, or for true pass-through of options to another API, ideally after validating them. For your own public functions, name the parameters and make options keyword-only.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Five kinds, in order: positional-only (<code>/</code>), normal, <code>*args</code>, keyword-only, <code>**kwargs</code>. Each answers "how may a caller pass this?"</li><li><code>*args</code> is a new tuple and <code>**kwargs</code> a new dict on every call. Their values are still the caller's objects.</li><li>Use <code>*</code> to make options and flags keyword-only (the boolean trap), and <code>/</code> when <code>**kwargs</code> must accept your own parameter names.</li><li>In a call, <code>*</code> and <code>**</code> spread. A repeated keyword is an error, so merge settings first (<code>a | b</code>) and spread once.</li><li>Forwarding with <code>*args, **kwargs</code> makes generic wrappers, at the cost of hiding the signature. Keep the wrapper's own parameters positional-only or keyword-only.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

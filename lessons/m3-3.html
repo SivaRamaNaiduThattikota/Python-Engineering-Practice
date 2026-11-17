@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3.3 · Scope: local, enclosing, global, built-in</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m3-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 3 · Functions and closures</span></div>
+  <h1>3.3 Scope: local, enclosing, global, built-in</h1>
+  <p>Where Python looks up a name, why assigning to a name anywhere in a function changes how it is read everywhere in that function, when <code>global</code> and <code>nonlocal</code> are needed, and why module-level state makes data and LLM code hard to test.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="legb">
+<h2><span class="n">1</span>Where Python looks for a name: LEGB</h2>
+<p>A <strong>scope</strong> is the part of a program where a name refers to one particular variable. When Python reads a name, it searches scopes in a fixed order and uses the <strong>first</strong> match:</p>
+<ul><li><strong>L, Local:</strong> names assigned inside the function that is running, including its parameters.</li><li><strong>E, Enclosing:</strong> names in any function that contains this function (only for functions defined inside other functions).</li><li><strong>G, Global:</strong> names assigned at the top level of the module (the file), including imports and <code>def</code>s.</li><li><strong>B, Built-in:</strong> names Python provides everywhere, such as <code>len</code>, <code>print</code>, <code>range</code> and <code>ValueError</code>.</li></ul>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 170" role="img" aria-label="Four nested boxes: built-in contains global contains enclosing contains local. A name is looked up from the innermost box outwards.">
+  <rect x="10" y="10" width="620" height="150" rx="16" class="box"/>
+  <text x="26" y="32" class="h">Built-in   len, print, sum, range, ValueError ...</text>
+  <rect x="40" y="42" width="560" height="108" rx="14" class="box"/>
+  <text x="56" y="64" class="h">Global (module)   import json, MODEL = "small", def outer ...</text>
+  <rect x="70" y="74" width="500" height="66" rx="12" class="box b"/>
+  <text x="86" y="96" class="w">Enclosing (outer function)   prefix = "doc"</text>
+  <rect x="300" y="102" width="250" height="30" rx="9" class="box a"/>
+  <text x="425" y="122" class="w mid">Local (inner function)   i, text</text>
+  <text x="225" y="125" class="w mid">look up: L, then E, then G, then B</text>
+</svg></div><figcaption>Each function call gets its own local scope. Lookup goes from the innermost scope outwards.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">legb.py</span><button class="copy">Copy</button></div><pre><code class="py">MODEL = &quot;small&quot;                       # global
+
+def outer():
+    prefix = &quot;doc&quot;                    # local to outer, enclosing for inner
+    def inner(i):
+        text = f&quot;{prefix}-{i}&quot;        # i and text are local; prefix is found in E
+        return text, MODEL, len(text) # MODEL found in G, len in B
+    return inner(7)
+
+print(outer())</code></pre><div class="out"><span class="ol">Output</span><pre>(&#x27;doc-7&#x27;, &#x27;small&#x27;, 5)</pre></div></div>
+<p>Two details matter. A <strong>new local scope is created on every call</strong>, so locals from one call never leak into the next (that is why recursion works, 3.1). And only functions create scopes in Python: an <code>if</code> block or a <code>for</code> loop does <strong>not</strong>. A variable assigned inside a loop is a normal local of the surrounding function and is still visible after the loop (1.2).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>LEGB is like name resolution in nested SQL: a column name in a subquery is looked up in that subquery's own tables first, then in the outer query (a correlated subquery), and finally in what the database provides. In DAX, a <code>VAR</code> defined inside a measure hides a measure or column with the same name for the rest of that expression, just as a local hides a global.</p></div></div>
+</section>
+<section class="sec" id="assignment">
+<h2><span class="n">2</span>Assignment decides the scope, for the whole function</h2>
+<p>Reading a name searches LEGB. <strong>Assigning</strong> works differently, and this is the part that causes real bugs. When Python <strong>compiles</strong> a function, it scans the whole body. Any name that is assigned <strong>anywhere</strong> in the function (with <code>=</code>, <code>+=</code>, a <code>for</code> target, an <code>import</code>, a <code>def</code> or <code>with ... as</code>) becomes a <strong>local name for the entire function</strong>, even on lines before the assignment.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">unbound_local.py</span><button class="copy">Copy</button></div><pre><code class="py">count = 10
+
+def read_only():
+    return count + 1          # count is only read: found in G
+
+def broken():
+    print(&quot;before:&quot;, count)   # count is assigned below, so it is LOCAL here too
+    count = 0
+
+print(read_only())
+try:
+    broken()
+except UnboundLocalError as e:
+    print(&quot;UnboundLocalError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>11
+UnboundLocalError: cannot access local variable &#x27;count&#x27; where it is not associated with a value</pre></div></div>
+<p>Step by step: at compile time, <code>broken</code> contains <code>count = 0</code>, so <code>count</code> is a local of <code>broken</code> everywhere in it. At run time, the first line reads that local before anything was assigned to it, which is <code>UnboundLocalError</code>. It does not fall back to the global <code>count</code>, because the decision "local or not" was made for the whole function before it ran. The same happens with <code>total += x</code> inside a function when <code>total</code> was meant to be the module's variable: <code>+=</code> is an assignment, so it makes <code>total</code> local.</p>
+<p>The rule gives you three ways out, from best to worst: pass the value in as a parameter and return the new value; use a different local name; or declare that you mean the outer variable, with <code>global</code> or <code>nonlocal</code> (next section).</p>
+</section>
+<section class="sec" id="global">
+<h2><span class="n">3</span><code>global</code> and <code>nonlocal</code></h2>
+<p><code>global name</code> at the top of a function says: in this function, <code>name</code> refers to the <strong>module-level</strong> variable, for reading and assigning. <code>nonlocal name</code> says the same about the nearest <strong>enclosing function's</strong> variable. Both are only needed to <strong>rebind</strong> the outer name. Changing a mutable object that an outer name already points at needs no declaration at all, because that is not an assignment to the name (2.2).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">global_nonlocal.py</span><button class="copy">Copy</button></div><pre><code class="py">calls = 0
+seen = []
+
+def track(item):
+    global calls
+    calls += 1              # rebinds the global name: needs `global`
+    seen.append(item)       # changes the global list in place: no declaration needed
+
+track(&quot;a&quot;); track(&quot;b&quot;)
+print(calls, seen)
+
+def make_counter():
+    n = 0
+    def bump():
+        nonlocal n          # rebinds outer&#x27;s n, not a new local
+        n += 1
+        return n
+    return bump
+
+bump = make_counter()
+print(bump(), bump(), bump())</code></pre><div class="out"><span class="ol">Output</span><pre>2 [&#x27;a&#x27;, &#x27;b&#x27;]
+1 2 3</pre></div></div>
+<p><code>nonlocal</code> is what makes a closure that keeps changing state, like this counter, work (lesson 3.4 is about closures). <code>global</code> is legal but usually a sign of hidden shared state, which is the next section's subject.</p>
+</section>
+<section class="sec" id="state">
+<h2><span class="n">4</span>Why module-level state hurts</h2>
+<p>A function that reads or writes a global variable depends on something its signature does not show. In data and LLM code that causes three specific problems:</p>
+<ul><li><strong>Results depend on history.</strong> A global counter, cache or "current model" means calling the same function twice can give different results, which breaks reproducibility and notebooks run out of order.</li><li><strong>Tests interfere with each other.</strong> One test changes the global, and the next test sees the changed value.</li><li><strong>Concurrency breaks it.</strong> In a web server (FastAPI) or with threads, many requests share one module, so a global "current user" or "last prompt" leaks between requests (Module 14).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">module_state.py</span><button class="copy">Copy</button></div><pre><code class="py">current_user = None                       # module state: shared by every request
+
+def handle(user, question):
+    global current_user
+    current_user = user
+    return answer(question)
+
+def answer(question):
+    return f&quot;answering {question!r} for {current_user}&quot;
+
+print(handle(&quot;ana&quot;, &quot;refund?&quot;))
+# Imagine two requests interleaved in a server: the second overwrites current_user
+current_user = &quot;ben&quot;
+print(answer(&quot;refund?&quot;))                  # a later call sees whoever wrote last</code></pre><div class="out"><span class="ol">Output</span><pre>answering &#x27;refund?&#x27; for ana
+answering &#x27;refund?&#x27; for ben</pre></div></div>
+<p>The fix is almost always the same: pass what a function needs as <strong>parameters</strong>, return results, and keep state in an object that is created per run or per request (a dict, a class instance in Module 9, or FastAPI's request-scoped dependencies). Module-level <strong>constants</strong> (<code>MAX_TOKENS = 4096</code>, a compiled regex, a loaded config that is never changed) are fine; module-level <strong>variables that change</strong> are the problem.</p>
+</section>
+<section class="sec" id="shadowing">
+<h2><span class="n">5</span>Shadowing built-ins, and two special scopes</h2>
+<p>Because built-ins are searched <strong>last</strong>, any global or local with the same name hides them. Naming a variable <code>list</code>, <code>id</code>, <code>sum</code>, <code>max</code>, <code>input</code>, <code>type</code> or <code>dict</code> is legal, and breaks every later use of the built-in in that scope with a confusing error far from the cause.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">shadowing.py</span><button class="copy">Copy</button></div><pre><code class="py">def total_length(docs):
+    sum = 0                     # shadows the built-in sum inside this function
+    for d in docs:
+        sum += len(d)
+    return sum
+
+print(total_length([&quot;ab&quot;, &quot;cde&quot;]))
+
+def average_length(docs):
+    sum = 0
+    for d in docs:
+        sum += len(d)
+    return sum / len(docs), sum([1, 2])   # the built-in is gone here
+
+try:
+    average_length([&quot;ab&quot;])
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>5
+TypeError: &#x27;int&#x27; object is not callable</pre></div></div>
+<p>Two places have scope rules worth knowing. A <strong>comprehension</strong> has its own scope, so its loop variable does not leak out (unlike a <code>for</code> loop). And a <strong>class body</strong> is a scope that is <strong>not</strong> an enclosing scope for the methods inside it: a method cannot see a class-level name without <code>self.</code> or the class name (Module 9).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">comprehension_scope.py</span><button class="copy">Copy</button></div><pre><code class="py">x = &quot;outer&quot;
+squares = [x * 2 for x in range(3)]
+print(squares, x)              # the comprehension&#x27;s x did not leak
+
+for y in range(3):
+    pass
+print(y)                       # a for loop&#x27;s variable does leak</code></pre><div class="out"><span class="ol">Output</span><pre>[0, 2, 4] outer
+2</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-which-scope-wins" data-pid="m3-3-which-scope-wins" data-type="predict" data-level="easy" data-answer="(&#x27;enclosing&#x27;, &#x27;local&#x27;, &#x27;enclosing&#x27;)
+global">
+<header class="prob-head"><h3>1. Which scope wins?</h3></header>
+<div class="code"><pre><code class="py">name = &quot;global&quot;
+
+def outer():
+    name = &quot;enclosing&quot;
+    def inner():
+        return name
+    def own():
+        name = &quot;local&quot;
+        return name
+    return inner(), own(), name
+
+print(outer())
+print(name)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each function's assignments make names local to that function only.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(&#x27;enclosing&#x27;, &#x27;local&#x27;, &#x27;enclosing&#x27;)
+global</pre></div><p><code>inner</code> assigns nothing, so it reads <code>name</code> from the enclosing <code>outer</code>. <code>own</code> assigns <code>name</code>, so it has its own local. <code>outer</code> returns its own variable. None of them touch the module's <code>name</code>, which is still <code>"global"</code>: an assignment inside a function never changes an outer name unless you declare <code>global</code> or <code>nonlocal</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-running-total-that-crashes" data-pid="m3-3-a-running-total-that-crashes" data-type="fix" data-level="easy">
+<header class="prob-head"><h3>2. A running total that crashes</h3></header>
+<div class="prob-q"><p><code>add_tokens</code> should keep a running total of tokens used across calls, stored in the module. It raises <code>UnboundLocalError</code>. Fix it <strong>without</strong> <code>global</code>: make the function take the current total and return the new one.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">total_tokens = 0
+
+def add_tokens(n):
+    total_tokens += n
+    return total_tokens
+</textarea>
+<script type="text/plain" class="prob-tests">t = 0
+t = add_tokens(t, 120)
+t = add_tokens(t, 80)
+assert t == 200
+assert add_tokens(0, 5) == 5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = 0
+t = add_tokens(t, 120)
+t = add_tokens(t, 80)
+assert t == 200
+assert add_tokens(0, 5) == 5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>total_tokens += n</code> is an assignment, so <code>total_tokens</code> is local to the whole function.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Change the signature to <code>add_tokens(total, n)</code> and return <code>total + n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def add_tokens(total, n):
+    return total + n</code></pre></div><p><code>+=</code> is an assignment, so the compiler makes <code>total_tokens</code> local, and the read on the same line finds an unassigned local. <code>global total_tokens</code> would silence the error but keep hidden shared state. Passing the total in and returning the new one makes the function pure (2.4): its result depends only on its arguments, so it is trivial to test, and two separate runs (or two users) can keep separate totals.</p></div></details>
+</article>
+<article class="prob" id="p-comprehension-and-loop-variables" data-pid="m3-3-comprehension-and-loop-variables" data-type="predict" data-level="easy" data-answer="[0, 2, 4] start
+2
+NameError: name &#x27;k&#x27; is not defined">
+<header class="prob-head"><h3>3. Comprehension and loop variables</h3></header>
+<div class="code"><pre><code class="py">i = &quot;start&quot;
+doubled = [i * 2 for i in range(3)]
+print(doubled, i)
+
+for i in range(3):
+    pass
+print(i)
+
+labels = {k: len(k) for k in [&quot;ab&quot;, &quot;c&quot;]}
+try:
+    print(k)
+except NameError as e:
+    print(&quot;NameError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Comprehensions have their own scope. A <code>for</code> loop does not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0, 2, 4] start
+2
+NameError: name &#x27;k&#x27; is not defined</pre></div><p>The list comprehension's <code>i</code> lives in the comprehension's own scope, so the outer <code>i</code> stays <code>"start"</code>. The plain <code>for</code> loop assigns the module's <code>i</code>, which keeps its last value, 2. The dict comprehension's <code>k</code> never existed outside it, so reading <code>k</code> afterwards is a <code>NameError</code>.</p></div></details>
+</article>
+<article class="prob" id="p-changing-versus-rebinding-a-global" data-pid="m3-3-changing-versus-rebinding-a-global" data-type="predict" data-level="easy" data-answer="{&#x27;a&#x27;: 1} 2">
+<header class="prob-head"><h3>4. Changing versus rebinding a global</h3></header>
+<div class="code"><pre><code class="py">cache = {}
+hits = 0
+
+def remember(key, value):
+    cache[key] = value
+
+def reset_cache():
+    cache = {}
+
+def count_hit():
+    global hits
+    hits += 1
+
+remember(&quot;a&quot;, 1)
+reset_cache()
+count_hit(); count_hit()
+print(cache, hits)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which of these functions assign to a name, and which only change an object?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;a&#x27;: 1} 2</pre></div><p><code>remember</code> changes the global dict in place, so no declaration is needed and the change is visible. <code>reset_cache</code> <strong>assigns</strong> <code>cache = {}</code>, which makes <code>cache</code> local to that function: the global dict is not reset at all, a bug that raises no error. <code>count_hit</code> declares <code>global hits</code>, so its <code>+=</code> rebinds the module's name. To empty the global dict without <code>global</code>, call <code>cache.clear()</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-a-request-handler-that-leaks-users" data-pid="m3-3-a-request-handler-that-leaks-users" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A request handler that leaks users</h3></header>
+<div class="prob-q"><p>This tiny chat backend stores the current user in a global, which leaks between interleaved requests. Remove the module-level state: <code>handle</code> should pass the user to <code>answer</code> explicitly, and nothing outside the functions should change.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">current_user = None
+
+def answer(question):
+    return f&quot;{current_user}: {question}&quot;
+
+def handle(user, question):
+    global current_user
+    current_user = user
+    return answer(question)
+</textarea>
+<script type="text/plain" class="prob-tests">assert handle("ana", "refund?") == "ana: refund?"
+assert handle("ben", "invoice?") == "ben: invoice?"
+assert answer("x", user="cy") == "cy: x"
+assert "current_user" not in globals()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert handle(&quot;ana&quot;, &quot;refund?&quot;) == &quot;ana: refund?&quot;
+assert handle(&quot;ben&quot;, &quot;invoice?&quot;) == &quot;ben: invoice?&quot;
+assert answer(&quot;x&quot;, user=&quot;cy&quot;) == &quot;cy: x&quot;
+assert &quot;current_user&quot; not in globals()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Give <code>answer</code> a <code>user</code> parameter and have <code>handle</code> pass it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def answer(question, user):
+    return f&quot;{user}: {question}&quot;
+
+def handle(user, question):
+    return answer(question, user=user)</code></pre></div><p>In a real server, requests run interleaved (async) or in parallel (threads), so between <code>current_user = user</code> and the use in <code>answer</code>, another request can overwrite the global. That is a data leak between users, and it never shows up in single-user testing. Passing the user explicitly makes every function's inputs visible in its signature. Frameworks give you per-request values the safe way: FastAPI dependencies, or <code>contextvars</code> for values that must flow through many layers (Module 14).</p></div></details>
+</article>
+<article class="prob" id="p-names-in-three-scopes" data-pid="m3-3-names-in-three-scopes" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>6. Names in three scopes</h3></header>
+<div class="prob-q"><p>Fill in the module-level <code>x</code> and <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">x = 1
+log = []
+
+def f():
+    x = 2
+    log.append(x)
+
+def g():
+    global x
+    x = 3
+    log.append(x)
+
+def h():
+    log = [&quot;local&quot;]
+    log.append(x)
+
+f()
+g()
+h()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>x</code></th><th><code>log</code></th></tr><tr><td>f()</td><td><input class="cell" data-a="1" data-s="1" aria-label="x at f()" autocomplete="off"></td><td><input class="cell" data-a="[2]" data-s="[2]" aria-label="log at f()" autocomplete="off"></td></tr><tr><td>g()</td><td><input class="cell" data-a="3" data-s="3" aria-label="x at g()" autocomplete="off"></td><td><input class="cell" data-a="[2, 3]" data-s="[2, 3]" aria-label="log at g()" autocomplete="off"></td></tr><tr><td>h()</td><td><input class="cell" data-a="3" data-s="3" aria-label="x at h()" autocomplete="off"></td><td><input class="cell" data-a="[2, 3]" data-s="[2, 3]" aria-label="log at h()" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only <code>g</code> declares <code>global</code>. <code>h</code> assigns <code>log</code>, so its <code>log</code> is a different, local list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>x</code></th><th><code>log</code></th></tr><tr><td>f()</td><td><code>1</code></td><td><code>[2]</code></td></tr><tr><td>g()</td><td><code>3</code></td><td><code>[2, 3]</code></td></tr><tr><td>h()</td><td><code>3</code></td><td><code>[2, 3]</code></td></tr></table></div><p><code>f</code> assigns a local <code>x</code>, so the global stays 1, but <code>log.append</code> changes the global list. <code>g</code> rebinds the global <code>x</code> to 3 and appends 3. <code>h</code> creates its own local <code>log</code>, so its append (of the global <code>x</code>, 3) goes into a list that is thrown away when <code>h</code> returns: the global <code>log</code> is unchanged. Three functions, three different scope outcomes, and none of them raised an error.</p></div></details>
+</article>
+<article class="prob" id="p-a-call-counter-without-globals" data-pid="m3-3-a-call-counter-without-globals" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A call counter without globals</h3></header>
+<div class="prob-q"><p>You want to count how many times an LLM client function is called, per client. Write <code>make_counted(fn)</code> that returns <code>(wrapper, get_count)</code>: <code>wrapper(*args, **kwargs)</code> calls <code>fn</code> and counts the call, and <code>get_count()</code> returns the number of calls so far. Each <code>make_counted</code> call must have its own independent count. Use <code>nonlocal</code>, not a global.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def make_counted(fn):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def complete(prompt, *, model="small"):
+    return f"{model}:{prompt}"
+w1, c1 = make_counted(complete)
+w2, c2 = make_counted(complete)
+assert w1("a") == "small:a" and w1("b", model="large") == "large:b"
+w2("x")
+assert c1() == 2 and c2() == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def complete(prompt, *, model=&quot;small&quot;):
+    return f&quot;{model}:{prompt}&quot;
+w1, c1 = make_counted(complete)
+w2, c2 = make_counted(complete)
+assert w1(&quot;a&quot;) == &quot;small:a&quot; and w1(&quot;b&quot;, model=&quot;large&quot;) == &quot;large:b&quot;
+w2(&quot;x&quot;)
+assert c1() == 2 and c2() == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>count = 0</code> inside <code>make_counted</code>, define <code>wrapper</code> and <code>get_count</code> inside it, and use <code>nonlocal count</code> in <code>wrapper</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_counted(fn):
+    count = 0
+
+    def wrapper(*args, **kwargs):
+        nonlocal count
+        count += 1
+        return fn(*args, **kwargs)
+
+    def get_count():
+        return count
+
+    return wrapper, get_count</code></pre></div><p><code>count</code> lives in the scope of one <code>make_counted</code> call, so every call creates a separate counter, unlike a module global that all clients would share. <code>wrapper</code> needs <code>nonlocal</code> because <code>count += 1</code> rebinds the name; <code>get_count</code> only reads it, so it needs nothing. Both inner functions see the <strong>same</strong> <code>count</code>, which is why the getter reports what the wrapper counted. This is a closure (lesson 3.4) and the core of a decorator (Module 7).</p></div></details>
+</article>
+<article class="prob" id="p-a-variable-named-after-a-built-in" data-pid="m3-3-a-variable-named-after-a-built-in" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. A variable named after a built-in</h3></header>
+<div class="prob-q"><p>This summarises scores, but crashes on the line that uses <code>max</code>. Find the cause and fix it without changing what the function returns.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def summarise(scores):
+    max = 1.0                         # the best possible score
+    total = sum(scores)
+    best = max(scores)
+    return {&quot;mean&quot;: total / len(scores), &quot;best&quot;: best, &quot;best_possible&quot;: max}
+</textarea>
+<script type="text/plain" class="prob-tests">assert summarise([0.2, 0.8, 0.5]) == {"mean": 0.5, "best": 0.8, "best_possible": 1.0}
+assert summarise([1.0]) == {"mean": 1.0, "best": 1.0, "best_possible": 1.0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert summarise([0.2, 0.8, 0.5]) == {&quot;mean&quot;: 0.5, &quot;best&quot;: 0.8, &quot;best_possible&quot;: 1.0}
+assert summarise([1.0]) == {&quot;mean&quot;: 1.0, &quot;best&quot;: 1.0, &quot;best_possible&quot;: 1.0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does the name <code>max</code> refer to on the line <code>best = max(scores)</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summarise(scores):
+    best_possible = 1.0
+    total = sum(scores)
+    best = max(scores)
+    return {&quot;mean&quot;: total / len(scores), &quot;best&quot;: best, &quot;best_possible&quot;: best_possible}</code></pre></div><p><code>max = 1.0</code> makes <code>max</code> a local float for the whole function, so <code>max(scores)</code> tries to call a float: <code>TypeError: 'float' object is not callable</code>. The error points at the call, not at the assignment that caused it, which is what makes shadowing confusing. Linters flag it (Ruff rule A001, from flake8-builtins). Common victims in data code are <code>id</code>, <code>type</code>, <code>filter</code>, <code>input</code>, <code>max</code>, <code>min</code>, <code>sum</code>, <code>list</code> and <code>dict</code>.</p></div></details>
+</article>
+<article class="prob" id="p-looking-up-a-setting-inside-the-loop" data-pid="m3-3-looking-up-a-setting-inside-the-loop" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>9. Looking up a setting inside the loop</h3></header>
+<div class="prob-q"><p>Both scale a million numbers by a factor stored deep inside a module-level config. Which loop is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">CONFIG = {&quot;model&quot;: {&quot;scaling&quot;: {&quot;factor&quot;: 3}}}
+xs = list(range(1_000_000))
+def scale_lookup(xs):
+    out = []
+    for x in xs:
+        out.append(x * CONFIG[&quot;model&quot;][&quot;scaling&quot;][&quot;factor&quot;])
+    return out
+def scale_once(xs):
+    factor = CONFIG[&quot;model&quot;][&quot;scaling&quot;][&quot;factor&quot;]
+    out = []
+    for x in xs:
+        out.append(x * factor)
+    return out</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">r = scale_lookup(xs)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">r = scale_once(xs)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many lookups does each pass of A perform before it can multiply?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>201.64 ms</td></tr><tr><td>B</td><td>92.95 ms</td></tr></table></div><p>A reads the global <code>CONFIG</code> and then does three dict lookups on <strong>every</strong> pass, a million times, to fetch a value that never changes. B does them once, before the loop, and keeps the result in a local name, which is the cheapest kind of name to read (locals live in fixed slots of the function's frame). Recent Pythons have made plain global reads almost as fast as local ones, so the win here comes mainly from the repeated dict lookups. The habit is worth having in hot loops over big data: hoist anything that does not change out of the loop. A list comprehension or numpy would be faster again.</p></div></details>
+</article>
+<article class="prob" id="p-settings-you-can-only-change-through-a-g" data-pid="m3-3-settings-you-can-only-change-through-a-g" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Settings you can only change through a global</h3></header>
+<div class="prob-q"><p>These helpers all read a module-level <code>CONFIG</code>, so an experiment with a stricter threshold has to change the global, which leaks into everything else. Change them so each takes the config as a parameter (defaulting to <code>CONFIG</code>), with the same behaviour for existing callers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">CONFIG = {&quot;threshold&quot;: 0.5, &quot;positive&quot;: &quot;spam&quot;, &quot;negative&quot;: &quot;ham&quot;}
+
+def classify(score):
+    if score &gt;= CONFIG[&quot;threshold&quot;]:
+        return CONFIG[&quot;positive&quot;]
+    return CONFIG[&quot;negative&quot;]
+
+def classify_all(scores):
+    return [classify(s) for s in scores]
+</textarea>
+<script type="text/plain" class="prob-tests">assert classify_all([0.9, 0.1, 0.5]) == ["spam", "ham", "spam"]
+assert classify(0.49) == "ham"
+strict = {"threshold": 0.8, "positive": "spam", "negative": "ham"}
+assert classify_all([0.7, 0.9], config=strict) == ["ham", "spam"]
+assert CONFIG["threshold"] == 0.5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert classify_all([0.9, 0.1, 0.5]) == [&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;]
+assert classify(0.49) == &quot;ham&quot;
+strict = {&quot;threshold&quot;: 0.8, &quot;positive&quot;: &quot;spam&quot;, &quot;negative&quot;: &quot;ham&quot;}
+assert classify_all([0.7, 0.9], config=strict) == [&quot;ham&quot;, &quot;spam&quot;]
+assert CONFIG[&quot;threshold&quot;] == 0.5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Give both functions a <code>config</code> parameter, defaulting to <code>CONFIG</code>, and pass it down from <code>classify_all</code> to <code>classify</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">CONFIG = {&quot;threshold&quot;: 0.5, &quot;positive&quot;: &quot;spam&quot;, &quot;negative&quot;: &quot;ham&quot;}
+
+def classify(score, config=CONFIG):
+    return config[&quot;positive&quot;] if score &gt;= config[&quot;threshold&quot;] else config[&quot;negative&quot;]
+
+def classify_all(scores, config=CONFIG):
+    return [classify(s, config) for s in scores]</code></pre></div><p>Each function now shows its dependency in its signature, and a test or an experiment can pass a different config without touching the global. Using <code>CONFIG</code> as a default is fine here because these functions never change it; the mutable-default warning from 2.4 is about defaults that get changed. If you want to be sure nobody changes it, freeze it (2.3, <code>MappingProxyType</code>). Adding a parameter <strong>with a default</strong> keeps every existing caller working, which is why the first two tests pass with both versions.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-unboundlocalerror-in-disguise" data-pid="m3-3-unboundlocalerror-in-disguise" data-type="predict" data-level="hard" data-answer="UnboundLocalError: cannot access local variable &#x27;json&#x27; where it is not associated with a value
+UnboundLocalError: cannot access local variable &#x27;total&#x27; where it is not associated with a value">
+<header class="prob-head"><h3>11. UnboundLocalError in disguise</h3></header>
+<div class="code"><pre><code class="py">import json
+
+def parse_all(lines):
+    out = []
+    for line in lines:
+        out.append(json.loads(line))
+    if not out:
+        import json
+    return out
+
+try:
+    print(parse_all([&#x27;{&quot;a&quot;: 1}&#x27;]))
+except UnboundLocalError as e:
+    print(&quot;UnboundLocalError:&quot;, e)
+
+total = 0
+def add(values):
+    for v in values:
+        total = total + v
+    return total
+try:
+    add([1, 2])
+except UnboundLocalError as e:
+    print(&quot;UnboundLocalError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>import</code> is an assignment. So is a <code>for</code> loop's target and a plain <code>=</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>import json</code> is never even executed. Does that matter at compile time?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>UnboundLocalError: cannot access local variable &#x27;json&#x27; where it is not associated with a value
+UnboundLocalError: cannot access local variable &#x27;total&#x27; where it is not associated with a value</pre></div><p>The <code>import json</code> inside the <code>if</code> assigns the name <code>json</code>, so the compiler makes <code>json</code> local to the <strong>whole</strong> function, including the loop above it, even though that line never runs. <code>json.loads</code> then reads an unassigned local. In <code>add</code>, <code>total = total + v</code> assigns <code>total</code>, so the right-hand side reads the unassigned local <code>total</code>. Both show that "local or global" is decided when the function is compiled, from every assignment anywhere in it, not by which lines happen to run.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-pipeline-with-hidden-sta" data-pid="m3-3-read-the-code-a-pipeline-with-hidden-sta" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. Read the code: a pipeline with hidden state</h3></header>
+<div class="prob-q"><p>This preprocessing module keeps its vocabulary and statistics in module-level variables. Fitting on a second dataset mixes in the first one's vocabulary, and transforming before fitting silently uses stale values. Rewrite it so <code>fit</code> <strong>returns</strong> the fitted state and <code>transform</code> takes that state as a parameter. No module-level variable may change.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">VOCAB = {}
+MEAN_LEN = 0.0
+
+
+def fit(texts):
+    global MEAN_LEN
+    for text in texts:
+        for word in text.lower().split():
+            if word not in VOCAB:
+                VOCAB[word] = len(VOCAB)
+    MEAN_LEN = sum(len(t.split()) for t in texts) / len(texts)
+
+
+def transform(text):
+    ids = [VOCAB.get(w, -1) for w in text.lower().split()]
+    return {&quot;ids&quot;: ids, &quot;len_ratio&quot;: len(ids) / MEAN_LEN}
+</textarea>
+<script type="text/plain" class="prob-tests">state_a = fit(["the cat sat", "the dog"])
+state_b = fit(["a bird"])
+assert state_a["vocab"] == {"the": 0, "cat": 1, "sat": 2, "dog": 3}
+assert state_b["vocab"] == {"a": 0, "bird": 1}
+assert transform("The bird", state_b) == {"ids": [-1, 1], "len_ratio": 1.0}
+assert transform("the cat", state_a) == {"ids": [0, 1], "len_ratio": 0.8}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">state_a = fit([&quot;the cat sat&quot;, &quot;the dog&quot;])
+state_b = fit([&quot;a bird&quot;])
+assert state_a[&quot;vocab&quot;] == {&quot;the&quot;: 0, &quot;cat&quot;: 1, &quot;sat&quot;: 2, &quot;dog&quot;: 3}
+assert state_b[&quot;vocab&quot;] == {&quot;a&quot;: 0, &quot;bird&quot;: 1}
+assert transform(&quot;The bird&quot;, state_b) == {&quot;ids&quot;: [-1, 1], &quot;len_ratio&quot;: 1.0}
+assert transform(&quot;the cat&quot;, state_a) == {&quot;ids&quot;: [0, 1], &quot;len_ratio&quot;: 0.8}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the vocabulary and the mean in local variables inside <code>fit</code>, and return them in a dict.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>transform(text, state)</code> reads <code>state["vocab"]</code> and <code>state["mean_len"]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def fit(texts):
+    vocab = {}
+    for text in texts:
+        for word in text.lower().split():
+            if word not in vocab:
+                vocab[word] = len(vocab)
+    mean_len = sum(len(t.split()) for t in texts) / len(texts)
+    return {&quot;vocab&quot;: vocab, &quot;mean_len&quot;: mean_len}
+
+
+def transform(text, state):
+    ids = [state[&quot;vocab&quot;].get(w, -1) for w in text.lower().split()]
+    return {&quot;ids&quot;: ids, &quot;len_ratio&quot;: len(ids) / state[&quot;mean_len&quot;]}</code></pre></div><p>The original has both scope bugs from this lesson. <code>VOCAB</code> is changed in place without <code>global</code>, so every <code>fit</code> call adds to the same dict and the second dataset's ids continue after the first's. <code>MEAN_LEN</code> is rebound with <code>global</code>, so <code>transform</code> reads whichever fit ran last, or 0.0 before any fit (a <code>ZeroDivisionError</code> far from the cause). Returning the state makes "fitted" a value you can store, pass, compare and version. That is exactly the <code>fit</code>/<code>transform</code> design of scikit-learn, except that it keeps the state on the estimator object (<code>vocabulary_</code>, <code>mean_</code>), one object per fit, never at module level.</p></div></details>
+</article>
+<article class="prob" id="p-late-lookup-of-globals" data-pid="m3-3-late-lookup-of-globals" data-type="predict" data-level="hard" data-answer="[brief] refunds?
+[formal] refunds?
+NameError: name &#x27;LIMIT&#x27; is not defined
+42">
+<header class="prob-head"><h3>13. Late lookup of globals</h3></header>
+<div class="code"><pre><code class="py">def make_prompt(question):
+    return f&quot;[{STYLE}] {question}&quot;
+
+STYLE = &quot;brief&quot;
+print(make_prompt(&quot;refunds?&quot;))
+STYLE = &quot;formal&quot;
+print(make_prompt(&quot;refunds?&quot;))
+
+def reader():
+    return LIMIT * 2
+try:
+    reader()
+except NameError as e:
+    print(&quot;NameError:&quot;, e)
+LIMIT = 21
+print(reader())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A function looks up a global name when the line runs, not when the function is defined.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[brief] refunds?
+[formal] refunds?
+NameError: name &#x27;LIMIT&#x27; is not defined
+42</pre></div><p><code>make_prompt</code> was defined before <code>STYLE</code> existed, which is fine: globals are looked up <strong>each time the line runs</strong>, so the function always sees the current value. The same rule makes <code>reader()</code> fail before <code>LIMIT</code> exists and work afterwards. Handy for constants, dangerous for anything that changes: a function's behaviour can change because some other code reassigned a module variable.</p></div></details>
+</article>
+<article class="prob" id="p-count-words-without-leaking-state" data-pid="m3-3-count-words-without-leaking-state" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Count words without leaking state</h3></header>
+<div class="prob-q"><p>Write <code>make_word_counter()</code> that returns three functions <code>(add, top, reset)</code> sharing one private word count: <code>add(text)</code> counts the lower-cased words of <code>text</code>, <code>top(n)</code> returns the <code>n</code> most common <code>(word, count)</code> pairs (highest count first, ties in first-seen order), and <code>reset()</code> clears the counts. Two counters must never share data, and nothing at module level may change.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def make_word_counter():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">add, top, reset = make_word_counter()
+add2, top2, _ = make_word_counter()
+add("The cat and the hat")
+add("the end")
+add2("other")
+assert top(2) == [("the", 3), ("cat", 1)]
+assert top2(5) == [("other", 1)]
+reset()
+assert top(3) == []
+add("again again")
+assert top(1) == [("again", 2)]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">add, top, reset = make_word_counter()
+add2, top2, _ = make_word_counter()
+add(&quot;The cat and the hat&quot;)
+add(&quot;the end&quot;)
+add2(&quot;other&quot;)
+assert top(2) == [(&quot;the&quot;, 3), (&quot;cat&quot;, 1)]
+assert top2(5) == [(&quot;other&quot;, 1)]
+reset()
+assert top(3) == []
+add(&quot;again again&quot;)
+assert top(1) == [(&quot;again&quot;, 2)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>counts = {}</code> in the outer function. <code>add</code> and <code>reset</code> change that dict in place, so do they need <code>nonlocal</code>?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(counts.items(), key=lambda kv: -kv[1])</code> sorts by count, and Python's sort is stable, so ties keep insertion order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_word_counter():
+    counts = {}
+
+    def add(text):
+        for word in text.lower().split():
+            counts[word] = counts.get(word, 0) + 1
+
+    def top(n):
+        return sorted(counts.items(), key=lambda kv: -kv[1])[:n]
+
+    def reset():
+        counts.clear()
+
+    return add, top, reset</code></pre></div><p>All three functions close over the same <code>counts</code> dict, and every operation changes that dict <strong>in place</strong> (<code>counts[word] = ...</code>, <code>counts.clear()</code>), so no <code>nonlocal</code> is needed. If <code>reset</code> were written <code>counts = {}</code> it would create a new local dict and the shared counts would not be cleared, the same bug as <code>reset_cache</code> in problem 4, and <code>nonlocal counts</code> would be required. Sorting with a negated count keeps ties in insertion order because Python's sort is stable (lesson 4.2). <code>collections.Counter</code> does the counting part for you (lesson 4.6).</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-explain-the-legb-rule-and-why-assigning-" data-pid="m3-3-explain-the-legb-rule-and-why-assigning-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Explain the LEGB rule, and why assigning to a variable inside a function can cause UnboundLocalError.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When Python reads a name it searches Local, Enclosing, Global, then Built-in scopes and uses the first match. Which scope a name belongs to in a function is decided at <strong>compile time</strong>: if the name is assigned anywhere in the function (<code>=</code>, <code>+=</code>, <code>for</code>, <code>import</code>, <code>def</code>, <code>with ... as</code>), it is local throughout that function. So reading it before the assignment raises <code>UnboundLocalError</code> instead of falling back to the global. Fixes: pass the value in and return the result, use a different name, or declare <code>global</code> / <code>nonlocal</code> if you really mean the outer variable. Mention that only rebinding needs a declaration; changing a mutable outer object in place does not.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-the-difference-between-global-an" data-pid="m3-3-what-is-the-difference-between-global-an" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What is the difference between <code>global</code> and <code>nonlocal</code>, and when should you use them?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>global x</code> makes <code>x</code> refer to the module-level variable for reading and rebinding inside the function. <code>nonlocal x</code> makes it refer to the nearest enclosing function's variable, and is an error if no enclosing function has one. <code>nonlocal</code> is the normal tool for closures that update state (counters, accumulators, memoising wrappers). <code>global</code> is legal but usually a design smell: hidden shared state makes code non-reproducible, hard to test and unsafe under concurrency. Prefer parameters and return values, or an object that owns the state.</p></div></details>
+</article>
+<article class="prob" id="p-your-fastapi-app-stores-the-current-user" data-pid="m3-3-your-fastapi-app-stores-the-current-user" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Your FastAPI app stores the current user's id in a module variable. What can go wrong, and what do you do instead?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A module is loaded once per worker process and shared by every request that process handles. With async endpoints, requests interleave at every <code>await</code>; with threads, they run at the same time. So one request can set the variable and another can overwrite it before the first one reads it, and responses (or LLM context) for one user get built with another user's data. It never shows in single-user testing. Instead: pass the user explicitly, use FastAPI dependencies (<code>Depends</code>) that compute per-request values, or <code>contextvars.ContextVar</code> when a value must flow through many layers, since it gives each request (task) its own value. Module-level constants and read-only clients are fine; module-level mutable per-request data is not.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Reading a name searches Local, Enclosing, Global, Built-in. Only functions (and comprehensions, classes) create scopes, not <code>if</code> or <code>for</code>.</li><li>Any assignment anywhere in a function makes that name local for the whole function, decided at compile time. That is the source of <code>UnboundLocalError</code>.</li><li><code>global</code> / <code>nonlocal</code> are needed only to rebind an outer name; changing an outer mutable object in place needs no declaration.</li><li>Module-level variables that change make results depend on history, tests interfere, and servers leak data between requests. Pass values in and return results.</li><li>Never name variables after built-ins (<code>list</code>, <code>id</code>, <code>max</code>, <code>sum</code>): the error appears far from the cause.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -237,7 +237,7 @@ def render_part(les, s, i, x, res, counter):
         return md(x.text)
     if isinstance(x, L.Callout):
         icon = {"sql": "≈", "warn": "!", "bad": "×", "ok": "✓", "key": "i", "note": "•"}.get(x.kind, "i")
-        return (f'<div class="callout c-{x.kind}"><div class="ci">{icon}</div><div><div class="ct">{esc(x.title)}</div>{md(x.text)}</div></div>')
+        return (f'<div class="callout c-{x.kind}"><div class="ci">{icon}</div><div><div class="ct">{inline(x.title)}</div>{md(x.text)}</div></div>')
     if isinstance(x, L.Figure):
         return f'<figure class="fig"><div class="sv">{x.svg}</div><figcaption>{inline(x.caption)}</figcaption></figure>'
     if isinstance(x, L.Example):

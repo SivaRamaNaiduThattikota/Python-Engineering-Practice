@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3.4 · Closures and late binding</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m3-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 3 · Functions and closures</span></div>
+  <h1>3.4 Closures and late binding</h1>
+  <p>A function defined inside another function can keep using the outer function's variables after the outer function has returned. How that works (cells), what it is good for (factories, callbacks, small caches), and the late-binding trap that breaks closures built in loops.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a closure is</h2>
+<p>When a function is defined <strong>inside</strong> another function and uses one of the outer function's local variables, the inner function remembers that variable even after the outer function has returned. The inner function together with the outer variables it uses is called a <strong>closure</strong>, and those variables are its <strong>free variables</strong> (not its own locals, not globals).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">closure_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_scaler(factor):
+    def scale(x):
+        return x * factor        # factor is a free variable of scale
+    return scale
+
+triple = make_scaler(3)
+halve = make_scaler(0.5)
+print(triple(10), halve(10))
+print(triple.__code__.co_freevars, triple.__closure__[0].cell_contents)</code></pre><div class="out"><span class="ol">Output</span><pre>30 5.0
+(&#x27;factor&#x27;,) 3</pre></div></div>
+<p>Step by step, here is what Python does. When it <strong>compiles</strong> <code>make_scaler</code>, it notices that <code>factor</code> is used by the inner function, so instead of an ordinary local slot it stores <code>factor</code> in a <strong>cell</strong>, a tiny shared box. When <code>make_scaler(3)</code> <strong>runs</strong>, it creates a new cell holding 3, then the <code>def scale</code> statement builds a new function object whose <code>__closure__</code> points at that cell. <code>make_scaler</code> returns and its frame disappears, but the cell survives because <code>scale</code> still refers to it. Calling <code>triple(10)</code> reads <code>factor</code> through the cell. <code>make_scaler(0.5)</code> is a separate call, so it creates a separate cell: <code>triple</code> and <code>halve</code> do not interfere.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 150" role="img" aria-label="make_scaler(3) creates a cell holding factor 3. The returned function scale points at the cell, so the value stays alive after make_scaler returns.">
+  <defs><marker id="k1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <rect x="10" y="20" width="220" height="110" rx="14" class="box"/>
+  <text x="120" y="42" class="h mid">call make_scaler(3)</text>
+  <text x="120" y="66" class="mid">frame: finished and gone</text>
+  <rect x="270" y="50" width="120" height="44" rx="12" class="box a"/><text x="330" y="77" class="w mid">cell: factor = 3</text>
+  <rect x="450" y="40" width="170" height="64" rx="12" class="box b"/>
+  <text x="535" y="66" class="w mid">scale (returned)</text><text x="535" y="86" class="w mid">__closure__ points at the cell</text>
+  <path d="M230 72 L266 72" style="stroke:var(--label2);stroke-width:2;fill:none;stroke-dasharray:4 3" marker-end="url(#k1)"/>
+  <path d="M450 72 L394 72" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#k1)"/>
+  <text x="330" y="124" class="mid">kept alive by the closure</text>
+</svg></div><figcaption>The outer call ends, but the cell holding <code>factor</code> stays alive as long as the returned function exists.</figcaption></figure>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A closure is like a parameterised query or a Power BI what-if parameter baked into a measure: <code>make_scaler(3)</code> returns "the measure, with 3 plugged in". Each call of the factory gives a separately configured measure, and each one keeps its own setting.</p></div></div>
+</section>
+<section class="sec" id="uses">
+<h2><span class="n">2</span>What closures are good for</h2>
+<p>Closures let you <strong>configure a function once and call it many times</strong>, without a class and without globals. Four patterns cover most real uses:</p>
+<ul><li><strong>Factories:</strong> functions that build configured functions, such as <code>make_scaler(3)</code> above, a tokenizer with fixed settings, or a validator for one schema.</li><li><strong>Callbacks:</strong> functions you hand to other code (<code>sorted(key=...)</code>, a button handler, an early-stopping hook), which need some context when they are called later.</li><li><strong>Private state:</strong> a counter, a running total or a small cache that only the returned functions can see, updated with <code>nonlocal</code> (3.3).</li><li><strong>Wrappers:</strong> functions that wrap another function to add retries, logging or timing. That is exactly a decorator (Module 7).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">factory.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_validator(required, max_len):
+    def validate(record):
+        missing = [k for k in required if record.get(k) is None]
+        too_long = [k for k, v in record.items() if isinstance(v, str) and len(v) &gt; max_len]
+        return {&quot;missing&quot;: missing, &quot;too_long&quot;: too_long}
+    return validate
+
+check_ticket = make_validator(required=[&quot;title&quot;, &quot;priority&quot;], max_len=20)
+print(check_ticket({&quot;title&quot;: &quot;Refund not received after 14 days&quot;, &quot;priority&quot;: None}))
+print(check_ticket({&quot;title&quot;: &quot;Login&quot;, &quot;priority&quot;: 2}))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;missing&#x27;: [&#x27;priority&#x27;], &#x27;too_long&#x27;: [&#x27;title&#x27;]}
+{&#x27;missing&#x27;: [], &#x27;too_long&#x27;: []}</pre></div></div>
+<p>Compare that with the alternatives. Passing <code>required</code> and <code>max_len</code> on every call clutters every call site. Globals would make all validators share one setting (3.3). A class works too, and is the better choice once you need several methods or want the state to be visible and inspectable (Module 9). A closure is the lightest tool when the whole object is "one function plus a few settings".</p>
+</section>
+<section class="sec" id="late">
+<h2><span class="n">3</span>Late binding: closures read the variable, not the value</h2>
+<p>A closure stores the <strong>variable</strong> (the cell), not a copy of its value at the moment the inner function was created. It reads the current value <strong>when it runs</strong>. Usually that is what you want. It becomes a trap when closures are created in a loop: every closure shares the <strong>same</strong> loop variable, and by the time they run, the loop has finished and the variable holds its last value.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">late_binding.py</span><button class="copy">Copy</button></div><pre><code class="py">handlers = []
+for name in [&quot;search&quot;, &quot;summarise&quot;, &quot;translate&quot;]:
+    def handler():
+        return f&quot;running {name}&quot;
+    handlers.append(handler)
+
+print([h() for h in handlers])          # every handler sees the final name
+print(handlers[0].__closure__ is None)  # module-level loop: name is a global here</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;running translate&#x27;, &#x27;running translate&#x27;, &#x27;running translate&#x27;]
+True</pre></div></div>
+<p>Here the loop runs at module level, so <code>name</code> is a global and the functions simply read it when called. Inside a function the mechanism is a shared cell, but the effect is identical. There are two standard fixes, and both work by capturing the <strong>value</strong> at creation time instead of the variable:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">late_binding_fixes.py</span><button class="copy">Copy</button></div><pre><code class="py">fixed_default = []
+for name in [&quot;search&quot;, &quot;summarise&quot;, &quot;translate&quot;]:
+    def handler(name=name):              # default evaluated now, once per pass (2.4)
+        return f&quot;running {name}&quot;
+    fixed_default.append(handler)
+print([h() for h in fixed_default])
+
+def make_handler(name):                  # a factory: each call gets its own cell
+    def handler():
+        return f&quot;running {name}&quot;
+    return handler
+fixed_factory = [make_handler(n) for n in [&quot;search&quot;, &quot;summarise&quot;, &quot;translate&quot;]]
+print([h() for h in fixed_factory])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;running search&#x27;, &#x27;running summarise&#x27;, &#x27;running translate&#x27;]
+[&#x27;running search&#x27;, &#x27;running summarise&#x27;, &#x27;running translate&#x27;]</pre></div></div>
+<p>The default-argument trick is short but leaves an extra parameter that a caller could pass by mistake. The factory is clearer and is what you should write in code others will read. <code>functools.partial(fn, value)</code> is a third option (lesson 3.5). The same trap appears with <code>lambda</code> in a comprehension, <code>[lambda: i for i in range(3)]</code>, in GUI and web callbacks registered in a loop, and in LLM tool registries built from a list of tool names (problem 4).</p>
+</section>
+<section class="sec" id="state">
+<h2><span class="n">4</span>Closures with state, and what they keep alive</h2>
+<p>Reading a free variable needs nothing special. <strong>Rebinding</strong> it needs <code>nonlocal</code>, because an assignment would otherwise make a new local (3.3). Changing a mutable object held in a free variable (a dict used as a cache) needs no declaration. Each call of the outer function creates fresh cells, so every closure made this way has private, independent state:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">stateful_closure.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_cache(fn, max_items=2):
+    store = {}
+    hits = 0
+
+    def cached(key):
+        nonlocal hits
+        if key in store:
+            hits += 1
+            return store[key]
+        if len(store) &gt;= max_items:
+            store.pop(next(iter(store)))      # evict the oldest entry
+        store[key] = fn(key)
+        return store[key]
+
+    def stats():
+        return {&quot;size&quot;: len(store), &quot;hits&quot;: hits}
+
+    return cached, stats
+
+embed, stats = make_cache(lambda text: len(text))
+for t in [&quot;a&quot;, &quot;bb&quot;, &quot;a&quot;, &quot;ccc&quot;, &quot;a&quot;]:
+    embed(t)
+print(stats())</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;size&#x27;: 2, &#x27;hits&#x27;: 1}</pre></div></div>
+<p>Two things to keep in mind. First, a closure keeps <strong>everything it closes over</strong> alive for as long as the closure exists. A callback that closes over a big DataFrame or a loaded model keeps that object in memory until the callback is gone, a common memory leak in long-running services. Second, closure state is invisible from outside: you cannot inspect <code>store</code> without a helper like <code>stats</code>. When the state grows important enough that you want to look at it, test it or save it, move it into a class (Module 9) or a dataclass.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-two-configured-functions" data-pid="m3-4-two-configured-functions" data-type="predict" data-level="easy" data-answer="Question: refunds? | Answer: 5 days
+Question Answer
+False True">
+<header class="prob-head"><h3>1. Two configured functions</h3></header>
+<div class="code"><pre><code class="py">def make_prefixer(prefix):
+    def add(text):
+        return f&quot;{prefix}: {text}&quot;
+    return add
+
+q = make_prefixer(&quot;Question&quot;)
+a = make_prefixer(&quot;Answer&quot;)
+print(q(&quot;refunds?&quot;), &quot;|&quot;, a(&quot;5 days&quot;))
+print(q.__closure__[0].cell_contents, a.__closure__[0].cell_contents)
+print(q is a, q.__code__ is a.__code__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each factory call builds a new function object with its own cell. Do they share the compiled code?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Question: refunds? | Answer: 5 days
+Question Answer
+False True</pre></div><p>Each call of <code>make_prefixer</code> creates a new cell for <code>prefix</code> and a new function object pointing at it, so <code>q</code> and <code>a</code> are different functions with different settings. Their <strong>code</strong> is the same object: Python compiled the body once, and each function object pairs that one code object with its own cells. That is why closures are cheap to create.</p></div></details>
+</article>
+<article class="prob" id="p-a-threshold-classifier-factory" data-pid="m3-4-a-threshold-classifier-factory" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. A threshold classifier factory</h3></header>
+<div class="prob-q"><p>Write <code>make_classifier(threshold, positive="yes", negative="no")</code> that returns a function <code>classify(score)</code> giving <code>positive</code> when <code>score &gt;= threshold</code>, otherwise <code>negative</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def make_classifier(threshold, positive=&quot;yes&quot;, negative=&quot;no&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">spam = make_classifier(0.8, "spam", "ham")
+loose = make_classifier(0.3)
+assert [spam(s) for s in [0.9, 0.5]] == ["spam", "ham"]
+assert [loose(s) for s in [0.9, 0.5, 0.1]] == ["yes", "yes", "no"]
+assert spam(0.8) == "spam"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">spam = make_classifier(0.8, &quot;spam&quot;, &quot;ham&quot;)
+loose = make_classifier(0.3)
+assert [spam(s) for s in [0.9, 0.5]] == [&quot;spam&quot;, &quot;ham&quot;]
+assert [loose(s) for s in [0.9, 0.5, 0.1]] == [&quot;yes&quot;, &quot;yes&quot;, &quot;no&quot;]
+assert spam(0.8) == &quot;spam&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define <code>classify</code> inside, using <code>threshold</code>, <code>positive</code> and <code>negative</code> from the outer call, and return it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_classifier(threshold, positive=&quot;yes&quot;, negative=&quot;no&quot;):
+    def classify(score):
+        return positive if score &gt;= threshold else negative
+    return classify</code></pre></div><p>All three settings become free variables of <code>classify</code>, held in cells for that one factory call. Two classifiers with different thresholds never interfere, which is exactly what you want when comparing operating points of a model (for example a strict and a lenient threshold on the same scores).</p></div></details>
+</article>
+<article class="prob" id="p-callbacks-made-in-a-loop" data-pid="m3-4-callbacks-made-in-a-loop" data-type="predict" data-level="easy" data-answer="[30, 30, 30]
+[10, 20, 30]">
+<header class="prob-head"><h3>3. Callbacks made in a loop</h3></header>
+<div class="code"><pre><code class="py">def build():
+    callbacks = []
+    for step in [1, 2, 3]:
+        callbacks.append(lambda: step * 10)
+    return callbacks
+
+print([cb() for cb in build()])
+
+def build_fixed():
+    return [lambda step=step: step * 10 for step in [1, 2, 3]]
+
+print([cb() for cb in build_fixed()])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>build</code>, how many <code>step</code> variables are there? When does each lambda read it?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[30, 30, 30]
+[10, 20, 30]</pre></div><p>All three lambdas in <code>build</code> close over the <strong>one</strong> <code>step</code> variable of that call, and they read it after the loop has finished, when it is 3. The default argument in <code>build_fixed</code> is evaluated as each lambda is created, so each one keeps its own value.</p></div></details>
+</article>
+<article class="prob" id="p-handlers-that-all-run-the-last-tool" data-pid="m3-4-handlers-that-all-run-the-last-tool" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>4. Handlers that all run the last tool</h3></header>
+<div class="prob-q"><p>An agent registers one handler per tool name. Every handler runs the last tool. Fix <code>register</code> with a factory function so each handler keeps its own tool name.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def run_tool(name, query):
+    return f&quot;{name}({query})&quot;
+
+def register(tool_names):
+    handlers = {}
+    for name in tool_names:
+        handlers[name] = lambda query: run_tool(name, query)
+    return handlers
+</textarea>
+<script type="text/plain" class="prob-tests">h = register(["search", "calculator", "weather"])
+assert h["search"]("refunds") == "search(refunds)"
+assert h["calculator"]("2+2") == "calculator(2+2)"
+assert h["weather"]("Oslo") == "weather(Oslo)"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">h = register([&quot;search&quot;, &quot;calculator&quot;, &quot;weather&quot;])
+assert h[&quot;search&quot;](&quot;refunds&quot;) == &quot;search(refunds)&quot;
+assert h[&quot;calculator&quot;](&quot;2+2&quot;) == &quot;calculator(2+2)&quot;
+assert h[&quot;weather&quot;](&quot;Oslo&quot;) == &quot;weather(Oslo)&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write <code>make_handler(name)</code> that returns the handler, and call it inside the loop.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def run_tool(name, query):
+    return f&quot;{name}({query})&quot;
+
+def make_handler(name):
+    def handler(query):
+        return run_tool(name, query)
+    return handler
+
+def register(tool_names):
+    return {name: make_handler(name) for name in tool_names}</code></pre></div><p>The lambdas all close over the single loop variable <code>name</code> of the <code>register</code> call, which ends as <code>"weather"</code>. Each <code>make_handler(name)</code> call creates a new cell holding the value for that pass, so each handler is bound to its own tool. The dict keys were right all along, which makes this bug easy to miss in a quick test: <code>h["weather"]</code> works perfectly, and only the other tools are wrong.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-late-binding-on-purpose" data-pid="m3-4-late-binding-on-purpose" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Late binding, on purpose</h3></header>
+<div class="prob-q"><p>Sometimes late binding is exactly what you want. Write <code>make_prompt_builder()</code> that returns <code>(set_style, build)</code>: <code>set_style(style)</code> changes a shared setting, and <code>build(question)</code> returns <code>f"[{style}] {question}"</code> using whatever style is current <strong>when <code>build</code> is called</strong>. The default style is <code>"brief"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def make_prompt_builder():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">set_style, build = make_prompt_builder()
+assert build("refunds?") == "[brief] refunds?"
+set_style("formal")
+assert build("refunds?") == "[formal] refunds?"
+other_set, other_build = make_prompt_builder()
+assert other_build("x") == "[brief] x"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">set_style, build = make_prompt_builder()
+assert build(&quot;refunds?&quot;) == &quot;[brief] refunds?&quot;
+set_style(&quot;formal&quot;)
+assert build(&quot;refunds?&quot;) == &quot;[formal] refunds?&quot;
+other_set, other_build = make_prompt_builder()
+assert other_build(&quot;x&quot;) == &quot;[brief] x&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>style = "brief"</code> in the outer function. <code>set_style</code> rebinds it, so it needs <code>nonlocal</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_prompt_builder():
+    style = &quot;brief&quot;
+
+    def set_style(new_style):
+        nonlocal style
+        style = new_style
+
+    def build(question):
+        return f&quot;[{style}] {question}&quot;
+
+    return set_style, build</code></pre></div><p>Both inner functions share one cell for <code>style</code>. <code>set_style</code> rebinds it through <code>nonlocal</code>, and <code>build</code> reads it at call time, so it always sees the latest value: that is late binding working for you. A second builder is a separate factory call with its own cell, so it is unaffected. This is the same mechanism as the loop trap; the difference is only whether "read the current value" is what you meant.</p></div></details>
+</article>
+<article class="prob" id="p-two-closures-sharing-one-cell" data-pid="m3-4-two-closures-sharing-one-cell" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>6. Two closures sharing one cell</h3></header>
+<div class="prob-q"><p>Fill in what <code>get()</code> and <code>get2()</code> would return after each marked line. <code>inc</code> and <code>get</code> share one factory call.</p></div>
+<div class="code"><pre><code class="py">def make_counter(start):
+    n = start
+    def inc(by=1):
+        nonlocal n
+        n += by
+        return n
+    def get():
+        return n
+    return inc, get
+
+inc, get = make_counter(10)
+inc2, get2 = make_counter(0)
+inc()
+inc(5)
+inc2()
+inc(-6)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>get()</code></th><th><code>get2()</code></th></tr><tr><td>inc()</td><td><input class="cell" data-a="11" data-s="11" aria-label="get() at inc()" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="get2() at inc()" autocomplete="off"></td></tr><tr><td>inc(5)</td><td><input class="cell" data-a="16" data-s="16" aria-label="get() at inc(5)" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="get2() at inc(5)" autocomplete="off"></td></tr><tr><td>inc2()</td><td><input class="cell" data-a="16" data-s="16" aria-label="get() at inc2()" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="get2() at inc2()" autocomplete="off"></td></tr><tr><td>inc(-6)</td><td><input class="cell" data-a="10" data-s="10" aria-label="get() at inc(-6)" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="get2() at inc(-6)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>inc</code> and <code>get</code> share the cell from the first factory call; <code>inc2</code> has its own.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>get()</code></th><th><code>get2()</code></th></tr><tr><td>inc()</td><td><code>11</code></td><td><code>0</code></td></tr><tr><td>inc(5)</td><td><code>16</code></td><td><code>0</code></td></tr><tr><td>inc2()</td><td><code>16</code></td><td><code>1</code></td></tr><tr><td>inc(-6)</td><td><code>10</code></td><td><code>1</code></td></tr></table></div><p><code>inc()</code> makes the shared <code>n</code> 11 and <code>inc(5)</code> makes it 16, and <code>get()</code> reads that same cell, so it shows each new value. <code>inc2</code> belongs to a different call of <code>make_counter</code>, with its own cell starting at 0, so <code>inc2()</code> moves only <code>get2()</code> to 1. <code>inc(-6)</code> brings the first counter back to 10. Two closures from one factory call share state; two factory calls never do.</p></div></details>
+</article>
+<article class="prob" id="p-rate-limit-any-function" data-pid="m3-4-rate-limit-any-function" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Rate-limit any function</h3></header>
+<div class="prob-q"><p>Write <code>make_limited(fn, max_calls)</code> that returns a function <code>limited(*args, **kwargs)</code> which forwards to <code>fn</code> for the first <code>max_calls</code> calls and then raises <code>RuntimeError("rate limit reached")</code> without calling <code>fn</code>. Each <code>make_limited</code> call has its own budget.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def make_limited(fn, max_calls):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+calls = []
+def complete(prompt, *, model="small"):
+    calls.append(prompt)
+    return f"{model}:{prompt}"
+lim = make_limited(complete, 2)
+assert lim("a") == "small:a" and lim("b", model="large") == "large:b"
+assert raises(RuntimeError, lim, "c")
+assert calls == ["a", "b"]
+other = make_limited(complete, 1)
+assert other("d") == "small:d"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+calls = []
+def complete(prompt, *, model=&quot;small&quot;):
+    calls.append(prompt)
+    return f&quot;{model}:{prompt}&quot;
+lim = make_limited(complete, 2)
+assert lim(&quot;a&quot;) == &quot;small:a&quot; and lim(&quot;b&quot;, model=&quot;large&quot;) == &quot;large:b&quot;
+assert raises(RuntimeError, lim, &quot;c&quot;)
+assert calls == [&quot;a&quot;, &quot;b&quot;]
+other = make_limited(complete, 1)
+assert other(&quot;d&quot;) == &quot;small:d&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>used = 0</code> in the factory and use <code>nonlocal used</code> inside <code>limited</code>. Check the budget before calling <code>fn</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_limited(fn, max_calls):
+    used = 0
+
+    def limited(*args, **kwargs):
+        nonlocal used
+        if used &gt;= max_calls:
+            raise RuntimeError(&quot;rate limit reached&quot;)
+        used += 1
+        return fn(*args, **kwargs)
+
+    return limited</code></pre></div><p>The closure combines three earlier ideas: a free variable with <code>nonlocal</code> for the budget (3.3), forwarding with <code>*args, **kwargs</code> (3.2), and a factory so each limiter is independent. Checking the budget <strong>before</strong> calling means a refused call costs nothing, which matters when each call is a paid API request. Real rate limiters count calls per time window (a token bucket) instead of a fixed total, but they keep their state in exactly this kind of closure or a small class.</p></div></details>
+</article>
+<article class="prob" id="p-what-a-closure-keeps-alive" data-pid="m3-4-what-a-closure-keeps-alive" data-type="predict" data-level="medium" data-answer="3 rows, total 12
+(&#x27;rows&#x27;, &#x27;total&#x27;)
+3 rows, total 12">
+<header class="prob-head"><h3>8. What a closure keeps alive</h3></header>
+<div class="code"><pre><code class="py">def make_summary(rows):
+    total = sum(r[&quot;amount&quot;] for r in rows)
+    def report():
+        return f&quot;{len(rows)} rows, total {total}&quot;
+    return report
+
+data = [{&quot;amount&quot;: 5}, {&quot;amount&quot;: 7}]
+report = make_summary(data)
+data.append({&quot;amount&quot;: 100})
+print(report())
+print(report.__code__.co_freevars)
+data = None
+print(report())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which free variables does <code>report</code> close over, and which of them point at objects that can change?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 rows, total 12
+(&#x27;rows&#x27;, &#x27;total&#x27;)
+3 rows, total 12</pre></div><p><code>report</code> closes over <code>rows</code> and <code>total</code>. <code>total</code> is an int computed once, but <code>rows</code> is the caller's list itself, so appending to <code>data</code> changes what <code>len(rows)</code> reports: the text says 3 rows but the total still covers only 2, a subtle inconsistency. Setting <code>data = None</code> only moves the caller's name; the list stays alive because the closure still refers to it. A closure that captures a large mutable object (a DataFrame, a list of documents) both sees later changes and keeps the object in memory as long as the closure exists.</p></div></details>
+</article>
+<article class="prob" id="p-closure-or-class-for-a-configured-functi" data-pid="m3-4-closure-or-class-for-a-configured-functi" data-type="choose" data-level="medium" data-answer="a">
+<header class="prob-head"><h3>9. Closure or class for a configured function</h3></header>
+<div class="prob-q"><p>Both build a configured scorer once and call it a million times. Which runs the calls faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">def make_scorer(w, b):
+    def score(x):
+        return w * x + b
+    return score
+
+class Scorer:
+    def __init__(self, w, b):
+        self.w, self.b = w, b
+    def __call__(self, x):
+        return self.w * x + self.b
+
+xs = list(range(1_000_000))
+closure = make_scorer(2, 1)
+obj = Scorer(2, 1)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">r = [closure(x) for x in xs]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">r = [obj(x) for x in xs]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Reading a free variable goes through a cell. Reading <code>self.w</code> goes through an attribute lookup. Calling an object goes through <code>__call__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>188.75 ms</td></tr><tr><td>B</td><td>384.53 ms</td></tr></table></div><p>The closure reads <code>w</code> and <code>b</code> straight from its cells and is called as a plain function. The class instance has to go through <code>__call__</code> and then look up <code>self.w</code> and <code>self.b</code> as attributes on every call. Both are fine for most code, and the class is easier to inspect and extend; the point is that closures are not a slow or exotic choice. For real numeric work, a vectorised numpy expression (<code>2 * arr + 1</code>) beats both by far.</p></div></details>
+</article>
+<article class="prob" id="p-a-memoiser-that-remembers-the-wrong-thin" data-pid="m3-4-a-memoiser-that-remembers-the-wrong-thin" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. A memoiser that remembers the wrong thing</h3></header>
+<div class="prob-q"><p><code>memoize</code> should cache results per argument value, so expensive feature computations run once per input. Instead every call after the first returns the first result. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def memoize(fn):
+    result = None
+    def cached(x):
+        nonlocal result
+        if result is None:
+            result = fn(x)
+        return result
+    return cached
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def slow_square(x):
+    calls.append(x)
+    return x * x
+sq = memoize(slow_square)
+assert [sq(2), sq(3), sq(2), sq(3)] == [4, 9, 4, 9]
+assert calls == [2, 3]
+assert memoize(lambda x: None)(1) is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def slow_square(x):
+    calls.append(x)
+    return x * x
+sq = memoize(slow_square)
+assert [sq(2), sq(3), sq(2), sq(3)] == [4, 9, 4, 9]
+assert calls == [2, 3]
+assert memoize(lambda x: None)(1) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One <code>result</code> variable can only remember one result. What structure can remember one result per argument?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last test caches a function that returns <code>None</code>. Can <code>None</code> still mean "not computed yet"?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def memoize(fn):
+    cache = {}
+    def cached(x):
+        if x not in cache:
+            cache[x] = fn(x)
+        return cache[x]
+    return cached</code></pre></div><p>The original stores one value and uses <code>None</code> as "empty", so it returns the first result forever, and it would call <code>fn</code> again and again for a function that returns <code>None</code>. A dict keyed by the argument stores one result per input, and <code>x not in cache</code> distinguishes "never computed" from "computed and was None". Because the dict is changed in place, no <code>nonlocal</code> is needed. The standard library version is <code>functools.cache</code> (or <code>lru_cache</code> with a size limit), which you will apply as a decorator in Module 7.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-late-binding-inside-a-function" data-pid="m3-4-late-binding-inside-a-function" data-type="predict" data-level="hard" data-answer="[10, 10, 10]
+10
+True">
+<header class="prob-head"><h3>11. Late binding inside a function</h3></header>
+<div class="code"><pre><code class="py">def make_multipliers():
+    fns = []
+    for k in range(3):
+        fns.append(lambda x: x * k)
+    k = 10
+    return fns
+
+fns = make_multipliers()
+print([f(1) for f in fns])
+print(fns[0].__closure__[0].cell_contents)
+print(fns[0].__closure__[0] is fns[2].__closure__[0])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many cells for <code>k</code> does one call of <code>make_multipliers</code> create?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What is the last value assigned to <code>k</code> before the function returns?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[10, 10, 10]
+10
+True</pre></div><p>One call of <code>make_multipliers</code> has exactly one cell for <code>k</code>, shared by all three lambdas. The loop assigns 0, 1, 2 into that cell, and then <code>k = 10</code> assigns again, after the loop. When the lambdas finally run, they all read 10. The identity check confirms there is a single shared cell. Late binding means "the last value assigned before the call", not "the last value of the loop".</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-event-system-with-two-c" data-pid="m3-4-read-the-code-an-event-system-with-two-c" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: an event system with two closure bugs</h3></header>
+<div class="prob-q"><p>This small event bus lets an agent subscribe handlers to events such as <code>"tool_start"</code>. Two things are broken: handlers subscribed in the setup loop all report the last event name, and <code>make_bus()</code> called twice gives two buses that share their subscriptions. Read the whole module, find both bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">_handlers = {}
+
+
+def make_bus():
+    def subscribe(event, fn):
+        _handlers.setdefault(event, []).append(fn)
+
+    def emit(event, payload):
+        return [fn(payload) for fn in _handlers.get(event, [])]
+
+    return subscribe, emit
+
+
+def setup_logging(subscribe, events, log):
+    for event in events:
+        subscribe(event, lambda payload: log.append(f&quot;{event}: {payload}&quot;))
+</textarea>
+<script type="text/plain" class="prob-tests">sub_a, emit_a = make_bus()
+sub_b, emit_b = make_bus()
+log_a = []
+setup_logging(sub_a, ["tool_start", "tool_end"], log_a)
+emit_a("tool_start", "search")
+emit_a("tool_end", "search")
+assert log_a == ["tool_start: search", "tool_end: search"]
+assert emit_b("tool_start", "x") == []
+sub_b("tool_start", lambda p: p.upper())
+assert emit_b("tool_start", "x") == ["X"]
+assert len(emit_a("tool_start", "y")) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sub_a, emit_a = make_bus()
+sub_b, emit_b = make_bus()
+log_a = []
+setup_logging(sub_a, [&quot;tool_start&quot;, &quot;tool_end&quot;], log_a)
+emit_a(&quot;tool_start&quot;, &quot;search&quot;)
+emit_a(&quot;tool_end&quot;, &quot;search&quot;)
+assert log_a == [&quot;tool_start: search&quot;, &quot;tool_end: search&quot;]
+assert emit_b(&quot;tool_start&quot;, &quot;x&quot;) == []
+sub_b(&quot;tool_start&quot;, lambda p: p.upper())
+assert emit_b(&quot;tool_start&quot;, &quot;x&quot;) == [&quot;X&quot;]
+assert len(emit_a(&quot;tool_start&quot;, &quot;y&quot;)) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Where does <code>_handlers</code> live? Should each bus have its own?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>setup_logging</code>, which variable do the lambdas read when they run? Bind its value per pass.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_bus():
+    handlers = {}
+
+    def subscribe(event, fn):
+        handlers.setdefault(event, []).append(fn)
+
+    def emit(event, payload):
+        return [fn(payload) for fn in handlers.get(event, [])]
+
+    return subscribe, emit
+
+
+def make_logger(event, log):
+    def handler(payload):
+        log.append(f&quot;{event}: {payload}&quot;)
+    return handler
+
+
+def setup_logging(subscribe, events, log):
+    for event in events:
+        subscribe(event, make_logger(event, log))</code></pre></div><p>Bug one is about <strong>where</strong> the state lives: <code>_handlers</code> is a module global, so every bus shares it, and <code>emit_b</code> sees the handlers subscribed on bus A. Moving the dict inside <code>make_bus</code> gives each call its own <code>handlers</code>, closed over by that bus's <code>subscribe</code> and <code>emit</code>. Bug two is late binding: every logging lambda reads the loop variable <code>event</code> when an event is emitted, long after the loop finished, so both log lines would say <code>tool_end</code>. A factory, <code>make_logger(event, log)</code>, captures the value per pass. Event buses, middleware chains and agent callback systems are built from closures like these, so both bugs show up in real frameworks.</p></div></details>
+</article>
+<article class="prob" id="p-retry-with-backoff-configured-once" data-pid="m3-4-retry-with-backoff-configured-once" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Retry with backoff, configured once</h3></header>
+<div class="prob-q"><p>Write <code>make_retrying(attempts, delays, sleep)</code> that returns a function <code>run(fn, *args, **kwargs)</code>. <code>run</code> calls <code>fn</code>, and on a <code>ConnectionError</code> waits <code>delays[i]</code> seconds (by calling the given <code>sleep</code> function) before the next attempt, up to <code>attempts</code> attempts in total. It returns the result, or re-raises the last error. It also records every wait in a list that <code>run.waits</code> exposes. Taking <code>sleep</code> as a parameter lets tests run instantly.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def make_retrying(attempts, delays, sleep):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+slept = []
+run = make_retrying(3, [0.5, 1.0], slept.append)
+state = {"left": 2}
+def flaky(q):
+    if state["left"]:
+        state["left"] -= 1
+        raise ConnectionError("reset")
+    return f"ok {q}"
+assert run(flaky, "refunds") == "ok refunds"
+assert slept == [0.5, 1.0] and run.waits == [0.5, 1.0]
+def down(q):
+    raise ConnectionError("down")
+assert raises(ConnectionError, run, down, "x")
+assert run.waits == [0.5, 1.0, 0.5, 1.0]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+slept = []
+run = make_retrying(3, [0.5, 1.0], slept.append)
+state = {&quot;left&quot;: 2}
+def flaky(q):
+    if state[&quot;left&quot;]:
+        state[&quot;left&quot;] -= 1
+        raise ConnectionError(&quot;reset&quot;)
+    return f&quot;ok {q}&quot;
+assert run(flaky, &quot;refunds&quot;) == &quot;ok refunds&quot;
+assert slept == [0.5, 1.0] and run.waits == [0.5, 1.0]
+def down(q):
+    raise ConnectionError(&quot;down&quot;)
+assert raises(ConnectionError, run, down, &quot;x&quot;)
+assert run.waits == [0.5, 1.0, 0.5, 1.0]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>run</code>: loop <code>for i in range(attempts)</code>; on <code>ConnectionError</code>, if this was not the last attempt, <code>sleep(delays[i])</code> and record it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Functions are objects: after defining <code>run</code>, set <code>run.waits = []</code> and append to it inside <code>run</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_retrying(attempts, delays, sleep):
+    def run(fn, *args, **kwargs):
+        for i in range(attempts):
+            try:
+                return fn(*args, **kwargs)
+            except ConnectionError:
+                if i == attempts - 1:
+                    raise
+                sleep(delays[i])
+                run.waits.append(delays[i])
+    run.waits = []
+    return run</code></pre></div><p>The retry policy (attempts, delays) is configured once in the factory and closed over, so call sites only say <code>run(fn, ...)</code>. Taking <code>sleep</code> as a parameter is <strong>dependency injection</strong>: production passes <code>time.sleep</code>, tests pass <code>list.append</code>, and the logic is identical. A bare <code>raise</code> inside <code>except</code> re-raises the current error with its original traceback. <code>run.waits</code> works because a function is an object that can carry attributes (3.1); it is a light alternative to returning a second "stats" function. This is the shape of libraries like <code>tenacity</code>, written by hand.</p></div></details>
+</article>
+<article class="prob" id="p-closures-over-a-loop-variable-three-ways" data-pid="m3-4-closures-over-a-loop-variable-three-ways" data-type="predict" data-level="hard" data-answer="[&#x27;b:x&#x27;, &#x27;b:x&#x27;]
+[&#x27;a:x&#x27;, &#x27;b:x&#x27;]
+[&#x27;a:x&#x27;, &#x27;b:x&#x27;]
+OOPS:x">
+<header class="prob-head"><h3>14. Closures over a loop variable, three ways</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def base(name, query):
+    return f&quot;{name}:{query}&quot;
+
+names = [&quot;a&quot;, &quot;b&quot;]
+late = [lambda q: base(n, q) for n in names]
+default = [lambda q, n=n: base(n, q) for n in names]
+partial = [functools.partial(base, n) for n in names]
+
+print([f(&quot;x&quot;) for f in late])
+print([f(&quot;x&quot;) for f in default])
+print([f(&quot;x&quot;) for f in partial])
+print(default[0](&quot;x&quot;, &quot;OOPS&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A comprehension has its own scope, but still only one <code>n</code> variable for the whole comprehension.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The default-argument version leaves <code>n</code> as a real parameter. What happens if a caller passes it?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;b:x&#x27;, &#x27;b:x&#x27;]
+[&#x27;a:x&#x27;, &#x27;b:x&#x27;]
+[&#x27;a:x&#x27;, &#x27;b:x&#x27;]
+OOPS:x</pre></div><p>The comprehension has one <code>n</code> (in its own scope), so the <code>late</code> lambdas all read its final value, <code>"b"</code>. The default argument freezes each value, and <code>functools.partial</code> stores the value in a new object, so both give <code>a:x</code> and <code>b:x</code>. The last line shows the weakness of the default trick: <code>n</code> is an ordinary parameter, so a caller can override it by accident, here with <code>"OOPS"</code> landing in <code>n</code>. <code>partial</code> and factories do not have that hole, which is why they are preferred in code others call.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-what-is-a-closure-in-python-and-how-does" data-pid="m3-4-what-is-a-closure-in-python-and-how-does" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. What is a closure in Python, and how does it remember values after the outer function returns?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A closure is an inner function together with the variables from an enclosing function that it uses (its free variables). At compile time Python sees that the inner function uses the outer variable and stores it in a <strong>cell</strong> rather than a normal local slot. Each call of the outer function creates new cells, and the inner function object keeps references to them in <code>__closure__</code>, so the cells (and the objects they hold) survive after the outer frame is gone. Reading a free variable needs nothing special; rebinding it needs <code>nonlocal</code>. Uses: factories, callbacks with context, private state, decorators. Mention the cost: anything a closure captures stays in memory as long as the closure lives.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-lambda-i-for-i-in-range-3-give-" data-pid="m3-4-why-does-lambda-i-for-i-in-range-3-give-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Why does <code>[lambda: i for i in range(3)]</code> give functions that all return 2, and how do you fix it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Closures use late binding: each lambda refers to the variable <code>i</code>, not to its value at creation time, and all three lambdas share the comprehension's single <code>i</code>. They run after the comprehension has finished, when <code>i</code> is 2. Fixes: capture the value at creation with a default argument (<code>lambda i=i: i</code>), build each function with a factory (<code>def make(i): return lambda: i</code>), or use <code>functools.partial</code>. Say which you prefer and why: the factory or <code>partial</code>, because the default-argument trick adds a parameter callers can override. Real-world version: callbacks or tool handlers registered in a loop all acting on the last item.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-use-a-closure-and-when-a-" data-pid="m3-4-when-would-you-use-a-closure-and-when-a-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When would you use a closure, and when a class?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use a closure when the thing is essentially <strong>one function plus a little configuration or private state</strong>: a configured validator, a key function, a counter, a small cache, a decorator. It is concise and fast, and the state is truly private. Use a class when there are several operations on the same state, when the state should be inspectable, printable, serialisable or testable directly, when you need inheritance or protocols such as <code>__repr__</code>, or when other people will extend it. A good signal: if you find yourself returning several inner functions or adding attributes to a function object, a class (or a dataclass with methods) is probably clearer. Many teams also prefer classes for anything long-lived in a service, because closure state is invisible in a debugger and in logs.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A closure is an inner function plus the outer variables it uses. They live in cells, which survive after the outer call returns.</li><li>Each call of the outer function creates new cells, so closures from different calls never share state.</li><li>Closures read variables at call time (late binding). Closures built in a loop all share one loop variable: capture the value with a factory, <code>functools.partial</code>, or a default argument.</li><li>Reading a free variable is free; rebinding needs <code>nonlocal</code>; changing a captured mutable object in place needs nothing.</li><li>Closures keep alive everything they capture. When the state needs to be inspected or grow, use a class.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
