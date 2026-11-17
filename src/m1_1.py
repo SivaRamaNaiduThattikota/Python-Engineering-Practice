@@ -82,8 +82,18 @@ section("rules", "The rules in one screen",
     `not 1 == 2` is `not (1 == 2)`."""),
     ex("""
     for v in [0, 0.0, "", [], {}, None, "0", " ", [0], -1]:
+        # Inside {v!r:>5} there are two formatting instructions:
+        #   !r   show v the way you would type it in code (its repr),
+        #        so the string "0" prints as '0' with quotes, and "" as ''.
+        #        Without !r, "" and " " would print as nothing at all.
+        #   :>5  make it 5 characters wide, pushed to the right (>),
+        #        so all the arrows line up in one column.
         print(f"{v!r:>5} -> {bool(v)}")
     """, "truthiness.py"),
+    p("""In the f-string, `!r` shows each value as its **repr**, the form you would type in code, so `"0"` appears as
+    `'0'` and the empty string as `''`. Without `!r`, the empty string and the space would print as blanks and you
+    could not tell them apart. `:>5` pads the text to 5 characters, aligned right. Compare `print(f"{'0'}")`, which
+    prints `0`, with `print(f"{'0'!r}")`, which prints `'0'`. Strings (Module 4) covers f-string formatting fully."""),
     p("""Falsy means "acts as False in an `if`": `None`, `False`, zero of any number type, and empty containers.
     Everything else is truthy, including the string `"0"`, a space, and a list holding a zero."""),
     ex("""
