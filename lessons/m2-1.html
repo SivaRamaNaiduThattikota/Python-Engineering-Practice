@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2.1 · Names, objects and identity</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m2-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 2 · The object model</span></div>
+  <h1>2.1 Names, objects and identity</h1>
+  <p>What <code>=</code> really does, how <code>is</code> differs from <code>==</code>, and the places where that difference turns into real bugs: missing values, caches keyed by <code>id()</code>, NaN in your features, and list methods that grab the wrong item.</p>
+  <div class="chips"><span class="chip">20 problems</span><span class="chip">4 easy · 10 medium · 6 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="names">
+<h2><span class="n">1</span>Names point at objects</h2>
+<p>Every value in Python is an <strong>object</strong> living somewhere in memory. A variable is a <strong>name</strong> that points at an object. <code>x = something</code> does one thing only: it makes the name <code>x</code> point at that object. It never copies the object, and it never changes the object that <code>x</code> pointed at before. Your theory notes call this a tag on an object; this lesson is about what that means in real code.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">names.py</span><button class="copy">Copy</button></div><pre><code class="py">a = [1]
+b = a              # b now points at the SAME list as a
+print(a is b)
+
+a = a + [2]        # a + [2] builds a NEW list, then a is pointed at it
+print(a, b)        # b still points at the old list
+print(a is b)</code></pre><div class="out"><span class="ol">Output</span><pre>True
+[1, 2] [1]
+False</pre></div></div>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 170" role="img" aria-label="After b = a, both names point at one list. After a = a + [2], a points at a new list and b still points at the old one.">
+  <defs><marker id="n1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <text x="10" y="18" class="h">After  b = a</text>
+  <rect x="10" y="38" width="44" height="30" rx="8" class="box"/><text x="32" y="58" class="tk">a</text>
+  <rect x="10" y="98" width="44" height="30" rx="8" class="box"/><text x="32" y="118" class="tk">b</text>
+  <rect x="150" y="62" width="110" height="40" rx="10" class="box a"/><text x="205" y="87" class="w mid">[1]</text>
+  <path d="M54 53 L146 76" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#n1)"/>
+  <path d="M54 113 L146 90" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#n1)"/>
+  <text x="205" y="125" class="mid">one object, two names</text>
+  <text x="340" y="18" class="h">After  a = a + [2]</text>
+  <rect x="340" y="38" width="44" height="30" rx="8" class="box"/><text x="362" y="58" class="tk">a</text>
+  <rect x="340" y="98" width="44" height="30" rx="8" class="box"/><text x="362" y="118" class="tk">b</text>
+  <rect x="480" y="30" width="130" height="40" rx="10" class="box b"/><text x="545" y="55" class="w mid">[1, 2]  new</text>
+  <rect x="480" y="96" width="130" height="40" rx="10" class="box a"/><text x="545" y="121" class="w mid">[1]  old</text>
+  <path d="M384 53 L476 50" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#n1)"/>
+  <path d="M384 113 L476 116" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#n1)"/>
+  <text x="545" y="158" class="mid">a moved, b did not</text>
+</svg></div><figcaption><code>=</code> moves a name. <code>a + [2]</code> built a brand-new list, so only <code>a</code> moved.</figcaption></figure>
+<p>Read every <code>=</code> as "point this name at that object". Two consequences follow, and the rest of the lesson depends on them:</p>
+<ul><li><strong>Several names can point at one object.</strong> Then any change made *through* one name is visible through all of them, because there is only one object. (Changing objects is lesson 2.2.)</li><li><strong>Pointing a name somewhere else changes nothing else.</strong> <code>a = a + [2]</code> did not touch the old list, so <code>b</code> was not affected.</li></ul>
+</section>
+<section class="sec" id="identity">
+<h2><span class="n">2</span>Identity and equality</h2>
+<p>Every object has an <strong>identity</strong>: a number that stays the same for the object's whole life. <code>id(x)</code> returns it. Two questions sound alike but are completely different:</p>
+<ul><li><code>a is b</code> asks: <strong>is this the same object?</strong> It compares identities. Nothing else is looked at.</li><li><code>a == b</code> asks: <strong>do these count as equal?</strong> Python asks the object itself, by calling its <code>__eq__</code> method, and the object can answer whatever its type decides.</li></ul>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p><code>is</code> is like comparing <strong>primary keys</strong>: same key, same row. <code>==</code> is like comparing <strong>all the columns</strong>: two different rows can have exactly the same values. A deduplication that should keep distinct rows but compares values instead of keys deletes real data, and the same mistake exists in Python.</p></div></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">is_vs_eq.py</span><button class="copy">Copy</button></div><pre><code class="py">a = [1, 2, 3]
+b = [1, 2, 3]
+print(a == b, a is b)        # equal values, two different objects
+print(id(a) == id(b))        # is compares exactly these numbers
+
+import numpy as np
+x = np.array([1, 2, 3])
+print(x == 2)                # numpy answers == with a whole array, not True / False</code></pre><div class="out"><span class="ol">Output</span><pre>True False
+False
+[False  True False]</pre></div></div>
+<p>Because <code>==</code> is decided by the type, it is not always a yes/no question. numpy compares element by element and returns an array. pandas does the same with a Series. Some libraries go further: in SQLAlchemy, <code>column == None</code> does not compare anything at all, it builds a piece of SQL (<code>IS NULL</code>). <code>is</code> can never be redefined by a type, so it always means exactly one thing and is very fast.</p>
+<div class="callout c-key"><div class="ci">i</div><div><div class="ct">Rule of thumb</div><p>Use <code>==</code> to compare values. Use <code>is</code> only to ask "is this that exact object?": with <code>None</code> and the other singletons, with sentinels, and when you really mean identity (problem 14). Never use <code>is</code> to compare numbers or strings: Python even warns you (<code>SyntaxWarning: "is" with 'int' literal</code>).</p></div></div>
+</section>
+<section class="sec" id="singletons">
+<h2><span class="n">3</span>None, singletons and sentinels</h2>
+<p>A <strong>singleton</strong> is a type that only ever has one object. <code>None</code>, <code>True</code>, <code>False</code> and <code>...</code> (Ellipsis) are singletons: every <code>None</code> in your program is the same object. That is why <code>x is None</code> is the right test. It is exact (nothing can pretend to be <code>None</code>), and it works on numpy arrays and pandas objects, where <code>x == None</code> either returns an array or raises an error inside an <code>if</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">none.py</span><button class="copy">Copy</button></div><pre><code class="py">def first(rows):
+    return rows[0] if rows else None
+
+r = first([])
+print(r is None)
+print(type(None)() is None)   # even asking the type for a new None gives the same one</code></pre><div class="out"><span class="ol">Output</span><pre>True
+True</pre></div></div>
+<p>Sometimes <code>None</code> is a valid value, so it cannot also mean "not given". An LLM API is a good example: <code>stop=None</code> can mean "clear the stop sequences", which is different from "use the server default". The standard answer is a <strong>sentinel</strong>: a private object created once, which no caller can pass by accident.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">sentinel.py</span><button class="copy">Copy</button></div><pre><code class="py">MISSING = object()            # a unique object; nothing else is ever this object
+
+def get_setting(settings, key, default=MISSING):
+    if key in settings:
+        return settings[key]
+    if default is MISSING:
+        raise KeyError(key)
+    return default            # includes default=None, which is a real choice
+
+cfg = {&quot;model&quot;: &quot;small&quot;, &quot;stop&quot;: None}
+print(get_setting(cfg, &quot;stop&quot;))
+print(get_setting(cfg, &quot;temperature&quot;, None))
+try:
+    get_setting(cfg, &quot;temperature&quot;)
+except KeyError as e:
+    print(&quot;KeyError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>None
+None
+KeyError: &#x27;temperature&#x27;</pre></div></div>
+<p><code>dict.get</code>, <code>getattr</code> and many library functions use exactly this trick inside. Recognising it makes a lot of library code easier to read.</p>
+</section>
+<section class="sec" id="caching">
+<h2><span class="n">4</span>Caching is not a rule</h2>
+<p>CPython, the normal Python, saves memory by reusing some immutable objects. Small integers from -5 to 256 are created once and shared. Many short strings that look like names are <strong>interned</strong>: kept in one shared copy. And when the same constant appears twice in one piece of compiled code, the compiler may store it only once. All of this is an <strong>implementation detail</strong>: it can differ between Python versions, between the REPL and a script, and between a literal and a value computed at run time.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">caching.py</span><button class="copy">Copy</button></div><pre><code class="py">a = 256; b = 256
+print(a is b)                       # small ints are shared
+
+c = int(&quot;257&quot;); d = int(&quot;257&quot;)
+print(c is d, c == d)               # computed at run time: two objects
+
+s1 = &quot;hello_world&quot;
+s3 = &quot;&quot;.join([&quot;hello&quot;, &quot;_world&quot;])
+print(s1 == s3, s1 is s3)           # built at run time: equal, not identical</code></pre><div class="out"><span class="ol">Output</span><pre>True
+False True
+True False</pre></div></div>
+<p>So <code>is</code> on numbers or strings can be <code>True</code> in your test and <code>False</code> in production with other data. Values that come from files, APIs and databases are created at run time, so they are usually separate objects even when they are equal. Always compare them with <code>==</code>.</p>
+</section>
+<section class="sec" id="containers">
+<h2><span class="n">5</span>Containers check identity first</h2>
+<p>When a list, tuple or dict looks for a value (for <code>in</code>, <code>==</code>, <code>count</code>, <code>index</code>, <code>remove</code> or a dict key), it compares each item with <code>x is item or x == item</code>: identity first, equality second. Usually you never notice. Two cases make it visible.</p>
+<p><strong>NaN.</strong> The float <code>nan</code> ("not a number", what pandas uses for missing numbers) is defined as not equal to anything, itself included: <code>nan == nan</code> is <code>False</code>. But the identity check comes first, so the <strong>same</strong> nan object is still found in a list.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">nan.py</span><button class="copy">Copy</button></div><pre><code class="py">nan = float(&quot;nan&quot;)
+print(nan == nan)                   # NaN equals nothing, not even itself
+print(nan in [nan])                 # found anyway: the identity check comes first
+print(float(&quot;nan&quot;) in [nan])        # a different NaN object: not found</code></pre><div class="out"><span class="ol">Output</span><pre>False
+True
+False</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>NaN behaves like SQL's <code>NULL</code>: <code>NULL = NULL</code> is not true, so you write <code>IS NULL</code>. In pandas the equivalent is <code>s.isna()</code>, never <code>s == np.nan</code> (problem 17).</p></div></div>
+<p><strong>Equal but different objects.</strong> <code>list.remove(x)</code> deletes the <strong>first item equal to</strong> <code>x</code>, and <code>list.index(x)</code> returns the position of the first equal item. If the list holds two equal objects (two chat messages that both say "ok"), they find the first one, which may not be the one you meant (problem 15).</p>
+</section>
+<section class="sec" id="lifetime">
+<h2><span class="n">6</span>Object lifetime and id reuse</h2>
+<p><code>del x</code> deletes the <strong>name</strong> <code>x</code>, not the object. An object stays alive as long as at least one name or container still points at it. When nothing points at it any more, Python frees it, and its memory can be reused for the next object. Since <code>id()</code> is based on that memory, <strong>an id can be reused</strong> after its object is gone.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lifetime.py</span><button class="copy">Copy</button></div><pre><code class="py">a = [1, 2, 3]
+b = a
+del a                 # removes the name a; the list is still reachable through b
+print(b)
+
+# Each [] here dies right after id() reads it, so the second one can land in the same
+# memory. The result depends on the run: never rely on it either way.
+print(id([]) == id([]))</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 3]
+True</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">Never key long-lived data by id()</div><p><code>id()</code> is only unique among objects that are alive <strong>at the same time</strong>. A cache keyed by <code>id(prompt)</code> misses when an equal prompt arrives as a new object, and can even return another prompt's answer once the old object is freed and its id reused (problem 8). Key by the value instead.</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-rebinding-immutable-values" data-pid="m2-1-rebinding-immutable-values" data-type="predict" data-level="easy" data-answer="gpt-mini gpt
+False
+4 3 False">
+<header class="prob-head"><h3>1. Rebinding immutable values</h3></header>
+<div class="code"><pre><code class="py">model = &quot;gpt&quot;
+alias = model
+model = model + &quot;-mini&quot;
+print(model, alias)
+print(model is alias)
+
+retries = 3
+limit = retries
+retries += 1
+print(retries, limit, retries is limit)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Strings and ints cannot be changed, so <code>+</code> and <code>+=</code> on them always build a new object and move the name.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>gpt-mini gpt
+False
+4 3 False</pre></div><p><code>model + "-mini"</code> builds a new string and points <code>model</code> at it. <code>alias</code> still points at the old <code>"gpt"</code>. <code>retries += 1</code> on an int works the same way: a new int object <code>4</code>, while <code>limit</code> keeps <code>3</code>. Lesson 2.2 shows that <code>+=</code> on a <strong>list</strong> is different: it changes the list in place.</p></div></details>
+</article>
+<article class="prob" id="p-missing-fields-in-an-llm-s-json" data-pid="m2-1-missing-fields-in-an-llm-s-json" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Missing fields in an LLM's JSON</h3></header>
+<div class="prob-q"><p>An LLM was asked to return JSON with some required fields. Write <code>missing_fields(record, required)</code> that returns the required keys that are <strong>absent or <code>None</code></strong>, in the order of <code>required</code>. A value of <code>0</code>, <code>""</code> or <code>[]</code> is a real answer and must not count as missing.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def missing_fields(record, required):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">r = {"title": "Refund", "priority": 0, "tags": [], "owner": None}
+assert missing_fields(r, ["title", "priority", "tags", "owner", "due"]) == ["owner", "due"]
+assert missing_fields({}, ["a"]) == ["a"]
+assert missing_fields({"a": ""}, ["a"]) == []
+assert missing_fields({"a": False}, ["a"]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = {&quot;title&quot;: &quot;Refund&quot;, &quot;priority&quot;: 0, &quot;tags&quot;: [], &quot;owner&quot;: None}
+assert missing_fields(r, [&quot;title&quot;, &quot;priority&quot;, &quot;tags&quot;, &quot;owner&quot;, &quot;due&quot;]) == [&quot;owner&quot;, &quot;due&quot;]
+assert missing_fields({}, [&quot;a&quot;]) == [&quot;a&quot;]
+assert missing_fields({&quot;a&quot;: &quot;&quot;}, [&quot;a&quot;]) == []
+assert missing_fields({&quot;a&quot;: False}, [&quot;a&quot;]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>record.get(key)</code> returns <code>None</code> both when the key is absent and when the value is <code>None</code>, which is exactly the rule here.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Test with <code>is None</code>. A plain <code>if not value</code> would also catch <code>0</code>, <code>""</code> and <code>[]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def missing_fields(record, required):
+    return [key for key in required if record.get(key) is None]</code></pre></div><p><code>record.get(key)</code> gives <code>None</code> for an absent key, so one <code>is None</code> test covers both cases. The trap is <code>if not record.get(key)</code>: priority <code>0</code>, an empty tag list and <code>False</code> are valid answers, and truthiness would report them as missing (the COALESCE trap from 1.1). In production you would validate this with Pydantic (Module 11), and it uses the same <code>is None</code> idea inside.</p></div></details>
+</article>
+<article class="prob" id="p-equal-or-the-same" data-pid="m2-1-equal-or-the-same" data-type="predict" data-level="easy" data-answer="True False
+True True
+True True
+True True">
+<header class="prob-head"><h3>3. Equal or the same?</h3></header>
+<div class="code"><pre><code class="py">a = [1, 2]
+b = [1, 2]
+c = a
+print(a == b, a is b)
+print(c == a, c is a)
+print(a is not b, not a is b)
+print(None is None, type(None)() is None)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>a is not b</code> is one operator, the opposite of <code>is</code>. <code>not a is b</code> reads as <code>not (a is b)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True False
+True True
+True True
+True True</pre></div><p><code>a</code> and <code>b</code> are two lists with equal values: <code>==</code> is <code>True</code>, <code>is</code> is <code>False</code>. <code>c = a</code> points <code>c</code> at the same list, so both are <code>True</code>. <code>a is not b</code> and <code>not a is b</code> mean the same thing; Python style prefers <code>is not</code>. <code>None</code> is a singleton, and even calling its type returns that same object.</p></div></details>
+</article>
+<article class="prob" id="p-the-numpy-check-that-crashes" data-pid="m2-1-the-numpy-check-that-crashes" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>4. The numpy check that crashes</h3></header>
+<div class="prob-q"><p><code>describe</code> should say <code>"missing"</code> for <code>None</code> and <code>"array of N"</code> for a numpy array. It crashes on <code>np.array([1, 2])</code>. Run it, read the error, then fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">import numpy as np
+
+def describe(x):
+    if x == None:
+        return &quot;missing&quot;
+    return f&quot;array of {len(x)}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+assert describe(None) == "missing"
+assert describe(np.array([1, 2])) == "array of 2"
+assert describe(np.array([5])) == "array of 1"
+assert describe(np.array([])) == "array of 0"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+assert describe(None) == &quot;missing&quot;
+assert describe(np.array([1, 2])) == &quot;array of 2&quot;
+assert describe(np.array([5])) == &quot;array of 1&quot;
+assert describe(np.array([])) == &quot;array of 0&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>np.array([1, 2]) == None</code> return? Then what does <code>if</code> do with that?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+
+def describe(x):
+    if x is None:
+        return &quot;missing&quot;
+    return f&quot;array of {len(x)}&quot;</code></pre></div><p>numpy answers <code>==</code> element by element: <code>np.array([1, 2]) == None</code> is <code>array([False, False])</code>. An <code>if</code> then has to turn a two-item array into one True / False, which numpy refuses: "The truth value of an array with more than one element is ambiguous". An empty array fails the same way ("The truth value of an empty array is ambiguous"), and a one-item array happens to work, so a quick test with <code>np.array([5])</code> hides the bug. <code>x is None</code> never asks the array anything. This exact crash is common in ML code that checks optional arrays such as <code>sample_weight</code> or <code>mask</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-optional-api-parameters-with-a-sentinel" data-pid="m2-1-optional-api-parameters-with-a-sentinel" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Optional API parameters with a sentinel</h3></header>
+<div class="prob-q"><p>Write <code>make_payload(prompt, *, temperature=MISSING, stop=MISSING)</code> that builds the request body for an LLM API. Arguments that were <strong>not passed</strong> must be left out completely, so the server uses its own defaults. But an argument passed as <code>None</code> must be <strong>included</strong> as <code>None</code>: for this API, <code>"stop": None</code> means "clear the stop sequences". (The <code>*</code> makes <code>temperature</code> and <code>stop</code> keyword-only; lesson 3.2 covers it.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">MISSING = object()
+
+def make_payload(prompt, *, temperature=MISSING, stop=MISSING):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert make_payload("hi") == {"prompt": "hi"}
+assert make_payload("hi", temperature=0) == {"prompt": "hi", "temperature": 0}
+assert make_payload("hi", stop=None) == {"prompt": "hi", "stop": None}
+assert make_payload("hi", temperature=0.2, stop=["###"]) == {"prompt": "hi", "temperature": 0.2, "stop": ["###"]}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert make_payload(&quot;hi&quot;) == {&quot;prompt&quot;: &quot;hi&quot;}
+assert make_payload(&quot;hi&quot;, temperature=0) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;temperature&quot;: 0}
+assert make_payload(&quot;hi&quot;, stop=None) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;stop&quot;: None}
+assert make_payload(&quot;hi&quot;, temperature=0.2, stop=[&quot;###&quot;]) == {&quot;prompt&quot;: &quot;hi&quot;, &quot;temperature&quot;: 0.2, &quot;stop&quot;: [&quot;###&quot;]}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start from <code>{"prompt": prompt}</code> and add each key only when its argument <code>is not MISSING</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Why not <code>if temperature:</code>? Look at the second test.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">MISSING = object()
+
+def make_payload(prompt, *, temperature=MISSING, stop=MISSING):
+    payload = {&quot;prompt&quot;: prompt}
+    if temperature is not MISSING:
+        payload[&quot;temperature&quot;] = temperature
+    if stop is not MISSING:
+        payload[&quot;stop&quot;] = stop
+    return payload</code></pre></div><p>Three cases have to stay apart: not passed, passed as <code>None</code>, passed as a real value. <code>None</code> cannot mark "not passed" because it is one of the values the caller may send, and truthiness fails even earlier: <code>temperature=0</code> is falsy but is the most common setting of all. <code>MISSING</code> is a fresh object that only this module knows, so <code>is not MISSING</code> is true exactly when the caller passed something. Real SDKs use the same pattern; the OpenAI Python client calls its sentinel <code>NOT_GIVEN</code>.</p></div></details>
+</article>
+<article class="prob" id="p-nan-in-a-list-and-a-dict" data-pid="m2-1-nan-in-a-list-and-a-dict" data-type="predict" data-level="medium" data-answer="False
+True False
+True False
+a None
+2">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. NaN in a list and a dict</h3></header>
+<div class="code"><pre><code class="py">nan = float(&quot;nan&quot;)
+print(nan == nan)
+print(nan in [nan], float(&quot;nan&quot;) in [nan])
+print([nan] == [nan], [nan] == [float(&quot;nan&quot;)])
+print({nan: &quot;a&quot;}.get(nan), {nan: &quot;a&quot;}.get(float(&quot;nan&quot;)))
+print([1, nan, nan].count(nan))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Every container comparison is <code>x is item or x == item</code>. Each <code>float("nan")</code> call makes a new object.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>False
+True False
+True False
+a None
+2</pre></div><p><code>nan == nan</code> is <code>False</code> by definition. But lists compare items with "identity first", so the <strong>same</strong> nan object is found, counted and compared equal, while a new <code>float("nan")</code> is not. Dict lookups work the same way: the key is found only through the identical object. This is why missing values must be found with <code>math.isnan</code>, <code>np.isnan</code> or <code>pd.isna</code>, never with <code>==</code> or <code>in</code>.</p></div></details>
+</article>
+<article class="prob" id="p-names-moving-objects-changing" data-pid="m2-1-names-moving-objects-changing" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Names moving, objects changing</h3></header>
+<div class="prob-q"><p>Fill in <code>a</code>, <code>b</code> and whether <code>a is b</code> after each line. Type values the way Python prints them, such as <code>[1, 2]</code> and <code>True</code>.</p></div>
+<div class="code"><pre><code class="py">a = [1]
+b = a
+a = a + [2]
+b.append(3)
+a = b</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>a is b</code></th></tr><tr><td>b = a</td><td><input class="cell" data-a="[1]" data-s="[1]" aria-label="a at b = a" autocomplete="off"></td><td><input class="cell" data-a="[1]" data-s="[1]" aria-label="b at b = a" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="a is b at b = a" autocomplete="off"></td></tr><tr><td>a = a + [2]</td><td><input class="cell" data-a="[1, 2]" data-s="[1, 2]" aria-label="a at a = a + [2]" autocomplete="off"></td><td><input class="cell" data-a="[1]" data-s="[1]" aria-label="b at a = a + [2]" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="a is b at a = a + [2]" autocomplete="off"></td></tr><tr><td>b.append(3)</td><td><input class="cell" data-a="[1, 2]" data-s="[1, 2]" aria-label="a at b.append(3)" autocomplete="off"></td><td><input class="cell" data-a="[1, 3]" data-s="[1, 3]" aria-label="b at b.append(3)" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="a is b at b.append(3)" autocomplete="off"></td></tr><tr><td>a = b</td><td><input class="cell" data-a="[1, 3]" data-s="[1, 3]" aria-label="a at a = b" autocomplete="off"></td><td><input class="cell" data-a="[1, 3]" data-s="[1, 3]" aria-label="b at a = b" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="a is b at a = b" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>a + [2]</code> builds a new list. <code>b.append(3)</code> changes the list <code>b</code> points at, without moving any name.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>a is b</code></th></tr><tr><td>b = a</td><td><code>[1]</code></td><td><code>[1]</code></td><td><code>True</code></td></tr><tr><td>a = a + [2]</td><td><code>[1, 2]</code></td><td><code>[1]</code></td><td><code>False</code></td></tr><tr><td>b.append(3)</td><td><code>[1, 2]</code></td><td><code>[1, 3]</code></td><td><code>False</code></td></tr><tr><td>a = b</td><td><code>[1, 3]</code></td><td><code>[1, 3]</code></td><td><code>True</code></td></tr></table></div><p>After <code>b = a</code> both names share one list. <code>a = a + [2]</code> builds a new list <code>[1, 2]</code> and moves only <code>a</code>. <code>b.append(3)</code> changes the old list in place, so <code>b</code> is <code>[1, 3]</code> and <code>a</code> is untouched. <code>a = b</code> points <code>a</code> back at that same list, so they are identical again. Two kinds of steps: moving a name (<code>=</code>) and changing an object (<code>append</code>). Lesson 2.2 is all about the second kind.</p></div></details>
+</article>
+<article class="prob" id="p-a-cache-keyed-by-id" data-pid="m2-1-a-cache-keyed-by-id" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. A cache keyed by id()</h3></header>
+<div class="prob-q"><p>To save money, this wraps an LLM call in a cache. Two prompts with the same text should cost one call, but they cost two. Fix the cache key.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">calls = []
+
+def fake_llm(prompt):
+    calls.append(prompt)
+    return f&quot;answer to: {prompt}&quot;
+
+_cache = {}
+
+def cached_complete(prompt):
+    key = id(prompt)
+    if key not in _cache:
+        _cache[key] = fake_llm(prompt)
+    return _cache[key]
+</textarea>
+<script type="text/plain" class="prob-tests">p1 = "".join(["What is ", "RAG?"])
+p2 = "".join(["What is ", "RAG?"])
+assert p1 == p2 and p1 is not p2
+assert cached_complete(p1) == "answer to: What is RAG?"
+assert cached_complete(p2) == "answer to: What is RAG?"
+assert len(calls) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">p1 = &quot;&quot;.join([&quot;What is &quot;, &quot;RAG?&quot;])
+p2 = &quot;&quot;.join([&quot;What is &quot;, &quot;RAG?&quot;])
+assert p1 == p2 and p1 is not p2
+assert cached_complete(p1) == &quot;answer to: What is RAG?&quot;
+assert cached_complete(p2) == &quot;answer to: What is RAG?&quot;
+assert len(calls) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Prompts built at run time (from templates, user input, files) are separate objects even when the text is equal.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>str</code> can be a dict key directly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">calls = []
+
+def fake_llm(prompt):
+    calls.append(prompt)
+    return f&quot;answer to: {prompt}&quot;
+
+_cache = {}
+
+def cached_complete(prompt):
+    if prompt not in _cache:
+        _cache[prompt] = fake_llm(prompt)
+    return _cache[prompt]</code></pre></div><p><code>id(prompt)</code> identifies the object, not the text, so equal prompts get different keys and miss. The worse bug is hidden: once a prompt object is freed, its id can be reused by a <strong>different</strong> prompt, which would then get the old prompt's cached answer. Key by the value itself. For long prompts, real caches key by a hash of the text plus the model and settings, for example <code>hashlib.sha256(f"{model}|{prompt}".encode()).hexdigest()</code>, since a different model or temperature must not share an answer.</p></div></details>
+</article>
+<article class="prob" id="p-checking-for-none-at-scale" data-pid="m2-1-checking-for-none-at-scale" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>9. Checking for None at scale</h3></header>
+<div class="prob-q"><p>Both count the missing records among 20,000 objects whose class defines <code>__eq__</code> in Python. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">class Record:
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        return isinstance(other, Record) and self.v == other.v
+
+records = [Record(i) for i in range(20000)] + [None] * 100</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">missing = sum(1 for r in records if r == None)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">missing = sum(1 for r in records if r is None)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>r == None</code> have to do for every <code>Record</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>7.44 ms</td></tr><tr><td>B</td><td>576.88 µs</td></tr></table></div><p><code>r == None</code> calls <code>Record.__eq__</code> for each of the 20,000 objects, which is a Python function call doing an <code>isinstance</code> check every time. <code>r is None</code> compares two identities, one machine-level comparison with no call at all. On objects with expensive or unusual <code>__eq__</code> (ORM rows, dataframes, arrays) the gap grows, and <code>== None</code> may not even return a bool.</p></div></details>
+</article>
+<article class="prob" id="p-merge-retriever-results-without-repeats" data-pid="m2-1-merge-retriever-results-without-repeats" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. Merge retriever results without repeats</h3></header>
+<div class="prob-q"><p>A hybrid retriever gets chunks from BM25 and from a vector search. Both return <strong>references to the same chunk objects</strong> from one shared store, so one chunk often appears in both lists. Write <code>merge_results(first, second)</code> that keeps the order of <code>first</code> then <code>second</code> and drops an item if <strong>that same object</strong> was already kept. Two separate chunks with equal content are different index entries and must both be kept. Chunks are dicts, which cannot go in a set.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def merge_results(first, second):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">c1 = {"doc": "faq.md", "text": "Reset your password from Settings."}
+c2 = {"doc": "faq.md", "text": "Reset your password from Settings."}
+c3 = {"doc": "guide.md", "text": "Contact support."}
+out = merge_results([c1, c3], [c3, c2, c1])
+assert len(out) == 3
+assert out[0] is c1 and out[1] is c3 and out[2] is c2
+assert merge_results([], []) == []
+assert len(merge_results([c1, c1], [])) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c1 = {&quot;doc&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Reset your password from Settings.&quot;}
+c2 = {&quot;doc&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Reset your password from Settings.&quot;}
+c3 = {&quot;doc&quot;: &quot;guide.md&quot;, &quot;text&quot;: &quot;Contact support.&quot;}
+out = merge_results([c1, c3], [c3, c2, c1])
+assert len(out) == 3
+assert out[0] is c1 and out[1] is c3 and out[2] is c2
+assert merge_results([], []) == []
+assert len(merge_results([c1, c1], [])) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A dict cannot go in a set, but its <code>id()</code> can, and every chunk here is alive while the function runs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Why not <code>if item not in out</code>? <code>in</code> falls back to <code>==</code>, so it would drop <code>c2</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def merge_results(first, second):
+    seen = set()
+    out = []
+    for chunk in first + second:
+        if id(chunk) not in seen:
+            seen.add(id(chunk))
+            out.append(chunk)
+    return out</code></pre></div><p>Keying by <code>id()</code> is safe <strong>here</strong>, because every chunk is alive (held by the input lists) for the whole call, so no id can be reused, unlike the long-lived cache in problem 8. A set of ids makes each check O(1); the tempting <code>if chunk not in out</code> is O(n) per item and compares by <code>==</code>, so it would also drop <code>c2</code>, an equal but separate chunk. Whether equal-content chunks should be merged is a separate decision. If they should, deduplicate by a content key such as <code>(doc, text)</code>.</p></div></details>
+</article>
+<article class="prob" id="p-read-a-flag-from-config" data-pid="m2-1-read-a-flag-from-config" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Read a flag from config</h3></header>
+<div class="prob-q"><p>This reads a true/false setting that may arrive as a bool, a string, an int or <code>None</code>. Clean it up: <code>is None</code> instead of <code>== None</code>, <code>isinstance</code> instead of <code>type(...) ==</code>, and no repeated work. Keep the tests green. Careful with the order of the checks.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def read_flag(value):
+    if value == None:
+        return False
+    if type(value) == bool:
+        return value
+    if type(value) == str:
+        if value.strip().lower() == &quot;true&quot; or value.strip().lower() == &quot;yes&quot; or value.strip().lower() == &quot;1&quot;:
+            return True
+        return False
+    if type(value) == int:
+        return value != 0
+    raise TypeError(f&quot;cannot read a flag from {value!r}&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert read_flag(None) is False
+assert read_flag(True) is True and read_flag(False) is False
+assert read_flag(" Yes ") is True and read_flag("no") is False and read_flag("1") is True
+assert read_flag(2) is True and read_flag(0) is False
+assert raises(TypeError, read_flag, 1.5)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert read_flag(None) is False
+assert read_flag(True) is True and read_flag(False) is False
+assert read_flag(&quot; Yes &quot;) is True and read_flag(&quot;no&quot;) is False and read_flag(&quot;1&quot;) is True
+assert read_flag(2) is True and read_flag(0) is False
+assert raises(TypeError, read_flag, 1.5)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>bool</code> is a subclass of <code>int</code> (1.1), so <code>isinstance(True, int)</code> is <code>True</code>. Which check must come first?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Strip and lower the string once, then test membership: <code>in {"true", "yes", "1"}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def read_flag(value):
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {&quot;true&quot;, &quot;yes&quot;, &quot;1&quot;}
+    if isinstance(value, int):
+        return value != 0
+    raise TypeError(f&quot;cannot read a flag from {value!r}&quot;)</code></pre></div><p><code>isinstance</code> also accepts subclasses, which is usually what you want, but here it changes behaviour if the order is wrong: with the <code>int</code> check first, <code>True</code> would be treated as the int 1. Keeping <code>bool</code> first preserves the old behaviour. <code>is None</code> replaces <code>== None</code> for the reasons in this lesson. The string is normalised once and checked with a set, which reads like the rule it implements.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-shared-system-message" data-pid="m2-1-read-the-code-a-shared-system-message" data-type="predict" data-level="medium" data-answer="2 1
+False True
+You are terse.
+You are terse.">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: a shared system message</h3></header>
+<div class="code"><pre><code class="py">SYSTEM = {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;You are helpful.&quot;}
+
+def new_chat():
+    return [SYSTEM]
+
+chat_a = new_chat()
+chat_b = new_chat()
+chat_a.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;})
+print(len(chat_a), len(chat_b))
+print(chat_a is chat_b, chat_a[0] is chat_b[0])
+
+chat_a[0][&quot;content&quot;] = &quot;You are terse.&quot;
+print(chat_b[0][&quot;content&quot;])
+print(SYSTEM[&quot;content&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[SYSTEM]</code> is a new list each call, but what does that new list contain?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2 1
+False True
+You are terse.
+You are terse.</pre></div><p>Each call builds a <strong>new list</strong>, so the chats are separate and the <code>append</code> affects only <code>chat_a</code>. But both lists hold the <strong>same</strong> <code>SYSTEM</code> dict. Changing it through <code>chat_a[0]</code> changes it for every chat and for the module constant itself. In a chat server this means one user's edited system prompt leaks into every other conversation. The fix, <code>[dict(SYSTEM)]</code>, is exactly the copying topic of lesson 2.3.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-when-does-caching-show" data-pid="m2-1-when-does-caching-show" data-type="predict" data-level="hard" data-answer="True
+False True
+True
+True
+False True">
+<header class="prob-head"><h3>13. When does caching show?</h3></header>
+<div class="code"><pre><code class="py">a = 256; b = 256
+print(a is b)
+c = int(&quot;257&quot;); d = int(&quot;257&quot;)
+print(c is d, c == d)
+e = 257; f = 257
+print(e is f)
+s1 = &quot;hello_world&quot;; s2 = &quot;hello&quot; + &quot;_world&quot;
+print(s1 is s2)
+s3 = &quot;&quot;.join([&quot;hello&quot;, &quot;_world&quot;])
+print(s1 is s3, s1 == s3)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Some objects are made when the code is compiled (constants), others while it runs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the same constant appears twice in one compiled block, the compiler may store it once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True
+False True
+True
+True
+False True</pre></div><p>Small ints up to 256 are shared, so <code>a is b</code>. <code>int("257")</code> runs twice at run time and builds two objects. But <code>e = 257; f = 257</code> sit in the same compiled code, and the compiler stored the constant 257 <strong>once</strong>, so both names point at it. Typed as two separate lines in the REPL, each line is compiled on its own and you get <code>False</code>. <code>"hello" + "_world"</code> is folded into one constant at compile time and interned, while <code>"".join(...)</code> builds a new string at run time. Same values, different answers: that is why <code>is</code> on numbers and strings is never correct.</p></div></details>
+</article>
+<article class="prob" id="p-find-this-exact-object-in-a-list" data-pid="m2-1-find-this-exact-object-in-a-list" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Find this exact object in a list</h3></header>
+<div class="prob-q"><p>An agent keeps a list of tool-call records, and the UI holds a reference to one of them. Write <code>index_of(items, target)</code> that returns the position of <strong>that exact object</strong>. <code>items.index(target)</code> is not enough: it returns the first <strong>equal</strong> record. Raise <code>ValueError</code> if the object is not in the list, like <code>list.index</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def index_of(items, target):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+a = {"tool": "search", "args": {"q": "refund policy"}}
+b = {"tool": "search", "args": {"q": "refund policy"}}
+items = [b, a]
+assert items.index(a) == 0
+assert index_of(items, a) == 1
+assert index_of(items, b) == 0
+assert raises(ValueError, index_of, items, dict(a))
+assert raises(ValueError, index_of, [], a)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+a = {&quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;refund policy&quot;}}
+b = {&quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;refund policy&quot;}}
+items = [b, a]
+assert items.index(a) == 0
+assert index_of(items, a) == 1
+assert index_of(items, b) == 0
+assert raises(ValueError, index_of, items, dict(a))
+assert raises(ValueError, index_of, [], a)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>enumerate</code> and an <code>is</code> check. What should happen after the loop?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def index_of(items, target):
+    for i, item in enumerate(items):
+        if item is target:
+            return i
+    raise ValueError(f&quot;object not in list: {target!r}&quot;)</code></pre></div><p><code>list.index</code> checks <code>item is target or item == target</code> from the left, so with equal records it stops at the first equal one. Checking <code>is</code> alone finds only the exact object. Raising instead of returning -1 keeps the same contract as <code>list.index</code>, so callers cannot silently use -1, which would mean "last item" if used as an index. That is a real off-by-one trap.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-deleting-the-wrong-message" data-pid="m2-1-read-the-code-deleting-the-wrong-message" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Read the code: deleting the wrong message</h3></header>
+<div class="prob-q"><p>This is a small chat-history store. The UI keeps the message object returned by <code>add</code> and later asks to delete or edit <strong>that</strong> message. When the user has typed the same text twice ("ok"), deleting or editing the second one changes the first. Read the whole module, find both bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">SYSTEM = {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Answer from the documents only.&quot;}
+
+
+def new_history():
+    return [dict(SYSTEM)]
+
+
+def add(history, role, content):
+    msg = {&quot;role&quot;: role, &quot;content&quot;: content}
+    history.append(msg)
+    return msg            # the UI keeps this object to edit or delete it later
+
+
+def delete(history, msg):
+    &quot;&quot;&quot;Delete exactly this message.&quot;&quot;&quot;
+    if msg is history[0]:
+        raise ValueError(&quot;the system prompt cannot be deleted&quot;)
+    history.remove(msg)
+
+
+def edit(history, msg, content):
+    &quot;&quot;&quot;Replace the text of exactly this message, return the new message.&quot;&quot;&quot;
+    i = history.index(msg)
+    history[i] = {&quot;role&quot;: msg[&quot;role&quot;], &quot;content&quot;: content}
+    return history[i]
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+h = new_history()
+first = add(h, "user", "ok")
+add(h, "assistant", "Noted.")
+second = add(h, "user", "ok")
+delete(h, second)
+assert [m["content"] for m in h] == [SYSTEM["content"], "ok", "Noted."]
+assert h[1] is first
+h2 = new_history()
+add(h2, "user", "ok")
+add(h2, "assistant", "Sure.")
+last = add(h2, "user", "ok")
+new = edit(h2, last, "ok, thanks")
+assert h2[1]["content"] == "ok" and h2[3]["content"] == "ok, thanks" and new is h2[3]
+assert raises(ValueError, delete, h2, h2[0])
+assert raises(ValueError, delete, h2, {"role": "user", "content": "ok"})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+h = new_history()
+first = add(h, &quot;user&quot;, &quot;ok&quot;)
+add(h, &quot;assistant&quot;, &quot;Noted.&quot;)
+second = add(h, &quot;user&quot;, &quot;ok&quot;)
+delete(h, second)
+assert [m[&quot;content&quot;] for m in h] == [SYSTEM[&quot;content&quot;], &quot;ok&quot;, &quot;Noted.&quot;]
+assert h[1] is first
+h2 = new_history()
+add(h2, &quot;user&quot;, &quot;ok&quot;)
+add(h2, &quot;assistant&quot;, &quot;Sure.&quot;)
+last = add(h2, &quot;user&quot;, &quot;ok&quot;)
+new = edit(h2, last, &quot;ok, thanks&quot;)
+assert h2[1][&quot;content&quot;] == &quot;ok&quot; and h2[3][&quot;content&quot;] == &quot;ok, thanks&quot; and new is h2[3]
+assert raises(ValueError, delete, h2, h2[0])
+assert raises(ValueError, delete, h2, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;ok&quot;})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>history.remove(msg)</code> and <code>history.index(msg)</code> both look for the first <strong>equal</strong> message.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write one helper that finds the position with <code>is</code> (like problem 14), then use it in both functions.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The last test deletes an equal message that is not in the history. It must raise, not delete the real one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">SYSTEM = {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Answer from the documents only.&quot;}
+
+
+def new_history():
+    return [dict(SYSTEM)]
+
+
+def add(history, role, content):
+    msg = {&quot;role&quot;: role, &quot;content&quot;: content}
+    history.append(msg)
+    return msg
+
+
+def _position(history, msg):
+    for i, m in enumerate(history):
+        if m is msg:
+            return i
+    raise ValueError(&quot;message is not in this history&quot;)
+
+
+def delete(history, msg):
+    &quot;&quot;&quot;Delete exactly this message.&quot;&quot;&quot;
+    i = _position(history, msg)
+    if i == 0:
+        raise ValueError(&quot;the system prompt cannot be deleted&quot;)
+    del history[i]
+
+
+def edit(history, msg, content):
+    &quot;&quot;&quot;Replace the text of exactly this message, return the new message.&quot;&quot;&quot;
+    i = _position(history, msg)
+    history[i] = {&quot;role&quot;: msg[&quot;role&quot;], &quot;content&quot;: content}
+    return history[i]</code></pre></div><p>Both bugs are the same one: <code>remove</code> and <code>index</code> match by equality, so two messages with the same role and text are interchangeable to them. The code even says "exactly this message" in its docstrings, which is an identity requirement. A single <code>_position</code> helper that compares with <code>is</code> fixes both and also rejects an equal copy that is not in the history (the last test), instead of deleting a real message by accident. Real chat apps usually avoid the whole problem by giving each message a unique id field, which is an identity you control and can store in a database.</p></div></details>
+</article>
+<article class="prob" id="p-repeated-rows-objects-or-values" data-pid="m2-1-repeated-rows-objects-or-values" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>16. Repeated rows: objects or values?</h3></header>
+<div class="prob-q"><p>A dataset of rows (lists) may have been built by repeating one list object, such as <code>[row] * 3</code>, which makes every "row" the same object. Write <code>object_and_value_counts(rows)</code> that returns <code>(distinct_objects, distinct_values)</code>. Lists are not hashable, so think about what you can put in a set.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">def object_and_value_counts(rows):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">r = [0, 0]
+assert object_and_value_counts([r, r, r]) == (1, 1)
+assert object_and_value_counts([[0, 0], [0, 0], [1, 2]]) == (3, 2)
+assert object_and_value_counts([r] * 3 + [[0, 0]]) == (2, 1)
+assert object_and_value_counts([]) == (0, 0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = [0, 0]
+assert object_and_value_counts([r, r, r]) == (1, 1)
+assert object_and_value_counts([[0, 0], [0, 0], [1, 2]]) == (3, 2)
+assert object_and_value_counts([r] * 3 + [[0, 0]]) == (2, 1)
+assert object_and_value_counts([]) == (0, 0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Distinct objects: a set of <code>id(row)</code>. Distinct values: a set of something hashable built from each row.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tuple(row)</code> is hashable when the items are.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def object_and_value_counts(rows):
+    objects = {id(row) for row in rows}
+    values = {tuple(row) for row in rows}
+    return len(objects), len(values)</code></pre></div><p>If <code>distinct_objects</code> is smaller than <code>len(rows)</code>, some rows are the same object, and writing to one changes all of them: the <code>[[0] * 3] * 3</code> grid trap from your theory notes, and the root of several pandas surprises. Lesson 2.3 fixes it. <code>id()</code> is safe again because all rows are alive during the call. <code>tuple(row)</code> turns a list into a hashable value with the same contents, the standard way to deduplicate lists by value.</p></div></details>
+</article>
+<article class="prob" id="p-nan-in-pandas" data-pid="m2-1-nan-in-pandas" data-type="predict" data-level="hard" data-answer="0 2
+True False
+True False">
+<header class="prob-head"><span class="ptag">ML</span><h3>17. NaN in pandas</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+import pandas as pd
+
+s = pd.Series([1.0, np.nan, 3.0, np.nan])
+print((s == np.nan).sum(), s.isna().sum())
+print(np.nan is np.nan, float(&quot;nan&quot;) is np.nan)
+print(np.nan in [np.nan], np.nan in s.tolist())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>s == np.nan</code> compares every value with NaN using <code>==</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>np.nan</code> is one float object made when numpy was imported. Does <code>tolist()</code> give back that same object?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0 2
+True False
+True False</pre></div><p><code>s == np.nan</code> is <code>False</code> for every row, NaN included, so the count is 0: a filter like <code>df[df["x"] == np.nan]</code> silently returns an empty frame. <code>isna()</code> is the correct test. <code>np.nan</code> is a single object, so <code>np.nan is np.nan</code> is <code>True</code>, while <code>float("nan")</code> is a new one. The last line is the subtle one: the Series stores raw numbers, not Python objects, so <code>tolist()</code> builds <strong>new</strong> float objects, and <code>np.nan in</code> that list no longer finds a match through identity. NaN logic that "works" in a small test list can fail on real data for exactly this reason.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-is-and-an" data-pid="m2-1-what-is-the-difference-between-is-and-an" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What is the difference between <code>is</code> and <code>==</code>, and when is <code>is</code> the right choice?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>is</code> checks identity: whether two names point at the same object. It cannot be overridden and is a single pointer comparison. <code>==</code> checks equality by calling the left object's <code>__eq__</code>, which each type defines, so it can be slow, can return a non-bool (numpy, pandas, SQLAlchemy), and two different objects can be equal. Use <code>is</code> for singletons (<code>None</code>, <code>True</code>, <code>False</code>), for sentinels, and when you really mean "this exact object" (finding a specific message, deduplicating references). Never use it for numbers or strings, because caching makes the result depend on the Python version and on how the value was created. Strong answer: mention that containers use "identity, then equality", which explains <code>nan in [nan]</code>.</p></div></details>
+</article>
+<article class="prob" id="p-when-is-none-not-enough-as-a-default-and" data-pid="m2-1-when-is-none-not-enough-as-a-default-and" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. When is <code>None</code> not enough as a default, and what do you use instead?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When <code>None</code> is itself a meaningful value the caller may pass. Then you cannot tell "not passed" from "passed <code>None</code>". Examples: an API where <code>stop=None</code> clears stop sequences, a cache where <code>None</code> is a valid stored result, or <code>dict.get</code> with a default. The answer is a sentinel: <code>MISSING = object()</code> at module level, checked with <code>is MISSING</code>. It is unique, so no caller can pass it by accident. Mention that real libraries do this (the OpenAI client's <code>NOT_GIVEN</code>, <code>dataclasses.MISSING</code>), and that typing it well uses an enum with one member or <code>typing.Final</code>, which shows you have read library code.</p></div></details>
+</article>
+<article class="prob" id="p-why-can-a-1000-b-1000-a-is-b-be-true-in-" data-pid="m2-1-why-can-a-1000-b-1000-a-is-b-be-true-in-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>20. Why can <code>a = 1000; b = 1000; a is b</code> be <code>True</code> in a script but <code>False</code> in the REPL?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The REPL compiles each line separately, so each <code>1000</code> becomes its own int object and <code>is</code> is <code>False</code>. In a script (or one line with <code>;</code>), both literals are in the same compiled code object, and the compiler stores the constant once, so both names point at the same object. Integers from -5 to 256 are always shared, so they are <code>True</code> everywhere. None of this is guaranteed by the language. It is CPython behaviour that can change between versions, so code must never depend on it: compare numbers with <code>==</code>. The interviewer is checking whether you know that <code>is</code> compares identity, not value.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>=</code> points a name at an object. It never copies, and moving a name changes no object.</li><li><code>is</code> = same object (identity, cannot be overridden). <code>==</code> = equal by the type's own rules, and may not even return a bool.</li><li>Use <code>is</code> for <code>None</code>, the other singletons and sentinels. Never for numbers or strings: caching makes it unreliable.</li><li>Containers compare with "identity, then equality": that is why <code>nan in [nan]</code> is <code>True</code>, and why <code>remove</code> and <code>index</code> can pick the wrong equal item.</li><li><code>id()</code> is unique only among live objects. Safe within one call, wrong as a long-lived cache key.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

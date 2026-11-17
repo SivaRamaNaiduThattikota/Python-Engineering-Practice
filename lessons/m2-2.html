@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2.2 · Mutable and immutable objects, and aliasing</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m2-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 2 · The object model</span></div>
+  <h1>2.2 Mutable and immutable objects, and aliasing</h1>
+  <p>Some objects can change in place, some never can. When two names point at one object that can change, a change through one name shows up everywhere. This lesson is about seeing that coming, in plain Python, in numpy and in pandas 3.</p>
+  <div class="chips"><span class="chip">21 problems</span><span class="chip">4 easy · 10 medium · 7 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="kinds">
+<h2><span class="n">1</span>Objects that can change and objects that cannot</h2>
+<p>Every object is either <strong>mutable</strong> (it can be changed in place after it is created) or <strong>immutable</strong> (it can never change). When an object changes in place, its identity stays the same: same <code>id()</code>, same object, new contents. When you "change" an immutable value, Python builds a new object and moves the name, exactly like the rebinding you saw in 2.1.</p>
+<div class="tbl"><table>
+      <tr><th>Mutable: can change in place</th><th>Immutable: never changes</th></tr>
+      <tr><td><code>list</code>, <code>dict</code>, <code>set</code>, <code>bytearray</code></td><td><code>int</code>, <code>float</code>, <code>bool</code>, <code>complex</code>, <code>None</code></td></tr>
+      <tr><td>most objects of your own classes</td><td><code>str</code>, <code>bytes</code></td></tr>
+      <tr><td>numpy arrays, pandas DataFrames and Series</td><td><code>tuple</code>, <code>frozenset</code> (but see the tuple trap below)</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">in_place.py</span><button class="copy">Copy</button></div><pre><code class="py">xs = [1, 2]
+before = id(xs)
+xs.append(3)               # changes the list itself
+print(xs, id(xs) == before)
+
+s = &quot;data&quot;
+before = id(s)
+s = s.upper()              # str cannot change: a new string, name moved
+print(s, id(s) == before)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 3] True
+DATA False</pre></div></div>
+<p>A useful convention follows from this: in the standard library, <strong>methods that change an object in place return <code>None</code></strong>. <code>list.sort()</code>, <code>list.append()</code>, <code>dict.update()</code>, <code>set.add()</code> and <code>random.shuffle()</code> all return <code>None</code>. Functions that leave their input alone and build something new return it: <code>sorted()</code>, <code>reversed()</code>, <code>str.upper()</code>. Writing <code>xs = xs.sort()</code> therefore replaces your list with <code>None</code> (problem 3).</p>
+</section>
+<section class="sec" id="aliasing">
+<h2><span class="n">2</span>Aliasing: one object, several names</h2>
+<p><strong>Aliasing</strong> means two or more names, or container slots, point at the same object. With immutable objects aliasing is harmless, because nobody can change the object. With mutable objects every change made through any of the names is visible through all of them, because there is only one object.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">aliasing.py</span><button class="copy">Copy</button></div><pre><code class="py">config = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+run_a = config                 # an alias, not a copy
+run_a[&quot;temperature&quot;] = 0.9
+print(config[&quot;temperature&quot;])   # the &quot;original&quot; changed too
+
+defaults = {&quot;retries&quot;: 3}
+settings = {&quot;api&quot;: defaults, &quot;batch&quot;: defaults}   # both slots point at one dict
+settings[&quot;api&quot;][&quot;retries&quot;] = 5
+print(settings[&quot;batch&quot;][&quot;retries&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>0.9
+5</pre></div></div>
+<p>Aliases hide in places that do not look like assignment:</p>
+<ul><li><strong>Containers:</strong> putting the same list or dict into two slots (above), or <code>dict.fromkeys(keys, [])</code>, which uses one list for every key (problem 5).</li><li><strong>Return values:</strong> a function that returns its internal list hands the caller a way to change its state (problem 6).</li><li><strong>Repetition:</strong> <code>[[]] * 3</code> repeats one inner list three times (the grid trap; lesson 2.3 shows the fix).</li><li><strong>Default arguments and function arguments</strong> (lesson 2.4).</li></ul>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>An alias is like two Power BI visuals bound to the <strong>same</strong> measure. Edit the measure and both visuals change, because there is one measure, not two. A copy is like duplicating the measure under a new name: editing one no longer touches the other.</p></div></div>
+</section>
+<section class="sec" id="operators">
+<h2><span class="n">3</span>Changing versus rebinding: <code>+=</code>, <code>+</code> and friends</h2>
+<p>For a list, <code>x += y</code> changes the list <strong>in place</strong> (it is <code>x.extend(y)</code> under the hood), while <code>x = x + y</code> builds a <strong>new</strong> list and moves the name. With an alias around, they give different results. For immutable types there is no in-place version, so <code>+=</code> on a str, tuple or int always builds a new object.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">plus_equals.py</span><button class="copy">Copy</button></div><pre><code class="py">x = [1]; y = x
+x += [2]                      # in place: y sees it
+print(x, y, x is y)
+
+x = [1]; y = x
+x = x + [2]                   # new list: y keeps the old one
+print(x, y, x is y)
+
+t = (1,); u = t
+t += (2,)                     # tuple: always a new object
+print(t, u)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2] [1, 2] True
+[1, 2] [1] False
+(1, 2) (1,)</pre></div></div>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 150" role="img" aria-label="x += [2] grows the same list, so y sees it. x = x + [2] builds a new list for x, and y keeps the old one.">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <text x="10" y="18" class="h">x += [2]   (in place)</text>
+  <rect x="10" y="40" width="40" height="28" rx="8" class="box"/><text x="30" y="59" class="tk">x</text>
+  <rect x="10" y="92" width="40" height="28" rx="8" class="box"/><text x="30" y="111" class="tk">y</text>
+  <rect x="140" y="62" width="120" height="38" rx="10" class="box a"/><text x="200" y="86" class="w mid">[1, 2]</text>
+  <path d="M50 54 L136 76" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m1)"/>
+  <path d="M50 106 L136 88" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m1)"/>
+  <text x="200" y="128" class="mid">same object, y sees [1, 2]</text>
+  <text x="340" y="18" class="h">x = x + [2]   (new object)</text>
+  <rect x="340" y="40" width="40" height="28" rx="8" class="box"/><text x="360" y="59" class="tk">x</text>
+  <rect x="340" y="92" width="40" height="28" rx="8" class="box"/><text x="360" y="111" class="tk">y</text>
+  <rect x="470" y="32" width="130" height="36" rx="10" class="box b"/><text x="535" y="55" class="w mid">[1, 2]  new</text>
+  <rect x="470" y="90" width="130" height="36" rx="10" class="box a"/><text x="535" y="113" class="w mid">[1]  old</text>
+  <path d="M380 54 L466 50" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m1)"/>
+  <path d="M380 106 L466 108" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m1)"/>
+  <text x="535" y="144" class="mid">y keeps [1]</text>
+</svg></div><figcaption><code>+=</code> on a list changes the object both names share. <code>x = x + [2]</code> builds a new list for <code>x</code> only.</figcaption></figure>
+</section>
+<section class="sec" id="tuples">
+<h2><span class="n">4</span>Tuples are immutable, their contents may not be</h2>
+<p>A tuple cannot change <strong>which objects</strong> it holds: you cannot assign <code>t[0] = ...</code>. But if one of those objects is mutable, that object can still change in place. So a tuple is only "frozen" all the way down if everything inside it is immutable too. That is also the rule for using a tuple as a dict key or set member: <code>(1, "a")</code> works, <code>([1], "a")</code> raises <code>TypeError: unhashable type: 'list'</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tuple_contents.py</span><button class="copy">Copy</button></div><pre><code class="py">t = ([1, 2], &quot;label&quot;)
+t[0].append(3)                # the list inside can change
+print(t)
+try:
+    hash(t)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(hash((1, &quot;label&quot;)) == hash((1, &quot;label&quot;)))</code></pre><div class="out"><span class="ol">Output</span><pre>([1, 2, 3], &#x27;label&#x27;)
+TypeError: unhashable type: &#x27;list&#x27;
+True</pre></div></div>
+</section>
+<section class="sec" id="views">
+<h2><span class="n">5</span>numpy views and pandas 3 Copy-on-Write</h2>
+<p>Data libraries make aliasing more important, because copying big arrays is expensive. <strong>numpy</strong> returns a <strong>view</strong> for basic slicing: a new array object that looks at the same memory. Changing the view changes the original. Boolean masks and lists of indexes ("fancy indexing") return a copy instead.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">numpy_views.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+
+a = np.arange(6)
+first = a[:3]                 # basic slice: a view
+first[0] = 99
+print(a, np.shares_memory(a, first))
+
+picked = a[a &gt; 3]             # boolean mask: a copy
+picked[0] = -1
+print(a, np.shares_memory(a, picked))</code></pre><div class="out"><span class="ol">Output</span><pre>[99  1  2  3  4  5] True
+[99  1  2  3  4  5] False</pre></div></div>
+<p><strong>pandas</strong> used to behave in a confusing mix of views and copies, which is what <code>SettingWithCopyWarning</code> was about. <strong>pandas 3.0 made Copy-on-Write the only behaviour</strong>: anything you take out of a DataFrame (a column, a filtered subset) acts as its own copy, so changing it never changes the original. To change the original, change it directly with <code>.loc</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pandas_cow.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+df = pd.DataFrame({&quot;x&quot;: [1, 2, 3]})
+sub = df[df[&quot;x&quot;] &gt; 1]
+sub[&quot;x&quot;] = 0                  # changes sub only
+col = df[&quot;x&quot;]
+col.iloc[0] = 100             # changes col only
+print(df[&quot;x&quot;].tolist(), sub[&quot;x&quot;].tolist(), col.tolist())
+
+df.loc[df[&quot;x&quot;] &gt; 1, &quot;x&quot;] = 7  # the way to change df itself
+print(df[&quot;x&quot;].tolist())
+print(pd.__version__)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 3] [0, 0] [100, 2, 3]
+[1, 7, 7]
+3.0.2</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">Old tutorials are wrong now</div><p>Many tutorials, Stack Overflow answers and older code were written for pandas 1.x and 2.x, where <code>col = df["x"]; col.iloc[0] = 100</code> <strong>did</strong> change <code>df</code>, and chained assignment like <code>df["x"][1] = 5</code> sometimes worked. In pandas 3 that chained form silently does nothing to <code>df</code> and only emits a <code>ChainedAssignmentError</code> warning. Always write <code>df.loc[row, "x"] = value</code>.</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-an-alias-and-a-number" data-pid="m2-2-an-alias-and-a-number" data-type="predict" data-level="easy" data-answer="[90, 85, 70]
+175 245
+True">
+<header class="prob-head"><h3>1. An alias and a number</h3></header>
+<div class="code"><pre><code class="py">scores = [90, 85]
+backup = scores
+scores.append(70)
+print(backup)
+
+total = 175
+saved = total
+total += 70
+print(saved, total)
+print(id(scores) == id(backup))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>append</code> changes the list both names point at. <code>+=</code> on an int cannot change the int.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[90, 85, 70]
+175 245
+True</pre></div><p><code>backup = scores</code> is an alias, so the <code>append</code> shows through <code>backup</code>. <code>total += 70</code> builds a new int and moves only <code>total</code>; <code>saved</code> keeps 175. Same syntax family, opposite behaviour, because a list can change and an int cannot.</p></div></details>
+</article>
+<article class="prob" id="p-versus" data-pid="m2-2-versus" data-type="predict" data-level="easy" data-answer="[1, 2] [1, 2]
+[1, 2] [1]
+abc ab">
+<header class="prob-head"><h3>2. <code>+=</code> versus <code>+</code></h3></header>
+<div class="code"><pre><code class="py">a = [1]; b = a
+a += [2]
+print(a, b)
+
+c = [1]; d = c
+c = c + [2]
+print(c, d)
+
+s = &quot;ab&quot;; r = s
+s += &quot;c&quot;
+print(s, r)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which of these types can change in place?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[1, 2] [1, 2]
+[1, 2] [1]
+abc ab</pre></div><p><code>a += [2]</code> extends the shared list, so <code>b</code> sees it. <code>c = c + [2]</code> builds a new list for <code>c</code> only. A string cannot change, so <code>s += "c"</code> builds a new string and <code>r</code> keeps <code>"ab"</code>. When you read <code>x += y</code>, always ask whether <code>x</code> is mutable: that decides whether other names see the change.</p></div></details>
+</article>
+<article class="prob" id="p-top-k-scores-that-return-none" data-pid="m2-2-top-k-scores-that-return-none" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. Top-k scores that return None</h3></header>
+<div class="prob-q"><p><code>top_k</code> should return the <code>k</code> highest similarity scores, highest first, <strong>without changing the caller's list</strong> (the caller still needs the scores in document order). It crashes. Fix it so both tests pass.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def top_k(scores, k):
+    ranked = scores.sort(reverse=True)
+    return ranked[:k]
+</textarea>
+<script type="text/plain" class="prob-tests">sims = [0.12, 0.91, 0.45, 0.78]
+assert top_k(sims, 2) == [0.91, 0.78]
+assert sims == [0.12, 0.91, 0.45, 0.78]
+assert top_k(sims, 0) == []
+assert top_k([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sims = [0.12, 0.91, 0.45, 0.78]
+assert top_k(sims, 2) == [0.91, 0.78]
+assert sims == [0.12, 0.91, 0.45, 0.78]
+assert top_k(sims, 0) == []
+assert top_k([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>list.sort()</code> return?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Even after fixing the return value, <code>sort()</code> would reorder the caller's list. Which function builds a new list?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def top_k(scores, k):
+    return sorted(scores, reverse=True)[:k]</code></pre></div><p><code>scores.sort()</code> sorts in place and returns <code>None</code>, so <code>ranked[:k]</code> fails with <code>TypeError: 'NoneType' object is not subscriptable</code>. Changing it to <code>scores.sort(...); return scores[:k]</code> would pass the first test and silently break the caller, whose list is now reordered (the second test). <code>sorted()</code> builds a new list and leaves the input alone. For large arrays, <code>heapq.nlargest(k, scores)</code> or <code>np.argpartition</code> avoid sorting everything (Module 16).</p></div></details>
+</article>
+<article class="prob" id="p-normalise-in-place" data-pid="m2-2-normalise-in-place" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>4. Normalise in place</h3></header>
+<div class="prob-q"><p>Write <code>normalise_inplace(weights)</code> that divides every value by the total so they sum to 1, <strong>changing the same list</strong> (other code holds a reference to it) and returning <code>None</code>, like the standard library's in-place methods. A total of 0 should raise <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def normalise_inplace(weights):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import math
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+w = [1, 1, 2]
+ref = w
+assert normalise_inplace(w) is None
+assert ref is w and w == [0.25, 0.25, 0.5]
+v = [0.2, 0.3]
+normalise_inplace(v)
+assert math.isclose(sum(v), 1.0)
+assert raises(ValueError, normalise_inplace, [0, 0])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+w = [1, 1, 2]
+ref = w
+assert normalise_inplace(w) is None
+assert ref is w and w == [0.25, 0.25, 0.5]
+v = [0.2, 0.3]
+normalise_inplace(v)
+assert math.isclose(sum(v), 1.0)
+assert raises(ValueError, normalise_inplace, [0, 0])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>weights = [...]</code> would only move your local name. You need to change the list object itself.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Either write each position <code>weights[i] = ...</code>, or replace all the contents at once with <code>weights[:] = [...]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def normalise_inplace(weights):
+    total = sum(weights)
+    if total == 0:
+        raise ValueError(&quot;weights sum to 0&quot;)
+    weights[:] = [w / total for w in weights]</code></pre></div><p><code>weights[:] = new_list</code> replaces the <strong>contents</strong> of the existing list, so every alias sees the new values. A plain <code>weights = [...]</code> inside the function would create a new list visible only inside the function, and the caller's list would stay unchanged (lesson 2.4 explains why). Returning <code>None</code> signals "I changed your object", the same promise <code>list.sort()</code> makes. Choosing in place versus returning a new list is an API decision: in place saves memory for huge data, returning new is safer to reason about.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-dict-fromkeys-with-a-list" data-pid="m2-2-dict-fromkeys-with-a-list" data-type="predict" data-level="medium" data-answer="{&#x27;pos&#x27;: [&#x27;great&#x27;], &#x27;neg&#x27;: [&#x27;great&#x27;]}
+True
+{&#x27;pos&#x27;: [&#x27;great&#x27;], &#x27;neg&#x27;: []}">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. <code>dict.fromkeys</code> with a list</h3></header>
+<div class="code"><pre><code class="py">buckets = dict.fromkeys([&quot;pos&quot;, &quot;neg&quot;], [])
+buckets[&quot;pos&quot;].append(&quot;great&quot;)
+print(buckets)
+print(buckets[&quot;pos&quot;] is buckets[&quot;neg&quot;])
+
+fixed = {k: [] for k in [&quot;pos&quot;, &quot;neg&quot;]}
+fixed[&quot;pos&quot;].append(&quot;great&quot;)
+print(fixed)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(keys, value)</code> evaluates <code>value</code> once. How many lists exist?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;pos&#x27;: [&#x27;great&#x27;], &#x27;neg&#x27;: [&#x27;great&#x27;]}
+True
+{&#x27;pos&#x27;: [&#x27;great&#x27;], &#x27;neg&#x27;: []}</pre></div><p><code>dict.fromkeys</code> stores the <strong>same</strong> list object under every key, so appending for <code>"pos"</code> also shows under <code>"neg"</code>. The dict comprehension evaluates <code>[]</code> once per key, giving separate lists. <code>fromkeys</code> is fine with immutable defaults like <code>0</code> or <code>None</code>; for lists, use a comprehension or <code>collections.defaultdict(list)</code> (lesson 4.6).</p></div></details>
+</article>
+<article class="prob" id="p-the-chat-store-that-leaks" data-pid="m2-2-the-chat-store-that-leaks" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. The chat store that leaks</h3></header>
+<div class="prob-q"><p>A tiny in-memory chat store. A caller fetched the messages, appended a <strong>draft</strong> to build a prompt, and the draft ended up saved in the store. Fix <code>get_messages</code> so callers cannot change the store's data by changing what they get back.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">_store = {&quot;c1&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Hello!&quot;}]}
+
+def get_messages(chat_id):
+    return _store[chat_id]
+
+def add_message(chat_id, role, content):
+    _store[chat_id].append({&quot;role&quot;: role, &quot;content&quot;: content})
+</textarea>
+<script type="text/plain" class="prob-tests">msgs = get_messages("c1")
+msgs.append({"role": "user", "content": "draft, not sent"})
+assert len(get_messages("c1")) == 2
+add_message("c1", "user", "thanks")
+assert [m["content"] for m in get_messages("c1")] == ["hi", "Hello!", "thanks"]
+assert get_messages("c1") is not get_messages("c1")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">msgs = get_messages(&quot;c1&quot;)
+msgs.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;draft, not sent&quot;})
+assert len(get_messages(&quot;c1&quot;)) == 2
+add_message(&quot;c1&quot;, &quot;user&quot;, &quot;thanks&quot;)
+assert [m[&quot;content&quot;] for m in get_messages(&quot;c1&quot;)] == [&quot;hi&quot;, &quot;Hello!&quot;, &quot;thanks&quot;]
+assert get_messages(&quot;c1&quot;) is not get_messages(&quot;c1&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return a new list that holds the same messages: <code>list(...)</code> or a slice <code>[:]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">_store = {&quot;c1&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Hello!&quot;}]}
+
+def get_messages(chat_id):
+    return list(_store[chat_id])
+
+def add_message(chat_id, role, content):
+    _store[chat_id].append({&quot;role&quot;: role, &quot;content&quot;: content})</code></pre></div><p>Returning the internal list returns an alias, so any caller can change the store by accident. <code>list(...)</code> returns a new list, so appending to it no longer touches the store. Note what is <strong>not</strong> fixed: both lists still hold the same message dicts, so <code>msgs[0]["content"] = "x"</code> would still change the store. That is a shallow copy, and lesson 2.3 is about when you need a deep one. Another option is to return a tuple, which callers cannot append to at all.</p></div></details>
+</article>
+<article class="prob" id="p-sorting-rebinding-and" data-pid="m2-2-sorting-rebinding-and" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Sorting, rebinding and <code>+=</code></h3></header>
+<div class="prob-q"><p>Fill in <code>a</code>, <code>b</code> and <code>a is b</code> after each line.</p></div>
+<div class="code"><pre><code class="py">a = [3, 1, 2]
+b = a
+a.sort()
+a = sorted(a, reverse=True)
+b += [0]
+a[0] = b</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>a is b</code></th></tr><tr><td>b = a</td><td><input class="cell" data-a="[3, 1, 2]" data-s="[3, 1, 2]" aria-label="a at b = a" autocomplete="off"></td><td><input class="cell" data-a="[3, 1, 2]" data-s="[3, 1, 2]" aria-label="b at b = a" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="a is b at b = a" autocomplete="off"></td></tr><tr><td>a.sort()</td><td><input class="cell" data-a="[1, 2, 3]" data-s="[1, 2, 3]" aria-label="a at a.sort()" autocomplete="off"></td><td><input class="cell" data-a="[1, 2, 3]" data-s="[1, 2, 3]" aria-label="b at a.sort()" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="a is b at a.sort()" autocomplete="off"></td></tr><tr><td>a = sorted(a, reverse=True)</td><td><input class="cell" data-a="[3, 2, 1]" data-s="[3, 2, 1]" aria-label="a at a = sorted(a, reverse=True)" autocomplete="off"></td><td><input class="cell" data-a="[1, 2, 3]" data-s="[1, 2, 3]" aria-label="b at a = sorted(a, reverse=True)" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="a is b at a = sorted(a, reverse=True)" autocomplete="off"></td></tr><tr><td>b += [0]</td><td><input class="cell" data-a="[3, 2, 1]" data-s="[3, 2, 1]" aria-label="a at b += [0]" autocomplete="off"></td><td><input class="cell" data-a="[1, 2, 3, 0]" data-s="[1, 2, 3, 0]" aria-label="b at b += [0]" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="a is b at b += [0]" autocomplete="off"></td></tr><tr><td>a[0] = b</td><td><input class="cell" data-a="[[1, 2, 3, 0], 2, 1]" data-s="[[1, 2, 3, 0], 2, 1]" aria-label="a at a[0] = b" autocomplete="off"></td><td><input class="cell" data-a="[1, 2, 3, 0]" data-s="[1, 2, 3, 0]" aria-label="b at a[0] = b" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="a is b at a[0] = b" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sort()</code> changes the shared list. <code>sorted()</code> builds a new one. <code>+=</code> on a list changes it in place.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the last line, <code>a[0]</code> is set to the list object <code>b</code> itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>a is b</code></th></tr><tr><td>b = a</td><td><code>[3, 1, 2]</code></td><td><code>[3, 1, 2]</code></td><td><code>True</code></td></tr><tr><td>a.sort()</td><td><code>[1, 2, 3]</code></td><td><code>[1, 2, 3]</code></td><td><code>True</code></td></tr><tr><td>a = sorted(a, reverse=True)</td><td><code>[3, 2, 1]</code></td><td><code>[1, 2, 3]</code></td><td><code>False</code></td></tr><tr><td>b += [0]</td><td><code>[3, 2, 1]</code></td><td><code>[1, 2, 3, 0]</code></td><td><code>False</code></td></tr><tr><td>a[0] = b</td><td><code>[[1, 2, 3, 0], 2, 1]</code></td><td><code>[1, 2, 3, 0]</code></td><td><code>False</code></td></tr></table></div><p><code>a.sort()</code> sorts the one shared list, so <code>b</code> changes too. <code>sorted(...)</code> builds a new list for <code>a</code>, ending the alias. <code>b += [0]</code> extends <code>b</code> in place; <code>a</code> is a different list now, so it does not change. The last line stores the list <code>b</code> inside <code>a</code>, so <code>a</code> prints as <code>[[1, 2, 3, 0], 2, 1]</code> and still is not <code>b</code>: an alias now lives inside a container.</p></div></details>
+</article>
+<article class="prob" id="p-remove-duplicates-in-place" data-pid="m2-2-remove-duplicates-in-place" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Remove duplicates in place</h3></header>
+<div class="prob-q"><p>Write <code>dedupe_inplace(rows)</code> that removes repeated values from a list of hashable values, keeping the <strong>first</strong> occurrence and the original order. It must change <strong>the same list object</strong>, because a pipeline holds references to it, and return <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def dedupe_inplace(rows):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = ["a", "b", "a", "c", "b"]
+ref = rows
+assert dedupe_inplace(rows) is None
+assert ref is rows and rows == ["a", "b", "c"]
+empty = []
+dedupe_inplace(empty)
+assert empty == []
+nums = [3, 3, 3]
+dedupe_inplace(nums)
+assert nums == [3]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [&quot;a&quot;, &quot;b&quot;, &quot;a&quot;, &quot;c&quot;, &quot;b&quot;]
+ref = rows
+assert dedupe_inplace(rows) is None
+assert ref is rows and rows == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+empty = []
+dedupe_inplace(empty)
+assert empty == []
+nums = [3, 3, 3]
+dedupe_inplace(nums)
+assert nums == [3]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the deduplicated list first (a <code>seen</code> set plus a new list), then put it back into the same object.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(rows)</code> keeps the first occurrence of each key, in order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def dedupe_inplace(rows):
+    rows[:] = dict.fromkeys(rows)</code></pre></div><p><code>dict.fromkeys(rows)</code> keeps each value once, in first-seen order (dicts keep insertion order), and slice assignment <code>rows[:] = ...</code> puts the result into the existing list, so every alias sees it. Deleting items while looping (<code>for x in rows: rows.remove(x)</code>) is the classic mistake from 1.2. The slice-assignment pattern is the safe way to "change a list in place" with any new contents.</p></div></details>
+</article>
+<article class="prob" id="p-growing-a-list-in-a-loop" data-pid="m2-2-growing-a-list-in-a-loop" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>9. Growing a list in a loop</h3></header>
+<div class="prob-q"><p>Both build the list of squares for 10,000 numbers. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">n = 10000</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = []
+for i in range(n):
+    out = out + [i * i]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = []
+for i in range(n):
+    out.append(i * i)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>out + [i * i]</code> builds a whole new list each time. How many items get copied in total?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>347.05 ms</td></tr><tr><td>B</td><td>1.65 ms</td></tr></table></div><p>A copies the entire list on every pass: 1 + 2 + ... + n items, which is O(n²). B changes one list in place, and <code>append</code> is O(1) on average, so the whole loop is O(n). The same trap exists for strings (<code>s = s + piece</code> in a loop), with <code>"".join(parts)</code> as the fix (Module 5).</p></div></details>
+</article>
+<article class="prob" id="p-features-added-twice" data-pid="m2-2-features-added-twice" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Features added twice</h3></header>
+<div class="prob-q"><p><code>add_bias</code> adds a constant <code>1.0</code> feature to every row before training. The pipeline calls it once for the training rows and once more inside cross-validation, and the second call finds rows that already have the bias. It also changes the raw data the caller wanted to keep. Make it return new rows and leave the input untouched.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def add_bias(rows):
+    for row in rows:
+        row.append(1.0)
+    return rows
+</textarea>
+<script type="text/plain" class="prob-tests">raw = [[0.5, 2.0], [1.5, 3.0]]
+out = add_bias(raw)
+assert out == [[0.5, 2.0, 1.0], [1.5, 3.0, 1.0]]
+assert raw == [[0.5, 2.0], [1.5, 3.0]]
+assert add_bias(raw) == out
+assert out is not raw and out[0] is not raw[0]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">raw = [[0.5, 2.0], [1.5, 3.0]]
+out = add_bias(raw)
+assert out == [[0.5, 2.0, 1.0], [1.5, 3.0, 1.0]]
+assert raw == [[0.5, 2.0], [1.5, 3.0]]
+assert add_bias(raw) == out
+assert out is not raw and out[0] is not raw[0]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build each new row with <code>row + [1.0]</code> instead of <code>row.append(1.0)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def add_bias(rows):
+    return [row + [1.0] for row in rows]</code></pre></div><p>The original changes every row object in place, and because it returns the same list, the "output" and the raw data are aliases. A second call appends a second bias. This is how leakage and double transformations sneak into ML pipelines: no error, just wrong features. scikit-learn's scalers follow the same rule: <code>transform</code> returns a new array and leaves the input alone, unless you explicitly pass <code>copy=False</code>.</p></div></details>
+</article>
+<article class="prob" id="p-overrides-that-stick" data-pid="m2-2-overrides-that-stick" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Overrides that stick</h3></header>
+<div class="prob-q"><p><code>make_config(overrides)</code> should return the default LLM settings with some values overridden for one run. After one call with <code>temperature=0.9</code>, every later call also gets 0.9. Fix it so <code>DEFAULTS</code> never changes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">DEFAULTS = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2, &quot;max_tokens&quot;: 512}
+
+def make_config(overrides):
+    cfg = DEFAULTS
+    for key, value in overrides.items():
+        cfg[key] = value
+    return cfg
+</textarea>
+<script type="text/plain" class="prob-tests">a = make_config({"temperature": 0.9})
+b = make_config({})
+assert a == {"model": "small", "temperature": 0.9, "max_tokens": 512}
+assert b == {"model": "small", "temperature": 0.2, "max_tokens": 512}
+assert DEFAULTS["temperature"] == 0.2
+assert a is not DEFAULTS and b is not DEFAULTS</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = make_config({&quot;temperature&quot;: 0.9})
+b = make_config({})
+assert a == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.9, &quot;max_tokens&quot;: 512}
+assert b == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2, &quot;max_tokens&quot;: 512}
+assert DEFAULTS[&quot;temperature&quot;] == 0.2
+assert a is not DEFAULTS and b is not DEFAULTS</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>cfg = DEFAULTS</code> is an alias. You need a new dict that starts from the defaults.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>{**DEFAULTS, **overrides}</code> or <code>DEFAULTS | overrides</code> (Python 3.9+) both build a new dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">DEFAULTS = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2, &quot;max_tokens&quot;: 512}
+
+def make_config(overrides):
+    return DEFAULTS | overrides</code></pre></div><p><code>cfg = DEFAULTS</code> makes <code>cfg</code> another name for the module's one defaults dict, so every override is written into the defaults themselves and leaks into all later runs: non-reproducible experiments with no error message. <code>DEFAULTS | overrides</code> builds a new dict with the right side winning. This is shallow: a nested dict inside <code>DEFAULTS</code> would still be shared (lesson 2.3). To make the defaults impossible to change by accident, wrap them in <code>types.MappingProxyType(...)</code>, a read-only view of a dict.</p></div></details>
+</article>
+<article class="prob" id="p-clean-tokens-in-place-without-the-manual" data-pid="m2-2-clean-tokens-in-place-without-the-manual" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>12. Clean tokens in place, without the manual index</h3></header>
+<div class="prob-q"><p>This strips and lower-cases tokens and drops empty ones, changing the list in place (callers rely on that) and returning it. The manual index loop is hard to read and easy to break. Rewrite it so it still changes the same list object. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def clean_tokens(tokens):
+    i = 0
+    while i &lt; len(tokens):
+        if tokens[i].strip() == &quot;&quot;:
+            del tokens[i]
+        else:
+            tokens[i] = tokens[i].strip().lower()
+            i = i + 1
+    return tokens
+</textarea>
+<script type="text/plain" class="prob-tests">t = [" Hello", "", "WORLD ", "   ", "ok"]
+ref = t
+out = clean_tokens(t)
+assert out is t and ref is t
+assert t == ["hello", "world", "ok"]
+assert clean_tokens([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = [&quot; Hello&quot;, &quot;&quot;, &quot;WORLD &quot;, &quot;   &quot;, &quot;ok&quot;]
+ref = t
+out = clean_tokens(t)
+assert out is t and ref is t
+assert t == [&quot;hello&quot;, &quot;world&quot;, &quot;ok&quot;]
+assert clean_tokens([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the cleaned list with a comprehension, then assign it into the same object with <code>tokens[:] = ...</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def clean_tokens(tokens):
+    tokens[:] = [t.strip().lower() for t in tokens if t.strip()]
+    return tokens</code></pre></div><p>The original only works because it carefully does not advance <code>i</code> after a delete, which is the bug-prone part of changing a list while walking it (1.2). The comprehension builds the result in one readable step, and <code>tokens[:] =</code> keeps the in-place contract. Returning the same list as well as changing it is a style choice some libraries make for chaining; the standard library's own in-place methods return <code>None</code> instead.</p></div></details>
+</article>
+<article class="prob" id="p-numpy-view-or-copy" data-pid="m2-2-numpy-view-or-copy" data-type="predict" data-level="medium" data-answer="[99  1  2  3  4  5]
+[99  1  2  3  4  5]
+[99  1  2  3  4  5]
+[7 1 7 3 7 5]">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. numpy: view or copy?</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+
+x = np.arange(6)
+head = x[:3]
+head[0] = 99
+print(x)
+
+safe = x[:3].copy()
+safe[1] = -1
+print(x)
+
+big = x[x &gt; 3]
+big[0] = 0
+print(x)
+
+every_other = x[::2]
+every_other[:] = 7
+print(x)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Basic slices (<code>a:b</code>, <code>a:b:step</code>) are views. Boolean masks are copies. <code>.copy()</code> always copies.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[99  1  2  3  4  5]
+[99  1  2  3  4  5]
+[99  1  2  3  4  5]
+[7 1 7 3 7 5]</pre></div><p><code>x[:3]</code> is a view, so setting <code>head[0]</code> changes <code>x</code>. <code>.copy()</code> breaks the link. The boolean mask <code>x[x &gt; 3]</code> makes a copy, so changing <code>big</code> does nothing to <code>x</code>. <code>x[::2]</code> is a strided view, so <code>every_other[:] = 7</code> writes 7 into positions 0, 2 and 4 of <code>x</code>. This is why a "preprocessing" step that slices an array and then normalises the slice can silently change your training data.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-the-tuple-that-changes-and-raises" data-pid="m2-2-the-tuple-that-changes-and-raises" data-type="predict" data-level="hard" data-answer="TypeError: &#x27;tuple&#x27; object does not support item assignment
+([1, 3], 2)">
+<header class="prob-head"><h3>14. The tuple that changes and raises</h3></header>
+<div class="code"><pre><code class="py">t = ([1], 2)
+try:
+    t[0] += [3]
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(t)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>t[0] += [3]</code> is really two steps: extend the list in place, then store the result back into <code>t[0]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which of those two steps can a tuple refuse?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>TypeError: &#x27;tuple&#x27; object does not support item assignment
+([1, 3], 2)</pre></div><p><code>t[0] += [3]</code> runs as <code>tmp = t[0]; tmp = tmp.__iadd__([3]); t[0] = tmp</code>. The first part extends the list <strong>in place</strong>, and it succeeds. Then Python tries to store the result back into <code>t[0]</code>, which a tuple refuses, so you get the <code>TypeError</code>. But the list already changed. An operation that raises and still has its effect is very surprising, and this is a famous interview puzzle. <code>t[0].extend([3])</code> does the same change without the error.</p></div></details>
+</article>
+<article class="prob" id="p-pandas-3-what-changes-the-dataframe" data-pid="m2-2-pandas-3-what-changes-the-dataframe" data-type="predict" data-level="hard" data-answer="[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]
+[0.2, 0.9, 0.5]
+[&#x27;a&#x27;, &#x27;HIGH&#x27;, &#x27;HIGH&#x27;]">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. pandas 3: what changes the DataFrame?</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+df = pd.DataFrame({&quot;score&quot;: [0.2, 0.9, 0.5], &quot;label&quot;: [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]})
+high = df[df[&quot;score&quot;] &gt; 0.4]
+high[&quot;label&quot;] = &quot;HIGH&quot;
+print(df[&quot;label&quot;].tolist())
+
+scores = df[&quot;score&quot;]
+scores.iloc[0] = 1.0
+print(df[&quot;score&quot;].tolist())
+
+df.loc[df[&quot;score&quot;] &gt; 0.4, &quot;label&quot;] = &quot;HIGH&quot;
+print(df[&quot;label&quot;].tolist())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>pandas 3 always uses Copy-on-Write: anything you take out of <code>df</code> behaves as its own copy.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only one of these statements writes to <code>df</code> itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]
+[0.2, 0.9, 0.5]
+[&#x27;a&#x27;, &#x27;HIGH&#x27;, &#x27;HIGH&#x27;]</pre></div><p>With Copy-on-Write, <code>high</code> and <code>scores</code> behave as independent copies the moment you change them, so the first two changes do not reach <code>df</code>. In pandas 2.x and older the second one (<code>scores.iloc[0] = 1.0</code>) <strong>did</strong> change <code>df</code>, and the first one raised <code>SettingWithCopyWarning</code>. <code>df.loc[mask, "label"] = ...</code> is the one statement that writes to <code>df</code>, and it is the correct way in every version. If you maintain old pipeline code, this upgrade can silently change results: look for code that relied on a column or slice writing back into its DataFrame.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-embedding-batches" data-pid="m2-2-read-the-code-embedding-batches" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>16. Read the code: embedding batches</h3></header>
+<div class="prob-q"><p>This splits texts into batches for an embedding API, with at most <code>max_items</code> texts and at most <code>max_tokens</code> (rough count: words) per batch. Each batch also gets a small metadata dict. The output is wrong in two ways that both come from aliasing. Read the whole function, find both bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">def count_tokens(text):
+    return len(text.split())
+
+
+def make_batches(texts, max_items, max_tokens):
+    batches = []
+    batch = []
+    meta = {&quot;tokens&quot;: 0, &quot;items&quot;: 0}
+    for text in texts:
+        n = count_tokens(text)
+        if batch and (len(batch) == max_items or meta[&quot;tokens&quot;] + n &gt; max_tokens):
+            batches.append({&quot;texts&quot;: batch, &quot;meta&quot;: meta})
+            batch.clear()
+            meta[&quot;tokens&quot;] = 0
+            meta[&quot;items&quot;] = 0
+        batch.append(text)
+        meta[&quot;tokens&quot;] += n
+        meta[&quot;items&quot;] += 1
+    if batch:
+        batches.append({&quot;texts&quot;: batch, &quot;meta&quot;: meta})
+    return batches
+</textarea>
+<script type="text/plain" class="prob-tests">texts = ["a b", "c d e", "f", "g h i j", "k"]
+out = make_batches(texts, max_items=2, max_tokens=5)
+assert [b["texts"] for b in out] == [["a b", "c d e"], ["f", "g h i j"], ["k"]]
+assert [b["meta"] for b in out] == [{"tokens": 5, "items": 2}, {"tokens": 5, "items": 2}, {"tokens": 1, "items": 1}]
+assert out[0]["texts"] is not out[1]["texts"] and out[0]["meta"] is not out[1]["meta"]
+assert make_batches([], 2, 5) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">texts = [&quot;a b&quot;, &quot;c d e&quot;, &quot;f&quot;, &quot;g h i j&quot;, &quot;k&quot;]
+out = make_batches(texts, max_items=2, max_tokens=5)
+assert [b[&quot;texts&quot;] for b in out] == [[&quot;a b&quot;, &quot;c d e&quot;], [&quot;f&quot;, &quot;g h i j&quot;], [&quot;k&quot;]]
+assert [b[&quot;meta&quot;] for b in out] == [{&quot;tokens&quot;: 5, &quot;items&quot;: 2}, {&quot;tokens&quot;: 5, &quot;items&quot;: 2}, {&quot;tokens&quot;: 1, &quot;items&quot;: 1}]
+assert out[0][&quot;texts&quot;] is not out[1][&quot;texts&quot;] and out[0][&quot;meta&quot;] is not out[1][&quot;meta&quot;]
+assert make_batches([], 2, 5) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After <code>batches.append({"texts": batch, ...})</code>, what does <code>batch.clear()</code> do to the list just stored?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The same question for <code>meta</code>: how many meta dicts exist in the whole run?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start a fresh list and a fresh dict instead of clearing the old ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def count_tokens(text):
+    return len(text.split())
+
+
+def make_batches(texts, max_items, max_tokens):
+    batches = []
+    batch = []
+    meta = {&quot;tokens&quot;: 0, &quot;items&quot;: 0}
+    for text in texts:
+        n = count_tokens(text)
+        if batch and (len(batch) == max_items or meta[&quot;tokens&quot;] + n &gt; max_tokens):
+            batches.append({&quot;texts&quot;: batch, &quot;meta&quot;: meta})
+            batch = []
+            meta = {&quot;tokens&quot;: 0, &quot;items&quot;: 0}
+        batch.append(text)
+        meta[&quot;tokens&quot;] += n
+        meta[&quot;items&quot;] += 1
+    if batch:
+        batches.append({&quot;texts&quot;: batch, &quot;meta&quot;: meta})
+    return batches</code></pre></div><p><code>batches.append({"texts": batch, ...})</code> stores a reference to the list, not a snapshot. <code>batch.clear()</code> then empties that very list, and the loop keeps appending to it, so every stored batch is the <strong>same</strong> list. The metadata has the same bug: one <code>meta</code> dict is shared by all batches and reset in place. The fix is to bind the names to <strong>new</strong> objects (<code>batch = []</code>, <code>meta = {...}</code>) so the stored ones are left alone. "Reuse and clear" is a common habit from languages without garbage collection, and in Python it turns into aliasing bugs. Sent to a real embedding API, the buggy version would embed the wrong texts with no error at all.</p></div></details>
+</article>
+<article class="prob" id="p-hashable-cache-keys-from-tool-arguments" data-pid="m2-2-hashable-cache-keys-from-tool-arguments" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>17. Hashable cache keys from tool arguments</h3></header>
+<div class="prob-q"><p>An agent caches tool results keyed by the tool's arguments, which arrive as JSON-like data: dicts, lists, strings, numbers, booleans and <code>None</code>, nested to any depth. Dicts and lists are mutable, so they cannot be dict keys. Write <code>freeze(value)</code> that turns such data into an equivalent <strong>hashable</strong> value: lists become tuples, dicts become a tuple of <code>(key, frozen_value)</code> pairs sorted by key, and everything else stays as it is. Two inputs that are equal (whatever the key order) must give equal results.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 17">def freeze(value):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a = {"query": "refund", "filters": {"year": 2025, "tags": ["billing", "eu"]}, "k": 5}
+b = {"k": 5, "filters": {"tags": ["billing", "eu"], "year": 2025}, "query": "refund"}
+assert freeze(a) == freeze(b)
+assert hash(freeze(a)) == hash(freeze(b))
+cache = {freeze(a): "result"}
+assert cache[freeze(b)] == "result"
+assert freeze({"q": ["x", "y"]}) != freeze({"q": ["y", "x"]})
+assert freeze([1, [2, None]]) == (1, (2, None))
+assert freeze("text") == "text"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = {&quot;query&quot;: &quot;refund&quot;, &quot;filters&quot;: {&quot;year&quot;: 2025, &quot;tags&quot;: [&quot;billing&quot;, &quot;eu&quot;]}, &quot;k&quot;: 5}
+b = {&quot;k&quot;: 5, &quot;filters&quot;: {&quot;tags&quot;: [&quot;billing&quot;, &quot;eu&quot;], &quot;year&quot;: 2025}, &quot;query&quot;: &quot;refund&quot;}
+assert freeze(a) == freeze(b)
+assert hash(freeze(a)) == hash(freeze(b))
+cache = {freeze(a): &quot;result&quot;}
+assert cache[freeze(b)] == &quot;result&quot;
+assert freeze({&quot;q&quot;: [&quot;x&quot;, &quot;y&quot;]}) != freeze({&quot;q&quot;: [&quot;y&quot;, &quot;x&quot;]})
+assert freeze([1, [2, None]]) == (1, (2, None))
+assert freeze(&quot;text&quot;) == &quot;text&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle three cases: dict, list, anything else. The dict and list cases call <code>freeze</code> on their contents.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(d.items())</code> sorts the pairs by key. Freeze each value inside the pairs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def freeze(value):
+    if isinstance(value, dict):
+        return tuple(sorted((k, freeze(v)) for k, v in value.items()))
+    if isinstance(value, list):
+        return tuple(freeze(v) for v in value)
+    return value</code></pre></div><p>Hashing needs the value to never change, so every mutable layer has to become an immutable one, at every depth: that is why it must recurse. Sorting the dict pairs makes key order irrelevant, matching dict equality, while list order is kept because <code>["x", "y"]</code> and <code>["y", "x"]</code> are different arguments. A common shortcut is <code>json.dumps(value, sort_keys=True)</code> as the key, which also works and is easy to log. It is slower and treats <code>1</code> and <code>1.0</code> differently, while <code>freeze</code> treats them as equal, which is the same rule dicts use. Pick the one whose equality matches what you want cached.</p></div></details>
+</article>
+<article class="prob" id="p-aliases-inside-a-grid" data-pid="m2-2-aliases-inside-a-grid" data-type="predict" data-level="hard" data-answer="[[1, 0, 0], [1, 0, 0]]
+[[1, 0, 0, 5], [1, 0, 0, 9]]
+True False">
+<header class="prob-head"><h3>18. Aliases inside a grid</h3></header>
+<div class="code"><pre><code class="py">row = [0] * 3
+grid = [row, row]
+grid[0][0] = 1
+print(grid)
+
+grid[1] = grid[1] + [9]
+grid[0].append(5)
+print(grid)
+print(grid[0] is row, grid[1] is row)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Both slots start as the same list. Which line gives slot 1 its own list?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[[1, 0, 0], [1, 0, 0]]
+[[1, 0, 0, 5], [1, 0, 0, 9]]
+True False</pre></div><p><code>grid = [row, row]</code> has two slots pointing at one list, so <code>grid[0][0] = 1</code> shows in both rows. <code>grid[1] + [9]</code> builds a <strong>new</strong> list and stores it in slot 1, which ends the alias for that slot. <code>append</code> then changes only the original <code>row</code>, which is still in slot 0. After that line <code>row</code> is <code>[1, 0, 0, 5]</code> and slot 1 is <code>[1, 0, 0, 9]</code>. This is the <code>[[0] * 3] * 3</code> trap in slow motion; lesson 2.3 shows how to build grids safely.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-which-built-in-types-are-mutable-and-why" data-pid="m2-2-which-built-in-types-are-mutable-and-why" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Which built-in types are mutable, and why does it matter?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Mutable: list, dict, set, bytearray, and most user-defined objects. Immutable: int, float, bool, complex, str, bytes, tuple, frozenset, None. It matters in three places. First, <strong>aliasing</strong>: any name or container that shares a mutable object sees every change, which causes action-at-a-distance bugs. Second, <strong>hashing</strong>: only values that cannot change can be dict keys or set members, because a key whose hash changed could never be found again. Third, <strong>defaults and arguments</strong>: a mutable default argument is created once and shared between calls (lesson 2.4). A strong answer adds that a tuple is only as immutable as its contents, and mentions numpy views and pandas Copy-on-Write for data roles.</p></div></details>
+</article>
+<article class="prob" id="p-explain-what-happens-in-t-1-2-t-0-3" data-pid="m2-2-explain-what-happens-in-t-1-2-t-0-3" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>20. Explain what happens in <code>t = ([1], 2); t[0] += [3]</code>.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It raises <code>TypeError: 'tuple' object does not support item assignment</code>, <strong>and</strong> <code>t</code> becomes <code>([1, 3], 2)</code>. Augmented assignment on an item is two steps: call <code>t[0].__iadd__([3])</code>, which extends the list in place and succeeds, then assign the result back to <code>t[0]</code>, which the tuple refuses. The interviewer wants to hear that you know <code>+=</code> on a list is in place, and that a tuple's immutability only covers which objects it holds, not those objects' contents. Mention that <code>t[0].extend([3])</code> makes the same change without raising.</p></div></details>
+</article>
+<article class="prob" id="p-what-was-settingwithcopywarning-and-what" data-pid="m2-2-what-was-settingwithcopywarning-and-what" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>21. What was <code>SettingWithCopyWarning</code>, and what changed in pandas 3?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>In pandas 1.x and 2.x, indexing could return either a view of the DataFrame or a copy, and it was hard to predict which. Writing to a result that might be a copy, such as <code>sub = df[mask]; sub["x"] = 0</code> or chained assignment <code>df[mask]["x"] = 0</code>, raised <code>SettingWithCopyWarning</code> because the write might or might not reach <code>df</code>. pandas 3.0 made <strong>Copy-on-Write</strong> the only behaviour: every object you derive from a DataFrame behaves as its own copy, copying lazily only when one side is changed. So writes to derived objects never reach the original, the warning is gone, and chained assignment never works (it warns with <code>ChainedAssignmentError</code>). The correct way to change <code>df</code> in every version is <code>df.loc[mask, "x"] = 0</code>. Bonus: Copy-on-Write also saves memory, because derived objects share data until someone writes.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Mutable objects (list, dict, set, arrays, DataFrames) change in place and keep their identity. Immutable ones never change: "changing" them builds a new object.</li><li>Standard-library methods that change an object in place return <code>None</code>: <code>xs = xs.sort()</code> loses your list. Use <code>sorted()</code> for a new one.</li><li>Aliases hide in containers, return values, <code>dict.fromkeys(keys, [])</code> and <code>[[]] * n</code>. Return new objects when callers should not change yours.</li><li>On a list, <code>x += y</code> changes the shared object; <code>x = x + y</code> builds a new one. <code>xs[:] = ...</code> replaces the contents in place.</li><li>numpy basic slices are views; masks and <code>.copy()</code> are copies. pandas 3 is always Copy-on-Write: change a DataFrame only through <code>df.loc[...]</code>.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

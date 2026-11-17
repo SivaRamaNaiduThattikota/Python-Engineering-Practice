@@ -264,7 +264,7 @@ def render(les, res, version):
     secs = []
     for si, s in enumerate(les.sections, 1):
         inner = "\n".join(render_part(les, s, i, x, res, counter) for i, x in enumerate(s.parts))
-        secs.append(f'<section class="sec" id="{s.id}">\n<h2><span class="n">{si}</span>{esc(s.title)}</h2>\n{inner}\n</section>')
+        secs.append(f'<section class="sec" id="{s.id}">\n<h2><span class="n">{si}</span>{inline(s.title)}</h2>\n{inner}\n</section>')
     theory = (f'<a class="chip" href="https://github.com/SivaRamaNaiduThattikota/python-core-foundations/blob/main/{les.theory}">Full theory notebook →</a>'
               if les.theory else "")
     recap_html = "".join(f"<li>{inline(r)}</li>" for r in les.recap)

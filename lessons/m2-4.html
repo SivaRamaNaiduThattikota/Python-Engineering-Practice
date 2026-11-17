@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2.4 · How arguments are passed</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m2-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 2 · The object model</span></div>
+  <h1>2.4 How arguments are passed</h1>
+  <p>Calling a function points its parameter names at your objects. That one rule explains why a function can change your list but not your variable, why mutable defaults leak between calls, and how to design functions that are safe to call.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 9 medium · 6 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="rule">
+<h2><span class="n">1</span>One rule: parameters are assigned, not copied</h2>
+<p>When you call <code>f(cart)</code>, Python does what <code>items = cart</code> would do: it points the parameter name <code>items</code> at the <strong>same object</strong> that <code>cart</code> points at. Nothing is copied, which is why passing a million-row list to a function is instant. People argue whether this is "pass by value" or "pass by reference"; the accurate name is <strong>pass by assignment</strong> (or "pass by object reference"), and everything from 2.1 to 2.3 applies directly.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 140" role="img" aria-label="Calling f(cart) points the parameter items at the same list as cart. items.append changes that list. items = [] only moves the parameter name.">
+  <defs><marker id="p1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <text x="10" y="18" class="h">Caller</text>
+  <rect x="10" y="40" width="70" height="30" rx="8" class="box"/><text x="45" y="60" class="tk">cart</text>
+  <text x="250" y="18" class="h mid">One object</text>
+  <rect x="190" y="52" width="120" height="40" rx="10" class="box a"/><text x="250" y="77" class="w mid">["a", "b"]</text>
+  <text x="420" y="18" class="h">Inside f(items)</text>
+  <rect x="420" y="40" width="70" height="30" rx="8" class="box"/><text x="455" y="60" class="tk">items</text>
+  <rect x="520" y="96" width="100" height="30" rx="8" class="box b"/><text x="570" y="116" class="w mid">[ ]  new</text>
+  <path d="M80 55 L186 68" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#p1)"/>
+  <path d="M420 55 L314 68" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#p1)"/>
+  <path d="M470 70 L530 94" style="stroke:var(--orange);stroke-width:2;fill:none;stroke-dasharray:4 3" marker-end="url(#p1)"/>
+  <text x="250" y="116" class="mid">items.append(...) changes this</text>
+  <text x="560" y="88" class="mid">items = [] moves only items</text>
+</svg></div><figcaption>The caller's name and the parameter point at one object. Changing it is visible to the caller; rebinding the parameter is not.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">passing.py</span><button class="copy">Copy</button></div><pre><code class="py">def add_item(items, x):
+    items.append(x)        # changes the caller&#x27;s list
+
+def reset(items):
+    items = []             # moves only the local name
+
+cart = [&quot;a&quot;]
+add_item(cart, &quot;b&quot;)
+reset(cart)
+print(cart)
+
+def bump(n):
+    n += 1                 # an int cannot change: a new int, local name moved
+    return n
+
+count = 1
+print(bump(count), count)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;]
+2 1</pre></div></div>
+<p>So a function can <strong>change a mutable argument in place</strong> and the caller sees it, but <strong>assigning to a parameter never affects the caller</strong>. With immutable arguments (numbers, strings, tuples) a function cannot affect the caller's object at all; it can only return a new value.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>Passing a list to a function is like giving a stored procedure the <strong>name of a table</strong>, not a copy of it: an <code>UPDATE</code> inside the procedure changes the real table. Assigning a new value to the parameter is like the procedure pointing its local variable at another table: the caller's table is untouched.</p></div></div>
+</section>
+<section class="sec" id="defaults">
+<h2><span class="n">2</span>Mutable default arguments</h2>
+<p>A default value is evaluated <strong>once, when the <code>def</code> statement runs</strong>, and stored on the function object (you can see them in <code>f.__defaults__</code>). Every call that uses the default gets that same object. For immutable defaults this is harmless. For a list, dict or set, every call shares and changes one object, so data leaks from one call into the next.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mutable_default.py</span><button class="copy">Copy</button></div><pre><code class="py">def log_event(event, log=[]):      # one list, created at definition time
+    log.append(event)
+    return log
+
+print(log_event(&quot;start&quot;))
+print(log_event(&quot;stop&quot;))           # the first call&#x27;s event is still there
+print(log_event.__defaults__)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;start&#x27;]
+[&#x27;start&#x27;, &#x27;stop&#x27;]
+([&#x27;start&#x27;, &#x27;stop&#x27;],)</pre></div></div>
+<p>The fix is the <code>None</code> default plus a fresh object inside the function. If <code>None</code> is a valid value for that parameter, use a sentinel (2.1).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">none_default.py</span><button class="copy">Copy</button></div><pre><code class="py">def log_event(event, log=None):
+    if log is None:
+        log = []                   # a new list on every call that needs one
+    log.append(event)
+    return log
+
+print(log_event(&quot;start&quot;))
+print(log_event(&quot;stop&quot;))
+shared = []
+log_event(&quot;a&quot;, shared); log_event(&quot;b&quot;, shared)
+print(shared)                      # passing a list on purpose still works</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;start&#x27;]
+[&#x27;stop&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;]</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">It is not only lists</div><p>Anything computed in a default is computed once: <code>created=datetime.now()</code> freezes one timestamp for every call, <code>request_id=uuid4()</code> gives every request the same id, and <code>conn=connect()</code> opens one connection at import time. Use <code>None</code> and compute the value inside the function (problem 6).</p></div></div>
+</section>
+<section class="sec" id="design">
+<h2><span class="n">3</span>Designing functions that are safe to call</h2>
+<p>Because a function receives your actual objects, every function makes a choice, whether it says so or not:</p>
+<ul><li><strong>Pure:</strong> read the arguments, return a new result, change nothing. Easiest to test, safe to call twice, safe to retry. The default choice for data transformations: <code>sorted</code>, <code>dict | dict</code>, comprehensions.</li><li><strong>In place:</strong> change the argument and return <code>None</code>, like <code>list.sort()</code>. Saves memory on big data. The name or docstring should make the side effect obvious, and the <code>None</code> return stops callers from assuming they got a copy.</li><li><strong>Defensive copy at the boundary:</strong> when you call code you do not control (plugins, agent tools, user callbacks), pass a copy so it cannot change your data (problem 15).</li></ul>
+<p>What to avoid is the mixture: a function that changes its argument <strong>and</strong> returns it, so the caller thinks they got a new object but actually holds an alias (problems 7 and 11). pandas offers both styles through an <code>inplace=True</code> parameter, and has been moving away from it because the mixture caused so many bugs.</p>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">*args and **kwargs (preview of 3.2)</div><p><code>*args</code> arrives as a <strong>new tuple</strong> and <code>**kwargs</code> as a <strong>new dict</strong> on every call, so changing those containers never affects the caller. The values inside them are still the caller's objects (problem 10).</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">4</span>Warm-up</h2>
+<article class="prob" id="p-change-or-rebind" data-pid="m2-4-change-or-rebind" data-type="predict" data-level="easy" data-answer="[]
+[1, 2] [&#x27;new&#x27;]
+hi">
+<header class="prob-head"><h3>1. Change or rebind?</h3></header>
+<div class="code"><pre><code class="py">def clear_all(items):
+    items.clear()
+
+def replace(items):
+    items = [&quot;new&quot;]
+    return items
+
+data = [1, 2]
+clear_all(data)
+print(data)
+
+data = [1, 2]
+out = replace(data)
+print(data, out)
+
+def shout(text):
+    text = text.upper()
+msg = &quot;hi&quot;
+shout(msg)
+print(msg)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which functions change the object they were given, and which only move their own parameter name?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[]
+[1, 2] [&#x27;new&#x27;]
+hi</pre></div><p><code>items.clear()</code> empties the caller's list in place. <code>items = ["new"]</code> moves only the local name, so <code>data</code> is unchanged, and the new list reaches the caller only because it is returned. <code>text.upper()</code> builds a new string and the local name moves; strings cannot be changed, so no function can change the caller's <code>msg</code>.</p></div></details>
+</article>
+<article class="prob" id="p-an-event-log-that-remembers-too-much" data-pid="m2-4-an-event-log-that-remembers-too-much" data-type="fix" data-level="easy">
+<header class="prob-head"><h3>2. An event log that remembers too much</h3></header>
+<div class="prob-q"><p>Each call to <code>log_event</code> without a log should start a new log. Instead, events from earlier calls keep appearing. Fix it, and keep the option of passing an existing log.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def log_event(event, log=[]):
+    log.append(event)
+    return log
+</textarea>
+<script type="text/plain" class="prob-tests">assert log_event("start") == ["start"]
+assert log_event("stop") == ["stop"]
+mine = ["boot"]
+assert log_event("ready", mine) is mine and mine == ["boot", "ready"]
+assert log_event.__defaults__ == (None,)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert log_event(&quot;start&quot;) == [&quot;start&quot;]
+assert log_event(&quot;stop&quot;) == [&quot;stop&quot;]
+mine = [&quot;boot&quot;]
+assert log_event(&quot;ready&quot;, mine) is mine and mine == [&quot;boot&quot;, &quot;ready&quot;]
+assert log_event.__defaults__ == (None,)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>None</code> as the default and create the list inside the function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def log_event(event, log=None):
+    if log is None:
+        log = []
+    log.append(event)
+    return log</code></pre></div><p>The <code>[]</code> in the signature is evaluated once, so every call without a <code>log</code> shares one list. With <code>None</code> as the default, <code>log = []</code> runs inside the function, on each call that needs it. The last test checks the fix directly through <code>__defaults__</code>. Linters flag this pattern (Ruff rule B006, from flake8-bugbear) because it is one of the most common bugs in Python code.</p></div></details>
+</article>
+<article class="prob" id="p-a-default-computed-once" data-pid="m2-4-a-default-computed-once" data-type="predict" data-level="easy" data-answer="(&#x27;a&#x27;, 1) (&#x27;b&#x27;, 1)
+(&#x27;c&#x27;, 2)
+(1,)">
+<header class="prob-head"><h3>3. A default computed once</h3></header>
+<div class="code"><pre><code class="py">import itertools
+
+counter = itertools.count(1)
+
+def make_job(name, job_id=next(counter)):
+    return (name, job_id)
+
+print(make_job(&quot;a&quot;), make_job(&quot;b&quot;))
+print(make_job(&quot;c&quot;, next(counter)))
+print(make_job.__defaults__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>next(counter)</code> in the signature runs exactly once. When?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(&#x27;a&#x27;, 1) (&#x27;b&#x27;, 1)
+(&#x27;c&#x27;, 2)
+(1,)</pre></div><p>The default <code>next(counter)</code> ran once, when <code>def</code> executed, and stored <code>1</code>. Every call without a <code>job_id</code> reuses it, so jobs <code>"a"</code> and <code>"b"</code> both get id 1. The explicit <code>next(counter)</code> in the third call runs at call time and gets 2. The same thing happens with <code>datetime.now()</code>, <code>uuid4()</code> or <code>random.random()</code> used as defaults: one frozen value for the life of the program.</p></div></details>
+</article>
+<article class="prob" id="p-add-a-system-prompt-without-changing-the" data-pid="m2-4-add-a-system-prompt-without-changing-the" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>4. Add a system prompt without changing the input</h3></header>
+<div class="prob-q"><p>Write <code>with_system(messages, system)</code> that returns a <strong>new</strong> list with a system message <code>{"role": "system", "content": system}</code> first. If the first message is already a system message, replace it in the new list instead of adding a second one. The caller's list must not change.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">def with_system(messages, system):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">msgs = [{"role": "user", "content": "hi"}]
+out = with_system(msgs, "Be brief.")
+assert out == [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}]
+assert msgs == [{"role": "user", "content": "hi"}]
+old = [{"role": "system", "content": "Old."}, {"role": "user", "content": "hi"}]
+out2 = with_system(old, "New.")
+assert out2[0]["content"] == "New." and len(out2) == 2
+assert old[0]["content"] == "Old."
+assert with_system([], "S") == [{"role": "system", "content": "S"}]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">msgs = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}]
+out = with_system(msgs, &quot;Be brief.&quot;)
+assert out == [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}]
+assert msgs == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}]
+old = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Old.&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}]
+out2 = with_system(old, &quot;New.&quot;)
+assert out2[0][&quot;content&quot;] == &quot;New.&quot; and len(out2) == 2
+assert old[0][&quot;content&quot;] == &quot;Old.&quot;
+assert with_system([], &quot;S&quot;) == [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;S&quot;}]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the result with <code>+</code>, which makes a new list. Use a slice to skip an existing system message.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def with_system(messages, system):
+    rest = messages[1:] if messages and messages[0][&quot;role&quot;] == &quot;system&quot; else messages
+    return [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system}] + rest</code></pre></div><p><code>[...] + rest</code> builds a new list, so the caller's list is never touched, and the replacement is done by <strong>not including</strong> the old system message rather than by editing it (which would change the caller's dict, 2.3). Pure functions like this are what make prompt-building code safe to call from several requests at once.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">5</span>Medium</h2>
+<article class="prob" id="p-agent-memory-shared-between-users" data-pid="m2-4-agent-memory-shared-between-users" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Agent memory shared between users</h3></header>
+<div class="prob-q"><p><code>answer</code> keeps conversation memory so follow-up questions have context. Two different users calling it without their own memory end up seeing each other's questions. Fix it so each call without <code>memory</code> starts empty, while a memory passed in is used and updated.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def answer(question, memory={}):
+    history = memory.setdefault(&quot;history&quot;, [])
+    history.append(question)
+    return f&quot;answering {question!r} with {len(history) - 1} earlier turns&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert answer("What is RAG?") == "answering 'What is RAG?' with 0 earlier turns"
+assert answer("Reset my password") == "answering 'Reset my password' with 0 earlier turns"
+session = {}
+answer("first", session)
+assert answer("second", session) == "answering 'second' with 1 earlier turns"
+assert session == {"history": ["first", "second"]}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert answer(&quot;What is RAG?&quot;) == &quot;answering &#x27;What is RAG?&#x27; with 0 earlier turns&quot;
+assert answer(&quot;Reset my password&quot;) == &quot;answering &#x27;Reset my password&#x27; with 0 earlier turns&quot;
+session = {}
+answer(&quot;first&quot;, session)
+assert answer(&quot;second&quot;, session) == &quot;answering &#x27;second&#x27; with 1 earlier turns&quot;
+assert session == {&quot;history&quot;: [&quot;first&quot;, &quot;second&quot;]}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>{}</code> default is one dict for the whole program, and <code>setdefault</code> stores the history list inside it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def answer(question, memory=None):
+    if memory is None:
+        memory = {}
+    history = memory.setdefault(&quot;history&quot;, [])
+    history.append(question)
+    return f&quot;answering {question!r} with {len(history) - 1} earlier turns&quot;</code></pre></div><p>The default dict is created once and lives as long as the function, so the history of every caller who did not pass their own memory accumulates in it. In a web service that is a <strong>privacy</strong> bug, not just a logic bug: one user's questions become context for another user's answers. The <code>None</code> default gives each such call a fresh dict. In real agent frameworks memory is an explicit object created per session for exactly this reason.</p></div></details>
+</article>
+<article class="prob" id="p-every-record-has-the-same-timestamp" data-pid="m2-4-every-record-has-the-same-timestamp" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Every record has the same timestamp</h3></header>
+<div class="prob-q"><p><code>make_record</code> should stamp each record with the time it was created. All records get the same time, the moment the module was loaded. Fix it so the time is taken on each call, while still letting callers pass their own <code>created</code> value (for backfills and tests).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from datetime import datetime, timezone
+
+def make_record(text, created=datetime.now(timezone.utc)):
+    return {&quot;text&quot;: text, &quot;created&quot;: created}
+</textarea>
+<script type="text/plain" class="prob-tests">from datetime import datetime, timezone
+r1 = make_record("a")
+r2 = make_record("b")
+assert r1["created"] is not r2["created"]
+assert r1["created"].tzinfo is timezone.utc
+fixed = datetime(2025, 1, 1, tzinfo=timezone.utc)
+assert make_record("c", fixed)["created"] is fixed
+assert make_record.__defaults__ == (None,)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from datetime import datetime, timezone
+r1 = make_record(&quot;a&quot;)
+r2 = make_record(&quot;b&quot;)
+assert r1[&quot;created&quot;] is not r2[&quot;created&quot;]
+assert r1[&quot;created&quot;].tzinfo is timezone.utc
+fixed = datetime(2025, 1, 1, tzinfo=timezone.utc)
+assert make_record(&quot;c&quot;, fixed)[&quot;created&quot;] is fixed
+assert make_record.__defaults__ == (None,)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Same fix as a mutable default: <code>None</code> in the signature, the real value computed inside.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from datetime import datetime, timezone
+
+def make_record(text, created=None):
+    if created is None:
+        created = datetime.now(timezone.utc)
+    return {&quot;text&quot;: text, &quot;created&quot;: created}</code></pre></div><p>The default <code>datetime.now(...)</code> ran once when the module was imported, so every record shares that one <code>datetime</code> object. A <code>datetime</code> is immutable, so this is not an aliasing bug, it is an <strong>evaluated-once</strong> bug, which is why the rule is about defaults in general, not just mutable ones. Accepting an explicit <code>created</code> keeps the function testable: tests can pass a fixed time instead of depending on the clock.</p></div></details>
+</article>
+<article class="prob" id="p-what-the-caller-sees-after-each-call" data-pid="m2-4-what-the-caller-sees-after-each-call" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. What the caller sees after each call</h3></header>
+<div class="prob-q"><p>Fill in <code>data</code> and <code>result</code> after each marked line. Read <code>f</code> carefully first.</p></div>
+<div class="code"><pre><code class="py">def f(xs):
+    xs.append(1)
+    xs = xs + [2]
+    xs.append(3)
+    return xs
+
+data = [0]
+result = f(data)
+result.append(4)
+data = f(data)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>data</code></th><th><code>result</code></th></tr><tr><td>result = f(data)</td><td><input class="cell" data-a="[0, 1]" data-s="[0, 1]" aria-label="data at result = f(data)" autocomplete="off"></td><td><input class="cell" data-a="[0, 1, 2, 3]" data-s="[0, 1, 2, 3]" aria-label="result at result = f(data)" autocomplete="off"></td></tr><tr><td>result.append(4)</td><td><input class="cell" data-a="[0, 1]" data-s="[0, 1]" aria-label="data at result.append(4)" autocomplete="off"></td><td><input class="cell" data-a="[0, 1, 2, 3, 4]" data-s="[0, 1, 2, 3, 4]" aria-label="result at result.append(4)" autocomplete="off"></td></tr><tr><td>data = f(data)</td><td><input class="cell" data-a="[0, 1, 1, 2, 3]" data-s="[0, 1, 1, 2, 3]" aria-label="data at data = f(data)" autocomplete="off"></td><td><input class="cell" data-a="[0, 1, 2, 3, 4]" data-s="[0, 1, 2, 3, 4]" aria-label="result at data = f(data)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>f</code>, the first <code>append</code> changes the caller's list. After <code>xs = xs + [2]</code>, <code>xs</code> is a different list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>data</code></th><th><code>result</code></th></tr><tr><td>result = f(data)</td><td><code>[0, 1]</code></td><td><code>[0, 1, 2, 3]</code></td></tr><tr><td>result.append(4)</td><td><code>[0, 1]</code></td><td><code>[0, 1, 2, 3, 4]</code></td></tr><tr><td>data = f(data)</td><td><code>[0, 1, 1, 2, 3]</code></td><td><code>[0, 1, 2, 3, 4]</code></td></tr></table></div><p>The first <code>xs.append(1)</code> changes the caller's list, so <code>data</code> becomes <code>[0, 1]</code>. Then <code>xs + [2]</code> builds a new list, and the second <code>append</code> changes only that new list, which is returned as <code>result</code>. <code>result.append(4)</code> changes only <code>result</code>. The second call appends 1 to <code>data</code> again (it is the same list), then returns another new list, which <code>data</code> is rebound to. A function that changes its input <strong>and</strong> returns a different object is the hardest kind to reason about; this is why the mixture should be avoided.</p></div></details>
+</article>
+<article class="prob" id="p-a-transform-with-an-explicit-in-place-op" data-pid="m2-4-a-transform-with-an-explicit-in-place-op" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. A transform with an explicit in-place option</h3></header>
+<div class="prob-q"><p>Write <code>scale_rows(rows, factor, inplace=False)</code>. By default it returns a <strong>new</strong> list of new rows with every value multiplied by <code>factor</code>, leaving <code>rows</code> untouched. With <code>inplace=True</code> it changes the caller's rows themselves (the same inner list objects) and returns <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">def scale_rows(rows, factor, inplace=False):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">data = [[1, 2], [3, 4]]
+out = scale_rows(data, 10)
+assert out == [[10, 20], [30, 40]] and data == [[1, 2], [3, 4]]
+assert out[0] is not data[0]
+inner = data[0]
+assert scale_rows(data, 2, inplace=True) is None
+assert data == [[2, 4], [6, 8]] and data[0] is inner
+assert scale_rows([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = [[1, 2], [3, 4]]
+out = scale_rows(data, 10)
+assert out == [[10, 20], [30, 40]] and data == [[1, 2], [3, 4]]
+assert out[0] is not data[0]
+inner = data[0]
+assert scale_rows(data, 2, inplace=True) is None
+assert data == [[2, 4], [6, 8]] and data[0] is inner
+assert scale_rows([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For <code>inplace=True</code>, change each row's contents with slice assignment <code>row[:] = ...</code> so the row objects stay the same.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def scale_rows(rows, factor, inplace=False):
+    if inplace:
+        for row in rows:
+            row[:] = [v * factor for v in row]
+        return None
+    return [[v * factor for v in row] for row in rows]</code></pre></div><p>The two modes make the side effect explicit at the call site: <code>scale_rows(x, 2)</code> is safe, and <code>scale_rows(x, 2, inplace=True)</code> says loudly that <code>x</code> changes. Returning <code>None</code> in place mode prevents <code>y = scale_rows(x, 2, inplace=True)</code> from looking like it produced a copy. pandas has been moving away from its <code>inplace</code> parameters because people mixed the modes up; if you add one, keep the two paths this clearly separated.</p></div></details>
+</article>
+<article class="prob" id="p-does-passing-a-list-copy-it" data-pid="m2-4-does-passing-a-list-copy-it" data-type="choose" data-level="medium" data-answer="a">
+<header class="prob-head"><h3>9. Does passing a list copy it?</h3></header>
+<div class="prob-q"><p>Both look up the first item of a million-item list through a function. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">big = list(range(1_000_000))
+def first(xs):
+    return xs[0]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">x = first(big)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">x = first(list(big))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python copy when you call <code>total(big)</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>0.11 µs</td></tr><tr><td>B</td><td>7.49 ms</td></tr></table></div><p>Passing <code>big</code> copies nothing: the parameter just points at the same list, so A costs one index lookup, no matter how big the list is. B first builds a full copy of a million references, then throws it away. When the function itself does heavy work (say, summing every item), that work can hide the copy's cost in a measurement, but the copy is still wasted time and memory. Copy only when the function would otherwise change data the caller needs, or when calling code you do not trust.</p></div></details>
+</article>
+<article class="prob" id="p-what-args-and-kwargs-receive" data-pid="m2-4-what-args-and-kwargs-receive" data-type="predict" data-level="medium" data-answer="[&#x27;x&#x27;, &#x27;y&#x27;] {&#x27;k&#x27;: 5}
+tuple False">
+<header class="prob-head"><h3>10. What <code>*args</code> and <code>**kwargs</code> receive</h3></header>
+<div class="code"><pre><code class="py">def capture(*args, **kwargs):
+    return args, kwargs
+
+tags = [&quot;x&quot;]
+opts = {&quot;k&quot;: 5}
+a, kw = capture(tags, **opts)
+a[0].append(&quot;y&quot;)
+kw[&quot;k&quot;] = 9
+print(tags, opts)
+print(type(a).__name__, kw is opts)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>*args</code> and <code>**kwargs</code> are new containers built for each call. What do they contain?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;x&#x27;, &#x27;y&#x27;] {&#x27;k&#x27;: 5}
+tuple False</pre></div><p><code>args</code> is a new <strong>tuple</strong> and <code>kwargs</code> a new <strong>dict</strong>, built on every call, so <code>kw["k"] = 9</code> changes only that dict and <code>opts</code> keeps 5. But the tuple's item is the caller's own <code>tags</code> list, so appending to <code>a[0]</code> changes <code>tags</code>. Unpacking with <code>**opts</code> copies the keys and values into a new dict: one level, like a shallow copy (2.3).</p></div></details>
+</article>
+<article class="prob" id="p-a-cleaner-that-changes-the-raw-data" data-pid="m2-4-a-cleaner-that-changes-the-raw-data" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. A cleaner that changes the raw data</h3></header>
+<div class="prob-q"><p><code>clean_record</code> normalises a CRM record before loading it. The raw record must be kept unchanged for the audit log, but after cleaning it has changed too. Make <code>clean_record</code> pure: return a new, cleaned dict.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def clean_record(rec):
+    rec[&quot;email&quot;] = rec[&quot;email&quot;].strip().lower()
+    if rec.get(&quot;phone&quot;) == &quot;&quot;:
+        del rec[&quot;phone&quot;]
+    rec[&quot;tags&quot;].append(&quot;cleaned&quot;)
+    return rec
+</textarea>
+<script type="text/plain" class="prob-tests">raw = {"email": "  Ana@Example.COM ", "phone": "", "tags": ["crm"]}
+out = clean_record(raw)
+assert out == {"email": "ana@example.com", "tags": ["crm", "cleaned"]}
+assert raw == {"email": "  Ana@Example.COM ", "phone": "", "tags": ["crm"]}
+assert out["tags"] is not raw["tags"]
+assert clean_record({"email": "B@x.io", "phone": "123", "tags": []}) == {"email": "b@x.io", "phone": "123", "tags": ["cleaned"]}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">raw = {&quot;email&quot;: &quot;  Ana@Example.COM &quot;, &quot;phone&quot;: &quot;&quot;, &quot;tags&quot;: [&quot;crm&quot;]}
+out = clean_record(raw)
+assert out == {&quot;email&quot;: &quot;ana@example.com&quot;, &quot;tags&quot;: [&quot;crm&quot;, &quot;cleaned&quot;]}
+assert raw == {&quot;email&quot;: &quot;  Ana@Example.COM &quot;, &quot;phone&quot;: &quot;&quot;, &quot;tags&quot;: [&quot;crm&quot;]}
+assert out[&quot;tags&quot;] is not raw[&quot;tags&quot;]
+assert clean_record({&quot;email&quot;: &quot;B@x.io&quot;, &quot;phone&quot;: &quot;123&quot;, &quot;tags&quot;: []}) == {&quot;email&quot;: &quot;b@x.io&quot;, &quot;phone&quot;: &quot;123&quot;, &quot;tags&quot;: [&quot;cleaned&quot;]}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start from a copy of the record, but remember <code>tags</code> is a list inside it (2.3).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Building the result directly is cleaner than copying and then deleting: include <code>phone</code> only if it is not empty.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def clean_record(rec):
+    out = {k: v for k, v in rec.items() if not (k == &quot;phone&quot; and v == &quot;&quot;)}
+    out[&quot;email&quot;] = rec[&quot;email&quot;].strip().lower()
+    out[&quot;tags&quot;] = rec[&quot;tags&quot;] + [&quot;cleaned&quot;]
+    return out</code></pre></div><p>The original changes the caller's dict three ways: a new value, a deleted key, and an append to the nested list. A shallow <code>dict(rec)</code> would fix the first two and still change <code>raw["tags"]</code>. The solution builds a new dict, leaves out the empty phone instead of deleting it, and makes a new tags list with <code>+</code>. Keeping the raw input intact is what makes a pipeline re-runnable: you can always clean the raw data again with a fixed version.</p></div></details>
+</article>
+<article class="prob" id="p-a-pure-transform-written-as-one-expressi" data-pid="m2-4-a-pure-transform-written-as-one-expressi" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>12. A pure transform, written as one expression</h3></header>
+<div class="prob-q"><p>This adds a tag to every document and returns new documents. It works but is long. Shorten it without changing behaviour. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def tag_all(docs, tag):
+    result = []
+    for d in docs:
+        new_d = {}
+        for k in d:
+            new_d[k] = d[k]
+        new_tags = []
+        for t in d[&quot;tags&quot;]:
+            new_tags.append(t)
+        new_tags.append(tag)
+        new_d[&quot;tags&quot;] = new_tags
+        result.append(new_d)
+    return result
+</textarea>
+<script type="text/plain" class="prob-tests">docs = [{"id": 1, "tags": ["faq"]}, {"id": 2, "tags": []}]
+out = tag_all(docs, "v2")
+assert out == [{"id": 1, "tags": ["faq", "v2"]}, {"id": 2, "tags": ["v2"]}]
+assert docs == [{"id": 1, "tags": ["faq"]}, {"id": 2, "tags": []}]
+assert out[0] is not docs[0] and out[0]["tags"] is not docs[0]["tags"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [{&quot;id&quot;: 1, &quot;tags&quot;: [&quot;faq&quot;]}, {&quot;id&quot;: 2, &quot;tags&quot;: []}]
+out = tag_all(docs, &quot;v2&quot;)
+assert out == [{&quot;id&quot;: 1, &quot;tags&quot;: [&quot;faq&quot;, &quot;v2&quot;]}, {&quot;id&quot;: 2, &quot;tags&quot;: [&quot;v2&quot;]}]
+assert docs == [{&quot;id&quot;: 1, &quot;tags&quot;: [&quot;faq&quot;]}, {&quot;id&quot;: 2, &quot;tags&quot;: []}]
+assert out[0] is not docs[0] and out[0][&quot;tags&quot;] is not docs[0][&quot;tags&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>{**d, "tags": ...}</code> copies a dict and overrides one key in a single expression.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def tag_all(docs, tag):
+    return [{**d, &quot;tags&quot;: d[&quot;tags&quot;] + [tag]} for d in docs]</code></pre></div><p><code>{**d, "tags": ...}</code> is a shallow copy of <code>d</code> with one key replaced, and <code>d["tags"] + [tag]</code> builds the new list, so no object of the input is changed and the one nested list that differs is new. This "copy and override" expression is the everyday way to write pure transformations of records in Python, and it reads like the spec: same document, with the tag added.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">6</span>Hard</h2>
+<article class="prob" id="p-read-the-code-a-default-that-escapes" data-pid="m2-4-read-the-code-a-default-that-escapes" data-type="predict" data-level="hard" data-answer="[1, 2, 99, 3]
+True True
+[4] ([1, 2, 99, 3],)">
+<header class="prob-head"><h3>13. Read the code: a default that escapes</h3></header>
+<div class="code"><pre><code class="py">def collect(x, bucket=[]):
+    bucket.append(x)
+    return bucket
+
+first = collect(1)
+second = collect(2)
+first.append(99)
+print(collect(3))
+print(first is second, collect.__defaults__[0] is first)
+
+mine = collect(4, [])
+print(mine, collect.__defaults__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The function <strong>returns</strong> its default list, so the caller now holds an alias to it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[1, 2, 99, 3]
+True True
+[4] ([1, 2, 99, 3],)</pre></div><p>Every call without <code>bucket</code> appends to the single default list and returns it, so <code>first</code>, <code>second</code> and <code>collect.__defaults__[0]</code> are all the same object. That is worse than a plain mutable default: the caller's <code>first.append(99)</code> writes straight into the function's default, so the next call sees 99. Passing <code>[]</code> explicitly uses a new list and leaves the default alone, so the last line shows <code>[4]</code> and the default still holding 1, 2, 99 and 3.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-retry-wrapper-with-two-l" data-pid="m2-4-read-the-code-a-retry-wrapper-with-two-l" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a retry wrapper with two leaks</h3></header>
+<div class="prob-q"><p><code>call_with_retry</code> calls an LLM function up to <code>attempts</code> times and returns the result plus the errors it saw. In production, the error list of one request contains errors from earlier requests, and the caller's payload comes back with an <code>"attempt"</code> key in it, which then gets sent on the next request. Find both problems and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class TransientError(Exception):
+    pass
+
+
+def call_with_retry(fn, payload, attempts=3, errors=[]):
+    for attempt in range(1, attempts + 1):
+        payload[&quot;attempt&quot;] = attempt
+        try:
+            return fn(payload), errors
+        except TransientError as e:
+            errors.append(f&quot;attempt {attempt}: {e}&quot;)
+    raise RuntimeError(f&quot;failed after {attempts} attempts: {errors}&quot;)
+
+
+def flaky(fails):
+    state = {&quot;left&quot;: fails}
+    def fn(payload):
+        if state[&quot;left&quot;] &gt; 0:
+            state[&quot;left&quot;] -= 1
+            raise TransientError(&quot;rate limited&quot;)
+        return f&quot;ok on attempt {payload[&#x27;attempt&#x27;]}&quot;
+    return fn
+</textarea>
+<script type="text/plain" class="prob-tests">p = {"prompt": "hi"}
+result, errs = call_with_retry(flaky(1), p)
+assert result == "ok on attempt 2" and errs == ["attempt 1: rate limited"]
+assert p == {"prompt": "hi"}
+result2, errs2 = call_with_retry(flaky(0), {"prompt": "again"})
+assert result2 == "ok on attempt 1" and errs2 == []
+assert errs == ["attempt 1: rate limited"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">p = {&quot;prompt&quot;: &quot;hi&quot;}
+result, errs = call_with_retry(flaky(1), p)
+assert result == &quot;ok on attempt 2&quot; and errs == [&quot;attempt 1: rate limited&quot;]
+assert p == {&quot;prompt&quot;: &quot;hi&quot;}
+result2, errs2 = call_with_retry(flaky(0), {&quot;prompt&quot;: &quot;again&quot;})
+assert result2 == &quot;ok on attempt 1&quot; and errs2 == []
+assert errs == [&quot;attempt 1: rate limited&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>errors=[]</code> is created once. Every request that does not pass <code>errors</code> shares it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>payload["attempt"] = attempt</code> writes into the caller's dict. Send a new dict to <code>fn</code> instead.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class TransientError(Exception):
+    pass
+
+
+def call_with_retry(fn, payload, attempts=3, errors=None):
+    if errors is None:
+        errors = []
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn({**payload, &quot;attempt&quot;: attempt}), errors
+        except TransientError as e:
+            errors.append(f&quot;attempt {attempt}: {e}&quot;)
+    raise RuntimeError(f&quot;failed after {attempts} attempts: {errors}&quot;)
+
+
+def flaky(fails):
+    state = {&quot;left&quot;: fails}
+    def fn(payload):
+        if state[&quot;left&quot;] &gt; 0:
+            state[&quot;left&quot;] -= 1
+            raise TransientError(&quot;rate limited&quot;)
+        return f&quot;ok on attempt {payload[&#x27;attempt&#x27;]}&quot;
+    return fn</code></pre></div><p>Bug one is the mutable default: one <code>errors</code> list for the life of the process, so every request reports the failures of all earlier ones, and it grows without limit. Bug two is a side effect on the argument: <code>payload["attempt"] = ...</code> writes into the caller's dict, which is then reused for the next request with a stale <code>attempt</code> key in it. The fix builds a new dict per attempt with <code>{**payload, "attempt": attempt}</code>. Retry code is exactly where side effects hurt most, because the same call runs several times: anything a call changes in its input is changed again on every retry. (<code>flaky</code> uses a closure to keep its counter; closures are lesson 3.4.)</p></div></details>
+</article>
+<article class="prob" id="p-call-untrusted-tools-on-copies" data-pid="m2-4-call-untrusted-tools-on-copies" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Call untrusted tools on copies</h3></header>
+<div class="prob-q"><p>An agent runs tool functions written by other teams, and some of them change the arguments they get. Write <code>safe_call(fn, *args, **kwargs)</code> that calls <code>fn</code> with <strong>deep copies</strong> of all positional and keyword arguments and returns its result, so no tool can change the agent's own data.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import copy
+
+def safe_call(fn, *args, **kwargs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def bad_tool(query, filters, *, limit):
+    filters["year"] = 1999
+    query["text"] = query["text"].upper()
+    return f"{query['text']} {filters} {limit}"
+q = {"text": "refunds"}
+f = {"year": 2025, "tags": ["eu"]}
+assert safe_call(bad_tool, q, f, limit=3) == "REFUNDS {'year': 1999, 'tags': ['eu']} 3"
+assert q == {"text": "refunds"} and f == {"year": 2025, "tags": ["eu"]}
+def appender(items):
+    items.append("x")
+    return len(items)
+data = [1]
+assert safe_call(appender, data) == 2 and data == [1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def bad_tool(query, filters, *, limit):
+    filters[&quot;year&quot;] = 1999
+    query[&quot;text&quot;] = query[&quot;text&quot;].upper()
+    return f&quot;{query[&#x27;text&#x27;]} {filters} {limit}&quot;
+q = {&quot;text&quot;: &quot;refunds&quot;}
+f = {&quot;year&quot;: 2025, &quot;tags&quot;: [&quot;eu&quot;]}
+assert safe_call(bad_tool, q, f, limit=3) == &quot;REFUNDS {&#x27;year&#x27;: 1999, &#x27;tags&#x27;: [&#x27;eu&#x27;]} 3&quot;
+assert q == {&quot;text&quot;: &quot;refunds&quot;} and f == {&quot;year&quot;: 2025, &quot;tags&quot;: [&quot;eu&quot;]}
+def appender(items):
+    items.append(&quot;x&quot;)
+    return len(items)
+data = [1]
+assert safe_call(appender, data) == 2 and data == [1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Deep-copy the whole <code>args</code> tuple and the whole <code>kwargs</code> dict, then call <code>fn(*new_args, **new_kwargs)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy
+
+def safe_call(fn, *args, **kwargs):
+    return fn(*copy.deepcopy(args), **copy.deepcopy(kwargs))</code></pre></div><p>Copying the <code>args</code> tuple and <code>kwargs</code> dict as wholes copies every argument inside them, at every level, and one memo per call keeps shared arguments shared. This is a <strong>defensive copy at the boundary</strong>: inside your own code you avoid copies, but at the edge where code you do not control runs, you pay for one so the agent's state, logs and retries cannot be corrupted. It costs time on big arguments, so real frameworks often validate tool arguments into fresh objects instead (Pydantic models built from the LLM's JSON), which gives the same isolation as a side benefit.</p></div></details>
+</article>
+<article class="prob" id="p-passing-an-iterator-not-a-list" data-pid="m2-4-passing-an-iterator-not-a-list" data-type="predict" data-level="hard" data-answer="(1, 3)
+ValueError: max() iterable argument is empty">
+<header class="prob-head"><h3>16. Passing an iterator, not a list</h3></header>
+<div class="code"><pre><code class="py">def stats(values):
+    return min(values), max(values)
+
+data = [3, 1, 2]
+print(stats(data))
+gen = (x for x in data)
+try:
+    print(stats(gen))
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A generator produces its values once. What is left for <code>max</code> after <code>min</code> has read them all?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(1, 3)
+ValueError: max() iterable argument is empty</pre></div><p>A list can be read any number of times, so <code>stats(data)</code> works. A generator (Module 6) is used up as it is read: <code>min</code> consumes all three values, and <code>max</code> then sees an empty iterator and raises <code>ValueError</code>. The function "works in the test" with a list and fails in production when someone passes a generator, a file, or a database cursor. Either accept that the argument is read once (compute both in one loop), or turn it into a list at the start with <code>values = list(values)</code>, and document which one the function does.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">7</span>Interview questions</h2>
+<article class="prob" id="p-is-python-pass-by-value-or-pass-by-refer" data-pid="m2-4-is-python-pass-by-value-or-pass-by-refer" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Is Python pass-by-value or pass-by-reference?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Neither, exactly. Python passes <strong>references to objects</strong>, and the parameter is assigned to the argument like a normal <code>=</code> ("pass by assignment" or "call by object reference"). Consequences: if the object is mutable and the function changes it in place, the caller sees the change, which looks like pass-by-reference. If the function assigns a new object to the parameter, the caller is unaffected, which looks like pass-by-value. Nothing is copied on a call, so passing large data is cheap. Give the two-line example (<code>append</code> versus <code>items = []</code>), and mention that immutable arguments can never be changed by the callee.</p></div></details>
+</article>
+<article class="prob" id="p-why-are-mutable-default-arguments-danger" data-pid="m2-4-why-are-mutable-default-arguments-danger" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why are mutable default arguments dangerous, and are they ever used on purpose?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Defaults are evaluated once when <code>def</code> runs and stored on the function (<code>__defaults__</code>), so a list or dict default is one object shared by every call that does not pass the argument. Data leaks between calls, and if the function returns it, callers hold aliases to it. The fix is <code>None</code> (or a sentinel) plus creating the object inside. The same once-only evaluation also freezes values like <code>datetime.now()</code> or <code>uuid4()</code>. Deliberate uses exist: a default dict as a cheap memo cache (<code>def fib(n, _cache={})</code>), but <code>functools.cache</code> does this more clearly and is what you should say you would use. Bonus: dataclasses refuse a mutable default and require <code>field(default_factory=list)</code>, which builds a new list per instance.</p></div></details>
+</article>
+<article class="prob" id="p-an-agent-s-tool-function-changes-the-arg" data-pid="m2-4-an-agent-s-tool-function-changes-the-arg" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. An agent's tool function changes the arguments dict the LLM produced. Why is that a problem, and how do you prevent it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The same dict usually lives on after the call: it is logged, stored in the conversation history, shown in traces, and reused if the step is retried or replayed. A tool that changes it rewrites history: traces show arguments the model never sent, retries run with altered input, and evaluation datasets built from logs are wrong. Prevention, from lightest to strongest: write tools as pure functions; validate the LLM's JSON into a fresh object (a Pydantic model) before calling the tool, so the tool never sees the logged dict; pass a deep copy at the boundary when calling third-party tools; or store logged arguments in read-only form. The principle is the one from this lesson: a function receives your actual object, so the boundary decides who may change it.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A call does <code>param = argument</code>: nothing is copied. Changing a mutable argument in place is visible to the caller; assigning to the parameter never is.</li><li>Defaults are evaluated once, at <code>def</code> time: <code>items=[]</code>, <code>memory={}</code>, <code>created=datetime.now()</code> are all shared or frozen. Use <code>None</code> and build the value inside.</li><li>Choose deliberately: pure (return new, change nothing), or in place (change and return <code>None</code>). Never change the input and return it.</li><li>Copy at boundaries you do not control (tools, plugins), not on every call. Passing a big list is free; copying it is not.</li><li>An iterator argument can be read only once. Accept that, or convert to a list at the start.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
