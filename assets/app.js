@@ -140,6 +140,8 @@ const COURSE = [
   const href = u => isExt(u) ? `href="${u}" target="_blank" rel="noopener"` : `href="${root + u}"`;
   const arrow = u => isExt(u) ? ' ↗' : '';
   const theoryPage = THEORY_PAGES.find(t => t.id === pageId);
+  // descriptions in the manifest use `code` marks, like the lesson pages
+  const fmt = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/`([^`]+)`/g, '<code>$1</code>');
   const KEY = 'pyp-done';
   let done = JSON.parse(localStorage.getItem(KEY) || '[]');
   const lesson = COURSE.find(c => c.id === pageId);
@@ -461,7 +463,7 @@ const COURSE = [
   const cards = document.getElementById('lesson-cards');
   if (cards) {
     cards.innerHTML = COURSE.map(c => `<a class="lcard ${c.soon ? 'soon' : ''}" data-stage="${c.stage}" href="${c.soon ? '#' : root + c.file}">
-      <span class="n">${'Lesson ' + c.num}</span><span class="t">${c.title}</span><span class="d">${c.desc}</span>
+      <span class="n">${'Lesson ' + c.num}</span><span class="t">${c.title}</span><span class="d">${fmt(c.desc)}</span>
       <span class="f"><span>${c.soon ? 'Coming next' : c.probs + ' problems'}</span>${done.includes(c.id) ? '<span class="ok">✓ Done</span>' : ''}</span></a>`).join('');
   }
   updateHome();
