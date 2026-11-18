@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>15.3 · Command-line tools</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m15-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 15 · Modules and packaging</span></div>
+  <h1>15.3 Command-line tools</h1>
+  <p>Ingestion jobs, evaluation runs, data exports and admin tasks are run from the command line, by people and by schedulers. <code>argparse</code> from the ground up (positional and optional arguments, types, choices, flags, subcommands), the <code>main(argv)</code> pattern that makes tools testable, standard input, output and error, exit codes, configuration precedence, and entry points that turn a function into a command.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 8 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="argparse">
+<h2><span class="n">1</span>argparse basics</h2>
+<p><code>sys.argv</code> is the list of command-line words, starting with the program name. Parsing it by hand breaks on the first unusual input, so use <strong><code>argparse</code></strong>: create an <code>ArgumentParser(prog=..., description=...)</code>, declare arguments with <code>add_argument</code>, and call <code>parse_args(argv)</code>, which returns a namespace object with one attribute per argument. <strong>Positional</strong> arguments are required and identified by order (<code>add_argument("source")</code>). <strong>Optional</strong> arguments start with dashes (<code>--out</code>, short form <code>-o</code>), are identified by name, and take a <code>default</code>. <code>type=int</code> (or any function of one string) converts and validates the value, <code>choices=[...]</code> restricts it, <code>required=True</code> makes an option mandatory, <code>action="store_true"</code> makes a flag, <code>nargs="+"</code> collects one or more values, and <code>help=</code> documents it. <code>argparse</code> builds <code>--help</code> from these declarations and prints a usage message and exits with <strong>code 2</strong> on invalid input.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">argparse_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse
+
+parser = argparse.ArgumentParser(prog=&quot;rag-ingest&quot;, description=&quot;Chunk documents for the vector index.&quot;)
+parser.add_argument(&quot;source&quot;, help=&quot;folder with documents&quot;)
+parser.add_argument(&quot;-o&quot;, &quot;--out&quot;, default=&quot;chunks.jsonl&quot;, help=&quot;output JSONL file&quot;)
+parser.add_argument(&quot;--chunk-size&quot;, type=int, default=200)
+parser.add_argument(&quot;--format&quot;, choices=[&quot;md&quot;, &quot;txt&quot;, &quot;all&quot;], default=&quot;all&quot;)
+parser.add_argument(&quot;--dry-run&quot;, action=&quot;store_true&quot;)
+parser.add_argument(&quot;-v&quot;, &quot;--verbose&quot;, action=&quot;count&quot;, default=0)
+
+args = parser.parse_args([&quot;docs/&quot;, &quot;--chunk-size&quot;, &quot;120&quot;, &quot;-vv&quot;, &quot;--dry-run&quot;])
+print(args)
+print(args.source, args.out, args.chunk_size + 1, args.dry_run, args.verbose)
+try:
+    parser.parse_args([&quot;docs/&quot;, &quot;--chunk-size&quot;, &quot;big&quot;])
+except SystemExit as e:
+    print(&quot;exit code&quot;, e.code)</code></pre><div class="out"><span class="ol">Output</span><pre>Namespace(source=&#x27;docs/&#x27;, out=&#x27;chunks.jsonl&#x27;, chunk_size=120, format=&#x27;all&#x27;, dry_run=True, verbose=2)
+docs/ chunks.jsonl 121 True 2
+usage: rag-ingest [-h] [-o OUT] [--chunk-size CHUNK_SIZE]
+                  [--format {md,txt,all}] [--dry-run] [-v]
+                  source
+rag-ingest: error: argument --chunk-size: invalid int value: &#x27;big&#x27;
+exit code 2</pre></div></div>
+<p>Dashes in option names become underscores in attribute names (<code>chunk_size</code>). The invalid value made <code>argparse</code> print an error message to standard error and raise <code>SystemExit(2)</code>; in a real terminal the program ends there, and tests can catch it, as here.</p>
+</section>
+<section class="sec" id="main">
+<h2><span class="n">2</span>The <code>main(argv)</code> pattern</h2>
+<p>Structure every tool as a function <strong><code>main(argv=None) -&gt; int</code></strong>: it builds the parser, parses <code>argv</code> (when <code>argv</code> is <code>None</code>, <code>parse_args</code> uses <code>sys.argv[1:]</code>), does the work, and <strong>returns</strong> an exit code instead of calling <code>sys.exit</code> deep inside. The file ends with <code>if __name__ == "__main__": raise SystemExit(main())</code>. Tests can then call <code>main(["docs/", "--dry-run"])</code> and check the return value and output, without a subprocess, and the same function serves as the entry point of an installed command. Keep the CLI layer thin: parse arguments, call ordinary functions that do the work (and that other code can import), and translate their results and exceptions into output and exit codes.</p>
+<p>Exit codes are the CLI's return value to the world: <strong>0</strong> for success, <strong>1</strong> for a general failure, <strong>2</strong> for bad usage (argparse's convention), and other small numbers for specific failures if callers need to tell them apart. Shell scripts (<code>tool &amp;&amp; next</code>), CI pipelines, cron and orchestrators such as Airflow or Kubernetes jobs decide what to do from this number, so a tool that prints "error" and exits 0 makes failures invisible. <code>raise SystemExit("message")</code> prints the message to standard error and exits with 1.</p>
+</section>
+<section class="sec" id="streams">
+<h2><span class="n">3</span>Standard input, output and error</h2>
+<p>Every process has three streams. <strong>Standard output</strong> is for the program's <strong>result</strong>, so it can be redirected to a file or piped into another program (<code>rag-ingest docs/ | jq .</code>). <strong>Standard error</strong> is for <strong>diagnostics</strong>: progress, warnings, errors and logs (12.3's handlers default to it), which stay visible on the terminal when stdout is redirected. <strong>Standard input</strong> lets a tool read data from a pipe (<code>cat tickets.jsonl | classify --label spam</code>); by convention a file argument of <code>-</code> means "read stdin". Mixing logs into stdout corrupts the data for the next program in the pipe. For testability, let <code>main</code> accept the streams as parameters with <code>sys.stdin</code>, <code>sys.stdout</code> and <code>sys.stderr</code> as defaults, and stream line by line (12.2) so large inputs work.</p>
+</section>
+<section class="sec" id="advanced">
+<h2><span class="n">4</span>Subcommands, configuration and entry points</h2>
+<p>Tools with several actions (<code>git commit</code>, <code>uv add</code>) use <strong>subcommands</strong>: <code>parser.add_subparsers(dest="command", required=True)</code> returns an object whose <code>add_parser("ask")</code> creates a parser per subcommand with its own arguments, and <code>set_defaults(func=handler)</code> attaches the function to call, so <code>main</code> ends with <code>return args.func(args)</code>. Settings often come from several places; the usual precedence is <strong>defaults &lt; configuration file &lt; environment variables &lt; command-line flags</strong> (12.4), which <code>argparse</code> supports through <code>parser.set_defaults(**values_from_config_and_env)</code> before parsing: explicit flags then override everything else (problem 8).</p>
+<p>To install a command, declare an <strong>entry point</strong> in <code>pyproject.toml</code>: <code>[project.scripts]</code> with <code>rag-ingest = "support_rag.cli:main"</code>. Installing the package (<code>pip install -e .</code>, <code>uv sync</code>) creates a small <code>rag-ingest</code> executable that imports <code>support_rag.cli</code> and calls <code>main()</code>, exiting with its return value. <code>python -m support_rag</code> runs a package's <code>__main__.py</code>, a useful second way in. Third-party libraries such as Click and Typer (which builds the parser from type hints) reduce boilerplate for larger tools; the principles (thin CLI layer, exit codes, streams) are the same.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-what-argparse-produces" data-pid="m15-3-what-argparse-produces" data-type="predict" data-level="easy" data-answer="faq.jsonl small None [] False
+large 50 [&#x27;billing&#x27;, &#x27;eu&#x27;] True False
+exit 2
+exit 2
+exit 2
+[&quot;argument --model: invalid choice: &#x27;huge&#x27; (choose from small, large)&quot;, &#x27;the following arguments are required: dataset&#x27;, &quot;argument --limit: invalid int value: &#x27;ten&#x27;&quot;]">
+<header class="prob-head"><h3>1. What argparse produces</h3></header>
+<div class="code"><pre><code class="py">import argparse, contextlib, io
+
+p = argparse.ArgumentParser(prog=&quot;evalctl&quot;)
+p.add_argument(&quot;dataset&quot;)
+p.add_argument(&quot;--model&quot;, default=&quot;small&quot;, choices=[&quot;small&quot;, &quot;large&quot;])
+p.add_argument(&quot;--limit&quot;, type=int)
+p.add_argument(&quot;--tags&quot;, nargs=&quot;+&quot;, default=[])
+p.add_argument(&quot;--no-cache&quot;, action=&quot;store_true&quot;)
+
+a = p.parse_args([&quot;faq.jsonl&quot;])
+print(a.dataset, a.model, a.limit, a.tags, a.no_cache)
+b = p.parse_args([&quot;--model&quot;, &quot;large&quot;, &quot;faq.jsonl&quot;, &quot;--tags&quot;, &quot;billing&quot;, &quot;eu&quot;, &quot;--limit&quot;, &quot;50&quot;, &quot;--no-cache&quot;])
+print(b.model, b.limit, b.tags, b.no_cache, vars(b) == vars(a))
+err = io.StringIO()
+for argv in ([&quot;faq.jsonl&quot;, &quot;--model&quot;, &quot;huge&quot;], [], [&quot;faq.jsonl&quot;, &quot;--limit&quot;, &quot;ten&quot;]):
+    with contextlib.redirect_stderr(err):
+        try:
+            p.parse_args(argv)
+        except SystemExit as e:
+            print(&quot;exit&quot;, e.code)
+print([line.split(&quot;: error: &quot;)[1] for line in err.getvalue().splitlines() if &quot;: error: &quot; in line])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Options may appear in any order around positionals. A missing value becomes <code>None</code> unless a default is given. Errors exit with code 2.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>faq.jsonl small None [] False
+large 50 [&#x27;billing&#x27;, &#x27;eu&#x27;] True False
+exit 2
+exit 2
+exit 2
+[&quot;argument --model: invalid choice: &#x27;huge&#x27; (choose from small, large)&quot;, &#x27;the following arguments are required: dataset&#x27;, &quot;argument --limit: invalid int value: &#x27;ten&#x27;&quot;]</pre></div><p>Unset options take their defaults (<code>None</code> without one); <code>store_true</code> flags are <code>False</code> unless given. Options may come before or after the positional, <code>nargs="+"</code> collects values until the next option, and <code>type=int</code> converts. Each invalid command line (a value outside <code>choices</code>, a missing positional, a non-integer) makes <code>argparse</code> print usage and an error message to standard error and exit with 2, the conventional "bad usage" code.</p></div></details>
+</article>
+<article class="prob" id="p-a-parser-for-an-ingestion-command" data-pid="m15-3-a-parser-for-an-ingestion-command" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. A parser for an ingestion command</h3></header>
+<div class="prob-q"><p>Write <code>build_parser()</code> for <code>rag-ingest SOURCE [-o OUT] [--chunk-size N] [--overlap N] [--dry-run]</code>: <code>SOURCE</code> is required; <code>--out</code> defaults to <code>"chunks.jsonl"</code>; <code>--chunk-size</code> is an int defaulting to 200; <code>--overlap</code> an int defaulting to 0; <code>--dry-run</code> a flag. Then write <code>main(argv=None)</code> that parses the arguments, returns 2 (after printing <code>"error: overlap must be smaller than chunk size"</code> to standard error) when <code>overlap &gt;= chunk_size</code>, and otherwise prints one summary line to standard output, <code>f"source={...} out={...} chunk_size={...} overlap={...} dry_run={...}"</code>, and returns 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import argparse, sys
+
+def build_parser():
+    pass
+
+def main(argv=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import contextlib, io
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    code = main(["docs/", "--chunk-size", "120", "--overlap", "20", "--dry-run"])
+assert code == 0 and out.getvalue() == "source=docs/ out=chunks.jsonl chunk_size=120 overlap=20 dry_run=True\n" and err.getvalue() == ""
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    code = main(["docs/", "-o", "x.jsonl", "--overlap", "200"])
+assert code == 2 and out.getvalue() == "" and err.getvalue() == "error: overlap must be smaller than chunk size\n"
+assert build_parser().parse_args(["d"]).chunk_size == 200 and build_parser().prog == "rag-ingest"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import contextlib, io
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    code = main([&quot;docs/&quot;, &quot;--chunk-size&quot;, &quot;120&quot;, &quot;--overlap&quot;, &quot;20&quot;, &quot;--dry-run&quot;])
+assert code == 0 and out.getvalue() == &quot;source=docs/ out=chunks.jsonl chunk_size=120 overlap=20 dry_run=True\n&quot; and err.getvalue() == &quot;&quot;
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    code = main([&quot;docs/&quot;, &quot;-o&quot;, &quot;x.jsonl&quot;, &quot;--overlap&quot;, &quot;200&quot;])
+assert code == 2 and out.getvalue() == &quot;&quot; and err.getvalue() == &quot;error: overlap must be smaller than chunk size\n&quot;
+assert build_parser().parse_args([&quot;d&quot;]).chunk_size == 200 and build_parser().prog == &quot;rag-ingest&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>argparse.ArgumentParser(prog="rag-ingest")</code>; <code>add_argument("-o", "--out", default="chunks.jsonl")</code> and so on.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>print(..., file=sys.stderr)</code> for the error; <code>parse_args(argv)</code> with <code>argv=None</code> reads <code>sys.argv</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, sys
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog=&quot;rag-ingest&quot;, description=&quot;Chunk documents for the vector index.&quot;)
+    p.add_argument(&quot;source&quot;, help=&quot;folder with documents&quot;)
+    p.add_argument(&quot;-o&quot;, &quot;--out&quot;, default=&quot;chunks.jsonl&quot;, help=&quot;output JSONL file&quot;)
+    p.add_argument(&quot;--chunk-size&quot;, type=int, default=200, help=&quot;words per chunk&quot;)
+    p.add_argument(&quot;--overlap&quot;, type=int, default=0, help=&quot;words shared by neighbouring chunks&quot;)
+    p.add_argument(&quot;--dry-run&quot;, action=&quot;store_true&quot;, help=&quot;show what would be done&quot;)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if args.overlap &gt;= args.chunk_size:
+        print(&quot;error: overlap must be smaller than chunk size&quot;, file=sys.stderr)
+        return 2
+    print(f&quot;source={args.source} out={args.out} chunk_size={args.chunk_size} overlap={args.overlap} dry_run={args.dry_run}&quot;)
+    return 0</code></pre></div><p>Building the parser in its own function lets tests and documentation tools inspect it, and <code>main(argv)</code> makes the whole command testable by passing a list instead of reading the real command line. Argument-level checks belong to <code>argparse</code> (types, choices); rules that involve several arguments, such as overlap versus chunk size, are checked after parsing, reported on standard error and turned into exit code 2, the same code argparse uses for bad usage. The summary goes to standard output because it is the command's result.</p></div></details>
+</article>
+<article class="prob" id="p-a-main-that-exits-instead-of-returning" data-pid="m15-3-a-main-that-exits-instead-of-returning" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A main that exits instead of returning</h3></header>
+<div class="prob-q"><p><code>main</code> reads <code>sys.argv</code> directly and calls <code>sys.exit()</code> from inside, so tests cannot call it without the test process exiting, and cannot pass their own arguments. Make it <code>main(argv=None)</code> that parses <code>argv</code> with argparse (a required <code>--day</code> option) and <strong>returns</strong> 0 on success or 1 when the export fails, printing the error to standard error. (In a real file, the last line would be <code>if __name__ == "__main__": raise SystemExit(main())</code>; it is left out here because code on this page runs as <code>__main__</code>, so the line would run the tool immediately.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import sys
+
+
+def export(day):
+    if day == &quot;1999-01-01&quot;:
+        raise ValueError(&quot;no data for that day&quot;)
+    return f&quot;exported {day}&quot;
+
+
+def main():
+    if len(sys.argv) &lt; 3 or sys.argv[1] != &quot;--day&quot;:
+        print(&quot;usage: export --day YYYY-MM-DD&quot;)
+        sys.exit(2)
+    try:
+        print(export(sys.argv[2]))
+    except ValueError as e:
+        print(e)
+        sys.exit(1)
+    sys.exit(0)
+</textarea>
+<script type="text/plain" class="prob-tests">import contextlib, io
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    codes = (main(["--day", "2025-03-01"]), main(["--day", "1999-01-01"]))
+assert codes == (0, 1)
+assert out.getvalue() == "exported 2025-03-01\n" and "no data for that day" in err.getvalue()
+def usage():
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            main([])
+        except SystemExit as e:
+            return e.code
+assert usage() == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import contextlib, io
+out, err = io.StringIO(), io.StringIO()
+with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    codes = (main([&quot;--day&quot;, &quot;2025-03-01&quot;]), main([&quot;--day&quot;, &quot;1999-01-01&quot;]))
+assert codes == (0, 1)
+assert out.getvalue() == &quot;exported 2025-03-01\n&quot; and &quot;no data for that day&quot; in err.getvalue()
+def usage():
+    with contextlib.redirect_stderr(io.StringIO()):
+        try:
+            main([])
+        except SystemExit as e:
+            return e.code
+assert usage() == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>parser.add_argument("--day", required=True)</code>; <code>args = parser.parse_args(argv)</code>; catch <code>ValueError</code> and <code>return 1</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Do not call <code>sys.exit</code> inside <code>main</code>; the caller (the <code>__main__</code> guard in a real file) turns the returned code into the exit status.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, sys
+
+
+def export(day):
+    if day == &quot;1999-01-01&quot;:
+        raise ValueError(&quot;no data for that day&quot;)
+    return f&quot;exported {day}&quot;
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog=&quot;export&quot;)
+    parser.add_argument(&quot;--day&quot;, required=True, help=&quot;day to export, YYYY-MM-DD&quot;)
+    args = parser.parse_args(argv)
+    try:
+        print(export(args.day))
+    except ValueError as e:
+        print(f&quot;error: {e}&quot;, file=sys.stderr)
+        return 1
+    return 0</code></pre></div><p><code>sys.exit</code> raises <code>SystemExit</code>, which ends the process, including a test run, when nobody catches it, and reading <code>sys.argv</code> ties the function to the real command line. Taking <code>argv</code> as a parameter and returning the code moves both decisions to the edge: the last line turns the return value into the process's exit code, while tests call <code>main([...])</code> like any function. argparse still exits with 2 on bad usage, which is the one exit worth keeping (tests catch it). In the real file, <code>if __name__ == "__main__": raise SystemExit(main())</code> connects the two worlds. Errors go to standard error, so they do not mix with the exported data.</p></div></details>
+</article>
+<article class="prob" id="p-exit-codes-and-systemexit" data-pid="m15-3-exit-codes-and-systemexit" data-type="predict" data-level="easy" data-answer="(None, &#x27;&#x27;) (0, &#x27;&#x27;) (3, &#x27;&#x27;)
+(&#x27;fatal: index missing&#x27;, &#x27;&#x27;)
+(&#x27;returned&#x27;, None) False True">
+<header class="prob-head"><h3>4. Exit codes and SystemExit</h3></header>
+<div class="code"><pre><code class="py">import contextlib, io, sys
+
+def run(fn):
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            fn()
+            return &quot;returned&quot;, None
+        except SystemExit as e:
+            return e.code, err.getvalue().strip()
+
+print(run(lambda: sys.exit()), run(lambda: sys.exit(0)), run(lambda: sys.exit(3)))
+print(run(lambda: sys.exit(&quot;fatal: index missing&quot;)))
+print(run(lambda: None), issubclass(SystemExit, Exception), issubclass(SystemExit, BaseException))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sys.exit(x)</code> raises <code>SystemExit(x)</code>. A string code is printed to stderr by the interpreter and the process exits with 1. <code>SystemExit</code> is a <code>BaseException</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(None, &#x27;&#x27;) (0, &#x27;&#x27;) (3, &#x27;&#x27;)
+(&#x27;fatal: index missing&#x27;, &#x27;&#x27;)
+(&#x27;returned&#x27;, None) False True</pre></div><p><code>sys.exit()</code> and <code>sys.exit(0)</code> both mean success (the code is <code>None</code> or 0); an integer is used as the exit status; a string is not a status at all: the interpreter prints it to standard error and exits with 1, a shortcut for fatal errors in scripts. Here nothing printed it because the exception was caught, and the message is in <code>e.code</code>. <code>SystemExit</code> derives from <code>BaseException</code>, not <code>Exception</code>, so a generic <code>except Exception</code> in a tool does not accidentally stop it from exiting.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-subcommands-for-an-llm-tool" data-pid="m15-3-subcommands-for-an-llm-tool" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Subcommands for an LLM tool</h3></header>
+<div class="prob-q"><p>Write <code>main(argv=None, client=None)</code> for <code>llmctl</code> with three subcommands: <code>ask QUESTION [--model M]</code> (default model <code>"small"</code>) prints <code>client.ask(question, model)</code>; <code>models</code> prints each name from <code>client.models()</code> on its own line; <code>batch FILE [--concurrency N]</code> (default 4, must be at least 1) prints <code>f"would run {FILE} with concurrency {N}"</code>. Use <code>add_subparsers(dest="command", required=True)</code> and <code>set_defaults(func=...)</code>; return 0 on success, 1 (with <code>error: ...</code> on stderr) if the client raises <code>ConnectionError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import argparse, sys
+
+def main(argv=None, client=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import contextlib, io
+class FakeClient:
+    def ask(self, question, model):
+        if "down" in question:
+            raise ConnectionError("model service unreachable")
+        return f"[{model}] answer to {question}"
+    def models(self):
+        return ["small", "large"]
+def run(argv):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = main(argv, client=FakeClient())
+        except SystemExit as e:
+            code = e.code
+    return code, out.getvalue(), err.getvalue()
+assert run(["ask", "refund window?"]) == (0, "[small] answer to refund window?\n", "")
+assert run(["ask", "refund?", "--model", "large"])[1] == "[large] answer to refund?\n"
+assert run(["models"]) == (0, "small\nlarge\n", "")
+assert run(["batch", "q.jsonl", "--concurrency", "8"])[1] == "would run q.jsonl with concurrency 8\n"
+code, out, err = run(["ask", "is it down?"])
+assert code == 1 and out == "" and err == "error: model service unreachable\n"
+assert run([])[0] == 2 and run(["batch", "q.jsonl", "--concurrency", "0"])[0] == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import contextlib, io
+class FakeClient:
+    def ask(self, question, model):
+        if &quot;down&quot; in question:
+            raise ConnectionError(&quot;model service unreachable&quot;)
+        return f&quot;[{model}] answer to {question}&quot;
+    def models(self):
+        return [&quot;small&quot;, &quot;large&quot;]
+def run(argv):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = main(argv, client=FakeClient())
+        except SystemExit as e:
+            code = e.code
+    return code, out.getvalue(), err.getvalue()
+assert run([&quot;ask&quot;, &quot;refund window?&quot;]) == (0, &quot;[small] answer to refund window?\n&quot;, &quot;&quot;)
+assert run([&quot;ask&quot;, &quot;refund?&quot;, &quot;--model&quot;, &quot;large&quot;])[1] == &quot;[large] answer to refund?\n&quot;
+assert run([&quot;models&quot;]) == (0, &quot;small\nlarge\n&quot;, &quot;&quot;)
+assert run([&quot;batch&quot;, &quot;q.jsonl&quot;, &quot;--concurrency&quot;, &quot;8&quot;])[1] == &quot;would run q.jsonl with concurrency 8\n&quot;
+code, out, err = run([&quot;ask&quot;, &quot;is it down?&quot;])
+assert code == 1 and out == &quot;&quot; and err == &quot;error: model service unreachable\n&quot;
+assert run([])[0] == 2 and run([&quot;batch&quot;, &quot;q.jsonl&quot;, &quot;--concurrency&quot;, &quot;0&quot;])[0] == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One handler function per subcommand taking <code>(args, client)</code>; attach with <code>sub.set_defaults(func=handler)</code> and call <code>args.func(args, client)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Reject a concurrency below 1 with <code>parser.error(...)</code> (which exits with 2) or a custom <code>type</code> function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, sys
+
+
+def _positive(text):
+    value = int(text)
+    if value &lt; 1:
+        raise argparse.ArgumentTypeError(&quot;must be at least 1&quot;)
+    return value
+
+
+def _ask(args, client):
+    print(client.ask(args.question, args.model))
+
+
+def _models(args, client):
+    for name in client.models():
+        print(name)
+
+
+def _batch(args, client):
+    print(f&quot;would run {args.file} with concurrency {args.concurrency}&quot;)
+
+
+def main(argv=None, client=None):
+    parser = argparse.ArgumentParser(prog=&quot;llmctl&quot;)
+    sub = parser.add_subparsers(dest=&quot;command&quot;, required=True)
+    ask = sub.add_parser(&quot;ask&quot;, help=&quot;ask one question&quot;)
+    ask.add_argument(&quot;question&quot;)
+    ask.add_argument(&quot;--model&quot;, default=&quot;small&quot;)
+    ask.set_defaults(func=_ask)
+    models = sub.add_parser(&quot;models&quot;, help=&quot;list models&quot;)
+    models.set_defaults(func=_models)
+    batch = sub.add_parser(&quot;batch&quot;, help=&quot;run a batch file&quot;)
+    batch.add_argument(&quot;file&quot;)
+    batch.add_argument(&quot;--concurrency&quot;, type=_positive, default=4)
+    batch.set_defaults(func=_batch)
+    args = parser.parse_args(argv)
+    try:
+        args.func(args, client)
+    except ConnectionError as e:
+        print(f&quot;error: {e}&quot;, file=sys.stderr)
+        return 1
+    return 0</code></pre></div><p>Subparsers give each action its own arguments and help text (<code>llmctl batch --help</code>), and <code>set_defaults(func=...)</code> stores the handler on the parsed namespace, so dispatch is one line with no <code>if command == ...</code> chain. Injecting <code>client</code> makes every subcommand testable with a fake (13.3). Connection problems are expected failures, reported as one clean line on standard error with exit code 1, rather than a traceback; programming errors still produce tracebacks, which is what you want for bugs. A custom <code>type</code> function rejects an invalid concurrency during parsing, with argparse's usual message and exit code 2.</p></div></details>
+</article>
+<article class="prob" id="p-a-jsonl-filter-that-works-in-pipes" data-pid="m15-3-a-jsonl-filter-that-works-in-pipes" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A JSONL filter that works in pipes</h3></header>
+<div class="prob-q"><p>Write <code>main(argv=None, stdin=None, stdout=None, stderr=None)</code> for <code>jsonl-filter --label L [--skip-bad]</code>: read JSON Lines from <code>stdin</code>, write the records whose <code>"label"</code> equals <code>L</code> to <code>stdout</code> (one compact JSON object per line, non-ASCII kept), and report bad lines on <code>stderr</code> as <code>f"line {n}: invalid JSON"</code>. Without <code>--skip-bad</code>, return 1 if any line was bad (after processing everything); with it, return 0. Write a final summary <code>f"kept {k} of {n} records"</code> to <code>stderr</code>. Streams default to the <code>sys</code> ones.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import argparse, json, sys
+
+def main(argv=None, stdin=None, stdout=None, stderr=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io
+data = '{"id": 1, "label": "spam"}\n{"id": 2, "label": "ham"}\nnot json\n\n{"id": 3, "label": "spam", "text": "Gagnez un prix"}\n'
+out, err = io.StringIO(), io.StringIO()
+code = main(["--label", "spam"], stdin=io.StringIO(data), stdout=out, stderr=err)
+assert code == 1
+assert out.getvalue().splitlines() == ['{"id": 1, "label": "spam"}', '{"id": 3, "label": "spam", "text": "Gagnez un prix"}']
+assert err.getvalue().splitlines() == ["line 3: invalid JSON", "kept 2 of 3 records"]
+out, err = io.StringIO(), io.StringIO()
+assert main(["--label", "ham", "--skip-bad"], stdin=io.StringIO(data), stdout=out, stderr=err) == 0 and out.getvalue() == '{"id": 2, "label": "ham"}\n'</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io
+data = &#x27;{&quot;id&quot;: 1, &quot;label&quot;: &quot;spam&quot;}\n{&quot;id&quot;: 2, &quot;label&quot;: &quot;ham&quot;}\nnot json\n\n{&quot;id&quot;: 3, &quot;label&quot;: &quot;spam&quot;, &quot;text&quot;: &quot;Gagnez un prix&quot;}\n&#x27;
+out, err = io.StringIO(), io.StringIO()
+code = main([&quot;--label&quot;, &quot;spam&quot;], stdin=io.StringIO(data), stdout=out, stderr=err)
+assert code == 1
+assert out.getvalue().splitlines() == [&#x27;{&quot;id&quot;: 1, &quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;id&quot;: 3, &quot;label&quot;: &quot;spam&quot;, &quot;text&quot;: &quot;Gagnez un prix&quot;}&#x27;]
+assert err.getvalue().splitlines() == [&quot;line 3: invalid JSON&quot;, &quot;kept 2 of 3 records&quot;]
+out, err = io.StringIO(), io.StringIO()
+assert main([&quot;--label&quot;, &quot;ham&quot;, &quot;--skip-bad&quot;], stdin=io.StringIO(data), stdout=out, stderr=err) == 0 and out.getvalue() == &#x27;{&quot;id&quot;: 2, &quot;label&quot;: &quot;ham&quot;}\n&#x27;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>stdin = stdin or sys.stdin</code> and so on; iterate over <code>stdin</code> line by line with <code>enumerate(..., start=1)</code>, skipping blank lines.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count valid records for the summary; remember whether any line failed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, json, sys
+
+
+def main(argv=None, stdin=None, stdout=None, stderr=None):
+    stdin, stdout, stderr = stdin or sys.stdin, stdout or sys.stdout, stderr or sys.stderr
+    parser = argparse.ArgumentParser(prog=&quot;jsonl-filter&quot;)
+    parser.add_argument(&quot;--label&quot;, required=True)
+    parser.add_argument(&quot;--skip-bad&quot;, action=&quot;store_true&quot;)
+    args = parser.parse_args(argv)
+    total = kept = 0
+    bad = False
+    for n, line in enumerate(stdin, start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            print(f&quot;line {n}: invalid JSON&quot;, file=stderr)
+            bad = True
+            continue
+        total += 1
+        if record.get(&quot;label&quot;) == args.label:
+            stdout.write(json.dumps(record, ensure_ascii=False) + &quot;\n&quot;)
+            kept += 1
+    print(f&quot;kept {kept} of {total} records&quot;, file=stderr)
+    return 1 if bad and not args.skip_bad else 0</code></pre></div><p>This is the shape of a Unix filter: data in on standard input, data out on standard output, everything else on standard error, so <code>cat tickets.jsonl | jsonl-filter --label spam &gt; spam.jsonl</code> produces a clean file while warnings and the summary still appear on the terminal. Streaming line by line keeps memory constant for gigabyte inputs (12.2). The exit code tells a pipeline whether to trust the output: bad input fails the step unless the caller explicitly accepts it with <code>--skip-bad</code>. Accepting the streams as parameters is what makes the test above possible without spawning a process.</p></div></details>
+</article>
+<article class="prob" id="p-a-tool-that-logs-to-stdout-and-always-su" data-pid="m15-3-a-tool-that-logs-to-stdout-and-always-su" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. A tool that logs to stdout and always succeeds</h3></header>
+<div class="prob-q"><p><code>score</code> prints scores as CSV for the next tool in a pipeline, but it also prints progress messages to <strong>standard output</strong>, corrupting the CSV, and it returns 0 even when some rows fail. Send progress and errors to <code>stderr</code>, keep only the header and data rows on <code>stdout</code>, and return 1 if any row failed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import sys
+
+def score(rows, stdout=None, stderr=None):
+    stdout, stderr = stdout or sys.stdout, stderr or sys.stderr
+    print(&quot;scoring&quot;, len(rows), &quot;rows...&quot;, file=stdout)
+    print(&quot;id,score&quot;, file=stdout)
+    for row in rows:
+        try:
+            value = round(row[&quot;hits&quot;] / row[&quot;total&quot;], 3)
+            print(f&quot;{row[&#x27;id&#x27;]},{value}&quot;, file=stdout)
+        except (KeyError, ZeroDivisionError) as e:
+            print(f&quot;skipping {row.get(&#x27;id&#x27;)}: {type(e).__name__}&quot;, file=stdout)
+    print(&quot;done&quot;, file=stdout)
+    return 0
+</textarea>
+<script type="text/plain" class="prob-tests">import io
+rows = [{"id": "a", "hits": 3, "total": 4}, {"id": "b", "hits": 1, "total": 0}, {"id": "c", "hits": 2, "total": 2}]
+out, err = io.StringIO(), io.StringIO()
+assert score(rows, out, err) == 1
+assert out.getvalue() == "id,score\na,0.75\nc,1.0\n"
+assert err.getvalue().splitlines() == ["scoring 3 rows...", "skipping b: ZeroDivisionError", "done"]
+out, err = io.StringIO(), io.StringIO()
+assert score(rows[:1], out, err) == 0 and out.getvalue() == "id,score\na,0.75\n"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io
+rows = [{&quot;id&quot;: &quot;a&quot;, &quot;hits&quot;: 3, &quot;total&quot;: 4}, {&quot;id&quot;: &quot;b&quot;, &quot;hits&quot;: 1, &quot;total&quot;: 0}, {&quot;id&quot;: &quot;c&quot;, &quot;hits&quot;: 2, &quot;total&quot;: 2}]
+out, err = io.StringIO(), io.StringIO()
+assert score(rows, out, err) == 1
+assert out.getvalue() == &quot;id,score\na,0.75\nc,1.0\n&quot;
+assert err.getvalue().splitlines() == [&quot;scoring 3 rows...&quot;, &quot;skipping b: ZeroDivisionError&quot;, &quot;done&quot;]
+out, err = io.StringIO(), io.StringIO()
+assert score(rows[:1], out, err) == 0 and out.getvalue() == &quot;id,score\na,0.75\n&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Change <code>file=stdout</code> to <code>file=stderr</code> for the progress, skip and done messages; track whether any row failed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import sys
+
+def score(rows, stdout=None, stderr=None):
+    stdout, stderr = stdout or sys.stdout, stderr or sys.stderr
+    print(&quot;scoring&quot;, len(rows), &quot;rows...&quot;, file=stderr)
+    print(&quot;id,score&quot;, file=stdout)
+    failed = False
+    for row in rows:
+        try:
+            value = round(row[&quot;hits&quot;] / row[&quot;total&quot;], 3)
+            print(f&quot;{row[&#x27;id&#x27;]},{value}&quot;, file=stdout)
+        except (KeyError, ZeroDivisionError) as e:
+            print(f&quot;skipping {row.get(&#x27;id&#x27;)}: {type(e).__name__}&quot;, file=stderr)
+            failed = True
+    print(&quot;done&quot;, file=stderr)
+    return 1 if failed else 0</code></pre></div><p>Anything on standard output becomes input for the next program, so <code>scoring 3 rows...</code> and <code>done</code> would be parsed as CSV rows, and <code>skipping b</code> too: the next tool either crashes or, worse, silently ingests garbage. Diagnostics belong on standard error, which a pipe does not capture. The exit code was the second lie: a scheduler saw success while a row was dropped. Returning 1 lets <code>score ... &amp;&amp; upload ...</code> stop before uploading incomplete results; a <code>--allow-failures</code> option can make partial success explicit when that is acceptable.</p></div></details>
+</article>
+<article class="prob" id="p-defaults-config-environment-and-flags" data-pid="m15-3-defaults-config-environment-and-flags" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Defaults, config, environment and flags</h3></header>
+<div class="prob-q"><p>Fill in <code>settings</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import argparse
+
+def load(argv, config=None, env=None):
+    p = argparse.ArgumentParser()
+    p.add_argument(&quot;--model&quot;, default=&quot;small&quot;)
+    p.add_argument(&quot;--limit&quot;, type=int, default=10)
+    p.add_argument(&quot;--debug&quot;, action=&quot;store_true&quot;)
+    layered = {}
+    layered.update(config or {})
+    env = env or {}
+    if &quot;APP_MODEL&quot; in env:
+        layered[&quot;model&quot;] = env[&quot;APP_MODEL&quot;]
+    if &quot;APP_LIMIT&quot; in env:
+        layered[&quot;limit&quot;] = int(env[&quot;APP_LIMIT&quot;])
+    p.set_defaults(**layered)
+    a = p.parse_args(argv)
+    return (a.model, a.limit, a.debug)
+
+settings = load([])
+settings = load([], config={&quot;model&quot;: &quot;medium&quot;, &quot;limit&quot;: 20})
+settings = load([], config={&quot;model&quot;: &quot;medium&quot;}, env={&quot;APP_MODEL&quot;: &quot;large&quot;})
+settings = load([&quot;--model&quot;, &quot;tiny&quot;, &quot;--debug&quot;], config={&quot;model&quot;: &quot;medium&quot;}, env={&quot;APP_MODEL&quot;: &quot;large&quot;, &quot;APP_LIMIT&quot;: &quot;5&quot;})</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>settings</code></th></tr><tr><td>defaults only</td><td><input class="cell" data-a="(&#x27;small&#x27;, 10, False)" data-s="(&#x27;small&#x27;, 10, False)" aria-label="settings at defaults only" autocomplete="off"></td></tr><tr><td>config file</td><td><input class="cell" data-a="(&#x27;medium&#x27;, 20, False)" data-s="(&#x27;medium&#x27;, 20, False)" aria-label="settings at config file" autocomplete="off"></td></tr><tr><td>env beats config</td><td><input class="cell" data-a="(&#x27;large&#x27;, 10, False)" data-s="(&#x27;large&#x27;, 10, False)" aria-label="settings at env beats config" autocomplete="off"></td></tr><tr><td>flags beat everything</td><td><input class="cell" data-a="(&#x27;tiny&#x27;, 5, True)" data-s="(&#x27;tiny&#x27;, 5, True)" aria-label="settings at flags beat everything" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>set_defaults</code> replaces the defaults declared in <code>add_argument</code>; values given on the command line always win over defaults.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>settings</code></th></tr><tr><td>defaults only</td><td><code>(&#x27;small&#x27;, 10, False)</code></td></tr><tr><td>config file</td><td><code>(&#x27;medium&#x27;, 20, False)</code></td></tr><tr><td>env beats config</td><td><code>(&#x27;large&#x27;, 10, False)</code></td></tr><tr><td>flags beat everything</td><td><code>(&#x27;tiny&#x27;, 5, True)</code></td></tr></table></div><p><code>set_defaults</code> lets the layers below the command line supply the defaults: the configuration file first, then environment variables written over it, so each later layer wins. An explicit flag is not a default, so <code>--model tiny</code> overrides everything, while the limit still comes from the environment because no flag set it. This is the standard precedence (defaults, file, environment, flags), and implementing it in one place keeps every command consistent.</p></div></details>
+</article>
+<article class="prob" id="p-argument-types-that-validate" data-pid="m15-3-argument-types-that-validate" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. Argument types that validate</h3></header>
+<div class="prob-q"><p>Write three <code>argparse</code> type functions that raise <code>argparse.ArgumentTypeError</code> with a clear message: <code>positive_int</code> (an integer at least 1), <code>probability</code> (a float in <code>[0, 1]</code>), and <code>existing_file</code> (a path that exists and is a file, returned as a <code>pathlib.Path</code>). Then write <code>build_parser()</code> for <code>train --epochs N --dropout P --data FILE</code> using them (all required).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import argparse
+from pathlib import Path
+
+def positive_int(text):
+    pass
+
+def probability(text):
+    pass
+
+def existing_file(text):
+    pass
+
+def build_parser():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import argparse, contextlib, io, os, tempfile
+from pathlib import Path
+data = os.path.join(tempfile.mkdtemp(), "train.csv")
+open(data, "w").close()
+args = build_parser().parse_args(["--epochs", "3", "--dropout", "0.1", "--data", data])
+assert (args.epochs, args.dropout, args.data) == (3, 0.1, Path(data)) and isinstance(args.data, Path)
+def error(argv):
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            build_parser().parse_args(argv)
+        except SystemExit as e:
+            return e.code, err.getvalue().strip().splitlines()[-1]
+code, msg = error(["--epochs", "0", "--dropout", "0.1", "--data", data])
+assert code == 2 and msg.endswith("argument --epochs: must be an integer >= 1, got '0'")
+assert error(["--epochs", "2", "--dropout", "1.5", "--data", data])[1].endswith("argument --dropout: must be a probability in [0, 1], got '1.5'")
+assert error(["--epochs", "2", "--dropout", "x", "--data", data])[1].endswith("argument --dropout: must be a probability in [0, 1], got 'x'")
+assert "no such file" in error(["--epochs", "2", "--dropout", "0.2", "--data", data + ".missing"])[1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import argparse, contextlib, io, os, tempfile
+from pathlib import Path
+data = os.path.join(tempfile.mkdtemp(), &quot;train.csv&quot;)
+open(data, &quot;w&quot;).close()
+args = build_parser().parse_args([&quot;--epochs&quot;, &quot;3&quot;, &quot;--dropout&quot;, &quot;0.1&quot;, &quot;--data&quot;, data])
+assert (args.epochs, args.dropout, args.data) == (3, 0.1, Path(data)) and isinstance(args.data, Path)
+def error(argv):
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            build_parser().parse_args(argv)
+        except SystemExit as e:
+            return e.code, err.getvalue().strip().splitlines()[-1]
+code, msg = error([&quot;--epochs&quot;, &quot;0&quot;, &quot;--dropout&quot;, &quot;0.1&quot;, &quot;--data&quot;, data])
+assert code == 2 and msg.endswith(&quot;argument --epochs: must be an integer &gt;= 1, got &#x27;0&#x27;&quot;)
+assert error([&quot;--epochs&quot;, &quot;2&quot;, &quot;--dropout&quot;, &quot;1.5&quot;, &quot;--data&quot;, data])[1].endswith(&quot;argument --dropout: must be a probability in [0, 1], got &#x27;1.5&#x27;&quot;)
+assert error([&quot;--epochs&quot;, &quot;2&quot;, &quot;--dropout&quot;, &quot;x&quot;, &quot;--data&quot;, data])[1].endswith(&quot;argument --dropout: must be a probability in [0, 1], got &#x27;x&#x27;&quot;)
+assert &quot;no such file&quot; in error([&quot;--epochs&quot;, &quot;2&quot;, &quot;--dropout&quot;, &quot;0.2&quot;, &quot;--data&quot;, data + &quot;.missing&quot;])[1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each function converts inside <code>try</code>, checks the range, and raises <code>argparse.ArgumentTypeError(f"must be ..., got {text!r}")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Path(text).is_file()</code> checks existence and type.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse
+from pathlib import Path
+
+
+def positive_int(text):
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value &lt; 1:
+        raise argparse.ArgumentTypeError(f&quot;must be an integer &gt;= 1, got {text!r}&quot;)
+    return value
+
+
+def probability(text):
+    try:
+        value = float(text)
+    except ValueError:
+        value = -1.0
+    if not 0.0 &lt;= value &lt;= 1.0:
+        raise argparse.ArgumentTypeError(f&quot;must be a probability in [0, 1], got {text!r}&quot;)
+    return value
+
+
+def existing_file(text):
+    path = Path(text)
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f&quot;no such file: {text!r}&quot;)
+    return path
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog=&quot;train&quot;)
+    p.add_argument(&quot;--epochs&quot;, type=positive_int, required=True)
+    p.add_argument(&quot;--dropout&quot;, type=probability, required=True)
+    p.add_argument(&quot;--data&quot;, type=existing_file, required=True)
+    return p</code></pre></div><p>A <code>type</code> is any function from a string to a value, so validation can happen during parsing, before any expensive work (loading data, allocating a GPU) starts. Raising <code>ArgumentTypeError</code> makes argparse print <code>argument --epochs: &lt;your message&gt;</code> with the usage line and exit with code 2, exactly like its built-in checks, so the user sees which argument is wrong and why. Returning a <code>Path</code> gives the rest of the program a ready-to-use object (12.1). These small functions are reusable across all of a project's commands.</p></div></details>
+</article>
+<article class="prob" id="p-help-and-usage" data-pid="m15-3-help-and-usage" data-type="predict" data-level="medium" data-answer="0 usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset
+Evaluate a RAG pipeline on a dataset.
+[&#x27;usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset&#x27;, &#x27;dataset              JSONL file with questions&#x27;, &#x27;--top-k TOP_K        chunks to retrieve (default: 5)&#x27;]
+usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset">
+<header class="prob-head"><h3>10. --help and usage</h3></header>
+<div class="code"><pre><code class="py">import argparse, contextlib, io
+
+p = argparse.ArgumentParser(prog=&quot;rag-eval&quot;, description=&quot;Evaluate a RAG pipeline on a dataset.&quot;)
+p.add_argument(&quot;dataset&quot;, help=&quot;JSONL file with questions&quot;)
+p.add_argument(&quot;--top-k&quot;, type=int, default=5, help=&quot;chunks to retrieve (default: %(default)s)&quot;)
+p.add_argument(&quot;--judge&quot;, choices=[&quot;exact&quot;, &quot;llm&quot;], default=&quot;exact&quot;)
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    try:
+        p.parse_args([&quot;--help&quot;])
+    except SystemExit as e:
+        code = e.code
+lines = out.getvalue().splitlines()
+print(code, lines[0])
+print(lines[2])
+print([l.strip() for l in lines if &quot;--top-k&quot; in l or &quot;dataset&quot; in l.split()[:1]])
+print(p.format_usage().strip())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>--help</code> prints to standard output and exits with 0. The usage line lists optional arguments in brackets, then positionals.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0 usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset
+Evaluate a RAG pipeline on a dataset.
+[&#x27;usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset&#x27;, &#x27;dataset              JSONL file with questions&#x27;, &#x27;--top-k TOP_K        chunks to retrieve (default: 5)&#x27;]
+usage: rag-eval [-h] [--top-k TOP_K] [--judge {exact,llm}] dataset</pre></div><p><code>--help</code> is a successful request, so it prints to standard output and exits with 0, unlike errors. The usage line is generated from the declarations (optional arguments in square brackets, <code>choices</code> in braces, metavariables in capitals derived from the option names), followed by the description and one help line per argument, where <code>%(default)s</code> is filled in. Good help text is the cheapest documentation a tool can have, and because it is generated, it never goes out of date.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-run-a-console-script-from-pyproject-toml" data-pid="m15-3-run-a-console-script-from-pyproject-toml" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Run a console script from pyproject.toml</h3></header>
+<div class="prob-q"><p>Write <code>run_script(pyproject_text, name, argv)</code> that does what an installed entry point does: read <code>[project.scripts]</code>, find <code>name</code> (else <code>LookupError(f"unknown command: {name}")</code>), import the <code>module:function</code> target with <code>importlib.import_module</code>, call <code>function(argv)</code> and return its exit code, mapping <code>None</code> to 0. If the function raises <code>SystemExit</code>, return its code (0 for <code>None</code>, 1 for a string); any other exception propagates.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import importlib, tomllib
+
+def run_script(pyproject_text, name, argv):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("toolbox_w11")
+make_tree({
+    "toolbox_w11/__init__.py": "",
+    "toolbox_w11/cli.py": '''
+    import argparse
+    def main(argv=None):
+        p = argparse.ArgumentParser(prog="greet")
+        p.add_argument("name")
+        args = p.parse_args(argv)
+        print(f"hello {args.name}")
+        return 0 if args.name != "error" else 3
+    def legacy(argv=None):
+        raise SystemExit("legacy tool failed")
+    def quiet(argv=None):
+        return None
+    ''',
+})
+pyproject = '''
+[project]
+name = "toolbox"
+version = "0.1.0"
+[project.scripts]
+greet = "toolbox_w11.cli:main"
+legacy = "toolbox_w11.cli:legacy"
+quiet = "toolbox_w11.cli:quiet"
+'''
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+    assert run_script(pyproject, "greet", ["Ana"]) == 0 and run_script(pyproject, "greet", ["error"]) == 3
+    assert run_script(pyproject, "greet", []) == 2
+assert out.getvalue() == "hello Ana\nhello error\n"
+assert run_script(pyproject, "legacy", []) == 1 and run_script(pyproject, "quiet", []) == 0
+try:
+    run_script(pyproject, "deploy", [])
+    assert False
+except LookupError as e:
+    assert str(e) == "unknown command: deploy"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;toolbox_w11&quot;)
+make_tree({
+    &quot;toolbox_w11/__init__.py&quot;: &quot;&quot;,
+    &quot;toolbox_w11/cli.py&quot;: &#x27;&#x27;&#x27;
+    import argparse
+    def main(argv=None):
+        p = argparse.ArgumentParser(prog=&quot;greet&quot;)
+        p.add_argument(&quot;name&quot;)
+        args = p.parse_args(argv)
+        print(f&quot;hello {args.name}&quot;)
+        return 0 if args.name != &quot;error&quot; else 3
+    def legacy(argv=None):
+        raise SystemExit(&quot;legacy tool failed&quot;)
+    def quiet(argv=None):
+        return None
+    &#x27;&#x27;&#x27;,
+})
+pyproject = &#x27;&#x27;&#x27;
+[project]
+name = &quot;toolbox&quot;
+version = &quot;0.1.0&quot;
+[project.scripts]
+greet = &quot;toolbox_w11.cli:main&quot;
+legacy = &quot;toolbox_w11.cli:legacy&quot;
+quiet = &quot;toolbox_w11.cli:quiet&quot;
+&#x27;&#x27;&#x27;
+import contextlib, io
+with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+    assert run_script(pyproject, &quot;greet&quot;, [&quot;Ana&quot;]) == 0 and run_script(pyproject, &quot;greet&quot;, [&quot;error&quot;]) == 3
+    assert run_script(pyproject, &quot;greet&quot;, []) == 2
+assert out.getvalue() == &quot;hello Ana\nhello error\n&quot;
+assert run_script(pyproject, &quot;legacy&quot;, []) == 1 and run_script(pyproject, &quot;quiet&quot;, []) == 0
+try:
+    run_script(pyproject, &quot;deploy&quot;, [])
+    assert False
+except LookupError as e:
+    assert str(e) == &quot;unknown command: deploy&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>scripts = tomllib.loads(text)["project"].get("scripts", {})</code>; split the target with <code>partition(":")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap the call in <code>try</code>/<code>except SystemExit as e</code>: <code>code = e.code</code>; <code>None</code> means 0, an int is itself, anything else (a message) means 1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib, tomllib
+
+
+def _exit_code(code):
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    return 1
+
+
+def run_script(pyproject_text, name, argv):
+    scripts = tomllib.loads(pyproject_text)[&quot;project&quot;].get(&quot;scripts&quot;, {})
+    if name not in scripts:
+        raise LookupError(f&quot;unknown command: {name}&quot;)
+    module_name, _, attr = scripts[name].partition(&quot;:&quot;)
+    fn = getattr(importlib.import_module(module_name), attr)
+    try:
+        return _exit_code(fn(argv))
+    except SystemExit as e:
+        return _exit_code(e.code)</code></pre></div><p>When a package is installed, each <code>[project.scripts]</code> entry becomes an executable whose body is essentially this function: import the module, call the function, and pass its return value to <code>sys.exit</code>, so returning 0, 3 or <code>None</code> sets the process's exit code. argparse's own <code>SystemExit(2)</code> on bad usage and a legacy tool's <code>SystemExit("message")</code> are translated the way the interpreter does (a message means 1). Writing it once shows why the <code>main(argv) -&gt; int</code> contract is so convenient: the same function works as an entry point, under <code>python -m</code>, and in tests.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-hand-rolled-cli" data-pid="m15-3-read-the-code-a-hand-rolled-cli" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: a hand-rolled CLI</h3></header>
+<div class="prob-q"><p><code>classify_cli</code> parses <code>sys.argv</code>-style lists by hand, so options must come in one exact order, <code>--threshold</code> is never converted from a string, errors are printed to stdout, bad input crashes with a traceback, the whole input is read into memory, and it always returns 0. Rewrite it as <code>main(argv, stdin, stdout, stderr)</code> with argparse: <code>--threshold</code> a float in <code>[0, 1]</code> (default 0.5), an optional <code>--field</code> (default <code>"text"</code>), reading JSONL from <code>stdin</code> line by line, writing <code>{"id", "label"}</code> lines to <code>stdout</code> (<code>"spam"</code> when <code>score(text) &gt;= threshold</code>), reporting a record missing the field on <code>stderr</code> as <code>f"line {n}: missing {field}"</code>, and returning 1 if any line failed, else 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import json
+
+
+def score(text):
+    words = text.lower().split()
+    return sum(w in {&quot;win&quot;, &quot;prize&quot;, &quot;free&quot;, &quot;click&quot;} for w in words) / max(len(words), 1)
+
+
+def classify_cli(argv, stdin, stdout, stderr):
+    threshold = 0.5
+    field = &quot;text&quot;
+    if len(argv) &gt;= 2 and argv[0] == &quot;--threshold&quot;:
+        threshold = argv[1]
+    if len(argv) &gt;= 4 and argv[2] == &quot;--field&quot;:
+        field = argv[3]
+    records = [json.loads(line) for line in stdin.read().splitlines() if line]
+    for r in records:
+        label = &quot;spam&quot; if score(r[field]) &gt;= threshold else &quot;ham&quot;
+        stdout.write(json.dumps({&quot;id&quot;: r[&quot;id&quot;], &quot;label&quot;: label}) + &quot;\n&quot;)
+    return 0
+</textarea>
+<script type="text/plain" class="prob-tests">import contextlib, io
+data = '{"id": 1, "text": "win a free prize"}\n{"id": 2, "body": "no text here"}\n{"id": 3, "text": "lunch at noon"}\n'
+out, err = io.StringIO(), io.StringIO()
+assert main(["--threshold", "0.4"], io.StringIO(data), out, err) == 1
+assert out.getvalue().splitlines() == ['{"id": 1, "label": "spam"}', '{"id": 3, "label": "ham"}']
+assert err.getvalue() == "line 2: missing text\n"
+out, err = io.StringIO(), io.StringIO()
+assert main(["--field", "body", "--threshold", "0.9"], io.StringIO('{"id": 9, "body": "click to win"}\n'), out, err) == 0
+assert out.getvalue() == '{"id": 9, "label": "ham"}\n'
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        main(["--threshold", "1.5"], io.StringIO(""), io.StringIO(), io.StringIO())
+        assert False
+    except SystemExit as e:
+        assert e.code == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import contextlib, io
+data = &#x27;{&quot;id&quot;: 1, &quot;text&quot;: &quot;win a free prize&quot;}\n{&quot;id&quot;: 2, &quot;body&quot;: &quot;no text here&quot;}\n{&quot;id&quot;: 3, &quot;text&quot;: &quot;lunch at noon&quot;}\n&#x27;
+out, err = io.StringIO(), io.StringIO()
+assert main([&quot;--threshold&quot;, &quot;0.4&quot;], io.StringIO(data), out, err) == 1
+assert out.getvalue().splitlines() == [&#x27;{&quot;id&quot;: 1, &quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;id&quot;: 3, &quot;label&quot;: &quot;ham&quot;}&#x27;]
+assert err.getvalue() == &quot;line 2: missing text\n&quot;
+out, err = io.StringIO(), io.StringIO()
+assert main([&quot;--field&quot;, &quot;body&quot;, &quot;--threshold&quot;, &quot;0.9&quot;], io.StringIO(&#x27;{&quot;id&quot;: 9, &quot;body&quot;: &quot;click to win&quot;}\n&#x27;), out, err) == 0
+assert out.getvalue() == &#x27;{&quot;id&quot;: 9, &quot;label&quot;: &quot;ham&quot;}\n&#x27;
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        main([&quot;--threshold&quot;, &quot;1.5&quot;], io.StringIO(&quot;&quot;), io.StringIO(), io.StringIO())
+        assert False
+    except SystemExit as e:
+        assert e.code == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a <code>type=</code> function for the threshold range (problem 9), <code>parse_args(argv)</code> for any order, and iterate <code>for n, line in enumerate(stdin, start=1)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>KeyError</code> for the missing field, write the message to <code>stderr</code>, remember the failure and continue.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, json
+
+
+def score(text):
+    words = text.lower().split()
+    return sum(w in {&quot;win&quot;, &quot;prize&quot;, &quot;free&quot;, &quot;click&quot;} for w in words) / max(len(words), 1)
+
+
+def _probability(text):
+    try:
+        value = float(text)
+    except ValueError:
+        value = -1.0
+    if not 0.0 &lt;= value &lt;= 1.0:
+        raise argparse.ArgumentTypeError(f&quot;must be in [0, 1], got {text!r}&quot;)
+    return value
+
+
+def main(argv, stdin, stdout, stderr):
+    parser = argparse.ArgumentParser(prog=&quot;classify&quot;)
+    parser.add_argument(&quot;--threshold&quot;, type=_probability, default=0.5)
+    parser.add_argument(&quot;--field&quot;, default=&quot;text&quot;)
+    args = parser.parse_args(argv)
+    failed = False
+    for n, line in enumerate(stdin, start=1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        try:
+            text = record[args.field]
+        except KeyError:
+            print(f&quot;line {n}: missing {args.field}&quot;, file=stderr)
+            failed = True
+            continue
+        label = &quot;spam&quot; if score(text) &gt;= args.threshold else &quot;ham&quot;
+        stdout.write(json.dumps({&quot;id&quot;: record[&quot;id&quot;], &quot;label&quot;: label}) + &quot;\n&quot;)
+    return 1 if failed else 0</code></pre></div><p>Every defect is a rule from this lesson. Hand parsing accepted only one order of options; argparse accepts any order, generates help, and rejects bad values with exit code 2. The threshold stayed a string, so <code>score(...) &gt;= "0.5"</code> would raise <code>TypeError</code> in Python 3; a <code>type</code> function converts and validates it. Reading all of stdin into a list breaks on large inputs, while iterating the stream handles any size. A record without the field crashed the whole run with a traceback; reporting it on standard error with its line number and continuing lets the rest of the data through, and the exit code still signals that something went wrong.</p></div></details>
+</article>
+<article class="prob" id="p-argparse-details-that-surprise-people" data-pid="m15-3-argparse-details-that-surprise-people" data-type="predict" data-level="hard" data-answer="{&#x27;chunk_size&#x27;: 64, &#x27;cache&#x27;: False, &#x27;tag&#x27;: [], &#x27;exclude&#x27;: [&#x27;tmp&#x27;], &#x27;files&#x27;: []}
+{&#x27;chunk_size&#x27;: 200, &#x27;cache&#x27;: True, &#x27;tag&#x27;: [&#x27;eu&#x27;, &#x27;billing&#x27;], &#x27;exclude&#x27;: [&#x27;tmp&#x27;], &#x27;files&#x27;: [&#x27;a.md&#x27;, &#x27;b.md&#x27;]}
+{&#x27;chunk_size&#x27;: 200, &#x27;cache&#x27;: True, &#x27;tag&#x27;: [], &#x27;exclude&#x27;: [], &#x27;files&#x27;: [&#x27;-weird-name.md&#x27;]}
+allow_abbrev=False -&gt; 2
+(Namespace(chunk_size=200, cache=True, tag=[], exclude=[&#x27;tmp&#x27;], files=[&#x27;a.md&#x27;]), [&#x27;--unknown&#x27;, &#x27;1&#x27;])">
+<header class="prob-head"><h3>13. argparse details that surprise people</h3></header>
+<div class="code"><pre><code class="py">import argparse, contextlib, io
+
+p = argparse.ArgumentParser(prog=&quot;ingest&quot;)
+p.add_argument(&quot;--chunk-size&quot;, type=int, default=200)
+p.add_argument(&quot;--cache&quot;, action=argparse.BooleanOptionalAction, default=True)
+p.add_argument(&quot;--tag&quot;, action=&quot;append&quot;, default=[])
+p.add_argument(&quot;--exclude&quot;, nargs=&quot;*&quot;, default=[&quot;tmp&quot;])
+p.add_argument(&quot;files&quot;, nargs=&quot;*&quot;)
+
+print(vars(p.parse_args([&quot;--chunk&quot;, &quot;64&quot;, &quot;--no-cache&quot;])))
+print(vars(p.parse_args([&quot;--tag&quot;, &quot;eu&quot;, &quot;--tag&quot;, &quot;billing&quot;, &quot;a.md&quot;, &quot;b.md&quot;])))
+print(vars(p.parse_args([&quot;--exclude&quot;, &quot;--&quot;, &quot;-weird-name.md&quot;])))
+strict = argparse.ArgumentParser(prog=&quot;x&quot;, allow_abbrev=False)
+strict.add_argument(&quot;--chunk-size&quot;, type=int)
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        strict.parse_args([&quot;--chunk&quot;, &quot;64&quot;])
+    except SystemExit as e:
+        print(&quot;allow_abbrev=False -&gt;&quot;, e.code)
+print(p.parse_known_args([&quot;a.md&quot;, &quot;--unknown&quot;, &quot;1&quot;]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>argparse accepts unambiguous prefixes of long options by default. <code>--</code> ends option parsing. <code>append</code> collects repeated options. <code>parse_known_args</code> returns the leftovers.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;chunk_size&#x27;: 64, &#x27;cache&#x27;: False, &#x27;tag&#x27;: [], &#x27;exclude&#x27;: [&#x27;tmp&#x27;], &#x27;files&#x27;: []}
+{&#x27;chunk_size&#x27;: 200, &#x27;cache&#x27;: True, &#x27;tag&#x27;: [&#x27;eu&#x27;, &#x27;billing&#x27;], &#x27;exclude&#x27;: [&#x27;tmp&#x27;], &#x27;files&#x27;: [&#x27;a.md&#x27;, &#x27;b.md&#x27;]}
+{&#x27;chunk_size&#x27;: 200, &#x27;cache&#x27;: True, &#x27;tag&#x27;: [], &#x27;exclude&#x27;: [], &#x27;files&#x27;: [&#x27;-weird-name.md&#x27;]}
+allow_abbrev=False -&gt; 2
+(Namespace(chunk_size=200, cache=True, tag=[], exclude=[&#x27;tmp&#x27;], files=[&#x27;a.md&#x27;]), [&#x27;--unknown&#x27;, &#x27;1&#x27;])</pre></div><p>By default argparse accepts any unambiguous abbreviation, so <code>--chunk</code> means <code>--chunk-size</code>, which is convenient but means adding a new option such as <code>--chunked</code> later can break existing scripts; <code>allow_abbrev=False</code> turns it off. <code>BooleanOptionalAction</code> generates <code>--cache</code> and <code>--no-cache</code>. <code>action="append"</code> collects a repeated option into a list, which is the clean way to pass several tags. <code>nargs="*"</code> accepts zero values, so <code>--exclude</code> given alone produces an empty list, and <code>--</code> stops option parsing so a file name starting with a dash is treated as a positional. <code>parse_known_args</code> returns the parsed namespace and the arguments it did not recognise, which wrappers use to pass options through to another program.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-what-makes-a-good-command-line-tool" data-pid="m15-3-what-makes-a-good-command-line-tool" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What makes a good command-line tool?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A good CLI is predictable for people and for programs. Arguments are parsed by a real parser (argparse, Click, Typer) with types, choices and good <code>--help</code>; required inputs are positionals or clearly named options; destructive actions need explicit confirmation or a <code>--dry-run</code> preview. Results go to <strong>standard output</strong> in a parseable format (JSON or JSONL for machines, a table for humans, ideally selectable with <code>--format</code>), and diagnostics go to <strong>standard error</strong>, so the tool composes in pipes. <strong>Exit codes</strong> are meaningful (0 success, 1 failure, 2 usage, documented others). Configuration follows a clear precedence (defaults, config file, environment, flags) and secrets come from the environment, never from flags that end up in shell history. It reads streams incrementally, handles Ctrl-C cleanly, is idempotent where possible, and its core logic lives in importable functions behind a thin <code>main(argv) -&gt; int</code>, which makes it testable and reusable.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-test-a-command-line-tool" data-pid="m15-3-how-do-you-test-a-command-line-tool" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How do you test a command-line tool?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Structure it so most tests do not need a subprocess: the business logic lives in ordinary functions tested directly, and <code>main(argv, ...)</code> takes the argument list and, ideally, the input and output streams as parameters. Tests then call <code>main([...])</code> with <code>io.StringIO</code> streams (or pytest's <code>capsys</code>, 13.2) and assert on the return code, standard output and standard error separately, including error paths: bad arguments (argparse exits with 2, so catch <code>SystemExit</code>), invalid input lines, and failing dependencies replaced by fakes. Use <code>tmp_path</code> for files and <code>monkeypatch</code> for environment variables and configuration. Add a few end-to-end tests that run the installed entry point with <code>subprocess.run([...], capture_output=True)</code> to check packaging, the <code>__main__</code> guard and real exit codes. Snapshot tests (13.P) work well for <code>--help</code> output and formatted tables.</p></div></details>
+</article>
+<article class="prob" id="p-a-nightly-pipeline-step-succeeded-but-pr" data-pid="m15-3-a-nightly-pipeline-step-succeeded-but-pr" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. A nightly pipeline step 'succeeded' but produced an empty file. What would you change in the tool?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The tool lied through its exit code, so first make failures visible: return non-zero when anything went wrong (input missing or unreadable, zero records processed when some were expected, a dependency failing), and treat "nothing to do" explicitly (a flag such as <code>--allow-empty</code>, or a distinct exit code) rather than as silent success. Validate inputs and preconditions at start-up and fail fast with a clear message on standard error. Write output <strong>atomically</strong> (12.1) so a crash cannot leave a partial or empty file that the next step trusts, and only replace the previous output on success. Emit a summary (records read, written, skipped, errors) to standard error or as metrics, and a manifest next to the output, so the scheduler and people can check counts; downstream steps can verify the manifest before consuming. Finally, add tests for the failure paths and an alert on the scheduler side for unusually small outputs, because exit codes only catch what the tool knows is wrong.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Use <code>argparse</code>: positionals are required, options have defaults, <code>type</code> converts and validates, <code>choices</code> restricts, and bad usage exits with code 2.</li><li>Write <code>main(argv=None) -&gt; int</code> and end the file with <code>raise SystemExit(main())</code>; keep the CLI layer thin over importable functions.</li><li>Results to standard output, diagnostics to standard error, data read from standard input line by line; accept streams as parameters for tests.</li><li>Exit codes are the tool's answer to schedulers and scripts: 0 success, non-zero failure, never print an error and exit 0.</li><li>Subcommands with <code>set_defaults(func=...)</code>, configuration precedence via <code>set_defaults</code>, and <code>[project.scripts]</code> entry points that call <code>main</code>.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

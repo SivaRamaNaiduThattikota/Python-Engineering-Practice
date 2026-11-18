@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>15.2 · Environments and dependencies</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m15-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 15 · Modules and packaging</span></div>
+  <h1>15.2 Environments and dependencies</h1>
+  <p>"It works on my machine" is usually a dependency problem. Virtual environments, pip and uv, how versions and specifiers work (PEP 440), requirement strings with extras and markers, <code>pyproject.toml</code>, lock files and why applications pin while libraries declare ranges, and the extra care ML stacks need. The browser cannot create environments or install packages, so problems work with the same building blocks the tools use: the <code>packaging</code> library that pip and uv rely on.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 8 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="venv">
+<h2><span class="n">1</span>Virtual environments</h2>
+<p>Installing packages into the system Python mixes every project's dependencies in one <code>site-packages</code> folder, where project A needs <code>pydantic 1</code> and project B needs <code>pydantic 2</code>, and upgrading one breaks the other (or the operating system's own tools). A <strong>virtual environment</strong> gives each project its own folder of installed packages: <code>python -m venv .venv</code> creates it, activating it (<code>source .venv/bin/activate</code> on Linux and macOS, <code>.venv\Scripts\activate</code> on Windows) puts its <code>python</code> and <code>pip</code> first on <code>PATH</code>, and inside it <code>sys.prefix</code> points at <code>.venv</code> while <code>sys.base_prefix</code> still points at the base installation. Use one environment per project, keep it out of git (<code>.venv/</code> in <code>.gitignore</code>), and treat it as disposable: it is rebuilt from the dependency files, never edited by hand.</p>
+<p>Always invoke pip as <strong><code>python -m pip</code></strong>, which guarantees it installs into the interpreter you are running; a bare <code>pip</code> may belong to another Python. Never use <code>sudo pip</code>. When something "is installed but cannot be imported", compare <code>sys.executable</code> and <code>python -m pip --version</code>: they usually belong to different environments.</p>
+</section>
+<section class="sec" id="tools">
+<h2><span class="n">2</span>pip and uv</h2>
+<p><strong>pip</strong> installs packages from PyPI (<code>python -m pip install "httpx&gt;=0.27"</code>), from requirement files (<code>-r requirements.txt</code>), and from a local project in <strong>editable</strong> mode (<code>pip install -e .</code>), which links the source folder so code changes apply without reinstalling. <code>pip freeze</code> lists exactly what is installed. pip resolves dependencies but does not maintain a lock file on its own; <code>pip-tools</code> (<code>pip-compile</code>) adds one.</p>
+<p><strong>uv</strong> is a much faster, all-in-one replacement written in Rust and now widely used: <code>uv venv</code> creates an environment, <code>uv add httpx</code> adds a dependency to <code>pyproject.toml</code> and installs it, <code>uv lock</code> writes a cross-platform <strong><code>uv.lock</code></strong> with exact versions and hashes, <code>uv sync</code> makes the environment match the lock exactly (adding and removing packages), <code>uv run pytest</code> runs a command inside the project environment, and <code>uv python install 3.13</code> installs interpreters. Poetry and PDM offer similar project workflows. Whatever the tool, the model is the same: <strong>declare</strong> what you need in <code>pyproject.toml</code>, <strong>lock</strong> what was resolved, <strong>sync</strong> environments from the lock.</p>
+</section>
+<section class="sec" id="versions">
+<h2><span class="n">3</span>Versions and specifiers</h2>
+<p>Python versions follow <strong>PEP 440</strong>: a release such as <code>2.7.1</code>, optionally with a pre-release (<code>2.8.0a1</code>, <code>b2</code>, <code>rc1</code>), a post-release (<code>2.7.1.post1</code>), a development release (<code>2.8.0.dev3</code>), or a local label (<code>2.1.0+cu121</code>, used by PyTorch for CUDA builds). They compare numerically segment by segment, so <code>1.10</code> is newer than <code>1.9</code>, and pre-releases come before their final release. Most libraries use <strong>semantic versioning</strong> loosely: a major bump (2.x to 3.0) may break your code, a minor bump adds features, a patch fixes bugs; ML libraries break more often than that promise suggests, so pin tightly in applications.</p>
+<p>A <strong>specifier</strong> constrains versions: <code>==2.7.1</code> exact, <code>==2.7.*</code> any 2.7 release, <code>!=2.7.0</code> excludes one, <code>&gt;=2.5,&lt;3</code> a range, and the <strong>compatible release</strong> operator <strong><code>~=2.5.1</code></strong>, meaning <code>&gt;=2.5.1,&lt;2.6</code> (and <code>~=2.5</code> meaning <code>&gt;=2.5,&lt;3</code>). Pre-releases need care: installers (pip, uv) do not pick a pre-release when a final release satisfies the requirement, unless you opt in (<code>--pre</code>) or the specifier itself names a pre-release, and <code>SpecifierSet.filter()</code> follows that rule; but in <code>packaging</code> 26, <code>contains()</code> asked about one version accepts a pre-release that lies inside the range unless you pass <code>prereleases=False</code>, so be explicit when it matters (problem 2). A <strong>requirement</strong> string combines a name, optional <strong>extras</strong> in brackets that pull in optional dependencies (<code>fastapi[standard]</code>, <code>torch[cuda]</code>), a specifier, and an optional <strong>environment marker</strong> after <code>;</code> that limits when it applies (<code>tomli&gt;=2; python_version &lt; "3.11"</code>). The <code>packaging</code> library implements all of this, and it is what pip and uv use.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">versions.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.version import Version
+from packaging.specifiers import SpecifierSet
+from packaging.requirements import Requirement
+
+versions = [&quot;1.9.0&quot;, &quot;1.10.0&quot;, &quot;2.0.0rc1&quot;, &quot;2.0.0&quot;, &quot;2.0.0.post1&quot;, &quot;1.10.0.dev2&quot;]
+print(sorted(versions), sorted(versions, key=Version))
+spec = SpecifierSet(&quot;~=1.9&quot;)
+print([v for v in versions if Version(v) in spec], spec.contains(&quot;2.0.0rc1&quot;, prereleases=True))
+req = Requirement(&#x27;openai[datalib]&gt;=1.40,&lt;2; python_version &gt;= &quot;3.9&quot;&#x27;)
+print(req.name, sorted(req.extras), str(req.specifier), str(req.marker), req.marker.evaluate({&quot;python_version&quot;: &quot;3.8&quot;}))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;1.10.0&#x27;, &#x27;1.10.0.dev2&#x27;, &#x27;1.9.0&#x27;, &#x27;2.0.0&#x27;, &#x27;2.0.0.post1&#x27;, &#x27;2.0.0rc1&#x27;] [&#x27;1.9.0&#x27;, &#x27;1.10.0.dev2&#x27;, &#x27;1.10.0&#x27;, &#x27;2.0.0rc1&#x27;, &#x27;2.0.0&#x27;, &#x27;2.0.0.post1&#x27;]
+[&#x27;1.9.0&#x27;, &#x27;1.10.0&#x27;, &#x27;1.10.0.dev2&#x27;] False
+openai [&#x27;datalib&#x27;] &lt;2,&gt;=1.40 python_version &gt;= &quot;3.9&quot; False</pre></div></div>
+<p>String sorting puts <code>1.10</code> before <code>1.9</code> and the development release last; <code>Version</code> sorts them correctly, with the <code>.dev</code> and <code>rc</code> releases before their finals. <code>~=1.9</code> accepts anything from 1.9 up to, but not including, 2.0, and <code>contains</code> (used through <code>in</code>) let the <code>1.10.0.dev2</code> development release through, the behaviour described above. The requirement parses into its parts, and its marker says it does not apply on Python 3.8.</p>
+</section>
+<section class="sec" id="pyproject">
+<h2><span class="n">4</span>pyproject.toml</h2>
+<p>Modern projects describe themselves in <strong><code>pyproject.toml</code></strong> (11.4's TOML). <code>[project]</code> holds the metadata: <code>name</code>, <code>version</code>, <code>requires-python = "&gt;=3.11"</code>, <code>dependencies</code> (the requirement strings the package needs at run time), and <code>[project.optional-dependencies]</code> for <strong>extras</strong> (<code>pdf = ["pypdf&gt;=4"]</code>, installed with <code>pip install "mytool[pdf]"</code>). <code>[dependency-groups]</code> (PEP 735) holds development-only groups such as <code>dev = ["pytest", "ruff", "mypy"]</code>, which are not published with the package. <code>[project.scripts]</code> declares command-line entry points (15.3). <code>[build-system]</code> names the build backend (hatchling, setuptools, flit, uv's own) that turns the project into a <strong>wheel</strong>, the installable archive. With a <code>src/</code> layout (<code>src/mytool/__init__.py</code>), tests import the installed package, not files that happen to be in the current folder (15.1).</p>
+</section>
+<section class="sec" id="locks">
+<h2><span class="n">5</span>Lock files and reproducibility</h2>
+<p>Your direct dependencies have dependencies of their own (<strong>transitive</strong> dependencies), often dozens. If you declare only ranges, two installs a month apart can resolve to different versions, and a new release of a package you never heard of breaks your build. A <strong>lock file</strong> records the exact resolved version of every package, and usually its hash, so <code>uv sync</code> (or <code>pip install -r requirements.lock --require-hashes</code>) recreates the same environment on every machine and in CI and production. The rule of thumb: <strong>applications lock</strong> (services, pipelines, notebooks you need to rerun), <strong>libraries declare ranges</strong> (so they can be installed alongside other libraries) and test against the lowest and highest versions they claim to support. Update locks deliberately (<code>uv lock --upgrade</code>, Dependabot or Renovate pull requests), run the tests, and scan for known vulnerabilities (<code>pip-audit</code>).</p>
+<p>ML environments add pitfalls: GPU builds of PyTorch and friends come from special package indexes and carry local version labels (<code>+cu124</code>), CUDA and driver versions must match, some packages ship platform-specific wheels only, and model behaviour can change between library versions. Pin the Python version (<code>.python-version</code>, <code>requires-python</code>), lock everything including the index URLs, record library versions next to saved models and evaluation results, and build production images from the lock file.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-pep-440-ordering" data-pid="m15-2-pep-440-ordering" data-type="predict" data-level="easy" data-answer="True False
+True True True
+True True 2.1.0
+[&#x27;2.9.9&#x27;, &#x27;3.0.0a3&#x27;, &#x27;3.0.0b1&#x27;, &#x27;3.0.0&#x27;, &#x27;3.0.0.post2&#x27;]
+1.2 (1, 2, 3) 1">
+<header class="prob-head"><h3>1. PEP 440 ordering</h3></header>
+<div class="code"><pre><code class="py">from packaging.version import Version
+
+print(Version(&quot;1.10&quot;) &gt; Version(&quot;1.9&quot;), &quot;1.10&quot; &gt; &quot;1.9&quot;)
+print(Version(&quot;2.0rc1&quot;) &lt; Version(&quot;2.0&quot;), Version(&quot;2.0.post1&quot;) &gt; Version(&quot;2.0&quot;), Version(&quot;1.0.dev1&quot;) &lt; Version(&quot;1.0a1&quot;))
+print(Version(&quot;1.0&quot;) == Version(&quot;1.0.0&quot;), Version(&quot;2.0.0rc2&quot;).is_prerelease, Version(&quot;2.1.0+cu121&quot;).public)
+print(sorted([&quot;3.0.0&quot;, &quot;3.0.0b1&quot;, &quot;2.9.9&quot;, &quot;3.0.0.post2&quot;, &quot;3.0.0a3&quot;], key=Version))
+print(Version(&quot;v1.2&quot;).base_version, Version(&quot;1.2.3&quot;).release, Version(&quot;1.4.2&quot;).major)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Versions compare by numeric release segments; <code>dev</code> &lt; <code>a</code> &lt; <code>b</code> &lt; <code>rc</code> &lt; final &lt; <code>post</code> for the same release; trailing zeros do not matter.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True False
+True True True
+True True 2.1.0
+[&#x27;2.9.9&#x27;, &#x27;3.0.0a3&#x27;, &#x27;3.0.0b1&#x27;, &#x27;3.0.0&#x27;, &#x27;3.0.0.post2&#x27;]
+1.2 (1, 2, 3) 1</pre></div><p><code>Version</code> compares release numbers as integers, so 1.10 is newer than 1.9, while plain strings compare character by character. For the same release, development releases sort first, then alphas, betas and release candidates, then the final, then post-releases. <code>1.0</code> equals <code>1.0.0</code> because trailing zeros are ignored. The local label <code>+cu121</code> is not part of the public version. A leading <code>v</code> is accepted and normalised away, and <code>release</code> gives the integer segments.</p></div></details>
+</article>
+<article class="prob" id="p-pick-the-newest-compatible-release" data-pid="m15-2-pick-the-newest-compatible-release" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Pick the newest compatible release</h3></header>
+<div class="prob-q"><p>Write <code>latest_compatible(available, spec, allow_prereleases=False)</code> returning the newest version string from <code>available</code> that satisfies the specifier string <code>spec</code>, or <code>None</code>. Ignore pre-releases unless <code>allow_prereleases</code> is true, and skip strings that are not valid versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
+
+def latest_compatible(available, spec, allow_prereleases=False):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">available = ["2.1.0", "2.3.1", "2.10.0", "3.0.0rc1", "3.0.0", "not-a-version", "2.4.0.dev1"]
+assert latest_compatible(available, ">=2.1,<3") == "2.10.0"
+assert latest_compatible(available, "~=2.3.0") == "2.3.1"
+assert latest_compatible(available, ">=3.0.0rc1") == "3.0.0" and latest_compatible(["3.0.0rc1"], ">=3") is None
+assert latest_compatible(["3.0.0rc1"], ">=3.0.0a1", allow_prereleases=True) == "3.0.0rc1"
+assert latest_compatible(available, ">=4") is None and latest_compatible(available, "==2.4.*", allow_prereleases=True) == "2.4.0.dev1"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">available = [&quot;2.1.0&quot;, &quot;2.3.1&quot;, &quot;2.10.0&quot;, &quot;3.0.0rc1&quot;, &quot;3.0.0&quot;, &quot;not-a-version&quot;, &quot;2.4.0.dev1&quot;]
+assert latest_compatible(available, &quot;&gt;=2.1,&lt;3&quot;) == &quot;2.10.0&quot;
+assert latest_compatible(available, &quot;~=2.3.0&quot;) == &quot;2.3.1&quot;
+assert latest_compatible(available, &quot;&gt;=3.0.0rc1&quot;) == &quot;3.0.0&quot; and latest_compatible([&quot;3.0.0rc1&quot;], &quot;&gt;=3&quot;) is None
+assert latest_compatible([&quot;3.0.0rc1&quot;], &quot;&gt;=3.0.0a1&quot;, allow_prereleases=True) == &quot;3.0.0rc1&quot;
+assert latest_compatible(available, &quot;&gt;=4&quot;) is None and latest_compatible(available, &quot;==2.4.*&quot;, allow_prereleases=True) == &quot;2.4.0.dev1&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>SpecifierSet(spec).filter(versions, prereleases=...)</code> returns the matching ones; parse each with <code>Version</code> inside <code>try</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return the <code>max</code> by <code>Version</code>, keeping the original string.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
+
+
+def latest_compatible(available, spec, allow_prereleases=False):
+    parsed = {}
+    for v in available:
+        try:
+            parsed[v] = Version(v)
+        except InvalidVersion:
+            continue
+    specifier = SpecifierSet(spec)
+    ok = [v for v, ver in parsed.items() if specifier.contains(ver, prereleases=allow_prereleases or None) and (allow_prereleases or not ver.is_prerelease)]
+    return max(ok, key=lambda v: parsed[v]) if ok else None</code></pre></div><p>This is the first step of every resolver: from the versions an index offers, keep those the specifier allows and pick the newest. Comparing parsed <code>Version</code> objects is essential (2.10 is newer than 2.3, not older). Pre-releases are excluded by default, as pip and uv do, so <code>&gt;=3</code> does not silently pick up <code>3.0.0rc1</code>; a specifier that itself mentions a pre-release, or an explicit flag, opts in. Invalid strings are skipped, because real indexes contain legacy version numbers that newer tools reject.</p></div></details>
+</article>
+<article class="prob" id="p-versions-sorted-as-strings" data-pid="m15-2-versions-sorted-as-strings" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Versions sorted as strings</h3></header>
+<div class="prob-q"><p><code>newest_model(names)</code> picks the newest model artefact from names like <code>"classifier-1.9.0.pkl"</code>. It sorts the version strings alphabetically, so <code>1.10.0</code> loses to <code>1.9.0</code>, and a release candidate beats its final release. Fix it with <code>packaging.version.Version</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def newest_model(names):
+    versions = [n.removeprefix(&quot;classifier-&quot;).removesuffix(&quot;.pkl&quot;) for n in names]
+    return &quot;classifier-&quot; + max(versions) + &quot;.pkl&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert newest_model(["classifier-1.9.0.pkl", "classifier-1.10.0.pkl", "classifier-1.2.0.pkl"]) == "classifier-1.10.0.pkl"
+assert newest_model(["classifier-2.0.0rc1.pkl", "classifier-2.0.0.pkl"]) == "classifier-2.0.0.pkl"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert newest_model([&quot;classifier-1.9.0.pkl&quot;, &quot;classifier-1.10.0.pkl&quot;, &quot;classifier-1.2.0.pkl&quot;]) == &quot;classifier-1.10.0.pkl&quot;
+assert newest_model([&quot;classifier-2.0.0rc1.pkl&quot;, &quot;classifier-2.0.0.pkl&quot;]) == &quot;classifier-2.0.0.pkl&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>max(versions, key=Version)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.version import Version
+
+def newest_model(names):
+    versions = [n.removeprefix(&quot;classifier-&quot;).removesuffix(&quot;.pkl&quot;) for n in names]
+    return &quot;classifier-&quot; + max(versions, key=Version) + &quot;.pkl&quot;</code></pre></div><p>Strings compare character by character, so <code>"1.10.0"</code> sorts before <code>"1.9.0"</code> because <code>"1"</code> comes before <code>"9"</code>, and <code>"2.0.0rc1"</code> sorts after <code>"2.0.0"</code> because it is longer. <code>Version</code> parses the numbers and the pre-release marker and compares them as PEP 440 defines. The same bug appears in checkpoint names (12.1), dataset folders and Docker tags; parse versions before comparing them.</p></div></details>
+</article>
+<article class="prob" id="p-specifiers-in-practice" data-pid="m15-2-specifiers-in-practice" data-type="predict" data-level="easy" data-answer="True False True False
+True False False False
+False True True True
+&lt;3,&gt;=2 3">
+<header class="prob-head"><h3>4. Specifiers in practice</h3></header>
+<div class="code"><pre><code class="py">from packaging.specifiers import SpecifierSet
+
+def ok(spec, version, pre=None):
+    return SpecifierSet(spec).contains(version, prereleases=pre)
+
+print(ok(&quot;~=1.4.2&quot;, &quot;1.4.9&quot;), ok(&quot;~=1.4.2&quot;, &quot;1.5.0&quot;), ok(&quot;~=1.4&quot;, &quot;1.9&quot;), ok(&quot;~=1.4&quot;, &quot;2.0&quot;))
+print(ok(&quot;==1.4.*&quot;, &quot;1.4.10&quot;), ok(&quot;==1.4.*&quot;, &quot;1.40&quot;), ok(&quot;!=2.1.0,&gt;=2&quot;, &quot;2.1.0&quot;), ok(&quot;&gt;=2,&lt;3&quot;, &quot;3.0&quot;))
+print(ok(&quot;&gt;=2,&lt;3&quot;, &quot;3.0rc1&quot;), ok(&quot;&gt;=2,&lt;3&quot;, &quot;2.5rc1&quot;), ok(&quot;&gt;=2,&lt;3&quot;, &quot;2.5rc1&quot;, pre=True), ok(&quot;&gt;=2.5rc1&quot;, &quot;2.5rc1&quot;))
+print(str(SpecifierSet(&quot;&lt;3,&gt;=2&quot;)), len(SpecifierSet(&quot;&gt;=2,&lt;3,!=2.4&quot;)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>~=X.Y.Z</code> means <code>&gt;=X.Y.Z, ==X.Y.*</code>; <code>~=X.Y</code> means <code>&gt;=X.Y, ==X.*</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>contains</code> accepts a pre-release inside the range by default, but <code>&lt;3</code> never accepts pre-releases of 3 itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True False True False
+True False False False
+False True True True
+&lt;3,&gt;=2 3</pre></div><p>The compatible-release operator keeps every segment but the last: <code>~=1.4.2</code> allows 1.4.x from 1.4.2 on but not 1.5, and <code>~=1.4</code> allows any 1.x from 1.4 on but not 2.0. <code>==1.4.*</code> matches the 1.4 series only, so 1.40 is not included. Ranges exclude their upper bound, and <code>&lt;3</code> also excludes the pre-releases of 3 (<code>3.0rc1</code> would otherwise sneak in, since it sorts below 3.0). A pre-release inside the range, <code>2.5rc1</code>, is accepted by <code>contains</code> whether or not <code>prereleases=True</code> is passed, and a specifier that names a pre-release obviously accepts it; installers still prefer final releases when choosing. A <code>SpecifierSet</code> normalises its string (sorted) and counts its clauses.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-parse-a-requirements-file" data-pid="m15-2-parse-a-requirements-file" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Parse a requirements file</h3></header>
+<div class="prob-q"><p>Write <code>parse_requirements(text)</code> for a <code>requirements.txt</code>-style string: ignore blank lines and comments (whole-line <code>#</code> and trailing <code> #</code>), parse each line with <code>packaging.requirements.Requirement</code>, and return a dict from the <strong>canonical</strong> project name (<code>packaging.utils.canonicalize_name</code>) to <code>{"specifier": str, "extras": sorted list, "marker": str or None}</code>, sorted by name. A duplicate project (after canonicalisation) raises <code>ValueError(f"duplicate requirement: {name}")</code>; an unparsable line raises <code>ValueError(f"line {n}: ...")</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+
+def parse_requirements(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">text = '''
+# LLM service
+openai[datalib]>=1.40,<2   # client
+Pydantic~=2.7
+tiktoken==0.7.*
+tomli>=2; python_version < "3.11"
+
+scikit_learn>=1.4
+'''
+reqs = parse_requirements(text)
+assert list(reqs) == ["openai", "pydantic", "scikit-learn", "tiktoken", "tomli"]
+assert reqs["openai"] == {"specifier": "<2,>=1.40", "extras": ["datalib"], "marker": None}
+assert reqs["tomli"]["marker"] == 'python_version < "3.11"' and reqs["pydantic"]["specifier"] == "~=2.7"
+for bad, msg in [("httpx\nHTTPX>=0.27", "duplicate requirement: httpx"), ("numpy\nnot valid ===", "line 2: ")]:
+    try:
+        parse_requirements(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e).startswith(msg), str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = &#x27;&#x27;&#x27;
+# LLM service
+openai[datalib]&gt;=1.40,&lt;2   # client
+Pydantic~=2.7
+tiktoken==0.7.*
+tomli&gt;=2; python_version &lt; &quot;3.11&quot;
+
+scikit_learn&gt;=1.4
+&#x27;&#x27;&#x27;
+reqs = parse_requirements(text)
+assert list(reqs) == [&quot;openai&quot;, &quot;pydantic&quot;, &quot;scikit-learn&quot;, &quot;tiktoken&quot;, &quot;tomli&quot;]
+assert reqs[&quot;openai&quot;] == {&quot;specifier&quot;: &quot;&lt;2,&gt;=1.40&quot;, &quot;extras&quot;: [&quot;datalib&quot;], &quot;marker&quot;: None}
+assert reqs[&quot;tomli&quot;][&quot;marker&quot;] == &#x27;python_version &lt; &quot;3.11&quot;&#x27; and reqs[&quot;pydantic&quot;][&quot;specifier&quot;] == &quot;~=2.7&quot;
+for bad, msg in [(&quot;httpx\nHTTPX&gt;=0.27&quot;, &quot;duplicate requirement: httpx&quot;), (&quot;numpy\nnot valid ===&quot;, &quot;line 2: &quot;)]:
+    try:
+        parse_requirements(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e).startswith(msg), str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Strip each line, drop text after <code>" #"</code>, skip empty lines, and wrap <code>Requirement(line)</code> in <code>try</code> to re-raise <code>InvalidRequirement</code> as <code>ValueError</code> with the line number.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>canonicalize_name("scikit_learn")</code> gives <code>"scikit-learn"</code>; <code>str(req.specifier)</code> and <code>str(req.marker)</code> give normalised strings.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+
+
+def parse_requirements(text):
+    out = {}
+    for n, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split(&quot; #&quot;, 1)[0].strip()
+        if not line or line.startswith(&quot;#&quot;):
+            continue
+        try:
+            req = Requirement(line)
+        except InvalidRequirement as e:
+            raise ValueError(f&quot;line {n}: {e}&quot;) from None
+        name = canonicalize_name(req.name)
+        if name in out:
+            raise ValueError(f&quot;duplicate requirement: {name}&quot;)
+        out[name] = {&quot;specifier&quot;: str(req.specifier), &quot;extras&quot;: sorted(req.extras),
+                     &quot;marker&quot;: str(req.marker) if req.marker else None}
+    return dict(sorted(out.items()))</code></pre></div><p>Requirement strings have a precise grammar (PEP 508), and using the same parser as pip avoids subtle disagreements about extras, markers and specifiers. Project names are case-insensitive and treat <code>-</code>, <code>_</code> and <code>.</code> as equivalent, so <code>scikit_learn</code>, <code>Scikit-Learn</code> and <code>scikit.learn</code> are one project; canonicalising before comparing is what catches the <code>httpx</code>/<code>HTTPX</code> duplicate, which pip would otherwise resolve unpredictably. Line numbers in errors make a 200-line requirements file fixable. A parser like this is the basis of dependency audits, licence checks and "what does this service depend on" dashboards.</p></div></details>
+</article>
+<article class="prob" id="p-is-the-lock-file-in-sync" data-pid="m15-2-is-the-lock-file-in-sync" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Is the lock file in sync?</h3></header>
+<div class="prob-q"><p>Write <code>check_lock(pyproject_text, lock)</code> where <code>lock</code> maps canonical package names to exact version strings. Read <code>[project].dependencies</code> from the TOML and return a sorted list of problems: <code>"missing from lock: NAME"</code> for a dependency not in the lock, and <code>"NAME VERSION does not satisfy SPEC"</code> when the locked version is outside the specifier. Dependencies whose marker does not apply to <code>environment</code> (default <code>{"python_version": "3.12"}</code>) are skipped.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import tomllib
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+def check_lock(pyproject_text, lock, environment=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">pyproject = '''
+[project]
+name = "support-rag"
+version = "0.3.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27,<1",
+    "Pydantic~=2.7",
+    "numpy>=1.26",
+    "tomli>=2; python_version < '3.11'",
+    "rich",
+]
+'''
+lock = {"httpx": "0.28.1", "pydantic": "3.0.0", "numpy": "1.26.4", "anyio": "4.4.0"}
+assert check_lock(pyproject, lock) == ["missing from lock: rich", "pydantic 3.0.0 does not satisfy ~=2.7"]
+assert check_lock(pyproject, {**lock, "pydantic": "2.9.2", "rich": "13.7.1"}) == []
+assert check_lock(pyproject, lock, {"python_version": "3.10"}) == ["missing from lock: rich", "missing from lock: tomli", "pydantic 3.0.0 does not satisfy ~=2.7"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">pyproject = &#x27;&#x27;&#x27;
+[project]
+name = &quot;support-rag&quot;
+version = &quot;0.3.0&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [
+    &quot;httpx&gt;=0.27,&lt;1&quot;,
+    &quot;Pydantic~=2.7&quot;,
+    &quot;numpy&gt;=1.26&quot;,
+    &quot;tomli&gt;=2; python_version &lt; &#x27;3.11&#x27;&quot;,
+    &quot;rich&quot;,
+]
+&#x27;&#x27;&#x27;
+lock = {&quot;httpx&quot;: &quot;0.28.1&quot;, &quot;pydantic&quot;: &quot;3.0.0&quot;, &quot;numpy&quot;: &quot;1.26.4&quot;, &quot;anyio&quot;: &quot;4.4.0&quot;}
+assert check_lock(pyproject, lock) == [&quot;missing from lock: rich&quot;, &quot;pydantic 3.0.0 does not satisfy ~=2.7&quot;]
+assert check_lock(pyproject, {**lock, &quot;pydantic&quot;: &quot;2.9.2&quot;, &quot;rich&quot;: &quot;13.7.1&quot;}) == []
+assert check_lock(pyproject, lock, {&quot;python_version&quot;: &quot;3.10&quot;}) == [&quot;missing from lock: rich&quot;, &quot;missing from lock: tomli&quot;, &quot;pydantic 3.0.0 does not satisfy ~=2.7&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tomllib.loads(text)["project"].get("dependencies", [])</code>; for each, <code>Requirement(...)</code>, then <code>req.marker.evaluate(env)</code> when there is a marker.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>Version(locked) in req.specifier</code>, with <code>prereleases=True</code> so a locked pre-release is judged by the range.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import tomllib
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+
+def check_lock(pyproject_text, lock, environment=None):
+    env = environment or {&quot;python_version&quot;: &quot;3.12&quot;}
+    deps = tomllib.loads(pyproject_text)[&quot;project&quot;].get(&quot;dependencies&quot;, [])
+    problems = []
+    for line in deps:
+        req = Requirement(line)
+        if req.marker and not req.marker.evaluate(env):
+            continue
+        name = canonicalize_name(req.name)
+        if name not in lock:
+            problems.append(f&quot;missing from lock: {name}&quot;)
+        elif not req.specifier.contains(Version(lock[name]), prereleases=True):
+            problems.append(f&quot;{name} {lock[name]} does not satisfy {req.specifier}&quot;)
+    return sorted(problems)</code></pre></div><p>A lock that does not satisfy the project's own declared ranges means someone edited one file without regenerating the other, so CI tests one set of versions and <code>pyproject.toml</code> promises another; <code>uv lock --check</code> and <code>poetry check --lock</code> exist for exactly this. Markers decide whether a dependency applies at all (<code>tomli</code> is only needed before Python 3.11, when <code>tomllib</code> joined the standard library), so the same project can be in sync for one environment and not another. Extra entries in the lock are normal: they are transitive dependencies such as <code>anyio</code>, pulled in by <code>httpx</code>.</p></div></details>
+</article>
+<article class="prob" id="p-pinning-that-drops-extras-and-markers" data-pid="m15-2-pinning-that-drops-extras-and-markers" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Pinning that drops extras and markers</h3></header>
+<div class="prob-q"><p><code>pin(requirements, resolved)</code> should turn each requirement string into a pinned one with <code>==</code> the resolved version, for a reproducible deploy, <strong>keeping</strong> its extras and environment marker. It currently writes <code>&gt;=</code> instead of <code>==</code>, drops extras (so <code>torch[cuda]</code> loses its CUDA dependencies) and drops markers (so a Linux-only package is installed on macOS). Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+def pin(requirements, resolved):
+    out = []
+    for line in requirements:
+        req = Requirement(line)
+        out.append(f&quot;{req.name}&gt;={resolved[canonicalize_name(req.name)]}&quot;)
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">reqs = ["transformers[torch]>=4.40", "uvloop>=0.19; sys_platform == 'linux'", "Rich"]
+resolved = {"transformers": "4.44.2", "uvloop": "0.20.0", "rich": "13.7.1"}
+assert pin(reqs, resolved) == ['transformers[torch]==4.44.2', 'uvloop==0.20.0; sys_platform == "linux"', "Rich==13.7.1"]
+assert pin([], {}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">reqs = [&quot;transformers[torch]&gt;=4.40&quot;, &quot;uvloop&gt;=0.19; sys_platform == &#x27;linux&#x27;&quot;, &quot;Rich&quot;]
+resolved = {&quot;transformers&quot;: &quot;4.44.2&quot;, &quot;uvloop&quot;: &quot;0.20.0&quot;, &quot;rich&quot;: &quot;13.7.1&quot;}
+assert pin(reqs, resolved) == [&#x27;transformers[torch]==4.44.2&#x27;, &#x27;uvloop==0.20.0; sys_platform == &quot;linux&quot;&#x27;, &quot;Rich==13.7.1&quot;]
+assert pin([], {}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build <code>extras = f"[{','.join(sorted(req.extras))}]" if req.extras else ""</code> and <code>marker = f"; {req.marker}" if req.marker else ""</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+def pin(requirements, resolved):
+    out = []
+    for line in requirements:
+        req = Requirement(line)
+        extras = f&quot;[{&#x27;,&#x27;.join(sorted(req.extras))}]&quot; if req.extras else &quot;&quot;
+        marker = f&quot;; {req.marker}&quot; if req.marker else &quot;&quot;
+        out.append(f&quot;{req.name}{extras}=={resolved[canonicalize_name(req.name)]}{marker}&quot;)
+    return out</code></pre></div><p>A pin must be an exact <code>==</code>, or the deploy is not reproducible: <code>&gt;=</code> lets tomorrow's release in. Extras are part of what gets installed (<code>transformers[torch]</code> also installs PyTorch), and markers are part of where it gets installed, so dropping either changes the environment silently. Rebuilding the string from the parsed parts keeps them, and <code>packaging</code> normalises the marker's quotes. Real lock tools also record hashes and the index URL; this is the core of <code>pip-compile</code>'s output.</p></div></details>
+</article>
+<article class="prob" id="p-evaluating-markers" data-pid="m15-2-evaluating-markers" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Evaluating markers</h3></header>
+<div class="prob-q"><p>Fill in <code>applies</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from packaging.markers import Marker
+
+linux_new = {&quot;python_version&quot;: &quot;3.12&quot;, &quot;sys_platform&quot;: &quot;linux&quot;, &quot;platform_machine&quot;: &quot;x86_64&quot;}
+mac_old = {&quot;python_version&quot;: &quot;3.10&quot;, &quot;sys_platform&quot;: &quot;darwin&quot;, &quot;platform_machine&quot;: &quot;arm64&quot;}
+m1 = Marker(&#x27;python_version &lt; &quot;3.11&quot;&#x27;)
+m2 = Marker(&#x27;sys_platform == &quot;linux&quot; and platform_machine == &quot;x86_64&quot;&#x27;)
+m3 = Marker(&#x27;sys_platform != &quot;win32&quot; or python_version &gt;= &quot;3.13&quot;&#x27;)
+
+applies = (m1.evaluate(linux_new), m1.evaluate(mac_old))
+applies = (m2.evaluate(linux_new), m2.evaluate(mac_old))
+applies = (m3.evaluate(mac_old), m3.evaluate({**mac_old, &quot;sys_platform&quot;: &quot;win32&quot;}))
+applies = str(Marker(&quot;python_version&gt;=&#x27;3.9&#x27;&quot;))</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>applies</code></th></tr><tr><td>tomli backport</td><td><input class="cell" data-a="(False, True)" data-s="(False, True)" aria-label="applies at tomli backport" autocomplete="off"></td></tr><tr><td>CUDA wheels</td><td><input class="cell" data-a="(True, False)" data-s="(True, False)" aria-label="applies at CUDA wheels" autocomplete="off"></td></tr><tr><td>or</td><td><input class="cell" data-a="(True, False)" data-s="(True, False)" aria-label="applies at or" autocomplete="off"></td></tr><tr><td>normalised</td><td><input class="cell" data-a="&#x27;python_version &gt;= &quot;3.9&quot;&#x27;" data-s="python_version &gt;= &quot;3.9&quot;" aria-label="applies at normalised" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>evaluate(env)</code> overrides the given variables and uses the running interpreter's values for the rest. Version comparisons in markers are numeric.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>applies</code></th></tr><tr><td>tomli backport</td><td><code>(False, True)</code></td></tr><tr><td>CUDA wheels</td><td><code>(True, False)</code></td></tr><tr><td>or</td><td><code>(True, False)</code></td></tr><tr><td>normalised</td><td><code>&#x27;python_version &gt;= &quot;3.9&quot;&#x27;</code></td></tr></table></div><p>Markers are small boolean expressions over the target environment. The <code>tomli</code> backport is needed only before 3.11, so only the old Mac needs it. CUDA-specific packages target Linux on x86_64, so the ARM Mac skips them. The <code>or</code> marker is true unless both sides are false: Windows on 3.10 fails both. <code>packaging</code> normalises spacing and quotes, so a marker printed back looks the same however it was written. Resolvers such as uv evaluate markers for every target platform to produce one cross-platform lock.</p></div></details>
+</article>
+<article class="prob" id="p-find-undeclared-and-unused-dependencies" data-pid="m15-2-find-undeclared-and-unused-dependencies" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. Find undeclared and unused dependencies</h3></header>
+<div class="prob-q"><p>Write <code>dependency_report(sources, declared, import_to_dist, local=())</code>: <code>sources</code> maps file names to Python source, <code>declared</code> is a list of requirement strings, and <code>import_to_dist</code> maps top-level import names to distribution names where they differ (<code>"sklearn": "scikit-learn"</code>). Collect top-level imported names with <code>ast</code> (absolute imports only), ignore the standard library (<code>sys.stdlib_module_names</code>) and <code>local</code> packages, and return <code>{"missing": [...], "unused": [...]}</code> with canonical names, sorted: imported but not declared, and declared but never imported.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import ast, sys
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+def dependency_report(sources, declared, import_to_dist, local=()):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">sources = {
+    "app/main.py": "import os, json\nimport httpx\nfrom pydantic import BaseModel\nfrom app.retrieval import search\nimport yaml",
+    "app/retrieval.py": "import numpy as np\nfrom sklearn.metrics import f1_score\nfrom . import utils\nimport collections.abc",
+    "app/utils.py": "def f():\n    import tiktoken\n    return tiktoken",
+}
+declared = ["httpx>=0.27", "pydantic~=2.7", "numpy", "requests", "Scikit_Learn>=1.4"]
+mapping = {"sklearn": "scikit-learn", "yaml": "PyYAML"}
+assert dependency_report(sources, declared, mapping, local=("app",)) == {"missing": ["pyyaml", "tiktoken"], "unused": ["requests"]}
+assert dependency_report({}, [], {}) == {"missing": [], "unused": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sources = {
+    &quot;app/main.py&quot;: &quot;import os, json\nimport httpx\nfrom pydantic import BaseModel\nfrom app.retrieval import search\nimport yaml&quot;,
+    &quot;app/retrieval.py&quot;: &quot;import numpy as np\nfrom sklearn.metrics import f1_score\nfrom . import utils\nimport collections.abc&quot;,
+    &quot;app/utils.py&quot;: &quot;def f():\n    import tiktoken\n    return tiktoken&quot;,
+}
+declared = [&quot;httpx&gt;=0.27&quot;, &quot;pydantic~=2.7&quot;, &quot;numpy&quot;, &quot;requests&quot;, &quot;Scikit_Learn&gt;=1.4&quot;]
+mapping = {&quot;sklearn&quot;: &quot;scikit-learn&quot;, &quot;yaml&quot;: &quot;PyYAML&quot;}
+assert dependency_report(sources, declared, mapping, local=(&quot;app&quot;,)) == {&quot;missing&quot;: [&quot;pyyaml&quot;, &quot;tiktoken&quot;], &quot;unused&quot;: [&quot;requests&quot;]}
+assert dependency_report({}, [], {}) == {&quot;missing&quot;: [], &quot;unused&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk every <code>ast.Import</code> (<code>alias.name.split(".")[0]</code>) and <code>ast.ImportFrom</code> with <code>level == 0</code> (<code>node.module.split(".")[0]</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Map each import name to a distribution with <code>import_to_dist.get(name, name)</code>, then canonicalise both sides before comparing sets.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import ast, sys
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+
+def dependency_report(sources, declared, import_to_dist, local=()):
+    imported = set()
+    for src in sources.values():
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(&quot;.&quot;)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(&quot;.&quot;)[0])
+    third_party = {n for n in imported if n not in sys.stdlib_module_names and n not in local}
+    needed = {canonicalize_name(import_to_dist.get(n, n)) for n in third_party}
+    have = {canonicalize_name(Requirement(r).name) for r in declared}
+    return {&quot;missing&quot;: sorted(needed - have), &quot;unused&quot;: sorted(have - needed)}</code></pre></div><p>Two common failures in real projects: code imports a package that is only installed by accident (a transitive dependency, or something in the developer's environment), so a clean install in CI or production breaks; and <code>pyproject.toml</code> keeps dependencies nobody uses, slowing installs and widening the security surface. Static analysis with <code>ast</code> finds both without running the code, including imports inside functions such as <code>tiktoken</code>. The mapping is necessary because import names and distribution names often differ (<code>sklearn</code> is <code>scikit-learn</code>, <code>yaml</code> is <code>PyYAML</code>, <code>cv2</code> is <code>opencv-python</code>). Tools such as <code>deptry</code> run this check in CI.</p></div></details>
+</article>
+<article class="prob" id="p-reading-pyproject-toml" data-pid="m15-2-reading-pyproject-toml" data-type="predict" data-level="medium" data-answer="support-rag [&#x27;eval&#x27;, &#x27;pdf&#x27;] support_rag.cli:main
+[&#x27;3.11&#x27;, &#x27;3.14&#x27;] pytest&gt;=8 hatchling.build
+5">
+<header class="prob-head"><h3>10. Reading pyproject.toml</h3></header>
+<div class="code"><pre><code class="py">import tomllib
+from packaging.specifiers import SpecifierSet
+
+doc = tomllib.loads(&#x27;&#x27;&#x27;
+[project]
+name = &quot;support-rag&quot;
+version = &quot;0.3.0&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [&quot;httpx&gt;=0.27,&lt;1&quot;, &quot;pydantic~=2.7&quot;]
+
+[project.optional-dependencies]
+pdf = [&quot;pypdf&gt;=4&quot;]
+eval = [&quot;ragas&gt;=0.1&quot;, &quot;pandas&gt;=2&quot;]
+
+[project.scripts]
+rag-ingest = &quot;support_rag.cli:main&quot;
+
+[dependency-groups]
+dev = [&quot;pytest&gt;=8&quot;, &quot;ruff&quot;, &quot;mypy&quot;]
+
+[build-system]
+requires = [&quot;hatchling&quot;]
+build-backend = &quot;hatchling.build&quot;
+&#x27;&#x27;&#x27;)
+project = doc[&quot;project&quot;]
+print(project[&quot;name&quot;], sorted(project[&quot;optional-dependencies&quot;]), project[&quot;scripts&quot;][&quot;rag-ingest&quot;])
+py = SpecifierSet(project[&quot;requires-python&quot;])
+print([v for v in [&quot;3.10&quot;, &quot;3.11&quot;, &quot;3.14&quot;] if v in py], doc[&quot;dependency-groups&quot;][&quot;dev&quot;][0], doc[&quot;build-system&quot;][&quot;build-backend&quot;])
+print(len(project[&quot;dependencies&quot;]) + sum(len(v) for v in project[&quot;optional-dependencies&quot;].values()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[project.optional-dependencies]</code> defines extras; <code>[dependency-groups]</code> defines development groups that are not published; <code>requires-python</code> is a specifier.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>support-rag [&#x27;eval&#x27;, &#x27;pdf&#x27;] support_rag.cli:main
+[&#x27;3.11&#x27;, &#x27;3.14&#x27;] pytest&gt;=8 hatchling.build
+5</pre></div><p>The project's name, its two extras (<code>pip install "support-rag[pdf]"</code> or <code>[eval]</code>) and its command-line entry point all come from <code>[project]</code>. <code>requires-python</code> is an ordinary specifier, so tools check the running interpreter against it before installing. The <code>dev</code> group (pytest, ruff, mypy) is for contributors and is not part of the published package's metadata. The build backend turns the project into a wheel. Counting runtime and optional requirements gives 5.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-a-tiny-dependency-resolver" data-pid="m15-2-a-tiny-dependency-resolver" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. A tiny dependency resolver</h3></header>
+<div class="prob-q"><p>Write <code>resolve(index, requirements)</code> where <code>index</code> maps package names to <code>{version: [requirement strings of that version's dependencies]}</code> and <code>requirements</code> is a list of requirement strings. Choose one version per package such that every requirement (from the root and from every chosen version) is satisfied, preferring the <strong>newest</strong> versions, with <strong>backtracking</strong> when a choice leads to a conflict. Return a dict name -&gt; version sorted by name, or raise <code>ValueError("no solution")</code>. Ignore pre-releases and markers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+def resolve(index, requirements):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">index = {
+    "app-sdk": {"2.0.0": ["httpx>=0.27", "pydantic>=2"], "1.5.0": ["httpx>=0.25", "pydantic<2"]},
+    "httpx": {"0.28.0": ["anyio>=4"], "0.27.0": ["anyio>=3"], "0.25.0": ["anyio<4"]},
+    "anyio": {"4.4.0": [], "3.7.1": []},
+    "pydantic": {"2.9.0": ["typing-extensions>=4.6"], "1.10.0": []},
+    "typing-extensions": {"4.12.0": [], "4.5.0": []},
+    "legacy-tool": {"1.0.0": ["pydantic<2"]},
+}
+assert resolve(index, ["app-sdk"]) == {"anyio": "4.4.0", "app-sdk": "2.0.0", "httpx": "0.28.0", "pydantic": "2.9.0", "typing-extensions": "4.12.0"}
+assert resolve(index, ["app-sdk", "legacy-tool"]) == {"anyio": "4.4.0", "app-sdk": "1.5.0", "httpx": "0.28.0", "legacy-tool": "1.0.0", "pydantic": "1.10.0"}
+assert resolve(index, ["app-sdk", "anyio<4"])["httpx"] == "0.27.0"
+try:
+    resolve(index, ["app-sdk>=2", "legacy-tool"])
+    assert False
+except ValueError as e:
+    assert str(e) == "no solution"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">index = {
+    &quot;app-sdk&quot;: {&quot;2.0.0&quot;: [&quot;httpx&gt;=0.27&quot;, &quot;pydantic&gt;=2&quot;], &quot;1.5.0&quot;: [&quot;httpx&gt;=0.25&quot;, &quot;pydantic&lt;2&quot;]},
+    &quot;httpx&quot;: {&quot;0.28.0&quot;: [&quot;anyio&gt;=4&quot;], &quot;0.27.0&quot;: [&quot;anyio&gt;=3&quot;], &quot;0.25.0&quot;: [&quot;anyio&lt;4&quot;]},
+    &quot;anyio&quot;: {&quot;4.4.0&quot;: [], &quot;3.7.1&quot;: []},
+    &quot;pydantic&quot;: {&quot;2.9.0&quot;: [&quot;typing-extensions&gt;=4.6&quot;], &quot;1.10.0&quot;: []},
+    &quot;typing-extensions&quot;: {&quot;4.12.0&quot;: [], &quot;4.5.0&quot;: []},
+    &quot;legacy-tool&quot;: {&quot;1.0.0&quot;: [&quot;pydantic&lt;2&quot;]},
+}
+assert resolve(index, [&quot;app-sdk&quot;]) == {&quot;anyio&quot;: &quot;4.4.0&quot;, &quot;app-sdk&quot;: &quot;2.0.0&quot;, &quot;httpx&quot;: &quot;0.28.0&quot;, &quot;pydantic&quot;: &quot;2.9.0&quot;, &quot;typing-extensions&quot;: &quot;4.12.0&quot;}
+assert resolve(index, [&quot;app-sdk&quot;, &quot;legacy-tool&quot;]) == {&quot;anyio&quot;: &quot;4.4.0&quot;, &quot;app-sdk&quot;: &quot;1.5.0&quot;, &quot;httpx&quot;: &quot;0.28.0&quot;, &quot;legacy-tool&quot;: &quot;1.0.0&quot;, &quot;pydantic&quot;: &quot;1.10.0&quot;}
+assert resolve(index, [&quot;app-sdk&quot;, &quot;anyio&lt;4&quot;])[&quot;httpx&quot;] == &quot;0.27.0&quot;
+try:
+    resolve(index, [&quot;app-sdk&gt;=2&quot;, &quot;legacy-tool&quot;])
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;no solution&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Recursive search over a list of pending requirements and a dict of choices: pop a requirement; if its package is chosen, check the version satisfies it; otherwise try the index's versions newest first that satisfy <strong>all</strong> constraints collected so far for that package.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep constraints per package (a dict name -&gt; list of specifiers) so a later requirement can reject an earlier choice; on failure, undo and try the next version.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+
+def resolve(index, requirements):
+    def ok(name, version, constraints):
+        return all(Version(version) in spec for spec in constraints.get(name, []))
+
+    def search(pending, chosen, constraints):
+        if not pending:
+            return dict(chosen)
+        req, rest = pending[0], pending[1:]
+        name = req.name
+        new_constraints = {k: list(v) for k, v in constraints.items()}
+        new_constraints.setdefault(name, []).append(req.specifier)
+        if name in chosen:
+            if not ok(name, chosen[name], new_constraints):
+                return None
+            return search(rest, chosen, new_constraints)
+        candidates = sorted(index.get(name, {}), key=Version, reverse=True)
+        for version in candidates:
+            if Version(version).is_prerelease or not ok(name, version, new_constraints):
+                continue
+            deps = [Requirement(d) for d in index[name][version]]
+            result = search(rest + deps, {**chosen, name: version}, new_constraints)
+            if result is not None:
+                return result
+        return None
+
+    result = search([Requirement(r) for r in requirements], {}, {})
+    if result is None:
+        raise ValueError(&quot;no solution&quot;)
+    return dict(sorted(result.items()))</code></pre></div><p>Dependency resolution is a search problem: each package needs one version, every chosen version adds constraints, and a choice that looks fine early can conflict with a requirement found later. Here the newest <code>app-sdk</code> needs <code>pydantic&gt;=2</code>, so adding <code>legacy-tool</code> (which needs <code>pydantic&lt;2</code>) forces the resolver to <strong>backtrack</strong> to <code>app-sdk 1.5.0</code>, whose constraints are compatible; with <code>app-sdk&gt;=2</code> pinned there is no solution at all, the "dependency hell" every developer meets. Trying newest versions first matches what pip and uv do. Real resolvers use smarter algorithms (pip's backtracking, uv's PubGrub, which also explains conflicts in plain language), but the core is this depth-first search with undo (16.5).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-environment-checker" data-pid="m15-2-read-the-code-an-environment-checker" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. Read the code: an environment checker</h3></header>
+<div class="prob-q"><p><code>check_environment(required, installed)</code> should report which required packages are missing or outside their specifier in an environment (<code>installed</code> maps distribution names, as the environment reports them, to versions). It compares versions as strings, compares names case-sensitively and without normalising <code>_</code> and <code>-</code>, treats a pre-release as satisfying a range, and crashes on requirements with extras. Rewrite it to return sorted <code>"missing: NAME"</code> and <code>"NAME VERSION not in SPEC"</code> problems using <code>packaging</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def check_environment(required, installed):
+    problems = []
+    for line in required:
+        name, _, minimum = line.partition(&quot;&gt;=&quot;)
+        if name not in installed:
+            problems.append(f&quot;missing: {name}&quot;)
+        elif installed[name] &lt; minimum:
+            problems.append(f&quot;{name} {installed[name]} not in &gt;={minimum}&quot;)
+    return sorted(problems)
+</textarea>
+<script type="text/plain" class="prob-tests">required = ["scikit-learn>=1.4", "torch[cuda]>=2.3,<2.6", "numpy>=1.26", "tiktoken>=0.7", "Pillow>=10"]
+installed = {"scikit_learn": "1.10.0", "torch": "2.6.0rc1", "numpy": "1.9.0", "pillow": "10.4.0"}
+assert check_environment(required, installed) == ["missing: tiktoken", "numpy 1.9.0 not in >=1.26", "torch 2.6.0rc1 not in <2.6,>=2.3"]
+assert check_environment(["numpy>=1.26"], {"NumPy": "2.1.0"}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">required = [&quot;scikit-learn&gt;=1.4&quot;, &quot;torch[cuda]&gt;=2.3,&lt;2.6&quot;, &quot;numpy&gt;=1.26&quot;, &quot;tiktoken&gt;=0.7&quot;, &quot;Pillow&gt;=10&quot;]
+installed = {&quot;scikit_learn&quot;: &quot;1.10.0&quot;, &quot;torch&quot;: &quot;2.6.0rc1&quot;, &quot;numpy&quot;: &quot;1.9.0&quot;, &quot;pillow&quot;: &quot;10.4.0&quot;}
+assert check_environment(required, installed) == [&quot;missing: tiktoken&quot;, &quot;numpy 1.9.0 not in &gt;=1.26&quot;, &quot;torch 2.6.0rc1 not in &lt;2.6,&gt;=2.3&quot;]
+assert check_environment([&quot;numpy&gt;=1.26&quot;], {&quot;NumPy&quot;: &quot;2.1.0&quot;}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Canonicalise both the requirement name and every installed name: <code>{canonicalize_name(k): v for k, v in installed.items()}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Requirement(line)</code> handles extras; test with <code>req.specifier.contains(Version(v), prereleases=True)</code> so a pre-release is checked against the range.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+
+def check_environment(required, installed):
+    have = {canonicalize_name(k): v for k, v in installed.items()}
+    problems = []
+    for line in required:
+        req = Requirement(line)
+        name = canonicalize_name(req.name)
+        if name not in have:
+            problems.append(f&quot;missing: {name}&quot;)
+        elif not req.specifier.contains(Version(have[name]), prereleases=True):
+            problems.append(f&quot;{name} {have[name]} not in {req.specifier}&quot;)
+    return sorted(problems)</code></pre></div><p>Each bug is a rule from this lesson. String comparison declared <code>1.9.0</code> newer than <code>1.26</code> and <code>1.10.0</code> older than <code>1.4</code>. Distribution names are case-insensitive and <code>scikit_learn</code> is the same project as <code>scikit-learn</code>, so names must be canonicalised on both sides. <code>partition("&gt;=")</code> broke on extras and on any other operator; the real <code>Requirement</code> parser handles the whole grammar. And <code>2.6.0rc1</code> is a pre-release of 2.6, which sorts <strong>below</strong> 2.6 but is still outside <code>&lt;2.6</code> in spirit: with <code>prereleases=True</code> it is judged against the range and <code>packaging</code> excludes it, because <code>&lt;2.6</code> rejects pre-releases of 2.6 itself. Checks like this run at service start-up or in a notebook's first cell to fail fast on a wrong environment.</p></div></details>
+</article>
+<article class="prob" id="p-names-and-version-normalisation" data-pid="m15-2-names-and-version-normalisation" data-type="predict" data-level="hard" data-answer="[&#x27;pillow&#x27;, &#x27;scikit-learn&#x27;, &#x27;scikit-learn&#x27;, &#x27;typing-extensions&#x27;, &#x27;typing-extensions&#x27;] 3
+1.0-alpha.1 -&gt; 1.0a1 None True
+v2.0 -&gt; 2.0 None False
+2.0.0-rc.2 -&gt; 2.0.0rc2 None True
+1.0.post -&gt; 1.0.post0 None False
+2.1.0+cu121 -&gt; 2.1.0+cu121 cu121 False
+1.0.0.0 -&gt; 1.0.0.0 None False
+True False">
+<header class="prob-head"><h3>13. Names and version normalisation</h3></header>
+<div class="code"><pre><code class="py">from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+names = [&quot;Pillow&quot;, &quot;scikit_learn&quot;, &quot;Scikit.Learn&quot;, &quot;typing-extensions&quot;, &quot;Typing__Extensions&quot;]
+print([canonicalize_name(n) for n in names], len({canonicalize_name(n) for n in names}))
+for raw in [&quot;1.0-alpha.1&quot;, &quot;v2.0&quot;, &quot;2.0.0-rc.2&quot;, &quot;1.0.post&quot;, &quot;2.1.0+cu121&quot;, &quot;1.0.0.0&quot;]:
+    v = Version(raw)
+    print(raw, &quot;-&gt;&quot;, str(v), v.local, v.is_prerelease)
+print(Version(&quot;2.1.0+cu121&quot;) &gt; Version(&quot;2.1.0&quot;), Version(&quot;2.1.0+cu121&quot;) == Version(&quot;2.1.0&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Canonical names are lower-case with runs of <code>-</code>, <code>_</code> and <code>.</code> replaced by a single <code>-</code>. <code>Version</code> normalises spellings such as <code>alpha</code> and <code>-rc.2</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;pillow&#x27;, &#x27;scikit-learn&#x27;, &#x27;scikit-learn&#x27;, &#x27;typing-extensions&#x27;, &#x27;typing-extensions&#x27;] 3
+1.0-alpha.1 -&gt; 1.0a1 None True
+v2.0 -&gt; 2.0 None False
+2.0.0-rc.2 -&gt; 2.0.0rc2 None True
+1.0.post -&gt; 1.0.post0 None False
+2.1.0+cu121 -&gt; 2.1.0+cu121 cu121 False
+1.0.0.0 -&gt; 1.0.0.0 None False
+True False</pre></div><p>Canonical names collapse case and separators, so the five spellings name only three projects; this is why <code>pip install Scikit_Learn</code> works. <code>Version</code> accepts many historical spellings and prints the normalised form: <code>1.0a1</code>, <code>2.0</code>, <code>2.0.0rc2</code>, <code>1.0.post0</code>. A local label such as <code>+cu121</code> is kept but not part of the public version, and a version with a local label sorts <strong>after</strong> the same version without one, which is how <code>torch 2.1.0+cu121</code> is distinguished from the CPU build in a resolver.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-why-do-you-use-virtual-environments-and-" data-pid="m15-2-why-do-you-use-virtual-environments-and-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. Why do you use virtual environments, and how do you set up a new project today?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A virtual environment isolates a project's installed packages from the system and from other projects, so incompatible versions can coexist, the system Python's tools are not broken, and the environment can be deleted and rebuilt at will. For a new project I would pin the Python version (<code>.python-version</code>, <code>requires-python</code>), create the project with <code>uv init</code> (or a <code>pyproject.toml</code> by hand) in a <code>src/</code> layout, add runtime dependencies with <code>uv add</code> and development tools with <code>uv add --dev</code> (pytest, ruff, mypy) into a dependency group, commit <code>pyproject.toml</code> and the lock file but not <code>.venv</code>, and use <code>uv sync</code> / <code>uv run</code> locally and in CI so everyone runs the locked versions. With plain pip, the equivalent is <code>python -m venv .venv</code>, <code>python -m pip install -e ".[dev]"</code> and a compiled requirements lock. The point is that the environment is reproducible from files in the repository.</p></div></details>
+</article>
+<article class="prob" id="p-should-a-library-pin-exact-dependency-ve" data-pid="m15-2-should-a-library-pin-exact-dependency-ve" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Should a library pin exact dependency versions? Should an application?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A <strong>library</strong> should declare the broadest ranges it actually supports (<code>httpx&gt;=0.25,&lt;1</code>), not exact pins: it will be installed alongside other libraries, and exact pins make conflicts likely (two libraries pinning different exact versions of a shared dependency cannot be installed together). It should test against its minimum and latest supported versions, and set upper bounds only for known incompatibilities. An <strong>application</strong> (a service, a pipeline, a training job) should <strong>lock</strong> every direct and transitive dependency to exact versions with hashes, so every install is identical and builds are reproducible, while still declaring ranges in <code>pyproject.toml</code> so the lock can be regenerated. Locks are upgraded deliberately and regularly (automated update pull requests plus the test suite) to pick up security fixes without surprises.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-make-an-ml-project-s-environm" data-pid="m15-2-how-do-you-make-an-ml-project-s-environm" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. How do you make an ML project's environment reproducible six months from now?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Pin the interpreter (<code>requires-python</code> and a <code>.python-version</code>, ideally a specific minor version), declare dependencies in <code>pyproject.toml</code>, and commit a lock file with exact versions and hashes for every package, including the package index URLs used for GPU builds (PyTorch's CUDA wheels with local labels such as <code>+cu124</code>). Record the system-level pieces the lock cannot capture: CUDA and cuDNN versions, driver requirements, and the operating system, ideally by building a container image from the lock file with a pinned base image digest, and keep the built image in a registry, since base images and indexes change. Store the environment's identity (lock hash, image digest, <code>pip freeze</code> output) next to every trained model, dataset version and evaluation result, so results can be traced to the exact stack. Seed randomness and enable deterministic algorithms where needed. Finally, test the rebuild: CI should create the environment from scratch from the lock, so drift is noticed early.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>One virtual environment per project; run tools as <code>python -m pip</code> or through uv, and rebuild environments from files rather than editing them.</li><li>PEP 440 versions compare numerically with pre-, post-, dev- and local parts; never compare version strings directly.</li><li>Specifiers (<code>&gt;=</code>, <code>&lt;</code>, <code>~=</code>, <code>==X.*</code>) constrain versions, extras add optional dependencies, markers limit where a requirement applies; <code>packaging</code> parses them all.</li><li><code>pyproject.toml</code> declares the project: dependencies, extras, dependency groups, scripts and build backend.</li><li>Applications lock exact versions with hashes; libraries declare ranges; ML stacks also pin Python, CUDA builds and images.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -102,6 +102,27 @@ def run_pytest(test_source, modules=None, args=()):
             "failed": values.count("failed") + values.count("error"), "skipped": values.count("skipped"),
             "errors": collector.errors, "output": out.getvalue()}
 
+def make_tree(files, on_path=True):
+    # Writes {relative path: source} into a fresh folder, like a small project on disk,
+    # and puts that folder first on sys.path so its modules and packages can be imported.
+    import importlib, tempfile
+    from pathlib import Path
+    root = Path(tempfile.mkdtemp())
+    for rel, src in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(src), encoding="utf-8")
+    if on_path:
+        sys.path.insert(0, str(root))
+    importlib.invalidate_caches()
+    return root
+
+def forget(*names):
+    # Removes modules (and their submodules) from the import cache, so the next import runs them again.
+    for mod in list(sys.modules):
+        if any(mod == n or mod.startswith(n + ".") for n in names):
+            del sys.modules[mod]
+
 def make_module(name, source):
     # Creates an importable module from source, as if it were the file name + ".py".
     import types

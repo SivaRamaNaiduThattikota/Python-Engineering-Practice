@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>15.P · Module 15 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m15-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 15 · Modules and packaging</span></div>
+  <h1>15.P Module 15 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 15: how imports and <code>python -m</code> work, versions and requirements, and command-line tools. Then a mini project that needs all of it: an evaluation command-line tool with subcommands, a scorer plugin loaded by name, an environment check against a requirements list, configuration from the environment and flags, and clean streams and exit codes.</p>
+  <div class="chips"><span class="chip">10 problems</span><span class="chip">3 easy · 4 medium · 3 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>When a tool misbehaves, ask three questions in order. <strong>Which code is running?</strong> Check <code>sys.path</code>, <code>module.__file__</code>, <code>__name__</code> and import-time side effects (15.1). <strong>Which versions are installed, and which were declared?</strong> Parse versions and requirements with <code>packaging</code>, never as strings, and compare the environment with the lock (15.2). <strong>How is it invoked?</strong> Through <code>main(argv) -&gt; int</code>, with results on standard output, diagnostics on standard error and meaningful exit codes (15.3).</p>
+<p>The problems mix the lessons on purpose, and the mini project combines all three in a tool you could ship with an LLM project.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-what-python-m-does" data-pid="m15-p-what-python-m-does" data-type="predict" data-level="easy" data-answer="package init, __name__ = reporter_p1
+main, __name__ = __main__ __package__ = reporter_p1
+n=3 mean=4.0
+n=1 mean=1.0">
+<header class="prob-head"><h3>1. What python -m does</h3></header>
+<div class="code"><pre><code class="py">import contextlib, io, runpy
+from lessontools import make_tree, forget
+
+forget(&quot;reporter_p1&quot;)
+make_tree({
+    &quot;reporter_p1/__init__.py&quot;: &#x27;print(&quot;package init, __name__ =&quot;, __name__)&#x27;,
+    &quot;reporter_p1/__main__.py&quot;: &#x27;&#x27;&#x27;
+    from .core import summary
+    print(&quot;main, __name__ =&quot;, __name__, &quot;__package__ =&quot;, __package__)
+    print(summary([3, 4, 5]))
+    &#x27;&#x27;&#x27;,
+    &quot;reporter_p1/core.py&quot;: &#x27;&#x27;&#x27;
+    def summary(values):
+        return f&quot;n={len(values)} mean={sum(values) / len(values):.1f}&quot;
+    &#x27;&#x27;&#x27;,
+})
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    runpy.run_module(&quot;reporter_p1&quot;, run_name=&quot;__main__&quot;)
+print(out.getvalue(), end=&quot;&quot;)
+import reporter_p1.core
+print(reporter_p1.core.summary([1]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>python -m pkg</code> is <code>runpy.run_module("pkg", run_name="__main__")</code>: it imports the package, then runs <code>pkg/__main__.py</code> as <code>__main__</code> with <code>__package__</code> set.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>package init, __name__ = reporter_p1
+main, __name__ = __main__ __package__ = reporter_p1
+n=3 mean=4.0
+n=1 mean=1.0</pre></div><p>Running a package with <code>python -m</code> first imports the package (its <code>__init__</code> runs, with its normal name), then executes <code>__main__.py</code> under the name <code>"__main__"</code> but with <code>__package__</code> set to the package, which is exactly why relative imports such as <code>from .core import summary</code> work there and fail when the file is run directly as a script. The package stays imported, so a later <code>import reporter_p1.core</code> is served from <code>sys.modules</code> without running <code>__init__</code> again.</p></div></details>
+</article>
+<article class="prob" id="p-bump-a-version" data-pid="m15-p-bump-a-version" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Bump a version</h3></header>
+<div class="prob-q"><p>Write <code>bump(version, part)</code> returning the next version string for <code>part</code> in <code>"major"</code>, <code>"minor"</code>, <code>"patch"</code>: <code>1.4.2</code> becomes <code>2.0.0</code>, <code>1.5.0</code> or <code>1.4.3</code>. Drop any pre-release, post-release, dev or local part before bumping (<code>2.0.0rc1</code> bumped as a patch gives <code>2.0.1</code>), and count missing segments as 0 (<code>1.4</code> bumped as a patch gives <code>1.4.1</code>). An unknown part raises <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from packaging.version import Version
+
+def bump(version, part):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert [bump("1.4.2", p) for p in ("major", "minor", "patch")] == ["2.0.0", "1.5.0", "1.4.3"]
+assert bump("1.4", "patch") == "1.4.1" and bump("2.0.0rc1", "patch") == "2.0.1" and bump("0.9.9.post2", "minor") == "0.10.0"
+assert bump("v3.1.0+cu121", "major") == "4.0.0"
+try:
+    bump("1.0.0", "build")
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert [bump(&quot;1.4.2&quot;, p) for p in (&quot;major&quot;, &quot;minor&quot;, &quot;patch&quot;)] == [&quot;2.0.0&quot;, &quot;1.5.0&quot;, &quot;1.4.3&quot;]
+assert bump(&quot;1.4&quot;, &quot;patch&quot;) == &quot;1.4.1&quot; and bump(&quot;2.0.0rc1&quot;, &quot;patch&quot;) == &quot;2.0.1&quot; and bump(&quot;0.9.9.post2&quot;, &quot;minor&quot;) == &quot;0.10.0&quot;
+assert bump(&quot;v3.1.0+cu121&quot;, &quot;major&quot;) == &quot;4.0.0&quot;
+try:
+    bump(&quot;1.0.0&quot;, &quot;build&quot;)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Version(version).release</code> gives the integer segments; pad to three with zeros.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return <code>f"{major}.{minor}.{patch}"</code> after incrementing one and resetting the lower ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.version import Version
+
+
+def bump(version, part):
+    major, minor, patch = (list(Version(version).release) + [0, 0, 0])[:3]
+    if part == &quot;major&quot;:
+        return f&quot;{major + 1}.0.0&quot;
+    if part == &quot;minor&quot;:
+        return f&quot;{major}.{minor + 1}.0&quot;
+    if part == &quot;patch&quot;:
+        return f&quot;{major}.{minor}.{patch + 1}&quot;
+    raise ValueError(f&quot;unknown part: {part!r}&quot;)</code></pre></div><p>Parsing with <code>Version</code> normalises everything a version string may carry (a leading <code>v</code>, pre-release, post-release and local labels) and exposes the numeric release segments, so the bump logic is three lines of integer arithmetic. Resetting the lower segments is the semantic-versioning rule: a new minor release starts at patch 0. Release tooling (<code>uv version --bump</code>, <code>bump-my-version</code>, <code>hatch version</code>) implements this together with updating <code>pyproject.toml</code> and tagging the commit.</p></div></details>
+</article>
+<article class="prob" id="p-a-plugin-loader-that-hides-real-import-e" data-pid="m15-p-a-plugin-loader-that-hides-real-import-e" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A plugin loader that hides real import errors</h3></header>
+<div class="prob-q"><p><code>load_scorer(name)</code> imports <code>scorers_f3.&lt;name&gt;</code> and returns its <code>score</code> function, reporting <code>LookupError(f"no scorer named {name}")</code> when the plugin does not exist. But it catches every <code>ImportError</code>, so a plugin that <strong>exists</strong> but fails to import one of <strong>its own</strong> dependencies is also reported as "no scorer named ...", which sends people looking in the wrong place. Only translate the error when the missing module is the plugin itself (<code>e.name</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import importlib
+
+def load_scorer(name):
+    try:
+        module = importlib.import_module(f&quot;scorers_f3.{name}&quot;)
+    except ImportError:
+        raise LookupError(f&quot;no scorer named {name}&quot;) from None
+    return module.score
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("scorers_f3")
+make_tree({
+    "scorers_f3/__init__.py": "",
+    "scorers_f3/exact.py": "def score(answer, expected):\n    return float(answer == expected)",
+    "scorers_f3/semantic.py": "import sentence_transformers_not_installed\ndef score(a, b):\n    return 1.0",
+})
+assert load_scorer("exact")("a", "a") == 1.0
+assert load_scorer("exact")("a", "b") == 0.0
+try:
+    load_scorer("bleu")
+    assert False
+except LookupError as e:
+    assert str(e) == "no scorer named bleu"
+try:
+    load_scorer("semantic")
+    assert False
+except ModuleNotFoundError as e:
+    assert e.name == "sentence_transformers_not_installed"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;scorers_f3&quot;)
+make_tree({
+    &quot;scorers_f3/__init__.py&quot;: &quot;&quot;,
+    &quot;scorers_f3/exact.py&quot;: &quot;def score(answer, expected):\n    return float(answer == expected)&quot;,
+    &quot;scorers_f3/semantic.py&quot;: &quot;import sentence_transformers_not_installed\ndef score(a, b):\n    return 1.0&quot;,
+})
+assert load_scorer(&quot;exact&quot;)(&quot;a&quot;, &quot;a&quot;) == 1.0
+assert load_scorer(&quot;exact&quot;)(&quot;a&quot;, &quot;b&quot;) == 0.0
+try:
+    load_scorer(&quot;bleu&quot;)
+    assert False
+except LookupError as e:
+    assert str(e) == &quot;no scorer named bleu&quot;
+try:
+    load_scorer(&quot;semantic&quot;)
+    assert False
+except ModuleNotFoundError as e:
+    assert e.name == &quot;sentence_transformers_not_installed&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>except ModuleNotFoundError as e:</code> and check <code>e.name == f"scorers_f3.{name}"</code>; otherwise re-raise with a bare <code>raise</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib
+
+def load_scorer(name):
+    target = f&quot;scorers_f3.{name}&quot;
+    try:
+        module = importlib.import_module(target)
+    except ModuleNotFoundError as e:
+        if e.name == target:
+            raise LookupError(f&quot;no scorer named {name}&quot;) from None
+        raise
+    return module.score</code></pre></div><p><code>ModuleNotFoundError</code> carries the name of the module that could not be found. When it is the plugin itself, "no such scorer" is the right message; when it is something the plugin imports, the real problem is a missing dependency (an extra that was not installed, 15.2), and re-raising preserves the original error and traceback that say so. Catching broad exceptions and replacing them with a friendly message is only friendly when the message is true; otherwise it turns a one-minute fix into an hour of searching.</p></div></details>
+</article>
+<article class="prob" id="p-parse-args-and-sys-argv" data-pid="m15-p-parse-args-and-sys-argv" data-type="predict" data-level="medium" data-answer="(True, &#x27;kb/&#x27;) (False, &#x27;docs/&#x27;) (True, &#x27;kb/&#x27;) sync-index">
+<header class="prob-head"><h3>4. parse_args and sys.argv</h3></header>
+<div class="code"><pre><code class="py">import argparse, sys
+
+def build():
+    p = argparse.ArgumentParser(prog=&quot;sync-index&quot;)
+    p.add_argument(&quot;--full&quot;, action=&quot;store_true&quot;)
+    p.add_argument(&quot;source&quot;, nargs=&quot;?&quot;, default=&quot;docs/&quot;)
+    return p
+
+saved = sys.argv
+try:
+    sys.argv = [&quot;sync-index&quot;, &quot;--full&quot;, &quot;kb/&quot;]
+    a = build().parse_args()
+    b = build().parse_args([])
+    c = build().parse_args(None)
+finally:
+    sys.argv = saved
+print((a.full, a.source), (b.full, b.source), (c.full, c.source), build().prog)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>parse_args()</code> and <code>parse_args(None)</code> read <code>sys.argv[1:]</code>; an explicit empty list means no arguments at all.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(True, &#x27;kb/&#x27;) (False, &#x27;docs/&#x27;) (True, &#x27;kb/&#x27;) sync-index</pre></div><p>With no argument (or <code>None</code>), <code>parse_args</code> reads <code>sys.argv[1:]</code>, so <code>a</code> and <code>c</code> both see <code>--full kb/</code>. Passing <code>[]</code> explicitly parses an empty command line, so <code>b</code> gets the defaults; <code>nargs="?"</code> makes the positional optional with its default. This is why <code>main(argv=None)</code> works both as an entry point (called with nothing, it reads the real command line) and in tests (called with an explicit list, it ignores the real one).</p></div></details>
+</article>
+<article class="prob" id="p-review-a-dependency-change" data-pid="m15-p-review-a-dependency-change" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Review a dependency change</h3></header>
+<div class="prob-q"><p>Write <code>requirements_diff(old, new)</code> comparing two lists of requirement strings by canonical name and returning <code>{"added": [...], "removed": [...], "changed": [...]}</code>, each sorted, where <code>changed</code> holds strings <code>f"{name}: {old_spec} -&gt; {new_spec}"</code> for projects whose specifier, extras or marker changed (show the specifier, or <code>"(any)"</code> when empty, followed by <code>[extras]</code> when present).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+def requirements_diff(old, new):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">old = ["httpx>=0.27,<1", "pydantic~=2.7", "numpy", "openai>=1.30", "rich"]
+new = ["HTTPX>=0.27,<1", "pydantic>=2.9,<3", "numpy>=2", "openai[datalib]>=1.30", "tiktoken==0.7.*"]
+assert requirements_diff(old, new) == {
+    "added": ["tiktoken"],
+    "removed": ["rich"],
+    "changed": ["numpy: (any) -> >=2", "openai: >=1.30 -> >=1.30[datalib]", "pydantic: ~=2.7 -> <3,>=2.9"],
+}
+assert requirements_diff(old, old) == {"added": [], "removed": [], "changed": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">old = [&quot;httpx&gt;=0.27,&lt;1&quot;, &quot;pydantic~=2.7&quot;, &quot;numpy&quot;, &quot;openai&gt;=1.30&quot;, &quot;rich&quot;]
+new = [&quot;HTTPX&gt;=0.27,&lt;1&quot;, &quot;pydantic&gt;=2.9,&lt;3&quot;, &quot;numpy&gt;=2&quot;, &quot;openai[datalib]&gt;=1.30&quot;, &quot;tiktoken==0.7.*&quot;]
+assert requirements_diff(old, new) == {
+    &quot;added&quot;: [&quot;tiktoken&quot;],
+    &quot;removed&quot;: [&quot;rich&quot;],
+    &quot;changed&quot;: [&quot;numpy: (any) -&gt; &gt;=2&quot;, &quot;openai: &gt;=1.30 -&gt; &gt;=1.30[datalib]&quot;, &quot;pydantic: ~=2.7 -&gt; &lt;3,&gt;=2.9&quot;],
+}
+assert requirements_diff(old, old) == {&quot;added&quot;: [], &quot;removed&quot;: [], &quot;changed&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Parse both lists into dicts <code>canonical name -&gt; Requirement</code>; compare <code>(str(r.specifier), sorted(r.extras), str(r.marker))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small helper <code>describe(req)</code> builds <code>"&lt;spec or (any)&gt;[extras]"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+
+def _parse(lines):
+    return {canonicalize_name(r.name): r for r in map(Requirement, lines)}
+
+
+def _key(req):
+    return (str(req.specifier), sorted(req.extras), str(req.marker) if req.marker else &quot;&quot;)
+
+
+def _describe(req):
+    spec = str(req.specifier) or &quot;(any)&quot;
+    extras = f&quot;[{&#x27;,&#x27;.join(sorted(req.extras))}]&quot; if req.extras else &quot;&quot;
+    return spec + extras
+
+
+def requirements_diff(old, new):
+    a, b = _parse(old), _parse(new)
+    changed = [f&quot;{n}: {_describe(a[n])} -&gt; {_describe(b[n])}&quot; for n in sorted(a.keys() &amp; b.keys()) if _key(a[n]) != _key(b[n])]
+    return {&quot;added&quot;: sorted(b.keys() - a.keys()), &quot;removed&quot;: sorted(a.keys() - b.keys()), &quot;changed&quot;: changed}</code></pre></div><p>Dependency changes deserve review like code changes, and a semantic diff is far easier to read than a text diff: renaming <code>httpx</code> to <code>HTTPX</code> is not a change at all, while widening <code>pydantic</code> from <code>~=2.7</code> to <code>&lt;3,&gt;=2.9</code> or adding an extra to <code>openai</code> pulls in different code. Comparing parsed specifiers, extras and markers catches exactly those, and canonical names prevent false "removed and added" pairs. A CI job can post this summary on every pull request that touches <code>pyproject.toml</code>.</p></div></details>
+</article>
+<article class="prob" id="p-validate-the-scripts-table" data-pid="m15-p-validate-the-scripts-table" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Validate the scripts table</h3></header>
+<div class="prob-q"><p>Write <code>validate_scripts(pyproject_text)</code> returning a sorted list of problems in <code>[project.scripts]</code>: <code>"NAME: target must look like module:function"</code> when there is no single <code>:</code> with text on both sides, <code>"NAME: module MODULE not found"</code> when <code>importlib.util.find_spec</code> finds nothing (without importing it), and nothing otherwise. An absent table means no problems.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import importlib.util, tomllib
+
+def validate_scripts(pyproject_text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree
+make_tree({"evaltool_w6/__init__.py": "", "evaltool_w6/cli.py": "def main(argv=None):\n    return 0"})
+text = '''
+[project]
+name = "evaltool"
+version = "0.1.0"
+[project.scripts]
+evaltool = "evaltool_w6.cli:main"
+broken = "evaltool_w6.cli.main"
+typo = "evaltool_w6.clii:main"
+empty = "evaltool_w6.cli:"
+'''
+assert validate_scripts(text) == ["broken: target must look like module:function", "empty: target must look like module:function",
+                                  "typo: module evaltool_w6.clii not found"]
+assert validate_scripts("[project]\nname = 'x'\nversion = '1'") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree
+make_tree({&quot;evaltool_w6/__init__.py&quot;: &quot;&quot;, &quot;evaltool_w6/cli.py&quot;: &quot;def main(argv=None):\n    return 0&quot;})
+text = &#x27;&#x27;&#x27;
+[project]
+name = &quot;evaltool&quot;
+version = &quot;0.1.0&quot;
+[project.scripts]
+evaltool = &quot;evaltool_w6.cli:main&quot;
+broken = &quot;evaltool_w6.cli.main&quot;
+typo = &quot;evaltool_w6.clii:main&quot;
+empty = &quot;evaltool_w6.cli:&quot;
+&#x27;&#x27;&#x27;
+assert validate_scripts(text) == [&quot;broken: target must look like module:function&quot;, &quot;empty: target must look like module:function&quot;,
+                                  &quot;typo: module evaltool_w6.clii not found&quot;]
+assert validate_scripts(&quot;[project]\nname = &#x27;x&#x27;\nversion = &#x27;1&#x27;&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>module, sep, func = target.partition(":")</code>; reject when <code>not sep or not module or not func or ":" in func</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>importlib.util.find_spec(module)</code> returns <code>None</code> for a missing module; it raises <code>ModuleNotFoundError</code> when a parent package is missing, so catch that too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib.util, tomllib
+
+
+def validate_scripts(pyproject_text):
+    scripts = tomllib.loads(pyproject_text).get(&quot;project&quot;, {}).get(&quot;scripts&quot;, {})
+    problems = []
+    for name, target in scripts.items():
+        module, sep, func = target.partition(&quot;:&quot;)
+        if not sep or not module or not func or &quot;:&quot; in func:
+            problems.append(f&quot;{name}: target must look like module:function&quot;)
+            continue
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except ModuleNotFoundError:
+            found = False
+        if not found:
+            problems.append(f&quot;{name}: module {module} not found&quot;)
+    return sorted(problems)</code></pre></div><p>A wrong entry point is only discovered when someone installs the package and types the command, typically in production; validating <code>[project.scripts]</code> in CI catches it at the pull request. The format check rejects the classic dotted-path mistake (<code>cli.main</code> instead of <code>cli:main</code>), and <code>find_spec</code> confirms the module exists <strong>without importing it</strong>, so the check has no side effects (15.1). A fuller check would import the module in a clean environment and confirm the function exists and is callable.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-release-helper" data-pid="m15-p-read-the-code-a-release-helper" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Read the code: a release helper</h3></header>
+<div class="prob-q"><p><code>release_check</code> gates a model-serving release: the requested <code>version</code> must be newer than every published version, and each required package must be installed at a satisfying version. It compares versions as strings, considers <code>2.0.0rc1</code> newer than <code>2.0.0</code>, matches package names exactly, and returns <code>True</code>/<code>False</code> without saying why. Rewrite it to return a sorted list of problems (empty means go): <code>"version V is not newer than LATEST"</code>, <code>"missing: NAME"</code>, <code>"NAME VERSION does not satisfy SPEC"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def release_check(version, published, required, installed):
+    if version &lt;= max(published):
+        return False
+    for line in required:
+        name, _, spec = line.partition(&quot;&gt;=&quot;)
+        if name not in installed or installed[name] &lt; spec:
+            return False
+    return True
+</textarea>
+<script type="text/plain" class="prob-tests">published = ["1.9.0", "1.10.0", "2.0.0rc1"]
+required = ["torch>=2.3", "transformers[torch]>=4.40", "fastapi>=0.110"]
+installed = {"Torch": "2.10.0", "transformers": "4.9.0"}
+problems = release_check("1.10.1", published, required, installed)
+assert problems == ["missing: fastapi", "transformers 4.9.0 does not satisfy >=4.40", "version 1.10.1 is not newer than 2.0.0rc1"]
+assert release_check("2.0.0", published, required, {**installed, "transformers": "4.44.0", "fastapi": "0.115.0"}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">published = [&quot;1.9.0&quot;, &quot;1.10.0&quot;, &quot;2.0.0rc1&quot;]
+required = [&quot;torch&gt;=2.3&quot;, &quot;transformers[torch]&gt;=4.40&quot;, &quot;fastapi&gt;=0.110&quot;]
+installed = {&quot;Torch&quot;: &quot;2.10.0&quot;, &quot;transformers&quot;: &quot;4.9.0&quot;}
+problems = release_check(&quot;1.10.1&quot;, published, required, installed)
+assert problems == [&quot;missing: fastapi&quot;, &quot;transformers 4.9.0 does not satisfy &gt;=4.40&quot;, &quot;version 1.10.1 is not newer than 2.0.0rc1&quot;]
+assert release_check(&quot;2.0.0&quot;, published, required, {**installed, &quot;transformers&quot;: &quot;4.44.0&quot;, &quot;fastapi&quot;: &quot;0.115.0&quot;}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare with <code>packaging.version.Version</code>: <code>max(published, key=Version)</code>; <code>Version("2.0.0") &gt; Version("2.0.0rc1")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Canonicalise installed names; parse each requirement with <code>Requirement</code> and test <code>req.specifier.contains(Version(v), prereleases=True)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+
+def release_check(version, published, required, installed):
+    problems = []
+    latest = max(published, key=Version) if published else None
+    if latest is not None and Version(version) &lt;= Version(latest):
+        problems.append(f&quot;version {version} is not newer than {latest}&quot;)
+    have = {canonicalize_name(k): v for k, v in installed.items()}
+    for line in required:
+        req = Requirement(line)
+        name = canonicalize_name(req.name)
+        if name not in have:
+            problems.append(f&quot;missing: {name}&quot;)
+        elif not req.specifier.contains(Version(have[name]), prereleases=True):
+            problems.append(f&quot;{name} {have[name]} does not satisfy {req.specifier}&quot;)
+    return sorted(problems)</code></pre></div><p>String comparison got every version question wrong: <code>"1.10.0"</code> sorts below <code>"1.9.0"</code>, <code>"2.10.0"</code> below <code>"2.3"</code>, and <code>"2.0.0rc1"</code> above <code>"2.0.0"</code>, so the gate could approve a version that goes backwards and reject a valid environment. <code>Version</code> compares by PEP 440, where a release candidate precedes its final release, so <code>2.0.0</code> is a valid release after <code>2.0.0rc1</code>. Package names need canonicalising (<code>Torch</code> is <code>torch</code>), requirements need the real parser (extras broke <code>partition</code>), and a gate should say <strong>why</strong> it fails, listing every problem at once, so the release engineer can fix them in one pass.</p></div></details>
+</article>
+<article class="prob" id="p-you-install-your-package-and-mytool-runs" data-pid="m15-p-you-install-your-package-and-mytool-runs" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>8. You install your package and <code>mytool</code> runs an old version of your code. What could be going on?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Usually more than one copy of the code or the interpreter is in play. The <code>mytool</code> on <code>PATH</code> may belong to another environment (a global install, a previous virtual environment, <code>pipx</code>); check <code>which mytool</code> (or <code>where</code> on Windows) and the shebang inside it. The package may be installed <strong>non-editable</strong> in the environment, so a wheel copy in <code>site-packages</code> is used instead of your working tree (<code>pip install -e .</code> or <code>uv sync</code> fixes it); <code>python -c "import mytool; print(mytool.__file__)"</code> shows which copy is imported. Stale build artefacts (<code>build/</code>, an old wheel, <code>.egg-info</code>) or a cached <code>__pycache__</code> from a moved file can confuse things, and a local folder or file with the same name can shadow the installed package. Finally, the entry point may point at an old module path. Printing <code>sys.executable</code>, <code>sys.path</code> and <code>module.__file__</code> settles it quickly.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-structure-a-python-project" data-pid="m15-p-how-would-you-structure-a-python-project" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>9. How would you structure a Python project that ships both a library and a command-line tool?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use a <code>src/</code> layout with one importable package (<code>src/mytool/</code>): pure, well-tested library modules for the domain logic, and a thin <code>cli.py</code> that only parses arguments (argparse, Click or Typer), reads configuration with clear precedence, calls library functions, writes results to standard output and diagnostics to standard error, and returns exit codes from <code>main(argv) -&gt; int</code>. Declare everything in <code>pyproject.toml</code>: metadata, <code>requires-python</code>, runtime dependencies with ranges (it is a library), heavy optional features as extras (<code>mytool[pdf]</code>), development tools in dependency groups, and <code>[project.scripts] mytool = "mytool.cli:main"</code>; add <code>__main__.py</code> so <code>python -m mytool</code> works too. Keep import-time side effects out of the package. Test the library directly, the CLI through <code>main([...])</code> with captured streams, and the installed entry point with a few subprocess tests; lock development environments with <code>uv.lock</code>, test against the minimum and latest supported dependency versions in CI, and publish wheels from CI with versions bumped deliberately.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: an evaluation command-line tool</h2>
+<p>Teams evaluate prompts and models from the command line and from CI. Build <code>evalctl</code>, a small tool with three subcommands: <code>run</code> scores model answers read as JSON Lines, using a scorer plugin chosen by name; <code>summary</code> aggregates result lines; <code>check-env</code> checks installed package versions against requirements. It must behave well in pipes and schedulers: data on standard output, diagnostics on standard error, and meaningful exit codes.</p>
+<article class="prob" id="p-evalctl" data-pid="m15-p-evalctl" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>10. Build the evalctl command</h3></header>
+<div class="prob-q"><p>Implement <code>main(argv=None, *, stdin=None, stdout=None, stderr=None, env=None, installed=None)</code>.</p>
+<ul><li><strong><code>run [--scorer MODULE:FUNC] [--threshold T]</code></strong>: read JSONL lines <code>{"id", "answer", "expected"}</code> from stdin; load the scorer with <code>importlib</code> (15.1), default <code>"evalctl_scorers.exact:score"</code>; write one JSONL line per case to stdout, <code>{"id", "score", "passed"}</code> with <code>passed = score &gt;= threshold</code>. The threshold comes from <code>--threshold</code>, else the <code>EVAL_THRESHOLD</code> environment variable in <code>env</code>, else 0.5 (15.3 precedence). Invalid JSON lines are reported on stderr as <code>f"line {n}: invalid JSON"</code>; exit code 1 if any line was invalid, else 0. A scorer target that cannot be loaded prints <code>f"error: cannot load scorer {target}"</code> to stderr and returns 2.</li><li><strong><code>summary</code></strong>: read result lines from stdin and print <code>f"cases={n} passed={p} rate={p / n:.2f}"</code> (rate 0.00 when empty); exit 0.</li><li><strong><code>check-env REQUIREMENT...</code></strong>: compare with <code>installed</code> (a dict of names to versions; canonicalise names, 15.2); print one line per problem to stderr, sorted (<code>f"missing: {name}"</code> or <code>f"{name} {version} does not satisfy {spec}"</code>), print <code>"ok"</code> to stdout when there is none; exit 0 if fine, else 1.</li></ul>
+<p>Streams default to the <code>sys</code> ones and <code>env</code> to <code>os.environ</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import argparse, importlib, json, os, sys
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+
+def main(argv=None, *, stdin=None, stdout=None, stderr=None, env=None, installed=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, json
+from lessontools import make_tree, forget
+forget("evalctl_scorers")
+make_tree({
+    "evalctl_scorers/__init__.py": "",
+    "evalctl_scorers/exact.py": '''
+    def score(answer, expected):
+        return float(answer.strip().lower() == expected.strip().lower())
+    ''',
+    "evalctl_scorers/overlap.py": '''
+    def score(answer, expected):
+        words = expected.lower().split()
+        have = set(answer.lower().split())
+        return round(sum(w in have for w in words) / len(words), 3) if words else 0.0
+    ''',
+})
+def call(argv, data="", env=None, installed=None):
+    out, err = io.StringIO(), io.StringIO()
+    code = main(argv, stdin=io.StringIO(data), stdout=out, stderr=err, env=env or {}, installed=installed or {})
+    return code, out.getvalue(), err.getvalue()
+
+cases = '{"id": 1, "answer": "Five days", "expected": "five days"}\nnot json\n{"id": 2, "answer": "Refunds take five business days", "expected": "five days to refund"}\n'
+code, out, err = call(["run"], cases)
+assert code == 1 and err == "line 2: invalid JSON\n"
+assert [json.loads(l) for l in out.splitlines()] == [{"id": 1, "score": 1.0, "passed": True}, {"id": 2, "score": 0.0, "passed": False}]
+code, out, err = call(["run", "--scorer", "evalctl_scorers.overlap:score"], cases, env={"EVAL_THRESHOLD": "0.5"})
+assert [json.loads(l)["passed"] for l in out.splitlines()] == [True, True] and json.loads(out.splitlines()[1])["score"] == 0.5
+code, out, err = call(["run", "--scorer", "evalctl_scorers.overlap:score", "--threshold", "0.9"], cases, env={"EVAL_THRESHOLD": "0.1"})
+assert [json.loads(l)["passed"] for l in out.splitlines()] == [True, False]
+assert call(["run", "--scorer", "evalctl_scorers.bleu:score"], cases) == (2, "", "error: cannot load scorer evalctl_scorers.bleu:score\n")
+
+results = '{"id": 1, "score": 1.0, "passed": true}\n{"id": 2, "score": 0.0, "passed": false}\n{"id": 3, "score": 0.8, "passed": true}\n'
+assert call(["summary"], results) == (0, "cases=3 passed=2 rate=0.67\n", "")
+assert call(["summary"], "") == (0, "cases=0 passed=0 rate=0.00\n", "")
+
+installed = {"Pydantic": "2.9.2", "numpy": "1.9.0"}
+assert call(["check-env", "pydantic~=2.7", "numpy>=1.26", "httpx"], installed=installed) == (1, "", "missing: httpx\nnumpy 1.9.0 does not satisfy >=1.26\n")
+assert call(["check-env", "pydantic>=2"], installed=installed) == (0, "ok\n", "")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 9 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, json
+from lessontools import make_tree, forget
+forget(&quot;evalctl_scorers&quot;)
+make_tree({
+    &quot;evalctl_scorers/__init__.py&quot;: &quot;&quot;,
+    &quot;evalctl_scorers/exact.py&quot;: &#x27;&#x27;&#x27;
+    def score(answer, expected):
+        return float(answer.strip().lower() == expected.strip().lower())
+    &#x27;&#x27;&#x27;,
+    &quot;evalctl_scorers/overlap.py&quot;: &#x27;&#x27;&#x27;
+    def score(answer, expected):
+        words = expected.lower().split()
+        have = set(answer.lower().split())
+        return round(sum(w in have for w in words) / len(words), 3) if words else 0.0
+    &#x27;&#x27;&#x27;,
+})
+def call(argv, data=&quot;&quot;, env=None, installed=None):
+    out, err = io.StringIO(), io.StringIO()
+    code = main(argv, stdin=io.StringIO(data), stdout=out, stderr=err, env=env or {}, installed=installed or {})
+    return code, out.getvalue(), err.getvalue()
+
+cases = &#x27;{&quot;id&quot;: 1, &quot;answer&quot;: &quot;Five days&quot;, &quot;expected&quot;: &quot;five days&quot;}\nnot json\n{&quot;id&quot;: 2, &quot;answer&quot;: &quot;Refunds take five business days&quot;, &quot;expected&quot;: &quot;five days to refund&quot;}\n&#x27;
+code, out, err = call([&quot;run&quot;], cases)
+assert code == 1 and err == &quot;line 2: invalid JSON\n&quot;
+assert [json.loads(l) for l in out.splitlines()] == [{&quot;id&quot;: 1, &quot;score&quot;: 1.0, &quot;passed&quot;: True}, {&quot;id&quot;: 2, &quot;score&quot;: 0.0, &quot;passed&quot;: False}]
+code, out, err = call([&quot;run&quot;, &quot;--scorer&quot;, &quot;evalctl_scorers.overlap:score&quot;], cases, env={&quot;EVAL_THRESHOLD&quot;: &quot;0.5&quot;})
+assert [json.loads(l)[&quot;passed&quot;] for l in out.splitlines()] == [True, True] and json.loads(out.splitlines()[1])[&quot;score&quot;] == 0.5
+code, out, err = call([&quot;run&quot;, &quot;--scorer&quot;, &quot;evalctl_scorers.overlap:score&quot;, &quot;--threshold&quot;, &quot;0.9&quot;], cases, env={&quot;EVAL_THRESHOLD&quot;: &quot;0.1&quot;})
+assert [json.loads(l)[&quot;passed&quot;] for l in out.splitlines()] == [True, False]
+assert call([&quot;run&quot;, &quot;--scorer&quot;, &quot;evalctl_scorers.bleu:score&quot;], cases) == (2, &quot;&quot;, &quot;error: cannot load scorer evalctl_scorers.bleu:score\n&quot;)
+
+results = &#x27;{&quot;id&quot;: 1, &quot;score&quot;: 1.0, &quot;passed&quot;: true}\n{&quot;id&quot;: 2, &quot;score&quot;: 0.0, &quot;passed&quot;: false}\n{&quot;id&quot;: 3, &quot;score&quot;: 0.8, &quot;passed&quot;: true}\n&#x27;
+assert call([&quot;summary&quot;], results) == (0, &quot;cases=3 passed=2 rate=0.67\n&quot;, &quot;&quot;)
+assert call([&quot;summary&quot;], &quot;&quot;) == (0, &quot;cases=0 passed=0 rate=0.00\n&quot;, &quot;&quot;)
+
+installed = {&quot;Pydantic&quot;: &quot;2.9.2&quot;, &quot;numpy&quot;: &quot;1.9.0&quot;}
+assert call([&quot;check-env&quot;, &quot;pydantic~=2.7&quot;, &quot;numpy&gt;=1.26&quot;, &quot;httpx&quot;], installed=installed) == (1, &quot;&quot;, &quot;missing: httpx\nnumpy 1.9.0 does not satisfy &gt;=1.26\n&quot;)
+assert call([&quot;check-env&quot;, &quot;pydantic&gt;=2&quot;], installed=installed) == (0, &quot;ok\n&quot;, &quot;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Subparsers with <code>set_defaults(func=...)</code>; each handler takes <code>(args, io)</code> where <code>io</code> holds the streams, the env and <code>installed</code>, and returns an exit code.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Threshold precedence: <code>args.threshold if args.threshold is not None else float(env.get("EVAL_THRESHOLD", 0.5))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Load the scorer like 15.1's <code>load_tool</code>; catch <code>ImportError</code>, <code>AttributeError</code> and <code>ValueError</code> and return 2 with the error message.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import argparse, importlib, json, os, sys
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import Version
+
+DEFAULT_SCORER = &quot;evalctl_scorers.exact:score&quot;
+
+
+def _load(target):
+    module_name, sep, attr = target.partition(&quot;:&quot;)
+    if not sep:
+        raise ValueError(target)
+    fn = getattr(importlib.import_module(module_name), attr)
+    if not callable(fn):
+        raise ValueError(target)
+    return fn
+
+
+def _run(args, io):
+    try:
+        scorer = _load(args.scorer)
+    except (ImportError, AttributeError, ValueError):
+        print(f&quot;error: cannot load scorer {args.scorer}&quot;, file=io[&quot;stderr&quot;])
+        return 2
+    threshold = args.threshold if args.threshold is not None else float(io[&quot;env&quot;].get(&quot;EVAL_THRESHOLD&quot;, 0.5))
+    bad = False
+    for n, line in enumerate(io[&quot;stdin&quot;], start=1):
+        if not line.strip():
+            continue
+        try:
+            case = json.loads(line)
+        except json.JSONDecodeError:
+            print(f&quot;line {n}: invalid JSON&quot;, file=io[&quot;stderr&quot;])
+            bad = True
+            continue
+        score = scorer(case[&quot;answer&quot;], case[&quot;expected&quot;])
+        io[&quot;stdout&quot;].write(json.dumps({&quot;id&quot;: case[&quot;id&quot;], &quot;score&quot;: score, &quot;passed&quot;: score &gt;= threshold}) + &quot;\n&quot;)
+    return 1 if bad else 0
+
+
+def _summary(args, io):
+    n = passed = 0
+    for line in io[&quot;stdin&quot;]:
+        if line.strip():
+            n += 1
+            passed += bool(json.loads(line)[&quot;passed&quot;])
+    rate = passed / n if n else 0.0
+    print(f&quot;cases={n} passed={passed} rate={rate:.2f}&quot;, file=io[&quot;stdout&quot;])
+    return 0
+
+
+def _check_env(args, io):
+    have = {canonicalize_name(k): v for k, v in io[&quot;installed&quot;].items()}
+    problems = []
+    for line in args.requirements:
+        req = Requirement(line)
+        name = canonicalize_name(req.name)
+        if name not in have:
+            problems.append(f&quot;missing: {name}&quot;)
+        elif not req.specifier.contains(Version(have[name]), prereleases=True):
+            problems.append(f&quot;{name} {have[name]} does not satisfy {req.specifier}&quot;)
+    for p in sorted(problems):
+        print(p, file=io[&quot;stderr&quot;])
+    if not problems:
+        print(&quot;ok&quot;, file=io[&quot;stdout&quot;])
+    return 1 if problems else 0
+
+
+def main(argv=None, *, stdin=None, stdout=None, stderr=None, env=None, installed=None):
+    io = {&quot;stdin&quot;: stdin or sys.stdin, &quot;stdout&quot;: stdout or sys.stdout, &quot;stderr&quot;: stderr or sys.stderr,
+          &quot;env&quot;: os.environ if env is None else env, &quot;installed&quot;: installed or {}}
+    parser = argparse.ArgumentParser(prog=&quot;evalctl&quot;)
+    sub = parser.add_subparsers(dest=&quot;command&quot;, required=True)
+    run = sub.add_parser(&quot;run&quot;, help=&quot;score answers read from stdin&quot;)
+    run.add_argument(&quot;--scorer&quot;, default=DEFAULT_SCORER)
+    run.add_argument(&quot;--threshold&quot;, type=float, default=None)
+    run.set_defaults(func=_run)
+    summary = sub.add_parser(&quot;summary&quot;, help=&quot;aggregate result lines&quot;)
+    summary.set_defaults(func=_summary)
+    check = sub.add_parser(&quot;check-env&quot;, help=&quot;check installed versions&quot;)
+    check.add_argument(&quot;requirements&quot;, nargs=&quot;+&quot;)
+    check.set_defaults(func=_check_env)
+    args = parser.parse_args(argv)
+    return args.func(args, io)</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Imports (15.1):</strong> the scorer is a plugin named by a <code>module:function</code> string and loaded with <code>importlib.import_module</code>, so new scorers are added by writing a module, not by editing the tool; a target that cannot be loaded is a usage problem, exit code 2.</li><li><strong>Dependencies (15.2):</strong> <code>check-env</code> uses <code>packaging</code>'s <code>Requirement</code>, <code>canonicalize_name</code> and <code>Version</code>, so names like <code>Pydantic</code> and versions like <code>1.9.0</code> versus <code>&gt;=1.26</code> are judged correctly.</li><li><strong>The CLI (15.3):</strong> subcommands dispatch through <code>set_defaults(func=...)</code>, the threshold follows the precedence default &lt; environment &lt; flag, results go to standard output as JSON Lines so <code>evalctl run &lt; cases.jsonl | evalctl summary</code> works, problems go to standard error, and the exit code tells CI whether to fail the build.</li></ul>
+<p>Injecting the streams, the environment and the installed-package map makes the whole tool testable without subprocesses; in a real package, <code>installed</code> would come from <code>importlib.metadata</code>, <code>main</code> would be registered as <code>[project.scripts] evalctl = "evalctl.cli:main"</code>, and <code>python -m evalctl</code> would call it from <code>__main__.py</code>.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>python -m pkg</code> imports the package and runs <code>pkg/__main__.py</code> as <code>__main__</code> with <code>__package__</code> set, so relative imports work.</li><li>Load plugins with <code>importlib.import_module</code>, and translate <code>ModuleNotFoundError</code> only when the missing module is the plugin itself.</li><li>Treat versions and requirements as data: <code>Version</code>, <code>Requirement</code>, <code>canonicalize_name</code>; diff and validate them in CI.</li><li><code>parse_args(None)</code> reads <code>sys.argv</code>; <code>main(argv=None) -&gt; int</code> serves both entry points and tests.</li><li>A good tool keeps data on stdout, diagnostics on stderr, and tells schedulers the truth with its exit code.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

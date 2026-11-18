@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>15.1 · Imports and modules</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m15-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 15 · Modules and packaging</span></div>
+  <h1>15.1 Imports and modules</h1>
+  <p>Every Python project is a tree of modules, and many confusing errors (ModuleNotFoundError, circular imports, a patch that does nothing, a local file shadowing a library) come from not knowing what <code>import</code> actually does. Module objects and <code>sys.modules</code>, the search path, packages and relative imports, <code>__name__</code> and <code>python -m</code>, circular imports and how to break them, import-time side effects, <code>__all__</code>, and dynamic imports for plugins. Problems build real package folders with <code>lessontools.make_tree</code>, which writes files and puts their folder on <code>sys.path</code>.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 8 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What <code>import</code> does</h2>
+<p><code>import shop</code> does three things. It looks in <strong><code>sys.modules</code></strong>, a dict of every module already imported, and if <code>shop</code> is there, simply binds the name. Otherwise it <strong>finds</strong> the module by searching the folders in <strong><code>sys.path</code></strong> in order (the folder of the script you ran, or the current folder for <code>python -m</code> and the REPL, then the <code>PYTHONPATH</code> entries, then the standard library and <code>site-packages</code>). Then it <strong>executes</strong> the module's code from top to bottom in a fresh namespace, stores the module object in <code>sys.modules</code> <strong>before</strong> running it, and binds the name. So a module's top-level code runs <strong>once per process</strong>, however many files import it, and every importer shares the same module object.</p>
+<p><code>from shop import price</code> imports <code>shop</code> the same way and then binds the name <code>price</code> in the importing module to the object <code>shop.price</code> refers to <strong>at that moment</strong>. If <code>shop</code> later rebinds <code>price</code>, the importer still holds the old object, which is why patching must happen where a name is looked up (13.3), and why <code>import shop</code> then <code>shop.price(...)</code> sees updates. <code>import shop.cart as cart</code> binds a short name; <code>from shop import *</code> imports the names listed in <code>shop.__all__</code>, or all public names if it is not defined.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">import_once.py</span><button class="copy">Copy</button></div><pre><code class="py">import sys
+from lessontools import make_tree, forget
+
+make_tree({&quot;pricing_demo.py&quot;: &#x27;&#x27;&#x27;
+print(&quot;  running pricing_demo top-level code&quot;)
+TAX = 0.2
+
+def price(net):
+    return round(net * (1 + TAX), 2)
+&#x27;&#x27;&#x27;})
+print(&quot;before:&quot;, &quot;pricing_demo&quot; in sys.modules)
+import pricing_demo
+import pricing_demo as again
+from pricing_demo import price, TAX
+print(again is pricing_demo is sys.modules[&quot;pricing_demo&quot;], price(10))
+pricing_demo.TAX = 0.1
+print(pricing_demo.price(10), TAX)
+forget(&quot;pricing_demo&quot;)
+import pricing_demo
+print(pricing_demo.TAX, pricing_demo is again)</code></pre><div class="out"><span class="ol">Output</span><pre>before: False
+  running pricing_demo top-level code
+True 12.0
+11.0 0.2
+  running pricing_demo top-level code
+0.2 False</pre></div></div>
+<p>The top-level code ran once for three import statements; all names refer to the same module object. Changing <code>TAX</code> on the module changed <code>price</code>'s result, because <code>price</code> reads the module global at call time, while the copied name <code>TAX</code> kept the old value. Removing the entry from <code>sys.modules</code> (what <code>forget</code> does) makes the next import run the file again and create a <strong>new</strong> module object; <code>importlib.reload(module)</code> re-runs the code into the existing object instead.</p>
+</section>
+<section class="sec" id="packages">
+<h2><span class="n">2</span>Packages and relative imports</h2>
+<p>A <strong>package</strong> is a folder of modules. With an <code>__init__.py</code> file it is a regular package: importing <code>shop</code> runs <code>shop/__init__.py</code>, and <code>import shop.cart</code> imports <code>shop</code> first and then <code>shop/cart.py</code> as <code>shop.cart</code>. <code>__init__.py</code> is often empty, or re-exports the package's public API (<code>from .cart import Cart</code>) so users can write <code>from shop import Cart</code>. Folders <strong>without</strong> <code>__init__.py</code> can still be imported as <strong>namespace packages</strong>, which exist so that several distributions can share one package name; for your own code, add <code>__init__.py</code> to avoid surprises.</p>
+<p>Inside a package, modules refer to each other with <strong>absolute</strong> imports (<code>from shop.cart import Cart</code>) or <strong>relative</strong> ones (<code>from .cart import Cart</code>, <code>from ..utils import slugify</code>), where dots count package levels from the current module. Relative imports only work in modules that are part of a package, so running a package module as a script (<code>python shop/cart.py</code>) breaks them: the file runs as <code>__main__</code> with no parent package. Run it as <strong><code>python -m shop.cart</code></strong> instead, which imports the package properly and runs the module as <code>__main__</code>. A project's code usually lives in a <code>src/</code> folder with the package inside (<code>src/shop/...</code>), and is installed in development mode (15.2) so <code>import shop</code> works from anywhere, including tests.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">packages.py</span><button class="copy">Copy</button></div><pre><code class="py">from lessontools import make_tree
+
+make_tree({
+    &quot;shopkit/__init__.py&quot;: &#x27;&#x27;&#x27;
+        from .cart import Cart
+        __all__ = [&quot;Cart&quot;]
+        print(&quot;  shopkit/__init__ ran, __name__ =&quot;, __name__)
+    &#x27;&#x27;&#x27;,
+    &quot;shopkit/cart.py&quot;: &#x27;&#x27;&#x27;
+        from .pricing import total
+        class Cart:
+            def __init__(self):
+                self.items = []
+            def add(self, net):
+                self.items.append(net)
+            def total(self):
+                return total(self.items)
+    &#x27;&#x27;&#x27;,
+    &quot;shopkit/pricing.py&quot;: &#x27;&#x27;&#x27;
+        def total(nets, tax=0.2):
+            return round(sum(nets) * (1 + tax), 2)
+    &#x27;&#x27;&#x27;,
+})
+from shopkit import Cart
+import shopkit.pricing
+c = Cart()
+c.add(10)
+c.add(5)
+print(c.total(), shopkit.pricing.__name__, shopkit.cart.__package__, sorted(m for m in __import__(&quot;sys&quot;).modules if m.startswith(&quot;shopkit&quot;)))</code></pre><div class="out"><span class="ol">Output</span><pre>  shopkit/__init__ ran, __name__ = shopkit
+18.0 shopkit.pricing shopkit [&#x27;shopkit&#x27;, &#x27;shopkit.cart&#x27;, &#x27;shopkit.pricing&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="main">
+<h2><span class="n">3</span><code>__name__</code> and running modules</h2>
+<p>Every module has <code>__name__</code>: its import name (<code>"shopkit.cart"</code>), except the module Python was asked to run, which is called <strong><code>"__main__"</code></strong>. The idiom <code>if __name__ == "__main__":</code> therefore separates code to run when the file is executed (a command-line entry point, a quick demo) from definitions that importers need, and it is essential for multiprocessing (14.3). Two related attributes: <code>__file__</code> is the path the module was loaded from, and <code>__package__</code> is the package used to resolve relative imports. A file run directly and the same file imported are <strong>two different module objects</strong> (<code>__main__</code> and <code>shopkit.cart</code>), each with its own globals, a classic source of "my singleton exists twice" bugs.</p>
+</section>
+<section class="sec" id="circular">
+<h2><span class="n">4</span>Circular imports</h2>
+<p>If <code>a</code> imports <code>b</code> and <code>b</code> imports <code>a</code>, importing <code>a</code> starts running <code>a</code>, which reaches <code>import b</code>, which starts running <code>b</code>, which reaches <code>import a</code>. Because <code>a</code> is already in <code>sys.modules</code> (it is put there before its code runs), Python hands <code>b</code> the <strong>partially initialised</strong> <code>a</code>, whose code stopped at the <code>import b</code> line. <code>import a</code> succeeds, but <code>from a import helper</code> fails with <code>ImportError: cannot import name 'helper' from partially initialized module 'a' (most likely due to a circular import)</code> if <code>helper</code> is defined below that line, and <code>a.helper</code> raises <code>AttributeError</code> if used at <code>b</code>'s top level.</p>
+<p>The fixes, from best to most tactical: <strong>restructure</strong> so the dependency goes one way (move the shared code both modules need into a third module that imports neither); depend on the <strong>module</strong> rather than the name (<code>import a</code> and use <code>a.helper</code> inside functions, which runs after both modules finished loading); move the import <strong>inside the function</strong> that needs it; or, for imports needed only by type hints, guard them with <code>if typing.TYPE_CHECKING:</code> (11.1). A circular import is usually a design smell: two modules that need each other's internals are really one module, or both need a third (problem 6).</p>
+</section>
+<section class="sec" id="side">
+<h2><span class="n">5</span>Import-time side effects and dynamic imports</h2>
+<p>Because importing runs a module's top-level code, anything slow or stateful there runs whenever anyone imports the module, including tests, linters, documentation tools and multiprocessing workers: connecting to a database, loading a 2 GB model, reading environment variables (12.4), configuring logging (12.3), or printing. Keep the top level to definitions and cheap constants; put setup in functions (<code>get_client()</code>, <code>load_model()</code>), called once, often cached with <code>functools.cache</code> (problem 12).</p>
+<p>Imports can also be computed at run time: <strong><code>importlib.import_module("plugins.csv_loader")</code></strong> imports a module by its name string, which is how plugin systems, framework settings (<code>"myapp.handlers.classify"</code>) and optional backends work. <code>pkgutil.iter_modules(package.__path__)</code> lists the modules in a package, so a registry can discover every plugin in a folder (problem 5). Importing a heavy optional dependency <strong>inside</strong> the function that uses it keeps start-up fast and lets the rest of the library work without it; catching <code>ImportError</code> there can give a helpful message such as "install the <code>pdf</code> extra" (problem 9). Packaging tools can also declare plugins as <strong>entry points</strong> (15.2), found with <code>importlib.metadata.entry_points(group=...)</code>.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-imports-run-once-and-share-one-object" data-pid="m15-1-imports-run-once-and-share-one-object" data-type="predict" data-level="easy" data-answer="loading counter_p1
+2 1 1
+True True">
+<header class="prob-head"><h3>1. Imports run once and share one object</h3></header>
+<div class="code"><pre><code class="py">import sys
+from lessontools import make_tree
+
+make_tree({
+    &quot;counter_p1.py&quot;: &#x27;&#x27;&#x27;
+    print(&quot;loading counter_p1&quot;)
+    count = 0
+    def bump():
+        global count
+        count += 1
+        return count
+    &#x27;&#x27;&#x27;,
+    &quot;user_a_p1.py&quot;: &#x27;&#x27;&#x27;
+    import counter_p1
+    counter_p1.bump()
+    &#x27;&#x27;&#x27;,
+    &quot;user_b_p1.py&quot;: &#x27;&#x27;&#x27;
+    from counter_p1 import bump, count
+    bump()
+    snapshot = count
+    &#x27;&#x27;&#x27;,
+})
+import user_a_p1
+import user_b_p1
+import counter_p1
+print(counter_p1.count, user_b_p1.snapshot, user_b_p1.count)
+print(&quot;user_a_p1&quot; in sys.modules, user_a_p1.counter_p1 is counter_p1)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The module code runs on the first import only. <code>from m import count</code> copies the current value of <code>count</code> into the importer.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>loading counter_p1
+2 1 1
+True True</pre></div><p><code>counter_p1</code> is loaded once, by the first importer, and both users share that one module object, so the two <code>bump()</code> calls increment the same counter to 2. But <code>user_b_p1</code> copied <code>count</code> when it imported it, while it was still 1 (after <code>user_a_p1</code>'s bump and before its own), and that copied name never changes, since <code>bump</code> rebinds the module's global, not the importer's. Module attributes are live; names imported with <code>from</code> are snapshots of references.</p></div></details>
+</article>
+<article class="prob" id="p-load-a-plugin-by-name" data-pid="m15-1-load-a-plugin-by-name" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Load a plugin by name</h3></header>
+<div class="prob-q"><p>Write <code>load_tool(dotted)</code> for an agent's tool registry: given <code>"package.module:function"</code>, import the module with <code>importlib.import_module</code>, get the function, and return it. Raise <code>ValueError</code> if the string has no <code>:</code>, <code>ModuleNotFoundError</code> (let it propagate) if the module does not exist, and <code>LookupError(f"{module} has no {name}")</code> if the attribute is missing or not callable.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import importlib
+
+def load_tool(dotted):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree
+make_tree({
+    "tools_w2/__init__.py": "",
+    "tools_w2/math_tools.py": '''
+    def add(a, b):
+        return a + b
+    PI = 3.14159
+    ''',
+})
+add = load_tool("tools_w2.math_tools:add")
+assert add(2, 3) == 5 and add.__module__ == "tools_w2.math_tools"
+assert load_tool("tools_w2.math_tools:add") is add
+for bad, err in [("tools_w2.math_tools", ValueError), ("tools_w2.math_tools:PI", LookupError), ("tools_w2.math_tools:sub", LookupError)]:
+    try:
+        load_tool(bad)
+        assert False, bad
+    except err:
+        pass
+try:
+    load_tool("tools_w2.nope:add")
+    assert False
+except ModuleNotFoundError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree
+make_tree({
+    &quot;tools_w2/__init__.py&quot;: &quot;&quot;,
+    &quot;tools_w2/math_tools.py&quot;: &#x27;&#x27;&#x27;
+    def add(a, b):
+        return a + b
+    PI = 3.14159
+    &#x27;&#x27;&#x27;,
+})
+add = load_tool(&quot;tools_w2.math_tools:add&quot;)
+assert add(2, 3) == 5 and add.__module__ == &quot;tools_w2.math_tools&quot;
+assert load_tool(&quot;tools_w2.math_tools:add&quot;) is add
+for bad, err in [(&quot;tools_w2.math_tools&quot;, ValueError), (&quot;tools_w2.math_tools:PI&quot;, LookupError), (&quot;tools_w2.math_tools:sub&quot;, LookupError)]:
+    try:
+        load_tool(bad)
+        assert False, bad
+    except err:
+        pass
+try:
+    load_tool(&quot;tools_w2.nope:add&quot;)
+    assert False
+except ModuleNotFoundError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>module_name, sep, attr = dotted.partition(":")</code>; if <code>sep</code> is empty, raise <code>ValueError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>getattr(module, attr, None)</code> and <code>callable(...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib
+
+
+def load_tool(dotted):
+    module_name, sep, attr = dotted.partition(&quot;:&quot;)
+    if not sep or not module_name or not attr:
+        raise ValueError(f&quot;expected &#x27;module:function&#x27;, got {dotted!r}&quot;)
+    module = importlib.import_module(module_name)
+    fn = getattr(module, attr, None)
+    if fn is None or not callable(fn):
+        raise LookupError(f&quot;{module_name} has no {attr}&quot;)
+    return fn</code></pre></div><p><code>"module:attribute"</code> strings are how configuration files refer to code: entry points in <code>pyproject.toml</code> (15.2), ASGI servers (<code>uvicorn app.main:app</code>), task queues and agent tool registries all use them. <code>import_module</code> performs a normal import from a string, so the module is cached in <code>sys.modules</code> and its own imports work as usual. Separate errors for "malformed string", "no such module" and "no such function" tell whoever wrote the configuration exactly what to fix.</p></div></details>
+</article>
+<article class="prob" id="p-a-package-module-with-an-implicit-relati" data-pid="m15-1-a-package-module-with-an-implicit-relati" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A package module with an implicit relative import</h3></header>
+<div class="prob-q"><p>The package below fails with <code>ModuleNotFoundError: No module named 'pricing'</code> when <code>shop_f3.cart</code> is imported, because <code>cart.py</code> uses a Python 2 style import of its sibling. Fix the file contents in <code>FILES</code> so the package imports correctly, using a relative import (the grader builds the folder from <code>FILES</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">FILES = {
+    &quot;shop_f3/__init__.py&quot;: &quot;&quot;,
+    &quot;shop_f3/pricing.py&quot;: &#x27;&#x27;&#x27;
+def with_tax(net, rate=0.2):
+    return round(net * (1 + rate), 2)
+&#x27;&#x27;&#x27;,
+    &quot;shop_f3/cart.py&quot;: &#x27;&#x27;&#x27;
+import pricing
+
+def total(nets):
+    return pricing.with_tax(sum(nets))
+&#x27;&#x27;&#x27;,
+}
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("shop_f3")
+make_tree(FILES)
+import shop_f3.cart
+assert shop_f3.cart.total([10, 5]) == 18.0
+assert "pricing" not in __import__("sys").modules or not hasattr(__import__("sys").modules.get("pricing"), "with_tax")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;shop_f3&quot;)
+make_tree(FILES)
+import shop_f3.cart
+assert shop_f3.cart.total([10, 5]) == 18.0
+assert &quot;pricing&quot; not in __import__(&quot;sys&quot;).modules or not hasattr(__import__(&quot;sys&quot;).modules.get(&quot;pricing&quot;), &quot;with_tax&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside a package, refer to a sibling module with <code>from . import pricing</code> (or <code>from shop_f3 import pricing</code>).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">FILES = {
+    &quot;shop_f3/__init__.py&quot;: &quot;&quot;,
+    &quot;shop_f3/pricing.py&quot;: &#x27;&#x27;&#x27;
+def with_tax(net, rate=0.2):
+    return round(net * (1 + rate), 2)
+&#x27;&#x27;&#x27;,
+    &quot;shop_f3/cart.py&quot;: &#x27;&#x27;&#x27;
+from . import pricing
+
+def total(nets):
+    return pricing.with_tax(sum(nets))
+&#x27;&#x27;&#x27;,
+}</code></pre></div><p>Python 3 imports are absolute by default: <code>import pricing</code> searches <code>sys.path</code> for a top-level module called <code>pricing</code>, and the package folder itself is not on the path, so it fails (or, worse, silently imports some other <code>pricing.py</code> that happens to be on the path). <code>from . import pricing</code> means "the module <code>pricing</code> in my own package", resolved through <code>__package__</code>, so it works wherever the package is installed. The absolute form <code>from shop_f3 import pricing</code> is equally correct and some style guides prefer it for clarity.</p></div></details>
+</article>
+<article class="prob" id="p-names-that-describe-a-module" data-pid="m15-1-names-that-describe-a-module" data-type="predict" data-level="easy" data-answer="__main__ (&#x27;app_p4.core.models&#x27;, &#x27;app_p4.core&#x27;) app_p4
+True app_p4.core.models app_p4.core
+True True">
+<header class="prob-head"><h3>4. Names that describe a module</h3></header>
+<div class="code"><pre><code class="py">from lessontools import make_tree
+
+root = make_tree({
+    &quot;app_p4/__init__.py&quot;: &quot;&quot;,
+    &quot;app_p4/core/__init__.py&quot;: &quot;&quot;,
+    &quot;app_p4/core/models.py&quot;: &#x27;&#x27;&#x27;
+    INFO = (__name__, __package__)
+    &#x27;&#x27;&#x27;,
+})
+import app_p4.core.models as m
+import app_p4
+print(__name__, m.INFO, app_p4.__package__)
+print(m.__file__.endswith(&quot;app_p4/core/models.py&quot;), m.__spec__.name, m.__spec__.parent)
+print(app_p4.core.models is m, hasattr(app_p4, &quot;core&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A submodule's <code>__name__</code> is its full dotted name; <code>__package__</code> is the package containing it, used for relative imports.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>__main__ (&#x27;app_p4.core.models&#x27;, &#x27;app_p4.core&#x27;) app_p4
+True app_p4.core.models app_p4.core
+True True</pre></div><p>The code you run is <code>__main__</code>. A module's <code>__name__</code> is its full dotted import name, and <code>__package__</code> (also <code>__spec__.parent</code>) is the package it belongs to, which is how <code>from . import x</code> knows where to look; a package's own <code>__package__</code> is its own name. Importing a submodule also sets it as an attribute of its parent package, so <code>app_p4.core.models</code> is the same object.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-discover-tools-in-a-plugin-package" data-pid="m15-1-discover-tools-in-a-plugin-package" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Discover tools in a plugin package</h3></header>
+<div class="prob-q"><p>Write <code>discover_tools(package_name)</code> that imports the package, lists its modules with <code>pkgutil.iter_modules(package.__path__)</code>, imports each (skipping names that start with <code>_</code>), and collects every <strong>class</strong> defined in those modules that has a string attribute <code>tool_name</code>. Return a dict from <code>tool_name</code> to class, sorted by name. Two classes with the same <code>tool_name</code> raise <code>ValueError</code> naming both modules.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import importlib, inspect, pkgutil
+
+def discover_tools(package_name):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("agent_tools_w5")
+make_tree({
+    "agent_tools_w5/__init__.py": "",
+    "agent_tools_w5/search.py": '''
+    class WebSearch:
+        tool_name = "web_search"
+    class NotATool:
+        pass
+    ''',
+    "agent_tools_w5/calc.py": '''
+    class Calculator:
+        tool_name = "calculator"
+    from agent_tools_w5.search import WebSearch
+    ''',
+    "agent_tools_w5/_internal.py": '''
+    class Hidden:
+        tool_name = "hidden"
+    ''',
+})
+tools = discover_tools("agent_tools_w5")
+assert list(tools) == ["calculator", "web_search"] and tools["web_search"].__name__ == "WebSearch"
+assert "hidden" not in tools
+import importlib, os, sys
+pkg = sys.modules["agent_tools_w5"]
+target = os.path.join(pkg.__path__[0], "dup.py")
+with open(target, "w", encoding="utf-8") as f:
+    f.write('class AlsoCalc:\n    tool_name = "calculator"\n')
+importlib.invalidate_caches()
+try:
+    discover_tools("agent_tools_w5")
+    assert False
+except ValueError as e:
+    assert "agent_tools_w5.calc" in str(e) and "agent_tools_w5.dup" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;agent_tools_w5&quot;)
+make_tree({
+    &quot;agent_tools_w5/__init__.py&quot;: &quot;&quot;,
+    &quot;agent_tools_w5/search.py&quot;: &#x27;&#x27;&#x27;
+    class WebSearch:
+        tool_name = &quot;web_search&quot;
+    class NotATool:
+        pass
+    &#x27;&#x27;&#x27;,
+    &quot;agent_tools_w5/calc.py&quot;: &#x27;&#x27;&#x27;
+    class Calculator:
+        tool_name = &quot;calculator&quot;
+    from agent_tools_w5.search import WebSearch
+    &#x27;&#x27;&#x27;,
+    &quot;agent_tools_w5/_internal.py&quot;: &#x27;&#x27;&#x27;
+    class Hidden:
+        tool_name = &quot;hidden&quot;
+    &#x27;&#x27;&#x27;,
+})
+tools = discover_tools(&quot;agent_tools_w5&quot;)
+assert list(tools) == [&quot;calculator&quot;, &quot;web_search&quot;] and tools[&quot;web_search&quot;].__name__ == &quot;WebSearch&quot;
+assert &quot;hidden&quot; not in tools
+import importlib, os, sys
+pkg = sys.modules[&quot;agent_tools_w5&quot;]
+target = os.path.join(pkg.__path__[0], &quot;dup.py&quot;)
+with open(target, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&#x27;class AlsoCalc:\n    tool_name = &quot;calculator&quot;\n&#x27;)
+importlib.invalidate_caches()
+try:
+    discover_tools(&quot;agent_tools_w5&quot;)
+    assert False
+except ValueError as e:
+    assert &quot;agent_tools_w5.calc&quot; in str(e) and &quot;agent_tools_w5.dup&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each <code>info</code> from <code>iter_modules</code>, import <code>f"{package_name}.{info.name}"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>inspect.getmembers(module, inspect.isclass)</code> lists classes; keep those whose <code>__module__</code> equals the module's name, so re-exported classes are not counted twice.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib, inspect, pkgutil
+
+
+def discover_tools(package_name):
+    package = importlib.import_module(package_name)
+    found = {}
+    for info in pkgutil.iter_modules(package.__path__):
+        if info.name.startswith(&quot;_&quot;):
+            continue
+        module = importlib.import_module(f&quot;{package_name}.{info.name}&quot;)
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            if cls.__module__ != module.__name__ or not isinstance(getattr(cls, &quot;tool_name&quot;, None), str):
+                continue
+            if cls.tool_name in found:
+                other = found[cls.tool_name].__module__
+                raise ValueError(f&quot;tool {cls.tool_name!r} defined in {other} and {module.__name__}&quot;)
+            found[cls.tool_name] = cls
+    return dict(sorted(found.items()))</code></pre></div><p>Plugin discovery turns "add a file to this folder" into "add a tool to the agent", without editing a central list. <code>pkgutil.iter_modules</code> lists the modules inside the package's folder, <code>import_module</code> loads each, and <code>inspect.getmembers</code> finds the classes. Checking <code>cls.__module__</code> matters: <code>calc.py</code> imports <code>WebSearch</code>, so it is visible there too, and without the check it would look like a duplicate. Private modules are skipped by convention, and a real duplicate is an error that names both places, because silently letting one plugin shadow another is a hard bug to find.</p></div></details>
+</article>
+<article class="prob" id="p-break-a-circular-import" data-pid="m15-1-break-a-circular-import" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Break a circular import</h3></header>
+<div class="prob-q"><p><code>models.py</code> imports <code>validate</code> from <code>validation.py</code>, and <code>validation.py</code> imports <code>Ticket</code> from <code>models.py</code> to check types, so <code>import helpdesk_f6.models</code> fails with "cannot import name ... from partially initialized module". Fix the structure in <code>FILES</code>: keep <code>Ticket</code> in <code>models.py</code> and <code>validate</code> in <code>validation.py</code>, but make each file depend on the other <strong>module</strong> (not on names from it) and look names up inside functions, so the cycle is harmless whichever module is imported first.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">FILES = {
+    &quot;helpdesk_f6/__init__.py&quot;: &quot;&quot;,
+    &quot;helpdesk_f6/models.py&quot;: &#x27;&#x27;&#x27;
+from helpdesk_f6.validation import validate
+
+class Ticket:
+    def __init__(self, title):
+        self.title = validate(title)
+&#x27;&#x27;&#x27;,
+    &quot;helpdesk_f6/validation.py&quot;: &#x27;&#x27;&#x27;
+from helpdesk_f6.models import Ticket
+
+def validate(title):
+    if isinstance(title, Ticket):
+        raise TypeError(&quot;a Ticket is not a title&quot;)
+    if not title.strip():
+        raise ValueError(&quot;empty title&quot;)
+    return title.strip()
+&#x27;&#x27;&#x27;,
+}
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("helpdesk_f6")
+make_tree(FILES)
+import helpdesk_f6.models as models
+t = models.Ticket("  Refund missing ")
+assert t.title == "Refund missing"
+import helpdesk_f6.validation as validation
+for bad, err in [(t, TypeError), ("  ", ValueError)]:
+    try:
+        validation.validate(bad)
+        assert False
+    except err:
+        pass
+forget("helpdesk_f6")
+import helpdesk_f6.validation
+assert helpdesk_f6.validation.validate(" ok ") == "ok"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;helpdesk_f6&quot;)
+make_tree(FILES)
+import helpdesk_f6.models as models
+t = models.Ticket(&quot;  Refund missing &quot;)
+assert t.title == &quot;Refund missing&quot;
+import helpdesk_f6.validation as validation
+for bad, err in [(t, TypeError), (&quot;  &quot;, ValueError)]:
+    try:
+        validation.validate(bad)
+        assert False
+    except err:
+        pass
+forget(&quot;helpdesk_f6&quot;)
+import helpdesk_f6.validation
+assert helpdesk_f6.validation.validate(&quot; ok &quot;) == &quot;ok&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>validation.py</code>, use <code>from helpdesk_f6 import models</code> and write <code>models.Ticket</code> inside <code>validate</code>; in <code>models.py</code>, use <code>from helpdesk_f6 import validation</code> and call <code>validation.validate(...)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The grader imports the package both ways round, starting from <code>models</code> and from <code>validation</code>; fixing only one side fails the second import.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">FILES = {
+    &quot;helpdesk_f6/__init__.py&quot;: &quot;&quot;,
+    &quot;helpdesk_f6/models.py&quot;: &#x27;&#x27;&#x27;
+from helpdesk_f6 import validation
+
+class Ticket:
+    def __init__(self, title):
+        self.title = validation.validate(title)
+&#x27;&#x27;&#x27;,
+    &quot;helpdesk_f6/validation.py&quot;: &#x27;&#x27;&#x27;
+from helpdesk_f6 import models
+
+def validate(title):
+    if isinstance(title, models.Ticket):
+        raise TypeError(&quot;a Ticket is not a title&quot;)
+    if not title.strip():
+        raise ValueError(&quot;empty title&quot;)
+    return title.strip()
+&#x27;&#x27;&#x27;,
+}</code></pre></div><p>Importing <code>models</code> first runs <code>models.py</code> until its first line, which imports <code>validation</code>, which asked for the name <code>Ticket</code> from <code>models</code>, a module that existed in <code>sys.modules</code> but had not reached the <code>class Ticket</code> line yet. Importing the <strong>module</strong> instead of the name only needs the module object to exist, which it does, and <code>models.Ticket</code> and <code>validation.validate</code> are looked up when the functions are <strong>called</strong>, by which time both files have finished loading. Both sides need the change: with only <code>validation.py</code> fixed, importing <code>validation</code> first runs <code>models.py</code>, which still asks for the name <code>validate</code> from a half-loaded module. The cleaner long-term fix is often to remove the cycle (here, validation could check <code>type(title).__name__</code> or accept only strings), but depending on modules rather than names inside a cycle is the standard tactical fix, and it works whichever module is imported first.</p></div></details>
+</article>
+<article class="prob" id="p-sys-modules-reload-and-forget" data-pid="m15-1-sys-modules-reload-and-forget" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. sys.modules, reload and forget</h3></header>
+<div class="prob-q"><p>Fill in <code>state</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import importlib, sys
+from lessontools import make_tree, forget
+
+make_tree({&quot;config_t7.py&quot;: &#x27;&#x27;&#x27;
+import itertools
+LOADS = globals().get(&quot;LOADS&quot;, 0) + 1
+VALUE = &quot;first&quot;
+&#x27;&#x27;&#x27;})
+
+import config_t7
+state = (config_t7.LOADS, config_t7.VALUE)
+import config_t7
+config_t7.VALUE = &quot;patched&quot;
+state = (config_t7.LOADS, config_t7.VALUE)
+old = config_t7
+importlib.reload(config_t7)
+state = (config_t7.LOADS, config_t7.VALUE, config_t7 is old)
+forget(&quot;config_t7&quot;)
+import config_t7
+state = (config_t7.LOADS, config_t7.VALUE, config_t7 is old)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>first import</td><td><input class="cell" data-a="(1, &#x27;first&#x27;)" data-s="(1, &#x27;first&#x27;)" aria-label="state at first import" autocomplete="off"></td></tr><tr><td>second import</td><td><input class="cell" data-a="(1, &#x27;patched&#x27;)" data-s="(1, &#x27;patched&#x27;)" aria-label="state at second import" autocomplete="off"></td></tr><tr><td>after reload</td><td><input class="cell" data-a="(2, &#x27;first&#x27;, True)" data-s="(2, &#x27;first&#x27;, True)" aria-label="state at after reload" autocomplete="off"></td></tr><tr><td>after forget</td><td><input class="cell" data-a="(1, &#x27;first&#x27;, False)" data-s="(1, &#x27;first&#x27;, False)" aria-label="state at after forget" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>reload</code> re-runs the file in the <strong>same</strong> module object, so <code>globals()</code> still has the old names. After removing it from <code>sys.modules</code>, the next import creates a new object.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>first import</td><td><code>(1, &#x27;first&#x27;)</code></td></tr><tr><td>second import</td><td><code>(1, &#x27;patched&#x27;)</code></td></tr><tr><td>after reload</td><td><code>(2, &#x27;first&#x27;, True)</code></td></tr><tr><td>after forget</td><td><code>(1, &#x27;first&#x27;, False)</code></td></tr></table></div><p>The second <code>import</code> finds the module in <code>sys.modules</code> and runs nothing, so only the manual patch changes <code>VALUE</code>. <code>importlib.reload</code> re-executes the file inside the existing module object: old globals are still there when the code runs, so <code>LOADS</code> counts to 2, and <code>VALUE</code> is reset by the re-executed assignment. Forgetting the module and importing again builds a brand-new module object with fresh globals, so <code>LOADS</code> is 1 again and the object differs from the old one, which anyone holding the old module (or names imported from it) would still be using.</p></div></details>
+</article>
+<article class="prob" id="p-live-module-attributes-versus-copied-nam" data-pid="m15-1-live-module-attributes-versus-copied-nam" data-type="predict" data-level="medium" data-answer="small large
+{&#x27;rpm&#x27;: 600} True
+{&#x27;rpm&#x27;: 600} {&#x27;rpm&#x27;: 1}">
+<header class="prob-head"><h3>8. Live module attributes versus copied names</h3></header>
+<div class="code"><pre><code class="py">from lessontools import make_tree
+
+make_tree({&quot;settings_p8.py&quot;: &#x27;&#x27;&#x27;
+MODEL = &quot;small&quot;
+LIMITS = {&quot;rpm&quot;: 60}
+
+def use_large():
+    global MODEL
+    MODEL = &quot;large&quot;
+    LIMITS[&quot;rpm&quot;] = 600
+&#x27;&#x27;&#x27;})
+import settings_p8
+from settings_p8 import MODEL, LIMITS, use_large
+
+use_large()
+print(MODEL, settings_p8.MODEL)
+print(LIMITS, settings_p8.LIMITS is LIMITS)
+settings_p8.LIMITS = {&quot;rpm&quot;: 1}
+print(LIMITS, settings_p8.LIMITS)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from m import NAME</code> binds the object NAME referred to at import time. Rebinding the module global does not change it; mutating the shared object does.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>small large
+{&#x27;rpm&#x27;: 600} True
+{&#x27;rpm&#x27;: 600} {&#x27;rpm&#x27;: 1}</pre></div><p><code>use_large</code> <strong>rebinds</strong> the module global <code>MODEL</code>, so the module sees <code>"large"</code> but the importer's <code>MODEL</code> still refers to the string <code>"small"</code>. For <code>LIMITS</code>, the function <strong>mutates</strong> the dict, which both names share, so the change is visible through both. Replacing <code>settings_p8.LIMITS</code> with a new dict rebinds the module's name only, and the importer keeps the old dict. This is the same rule as variables and objects (2.4) applied to modules, and the reason configuration should be read through the module (<code>settings.MODEL</code>) or a function, not copied out at import time.</p></div></details>
+</article>
+<article class="prob" id="p-an-optional-dependency-with-a-helpful-er" data-pid="m15-1-an-optional-dependency-with-a-helpful-er" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. An optional dependency with a helpful error</h3></header>
+<div class="prob-q"><p>Libraries import heavy optional dependencies lazily. Write <code>optional_import(name, extra)</code> that returns the imported module if available, and otherwise a placeholder object whose <strong>attribute access</strong> raises <code>ImportError(f"{name} is required for this feature: pip install 'mylib[{extra}]'")</code>, so the error appears only when the feature is used. Also write <code>has_module(name)</code> using <code>importlib.util.find_spec</code> without importing.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import importlib, importlib.util
+
+def optional_import(name, extra):
+    pass
+
+def has_module(name):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">json_mod = optional_import("json", "json")
+assert json_mod.dumps([1]) == "[1]"
+pdf = optional_import("pdf_parser_that_does_not_exist", "pdf")
+try:
+    pdf.parse("x.pdf")
+    assert False
+except ImportError as e:
+    assert str(e) == "pdf_parser_that_does_not_exist is required for this feature: pip install 'mylib[pdf]'"
+assert has_module("json") and not has_module("pdf_parser_that_does_not_exist") and has_module("collections.abc")
+assert repr(pdf).startswith("<missing optional module")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">json_mod = optional_import(&quot;json&quot;, &quot;json&quot;)
+assert json_mod.dumps([1]) == &quot;[1]&quot;
+pdf = optional_import(&quot;pdf_parser_that_does_not_exist&quot;, &quot;pdf&quot;)
+try:
+    pdf.parse(&quot;x.pdf&quot;)
+    assert False
+except ImportError as e:
+    assert str(e) == &quot;pdf_parser_that_does_not_exist is required for this feature: pip install &#x27;mylib[pdf]&#x27;&quot;
+assert has_module(&quot;json&quot;) and not has_module(&quot;pdf_parser_that_does_not_exist&quot;) and has_module(&quot;collections.abc&quot;)
+assert repr(pdf).startswith(&quot;&lt;missing optional module&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Try <code>importlib.import_module(name)</code> and catch <code>ImportError</code>; return an instance of a small class whose <code>__getattr__</code> raises.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>importlib.util.find_spec(name) is not None</code> checks availability without running the module.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import importlib, importlib.util
+
+
+class _Missing:
+    def __init__(self, name, extra):
+        self._name, self._extra = name, extra
+
+    def __getattr__(self, attr):
+        raise ImportError(f&quot;{self._name} is required for this feature: pip install &#x27;mylib[{self._extra}]&#x27;&quot;)
+
+    def __repr__(self):
+        return f&quot;&lt;missing optional module {self._name}&gt;&quot;
+
+
+def optional_import(name, extra):
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return _Missing(name, extra)
+
+
+def has_module(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False</code></pre></div><p>Optional features (PDF parsing, GPU backends, a specific vector store) should not force every user to install their dependencies, nor fail with a bare <code>ModuleNotFoundError</code> deep inside the code. The placeholder delays the failure until the feature is actually used and turns it into instructions, naming the <strong>extra</strong> that installs it (15.2). <code>__getattr__</code> is only called for attributes that are not found normally (9.3), so <code>_name</code> and <code>_extra</code> still work. <code>find_spec</code> answers "is it installed?" without running the module's import-time code; it raises <code>ModuleNotFoundError</code> when a parent package is missing, hence the <code>try</code>.</p></div></details>
+</article>
+<article class="prob" id="p-star-imports-that-export-too-much" data-pid="m15-1-star-imports-that-export-too-much" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Star imports that export too much</h3></header>
+<div class="prob-q"><p><code>from textkit_f10 import *</code> is used in notebooks, but it also exports <code>re</code>, <code>json</code> and the internal helper <code>normalise</code>, shadowing users' own names. Define the public API explicitly with <code>__all__</code> in <code>FILES</code> so a star import gives exactly <code>clean</code> and <code>tokenize</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">FILES = {
+    &quot;textkit_f10.py&quot;: &#x27;&#x27;&#x27;
+import json, re
+
+def normalise(text):
+    return re.sub(r&quot;[ ]+&quot;, &quot; &quot;, text).strip()
+
+def clean(text):
+    return normalise(text).lower()
+
+def tokenize(text):
+    return clean(text).split(&quot; &quot;)
+&#x27;&#x27;&#x27;,
+}
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree, forget
+forget("textkit_f10")
+make_tree(FILES)
+ns = {}
+exec("from textkit_f10 import *", ns)
+assert sorted(k for k in ns if not k.startswith("__")) == ["clean", "tokenize"]
+import textkit_f10
+assert textkit_f10.tokenize("  Refund   Policy ") == ["refund", "policy"] and textkit_f10.normalise(" a  b ") == "a b"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree, forget
+forget(&quot;textkit_f10&quot;)
+make_tree(FILES)
+ns = {}
+exec(&quot;from textkit_f10 import *&quot;, ns)
+assert sorted(k for k in ns if not k.startswith(&quot;__&quot;)) == [&quot;clean&quot;, &quot;tokenize&quot;]
+import textkit_f10
+assert textkit_f10.tokenize(&quot;  Refund   Policy &quot;) == [&quot;refund&quot;, &quot;policy&quot;] and textkit_f10.normalise(&quot; a  b &quot;) == &quot;a b&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Add <code>__all__ = ["clean", "tokenize"]</code> to the module; names not listed stay importable explicitly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">FILES = {
+    &quot;textkit_f10.py&quot;: &#x27;&#x27;&#x27;
+import json, re
+
+__all__ = [&quot;clean&quot;, &quot;tokenize&quot;]
+
+def normalise(text):
+    return re.sub(r&quot;[ ]+&quot;, &quot; &quot;, text).strip()
+
+def clean(text):
+    return normalise(text).lower()
+
+def tokenize(text):
+    return clean(text).split(&quot; &quot;)
+&#x27;&#x27;&#x27;,
+}</code></pre></div><p>Without <code>__all__</code>, <code>import *</code> copies every top-level name that does not start with an underscore, including modules the file imported and internal helpers, so a user's own <code>json</code> or <code>normalise</code> can be silently replaced. <code>__all__</code> declares the public API: star imports take exactly those names, documentation tools and type checkers use it, and everything else remains reachable by explicit import (<code>from textkit_f10 import normalise</code>) for those who really need it. Renaming the helper to <code>_normalise</code> would also hide it from star imports and signal that it is private.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-find-import-cycles-in-a-project" data-pid="m15-1-find-import-cycles-in-a-project" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Find import cycles in a project</h3></header>
+<div class="prob-q"><p>Write <code>import_graph(root, package)</code> that reads every <code>.py</code> file under <code>root/package</code> with <code>ast</code> (without importing), and returns a dict from each module's dotted name to the sorted list of modules <strong>inside the package</strong> it imports (via <code>import x</code> or <code>from x import y</code>, resolving relative imports; <code>from . import name</code> refers to the submodule <code>name</code> if such a file exists). Then write <code>find_cycles(graph)</code> returning the sorted list of cycles, each as a list of module names starting from the alphabetically smallest member, in import order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import ast
+from pathlib import Path
+
+def import_graph(root, package):
+    pass
+
+def find_cycles(graph):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from lessontools import make_tree
+root = make_tree({
+    "billing/__init__.py": "from .api import charge",
+    "billing/api.py": "from .models import Invoice\nfrom . import tax\nimport json",
+    "billing/models.py": "from billing.api import charge\nimport billing.util",
+    "billing/tax.py": "from .rates import RATE",
+    "billing/rates.py": "from . import tax\nRATE = 0.2",
+    "billing/util.py": "import os",
+}, on_path=False)
+g = import_graph(root, "billing")
+assert g == {"billing": ["billing.api"], "billing.api": ["billing.models", "billing.tax"], "billing.models": ["billing.api", "billing.util"],
+             "billing.rates": ["billing.tax"], "billing.tax": ["billing.rates"], "billing.util": []}
+assert find_cycles(g) == [["billing.api", "billing.models"], ["billing.rates", "billing.tax"]]
+assert find_cycles({"a": ["b"], "b": ["c"], "c": []}) == []
+assert find_cycles({"a": ["b"], "b": ["c"], "c": ["a"]}) == [["a", "b", "c"]]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from lessontools import make_tree
+root = make_tree({
+    &quot;billing/__init__.py&quot;: &quot;from .api import charge&quot;,
+    &quot;billing/api.py&quot;: &quot;from .models import Invoice\nfrom . import tax\nimport json&quot;,
+    &quot;billing/models.py&quot;: &quot;from billing.api import charge\nimport billing.util&quot;,
+    &quot;billing/tax.py&quot;: &quot;from .rates import RATE&quot;,
+    &quot;billing/rates.py&quot;: &quot;from . import tax\nRATE = 0.2&quot;,
+    &quot;billing/util.py&quot;: &quot;import os&quot;,
+}, on_path=False)
+g = import_graph(root, &quot;billing&quot;)
+assert g == {&quot;billing&quot;: [&quot;billing.api&quot;], &quot;billing.api&quot;: [&quot;billing.models&quot;, &quot;billing.tax&quot;], &quot;billing.models&quot;: [&quot;billing.api&quot;, &quot;billing.util&quot;],
+             &quot;billing.rates&quot;: [&quot;billing.tax&quot;], &quot;billing.tax&quot;: [&quot;billing.rates&quot;], &quot;billing.util&quot;: []}
+assert find_cycles(g) == [[&quot;billing.api&quot;, &quot;billing.models&quot;], [&quot;billing.rates&quot;, &quot;billing.tax&quot;]]
+assert find_cycles({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;c&quot;], &quot;c&quot;: []}) == []
+assert find_cycles({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;c&quot;], &quot;c&quot;: [&quot;a&quot;]}) == [[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Module names: <code>billing/api.py</code> is <code>billing.api</code> and <code>billing/__init__.py</code> is <code>billing</code>. The package of a module is its own name for <code>__init__</code>, otherwise its parent.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For <code>ast.ImportFrom</code>, <code>node.level</code> counts leading dots; drop <code>level - 1</code> parts from the package name, then append <code>node.module</code> if any.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Cycles: run a DFS from each node keeping the current path; when you reach a node already on the path, the slice from it is a cycle; rotate it to start at its smallest name and store it in a set of tuples.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import ast
+from pathlib import Path
+
+
+def _module_name(path, root):
+    parts = list(path.relative_to(root).with_suffix(&quot;&quot;).parts)
+    if parts[-1] == &quot;__init__&quot;:
+        parts.pop()
+    return &quot;.&quot;.join(parts)
+
+
+def import_graph(root, package):
+    root = Path(root)
+    files = {_module_name(p, root): p for p in (root / package).rglob(&quot;*.py&quot;)}
+    graph = {}
+    for name, path in files.items():
+        pkg = name if path.name == &quot;__init__.py&quot; else name.rpartition(&quot;.&quot;)[0]
+        deps = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding=&quot;utf-8&quot;))):
+            if isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    parts = pkg.split(&quot;.&quot;)
+                    base = parts[: len(parts) - (node.level - 1)]
+                    mod = &quot;.&quot;.join(base + ([node.module] if node.module else []))
+                else:
+                    mod = node.module
+                targets = []
+                for alias in node.names:
+                    full = f&quot;{mod}.{alias.name}&quot;
+                    targets.append(full if full in files else mod)
+            else:
+                continue
+            for t in targets:
+                if t in files and t != name:
+                    deps.add(t)
+        graph[name] = sorted(deps)
+    return dict(sorted(graph.items()))
+
+
+def find_cycles(graph):
+    cycles = set()
+
+    def dfs(node, path, on_path):
+        for nxt in graph.get(node, []):
+            if nxt in on_path:
+                cycle = path[path.index(nxt):]
+                i = cycle.index(min(cycle))
+                cycles.add(tuple(cycle[i:] + cycle[:i]))
+            elif len(path) &lt; len(graph) + 1:
+                on_path.add(nxt)
+                path.append(nxt)
+                dfs(nxt, path, on_path)
+                path.pop()
+                on_path.discard(nxt)
+
+    for start in graph:
+        dfs(start, [start], {start})
+    return [list(c) for c in sorted(cycles)]</code></pre></div><p>Reading imports with <code>ast</code> shows a project's structure <strong>without running it</strong>, which is safe on code with import-time side effects and is how tools such as <code>pydeps</code>, <code>import-linter</code> and Ruff's import rules work. Relative imports are resolved with the module's package and the number of leading dots, and <code>from . import tax</code> counts as a dependency on the submodule <code>tax</code> (not on the package) because that file exists, while <code>from .api import charge</code> depends on <code>billing.api</code>. The cycle search is a depth-first search that notices when it reaches a module already on the current path (16.4); rotating each cycle to start at its smallest name makes the same cycle found from different starting points identical. Running this in CI and failing on new cycles keeps a growing codebase layered.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-import-time-side-effects" data-pid="m15-1-read-the-code-import-time-side-effects" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: import-time side effects</h3></header>
+<div class="prob-q"><p><code>assistant_f12/client.py</code> connects to the model service, reads the API key and prints a banner <strong>at import time</strong>, so merely importing the package (in tests, in a notebook, in a worker process) opens a connection and crashes when the key is missing. Move all of it into a function <code>get_client()</code> that creates the client on the first call and returns the same one afterwards (<code>functools.cache</code>), reading the key from the environment then; importing must have no side effects.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">FILES = {
+    &quot;assistant_f12/__init__.py&quot;: &quot;&quot;,
+    &quot;assistant_f12/connection.py&quot;: &#x27;&#x27;&#x27;
+CONNECTIONS = []
+
+class Client:
+    def __init__(self, api_key):
+        if not api_key:
+            raise RuntimeError(&quot;ASSISTANT_KEY is not set&quot;)
+        self.api_key = api_key
+        CONNECTIONS.append(self)
+
+    def ask(self, q):
+        return f&quot;answer to {q}&quot;
+&#x27;&#x27;&#x27;,
+    &quot;assistant_f12/client.py&quot;: &#x27;&#x27;&#x27;
+import os
+from assistant_f12.connection import Client
+
+print(&quot;assistant client ready&quot;)
+CLIENT = Client(os.environ.get(&quot;ASSISTANT_KEY&quot;, &quot;&quot;))
+
+def ask(question):
+    return CLIENT.ask(question)
+&#x27;&#x27;&#x27;,
+}
+</textarea>
+<script type="text/plain" class="prob-tests">import io, os, contextlib
+from lessontools import make_tree, forget
+forget("assistant_f12")
+make_tree(FILES)
+os.environ.pop("ASSISTANT_KEY", None)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    import assistant_f12.client as client
+import assistant_f12.connection as connection
+assert buf.getvalue() == "" and connection.CONNECTIONS == []
+os.environ["ASSISTANT_KEY"] = "sk-test"
+assert client.ask("refund?") == "answer to refund?" and client.get_client() is client.get_client()
+assert len(connection.CONNECTIONS) == 1
+os.environ.pop("ASSISTANT_KEY")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, os, contextlib
+from lessontools import make_tree, forget
+forget(&quot;assistant_f12&quot;)
+make_tree(FILES)
+os.environ.pop(&quot;ASSISTANT_KEY&quot;, None)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    import assistant_f12.client as client
+import assistant_f12.connection as connection
+assert buf.getvalue() == &quot;&quot; and connection.CONNECTIONS == []
+os.environ[&quot;ASSISTANT_KEY&quot;] = &quot;sk-test&quot;
+assert client.ask(&quot;refund?&quot;) == &quot;answer to refund?&quot; and client.get_client() is client.get_client()
+assert len(connection.CONNECTIONS) == 1
+os.environ.pop(&quot;ASSISTANT_KEY&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>client.py</code>: <code>@functools.cache def get_client(): return Client(os.environ.get("ASSISTANT_KEY", ""))</code>, and <code>ask</code> calls <code>get_client().ask(question)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Delete the <code>print</code> and the module-level <code>CLIENT</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">FILES = {
+    &quot;assistant_f12/__init__.py&quot;: &quot;&quot;,
+    &quot;assistant_f12/connection.py&quot;: &#x27;&#x27;&#x27;
+CONNECTIONS = []
+
+class Client:
+    def __init__(self, api_key):
+        if not api_key:
+            raise RuntimeError(&quot;ASSISTANT_KEY is not set&quot;)
+        self.api_key = api_key
+        CONNECTIONS.append(self)
+
+    def ask(self, q):
+        return f&quot;answer to {q}&quot;
+&#x27;&#x27;&#x27;,
+    &quot;assistant_f12/client.py&quot;: &#x27;&#x27;&#x27;
+import functools, os
+from assistant_f12.connection import Client
+
+
+@functools.cache
+def get_client():
+    return Client(os.environ.get(&quot;ASSISTANT_KEY&quot;, &quot;&quot;))
+
+
+def ask(question):
+    return get_client().ask(question)
+&#x27;&#x27;&#x27;,
+}</code></pre></div><p>Module top-level code runs on import, for every importer, so expensive or stateful setup there leaks into tests (which may not have the key), tools that only want the module's names, and every multiprocessing worker (14.3). Moving setup into <code>get_client()</code> makes importing free and deterministic, reads the environment when the client is actually needed (12.4), and <code>functools.cache</code> makes it a lazily created singleton, created once on first use; tests can call <code>get_client.cache_clear()</code> or patch <code>get_client</code> (13.3) to swap in a fake. The banner belonged in logging at start-up, not in a library's import.</p></div></details>
+</article>
+<article class="prob" id="p-shadowing-and-namespace-packages" data-pid="m15-1-shadowing-and-namespace-packages" data-type="predict" data-level="hard" data-answer="my mean True
+2
+alpha None _NamespacePath">
+<header class="prob-head"><h3>13. Shadowing and namespace packages</h3></header>
+<div class="code"><pre><code class="py">import sys
+from lessontools import make_tree, forget
+
+make_tree({&quot;statistics.py&quot;: &#x27;&#x27;&#x27;
+def mean(values):
+    return &quot;my mean&quot;
+&#x27;&#x27;&#x27;})
+forget(&quot;statistics&quot;)
+import statistics
+print(statistics.mean([1, 2, 3]), statistics.__file__.endswith(&quot;statistics.py&quot;) and &quot;site&quot; not in statistics.__file__)
+sys.path.pop(0)
+forget(&quot;statistics&quot;)
+import statistics
+print(statistics.mean([1, 2, 3]))
+make_tree({&quot;plugins_p13/alpha.py&quot;: &quot;NAME = &#x27;alpha&#x27;&quot;})
+import plugins_p13.alpha
+import plugins_p13
+print(plugins_p13.alpha.NAME, getattr(plugins_p13, &quot;__file__&quot;, None), type(plugins_p13.__path__).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The first folder on <code>sys.path</code> that contains a matching name wins, even over the standard library for most modules.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A folder without <code>__init__.py</code> imports as a namespace package: it has a <code>__path__</code> but no <code>__file__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>my mean True
+2
+alpha None _NamespacePath</pre></div><p>Because <code>make_tree</code> put the new folder first on <code>sys.path</code>, a local file named <code>statistics.py</code> <strong>shadows</strong> the standard library module, so <code>statistics.mean</code> is the local one. Removing that folder from the path and the cached module restores the real <code>statistics</code>. This is the classic "my script is called <code>random.py</code> (or <code>json.py</code>, <code>email.py</code>, <code>test.py</code>) and imports break" bug: never name your files after standard library or installed modules. The <code>plugins_p13</code> folder has no <code>__init__.py</code>, so it is a <strong>namespace package</strong>: importable, with a <code>__path__</code> for finding submodules but no <code>__file__</code>, which is why regular packages should always have <code>__init__.py</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-happens-when-python-executes-import" data-pid="m15-1-what-happens-when-python-executes-import" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What happens when Python executes <code>import x</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Python first checks <code>sys.modules</code>; if <code>x</code> is already imported, it binds the name to that module object and does nothing else. Otherwise it <strong>finds</strong> the module: for a dotted name it imports the parent packages first, then asks the finders in <code>sys.meta_path</code> (which search <code>sys.path</code> entries: the script's folder, <code>PYTHONPATH</code>, the standard library, <code>site-packages</code>, and handle built-in, frozen, extension and zip modules) for a <strong>spec</strong> describing how to load it. It <strong>creates</strong> a module object, inserts it into <code>sys.modules</code> <strong>before</strong> executing (which is what makes circular imports partially work), and <strong>executes</strong> the module's code in the module's namespace, compiling it to bytecode and caching that in <code>__pycache__</code>. Finally it binds the name in the importer's namespace. Consequences: module code runs once per process, all importers share the module object, <code>from x import y</code> copies a reference at import time, and import-time side effects run wherever the module is imported.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-fix-a-circular-import" data-pid="m15-1-how-do-you-fix-a-circular-import" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How do you fix a circular import?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>First understand it: module A imports B at the top, B imports A, so B receives a partially initialised A and fails when it asks for a name A has not defined yet. The best fix is structural: find what both modules need from each other and move it into a third module that both import (shared types, constants, interfaces), or merge two modules that are really one; this restores a one-way dependency graph. Tactical fixes: import the module rather than names (<code>import a</code> and use <code>a.helper</code> inside functions), move the import into the function that needs it, or, when the dependency exists only for type annotations, import under <code>if TYPE_CHECKING:</code> and use string or lazy annotations. Dependency injection (passing the object in instead of importing it) also breaks cycles. Tools such as <code>import-linter</code> or a CI check of the import graph prevent new cycles.</p></div></details>
+</article>
+<article class="prob" id="p-your-package-imports-fine-in-tests-but-f" data-pid="m15-1-your-package-imports-fine-in-tests-but-f" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Your package imports fine in tests but fails with ModuleNotFoundError in production (or the reverse). What do you check?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Check <strong>how the code is found</strong>. Tests often pass because pytest inserts the project root (or test folders) into <code>sys.path</code>, or because the current working directory is the repository root, while production runs an <strong>installed</strong> package from another directory. Use a <code>src/</code> layout and install the project (<code>pip install -e .</code> or <code>uv sync</code>) so tests import the installed package exactly as production does. Check <strong>packaging</strong>: is the module included in the built wheel (package discovery settings in <code>pyproject.toml</code>, missing <code>__init__.py</code>, data files), and are optional dependencies installed in that environment? Check for <strong>shadowing</strong>: a local file or folder named like a dependency (<code>requests.py</code>, <code>config/</code> without <code>__init__.py</code>), or two installed distributions providing the same package. Check <strong>which interpreter and environment</strong> run the code (<code>sys.executable</code>, <code>sys.path</code>, <code>pip list</code> in that environment), and relative imports in modules run as scripts instead of with <code>python -m</code>. Printing <code>module.__file__</code> and <code>sys.path</code> at the failure point usually settles it in minutes.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>import</code> checks <code>sys.modules</code>, searches <code>sys.path</code>, runs the module once, and caches it; every importer shares the one module object.</li><li><code>from m import name</code> copies a reference at import time; read changing values through the module (<code>m.name</code>).</li><li>Packages are folders with <code>__init__.py</code>; use relative (<code>from . import x</code>) or absolute imports inside them, and <code>python -m pkg.module</code> to run their modules.</li><li>Circular imports hand a partially initialised module to the other side: restructure, import modules instead of names, or import inside functions.</li><li>Keep import time free of side effects (lazy <code>get_client()</code>), use <code>__all__</code> for public APIs, <code>importlib.import_module</code> for plugins, and never name files after libraries.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
