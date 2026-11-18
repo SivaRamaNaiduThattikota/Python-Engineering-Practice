@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m13-4", num="13.4", title="Testing ML and GenAI code",
@@ -15,6 +16,12 @@ term("Property test", "A test that checks a rule which must hold for any input (
 term("Metamorphic test", "A test that changes the input in a way that should not change the answer (or should change it predictably) and checks that the model agrees.")
 
 section("layers", "What to test, and what to evaluate",
+    fig(table(["layer", "checks", "how often"], [
+        ["unit tests", "loaders, features, parsers, metrics, prompts", "every change"],
+        ["behaviour tests", "properties, shapes, a tiny model trains", "every change"],
+        ["evaluation", "accuracy or quality on a dataset", "per model or prompt change"],
+    ], label="what to test and what to evaluate"),
+        "Ordinary code gets exact tests; the model gets measured with datasets and thresholds."),
     p("""An ML or LLM system is ordinary code around a model. The ordinary code, which is most of it, gets ordinary **unit tests**: data loading and cleaning,
     feature functions, tokenisation and chunking, metric implementations, prompt builders, output parsers and validators, routing and retry logic. These are
     deterministic, or can be made so, and every bug in them corrupts results silently, so they deserve the most tests. The model itself is different:
@@ -51,6 +58,8 @@ section("numbers", "Numbers: tolerances and dtypes",
 )
 
 section("seeds", "Randomness and determinism",
+    fig(chain(["seed every source|(random, numpy, model)", "same seed,|same numbers", ("a failing test|fails the same way", "good")]),
+        "Fixing seeds makes randomness repeatable, so a test either always passes or always fails."),
     p("""Shuffles, splits, initial weights, sampling and data augmentation all use random numbers. A test that depends on them must control them, and so should
     production code, for reproducible experiments. The robust pattern is to **pass a generator in**: `rng = np.random.default_rng(seed)` or `random.Random(seed)`,
     given to every function that needs randomness, rather than calling the global `np.random.rand` or `random.random`, whose state any other code can change.
@@ -249,10 +258,10 @@ section("warmup", "Warm-up",
             lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
             return float(lo), float(hi)
         '''
-        assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0
+        assert any(run_pytest(swap_impl(__source__, BUG))["failed"] > 0 for _ in range(3))
         """,
         hints=["`np.random.default_rng(0)` twice, called separately, must give identical intervals: that also catches code that ignores the generator.",
-               "Properties: `lo <= hi` and `1 <= lo` and `hi <= 5` for several seeds, with `@pytest.mark.parametrize(\"seed\", [0, 1, 2])`."],
+               "Use data with many distinct values, then check `min(DATA) <= lo <= hi <= max(DATA)` for several seeds, with `@pytest.mark.parametrize(\"seed\", [0, 1, 2])`."],
         solution="""
         # --- code under test (do not edit) ---
         import numpy as np
@@ -269,7 +278,7 @@ section("warmup", "Warm-up",
         import numpy as np
         import pytest
 
-        DATA = [1, 2, 3, 4, 5]
+        DATA = [0.3, 1.7, 2.2, 2.9, 3.4, 4.1, 4.8, 5.6, 6.3, 7.9]
 
 
         def test_same_seed_same_interval():
@@ -281,17 +290,19 @@ section("warmup", "Warm-up",
         @pytest.mark.parametrize("seed", [0, 1, 2])
         def test_interval_is_ordered_and_within_data_range(seed):
             lo, hi = bootstrap_ci(DATA, 200, np.random.default_rng(seed))
-            assert 1 <= lo <= hi <= 5
+            assert min(DATA) <= lo <= hi <= max(DATA)
 
 
         def test_interval_contains_sample_mean():
             lo, hi = bootstrap_ci(DATA, 500, np.random.default_rng(3))
-            assert lo <= 3.0 <= hi
+            assert lo <= np.mean(DATA) <= hi
         """,
         why="""An unseeded generator gives different numbers on every run, so a test with copied values is flaky by construction. A seeded generator makes runs repeatable,
         and comparing **two fresh generators with the same seed** is the right determinism check; it also exposes code that ignores the generator and uses the
         global NumPy random state (the graded bug), which no seed passed to the function can control. The other tests check properties that hold whatever the
-        seed, which keeps them valid if the algorithm changes, unlike golden numbers. The grader ran the suite three times to make sure it is stable."""),
+        seed, which keeps them valid if the algorithm changes, unlike golden numbers. The data matters too: with `[1, 2, 3, 4, 5]` the resampled means take few
+        distinct values, so two unseeded runs give the same interval about one time in five and the determinism test would sometimes miss the bug. The grader
+        ran the suite three times to make sure it is stable."""),
     predict("Why property tests catch overflow", "easy",
         code="""
         import numpy as np

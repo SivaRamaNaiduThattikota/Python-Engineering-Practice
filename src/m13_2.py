@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m13-2", num="13.2", title="Fixtures",
@@ -15,6 +16,8 @@ term("Teardown", "The cleanup after a test: closing files, deleting data, restor
 term("Test isolation", "Every test starts from a known state and leaves nothing behind, so tests pass in any order and alone.")
 
 section("fixtures", "Fixtures: dependencies by name",
+    fig(chain(["def test_x(store):", "pytest sees the|parameter name", "runs the fixture|store()", ("passes its result|as the argument", "good")]),
+        "Fixtures are requested by name: a test lists what it needs and pytest builds it."),
     p("""Tests often need the same preparation: a list of sample documents, a configured object, a file on disk. Copying that code into every test is noisy, and
     putting it in module-level variables shares **mutable state** between tests, which makes them depend on each other's order. A **fixture** is a function
     decorated with `@pytest.fixture` that builds the thing; a test asks for it by **naming a parameter after it**, and pytest calls the fixture, passes the
@@ -58,6 +61,8 @@ section("fixtures", "Fixtures: dependencies by name",
 )
 
 section("yield", "Cleanup with `yield`",
+    fig(chain(["fixture code|before yield", ("the test runs", "accent"), "fixture code|after yield", ("cleanup runs even|if the test failed", "good")]),
+        "Everything after `yield` is teardown, and it runs whether the test passed or failed."),
     p("""A fixture that acquires something must release it. Write it as a generator: code before **`yield`** is the setup, the yielded value goes to the test, and code
     after `yield` is the **teardown**, which runs after the test **whether it passed or failed**, like the `finally` of a context manager (10.2). When a
     test uses several fixtures, teardowns run in reverse order of setup. If setup raises, the test is reported as an **error** (not a failure), which tells
@@ -92,6 +97,13 @@ section("yield", "Cleanup with `yield`",
 )
 
 section("scope", "Scopes, autouse and conftest.py",
+    fig(table(["scope", "created", "use for"], [
+        ["function (default)", "once per test", "anything a test may change"],
+        ["class", "once per test class", "shared setup for a group"],
+        ["module", "once per test file", "read-only data for a file"],
+        ["session", "once per test run", "expensive read-only things (a loaded model)"],
+    ], hl={(3, 2)}, label="fixture scopes"),
+        "Wider scopes save time but share one object, so only share things no test mutates."),
     p("""By default a fixture has **function scope**: it is created for every test that uses it. `@pytest.fixture(scope="module")` creates it once per test file,
     `"class"` once per test class, and `"session"` once per test run, which is how you share something **expensive** such as a loaded model, a started
     container or a database schema. The trap: a shared object is shared, so if one test mutates it, the next sees the change, and the suite becomes

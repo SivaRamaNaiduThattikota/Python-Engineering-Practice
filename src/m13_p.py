@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m13-p", num="13.P", title="Module 13 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(13, "a test suite for a RAG answer service"), "Module 13 at a glance: pytest basics, fixtures, test doubles and testing ML code, building up to a full test suite."),
     p("""Before writing a test, ask what would make it **fail**. Pick inputs that separate correct behaviour from plausible mistakes (13.1); give each test its own
     world through fixtures, `tmp_path` and `monkeypatch` (13.2); replace slow or random dependencies with fakes and mocks that match the real interface, and
     patch where names are looked up (13.3); and for numbers, randomness and models, test tolerances, seeds, properties and behaviour, leaving quality to
@@ -604,6 +606,19 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: a test suite for a RAG answer service",
+    fig(flowchart({
+        "q": ("start", 0, 0, "answer(question)"),
+        "blank": ("ask", 0, 1, "blank question?"),
+        "err": ("bad", 1, 1, "ValueError"),
+        "hit": ("ask", 0, 2, "cached on disk?"),
+        "ret": ("good", 1, 2, "return the cached|result, log a hit"),
+        "chunks": ("ask", 0, 3, "retriever returns|any chunks?"),
+        "idk": ("warn", 1, 3, "I don't know.|(warning, no cache)"),
+        "llm": ("accent", 0, 4, "call the model,|time it with the clock"),
+        "save": ("end", 0, 5, "cache and return"),
+    }, [("q", "blank"), ("blank", "err", "yes"), ("blank", "hit", "no"), ("hit", "ret", "yes"), ("hit", "chunks", "no"),
+        ("chunks", "idk", "no"), ("chunks", "llm", "yes"), ("llm", "save")], cell=(240, 76), label="the answer service your tests pin down"),
+        "Each branch of the service is a behaviour to test, and each needs its own fixture, fake or mock."),
     p("""`AnswerService` answers support questions: it normalises the question, returns a cached answer if one exists on disk, otherwise retrieves chunks, calls the
     model with a prompt built from them, measures latency with an injected clock, caches the result, and logs what happened. Your task is the test suite: it must
     pass on this implementation and catch each of ten realistic bugs, using what this module taught: fixtures, `tmp_path`, mocks with `spec`, fakes, a fake

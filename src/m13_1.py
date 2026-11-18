@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m13-1", num="13.1", title="pytest basics",
@@ -16,6 +17,11 @@ term("Test runner", "The program that finds tests, runs them and reports results
 term("Mutation testing", "Judging tests by deliberately introducing bugs (mutants) into the code and checking that at least one test fails for each.")
 
 section("why", "What a test is and how pytest finds it",
+    fig(stage_map(13, "a test suite for a RAG answer service"), "Module 13 at a glance: pytest basics, fixtures, test doubles and testing ML code, building up to a full test suite."),
+    fig(chain(["arrange:|build the input", "act:|call the code", ("assert:|check the result", "accent")]),
+        "Every test has the same three steps; a test name states the behaviour they check."),
+    fig(chain(["pytest", "collect test_*.py|files", "collect test_*|functions", "run each,|report failures", ("rewritten assert shows|both sides on failure", "good")]),
+        "pytest finds tests by naming convention, runs each one separately, and explains failed asserts."),
     p("""A **test** is code that runs other code with a known input and checks the output. Written once, it runs in a second every time anything changes, so
     regressions are caught before users or downstream jobs find them, and refactoring becomes safe. A good test reads as a specification: its name states a
     behaviour (`test_slugify_collapses_repeated_separators`), and its body follows **arrange, act, assert**: set up the input, call the code, check the
@@ -75,6 +81,8 @@ section("asserts", "Writing assertions: values, floats and exceptions",
 )
 
 section("param", "Parametrize: one test, many cases",
+    fig(chain(["@pytest.mark.parametrize(|'text, want', cases)", "one test function", ("one separate test|per case, with its own id", "good")]),
+        "Parametrize turns a table of cases into separate tests, so one failing case does not hide the others."),
     p("""Edge cases are where bugs live, and writing a separate function for each is tedious. **`@pytest.mark.parametrize("text,expected", [...])`** runs one test
     function once per tuple, each as a separate test with its own outcome and an id built from the values (`test_slugify[Hello World-hello-world]`), so one
     failing case does not hide the others. Give readable ids with `ids=[...]` or `pytest.param(value, id="unicode")`, and attach marks to single cases with

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m13-3", num="13.3", title="Mocking",
@@ -15,6 +16,13 @@ term("Mock", "A test double that records how it was called, so the test can chec
 term("Fake", "A small working implementation of a dependency, such as an in-memory store or a scripted model client, used instead of the real one in tests.")
 
 section("doubles", "Why test doubles, and which kind",
+    fig(table(["double", "what it does", "use it to check"], [
+        ["stub", "returns canned answers", "what your code returns"],
+        ["fake", "a small working version (dict store)", "what your code returns"],
+        ["mock", "records every call", "how a dependency was called"],
+        ["spy", "wraps the real object, records calls", "calls, with real behaviour"],
+    ], label="kinds of test double"),
+        "Pick the double by what the test is about: results need stubs or fakes, interactions need mocks."),
     p("""A unit test should be fast, deterministic and free. Calls to an LLM API, a vector database, an HTTP service, the system clock or a random generator are none
     of those, so tests replace them with **test doubles**. The vocabulary helps when discussing designs. A **stub** returns canned answers ("the model always
     replies `spam`"). A **fake** is a simple working implementation (a dict-backed store, a scripted chat model). A **mock** records calls so the test can
@@ -61,6 +69,9 @@ section("mock", "`Mock`: return values, side effects and call records",
 )
 
 section("patch", "`patch` and where to patch",
+    fig(refs(["weather.fetch", "app.fetch"], ["real fetch", "Mock()"], [(0, 1), (1, 0)], label="from weather import fetch, then patch('weather.fetch')",
+        title_names="names", title_objects="objects"),
+        "After `from weather import fetch`, `app` has its own name; patching `weather.fetch` leaves `app.fetch` on the real function, so patch `app.fetch`."),
     p("""When code creates or imports its dependency itself instead of receiving it, the test must replace it in place. **`unittest.mock.patch("module.name",
     new=...)`** replaces the attribute `name` of `module` for the duration of a `with` block or a decorated test, and restores it afterwards; `patch.object(obj,
     "attr")` does the same for an object you already hold, and `patch.dict(os.environ, {...})` for dictionary entries. pytest's `monkeypatch.setattr` (13.2)
