@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>12.4 · Configuration and secrets</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m12-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 12 · Files and data</span></div>
+  <h1>12.4 Configuration and secrets</h1>
+  <p>The same code runs on a laptop, in CI and in production with different models, limits and keys, so configuration must live outside the code, and secrets must never be in it. Environment variables and their parsing, <code>.env</code> files, TOML with <code>tomllib</code>, layering defaults, files and environment with clear precedence, keeping secrets out of reprs, logs and git, and test hygiene. Applied to LLM settings, model registries and secret scanning.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 10 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>Configuration lives outside the code</h2>
+<p><strong>Configuration</strong> is everything that differs between deployments of the same code: the model name, the temperature, the database URL, timeouts, feature flags, log level, and the credentials to reach other services. Hard-coding it means editing and redeploying code to change a timeout, and hard-coding a <strong>secret</strong> means everyone with access to the repository, its forks, its CI logs and its history has the key. The widely followed "twelve-factor" rule is to keep configuration in the <strong>environment</strong>: the code reads it at start-up, and each environment (developer laptop, CI, staging, production) supplies its own values.</p>
+<p>In practice, configuration comes in layers, from most general to most specific: <strong>defaults</strong> in the code (safe values that work for development), a <strong>configuration file</strong> checked into the repository for non-secret settings (<code>config.toml</code>), <strong>environment variables</strong> set by the deployment, and sometimes <strong>command-line flags</strong> for one run (15.3). Each layer overrides the ones before it, and secrets come only from the environment or a secret manager. The rest of this lesson builds each layer.</p>
+</section>
+<section class="sec" id="env">
+<h2><span class="n">2</span>Environment variables</h2>
+<p><strong><code>os.environ</code></strong> is a mapping of the process's environment variables. <code>os.environ["KEY"]</code> raises <code>KeyError</code> if the variable is missing, <code>os.environ.get("KEY", default)</code> (or the identical <code>os.getenv</code>) returns a default instead, and assigning <code>os.environ["KEY"] = "value"</code> changes it for this process and the child processes it starts, never for the parent shell. <strong>Every value is a string</strong>: assigning an int raises <code>TypeError</code>, and reading <code>"8"</code> or <code>"false"</code> gives strings that must be parsed. That parsing is where most configuration bugs come from: <code>bool("false")</code> is <code>True</code>, <code>int("8.0")</code> fails, and an empty string is not the same as a missing variable.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">environ.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+os.environ[&quot;APP_TOP_K&quot;] = &quot;8&quot;
+os.environ[&quot;APP_DEBUG&quot;] = &quot;false&quot;
+os.environ.pop(&quot;APP_MISSING&quot;, None)
+print(repr(os.environ[&quot;APP_TOP_K&quot;]), int(os.environ[&quot;APP_TOP_K&quot;]) + 1)
+print(bool(os.environ[&quot;APP_DEBUG&quot;]), os.getenv(&quot;APP_MISSING&quot;), os.getenv(&quot;APP_MISSING&quot;, &quot;fallback&quot;))
+print(&quot;APP_TOP_K&quot; in os.environ, type(os.environ).__name__, type(os.environ.copy()).__name__)
+try:
+    os.environ[&quot;APP_TIMEOUT&quot;] = 30
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+try:
+    os.environ[&quot;APP_MISSING&quot;]
+except KeyError as e:
+    print(&quot;KeyError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>&#x27;8&#x27; 9
+True None fallback
+True _Environ dict
+TypeError: str expected, not int
+KeyError: &#x27;APP_MISSING&#x27;</pre></div></div>
+<p>Two habits follow. <strong>Parse and validate once, at start-up</strong>, into a typed settings object (a frozen dataclass or a Pydantic model, 11.P), so the rest of the program never touches <code>os.environ</code> and a bad value fails immediately with a clear message instead of an hour later. And <strong>read the environment when the settings are created, not at import time</strong>: a module that evaluates <code>os.getenv</code> in a global freezes whatever was set when it was first imported, which breaks tests and anything that changes configuration (problem 15).</p>
+</section>
+<section class="sec" id="dotenv">
+<h2><span class="n">3</span><code>.env</code> files</h2>
+<p>Typing a dozen <code>export</code> commands before every run is tedious, so development tools read a <strong><code>.env</code></strong> file in the project folder: one <code>KEY=value</code> per line, <code>#</code> comments, optional quotes. The <code>python-dotenv</code> package loads it into <code>os.environ</code>; Docker Compose, VS Code and many frameworks read the same format. The file holds <strong>real secrets for your machine</strong>, so it is listed in <strong><code>.gitignore</code></strong> and never committed; instead the repository contains a <code>.env.example</code> with every variable name and dummy values, which documents what the application needs. Problem 5 implements the parser, to see exactly what the format means: <code>export</code> prefixes, quotes, escapes in double quotes, and comments.</p>
+<p>By convention, values loaded from <code>.env</code> do <strong>not</strong> override variables already set in the real environment, so a deployment can always win over a stray file. In production, there is no <code>.env</code> file at all: the platform (Kubernetes, a cloud service, CI) injects environment variables, ideally fetched from a <strong>secret manager</strong> such as AWS Secrets Manager, Azure Key Vault, GCP Secret Manager or HashiCorp Vault, which stores secrets encrypted, controls who can read them, logs every access and supports rotation.</p>
+</section>
+<section class="sec" id="toml">
+<h2><span class="n">4</span>Configuration files with <code>tomllib</code></h2>
+<p>Non-secret settings with structure (several models, retrieval parameters, prompt names) are clearer in a file than in dozens of variables. <strong>TOML</strong> is the Python ecosystem's format: <code>pyproject.toml</code> uses it, and since Python 3.11 the standard library reads it with <strong><code>tomllib</code></strong>. Unlike <code>.env</code> and environment variables, TOML values are <strong>typed</strong>: <code>8</code> is an int, <code>0.2</code> a float, <code>true</code> a bool, <code>"text"</code> a string, <code>2025-03-01</code> a date, <code>[...]</code> an array, and <code>[section]</code> headers and <code>[[array.of.tables]]</code> create nested dicts and lists of dicts. <code>tomllib.loads(text)</code> parses a string and <code>tomllib.load(f)</code> a file opened in <strong>binary</strong> mode (<code>"rb"</code>), returning plain dicts; errors raise <code>tomllib.TOMLDecodeError</code>, a subclass of <code>ValueError</code>. <code>tomllib</code> only reads; writing TOML needs a third-party package such as <code>tomli-w</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">toml_config.py</span><button class="copy">Copy</button></div><pre><code class="py">import tomllib
+
+text = &#x27;&#x27;&#x27;
+service = &quot;support-rag&quot;
+debug = false
+
+[retrieval]
+top_k = 8
+min_score = 0.35
+sources = [&quot;faq&quot;, &quot;terms&quot;]
+
+[[models]]
+name = &quot;small&quot;
+context_window = 8_192
+
+[[models]]
+name = &quot;large&quot;
+context_window = 128_000
+&#x27;&#x27;&#x27;
+cfg = tomllib.loads(text)
+print(cfg[&quot;retrieval&quot;], type(cfg[&quot;retrieval&quot;][&quot;min_score&quot;]).__name__)
+print([m[&quot;name&quot;] for m in cfg[&quot;models&quot;]], cfg[&quot;models&quot;][1][&quot;context_window&quot;])
+try:
+    tomllib.loads(&quot;top_k = 8\ntop_k = 9&quot;)
+except tomllib.TOMLDecodeError as e:
+    print(&quot;TOMLDecodeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;top_k&#x27;: 8, &#x27;min_score&#x27;: 0.35, &#x27;sources&#x27;: [&#x27;faq&#x27;, &#x27;terms&#x27;]} float
+[&#x27;small&#x27;, &#x27;large&#x27;] 128000
+TOMLDecodeError: Cannot overwrite a value (at end of document)</pre></div></div>
+</section>
+<section class="sec" id="layers">
+<h2><span class="n">5</span>Layering and precedence</h2>
+<p>Combining the layers is a <strong>merge</strong>, and its rules should be explicit. A shallow merge, <code>{**defaults, **file_cfg, **env_cfg}</code> or <code>defaults | file_cfg</code>, replaces whole nested sections: a file that sets only <code>model.name</code> would wipe out the default <code>model.temperature</code>. Configuration needs a <strong>deep merge</strong>: nested dicts are merged key by key, and other values (including lists) are replaced. <code>collections.ChainMap(env, file_cfg, defaults)</code> gives a read-only-looking view that searches the maps in order without copying, which suits flat settings; writes go to the first map (problem 9).</p>
+<p>Environment variables are flat strings, so nested keys need a naming convention, usually a prefix and a double underscore for each level: <code>APP_MODEL__TEMPERATURE=0.7</code> sets <code>model.temperature</code>. Their values need types; a neat trick is to parse each one as a TOML value and fall back to the raw string, so <code>0.7</code> becomes a float, <code>true</code> a bool and <code>["a", "b"]</code> a list (problem 6). Whatever the scheme, a good settings loader can also report <strong>where each value came from</strong> (problem 14), the first thing you want to know when production behaves differently from your laptop.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">layers.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy
+
+def deep_merge(base, override):
+    out = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+defaults = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0}, &quot;retrieval&quot;: {&quot;top_k&quot;: 5, &quot;sources&quot;: [&quot;faq&quot;]}}
+file_cfg = {&quot;model&quot;: {&quot;name&quot;: &quot;large&quot;}, &quot;retrieval&quot;: {&quot;sources&quot;: [&quot;faq&quot;, &quot;terms&quot;]}}
+print({**defaults, **file_cfg}[&quot;model&quot;])
+merged = deep_merge(defaults, file_cfg)
+print(merged)
+print(defaults[&quot;retrieval&quot;][&quot;sources&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;name&#x27;: &#x27;large&#x27;}
+{&#x27;model&#x27;: {&#x27;name&#x27;: &#x27;large&#x27;, &#x27;temperature&#x27;: 0.0}, &#x27;retrieval&#x27;: {&#x27;top_k&#x27;: 5, &#x27;sources&#x27;: [&#x27;faq&#x27;, &#x27;terms&#x27;]}}
+[&#x27;faq&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="secrets">
+<h2><span class="n">6</span>Keeping secrets secret</h2>
+<p>A secret leaks in more ways than being committed. The rules: never write a secret in source code, notebooks, tests or config files that are committed; keep <code>.env</code> in <code>.gitignore</code>; read secrets from the environment or a secret manager at start-up; <strong>never log or print them</strong>, which includes the accidental cases: an exception message that contains a URL with a password, a <code>repr</code> of a settings object in a log line, a debug dump of request headers, or a notebook cell output saved into the repository. Give secrets their own type whose <code>repr</code> and <code>str</code> are masked (Pydantic has <code>SecretStr</code>; problem 10 builds one), so printing the settings is safe.</p>
+<p>Assume a leak will happen and limit its damage: use <strong>separate keys per environment and per service</strong>, give each key the narrowest permissions and spending limits the provider allows, and <strong>rotate</strong> them regularly. Add automated <strong>secret scanning</strong> (GitHub's push protection, <code>gitleaks</code>, <code>detect-secrets</code>, or a pre-commit hook like problem 13) so a key is caught before it is pushed. If a key is committed anyway, <strong>revoke and rotate it first</strong>: deleting the commit does not help, because forks, clones, CI caches and bots that scan public repositories for keys within minutes may already have it.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-environment-variables-are-strings" data-pid="m12-4-environment-variables-are-strings" data-type="predict" data-level="easy" data-answer="1010 20
+True False unset
+default True
+5 5 False">
+<header class="prob-head"><h3>1. Environment variables are strings</h3></header>
+<div class="code"><pre><code class="py">import os
+
+os.environ[&quot;P1_LIMIT&quot;] = &quot;10&quot;
+os.environ[&quot;P1_FLAG&quot;] = &quot;0&quot;
+os.environ[&quot;P1_EMPTY&quot;] = &quot;&quot;
+os.environ.pop(&quot;P1_NONE&quot;, None)
+print(os.environ[&quot;P1_LIMIT&quot;] * 2, int(os.environ[&quot;P1_LIMIT&quot;]) * 2)
+print(bool(os.environ[&quot;P1_FLAG&quot;]), bool(os.environ[&quot;P1_EMPTY&quot;]), os.getenv(&quot;P1_NONE&quot;, &quot;unset&quot;))
+print(os.environ.get(&quot;P1_EMPTY&quot;) or &quot;default&quot;, os.environ.get(&quot;P1_EMPTY&quot;, &quot;default&quot;) == &quot;&quot;)
+print(os.environ.setdefault(&quot;P1_NONE&quot;, &quot;5&quot;), os.environ.pop(&quot;P1_NONE&quot;), &quot;P1_NONE&quot; in os.environ)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Every value is a string; <code>bool</code> of any non-empty string is <code>True</code>. <code>get</code> with a default only helps when the variable is missing, not when it is empty.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1010 20
+True False unset
+default True
+5 5 False</pre></div><p><code>"10" * 2</code> repeats the string; it needs <code>int</code> first. <code>bool("0")</code> is <code>True</code> because the string is not empty, the classic bug when flags are parsed with <code>bool</code>. An empty variable is <strong>set</strong>, so <code>get</code> returns <code>""</code> rather than the default, while <code>or "default"</code> treats empty as missing; choose deliberately. <code>setdefault</code> sets and returns the value when missing, and <code>pop</code> removes it again.</p></div></details>
+</article>
+<article class="prob" id="p-parse-boolean-and-integer-settings" data-pid="m12-4-parse-boolean-and-integer-settings" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Parse boolean and integer settings</h3></header>
+<div class="prob-q"><p>Write <code>env_bool(name, default=False, environ=None)</code> and <code>env_int(name, default, min_value=None, max_value=None, environ=None)</code> reading from <code>environ</code> (default <code>os.environ</code>). A missing or empty variable gives the default. <code>env_bool</code> accepts <code>1, true, yes, on</code> and <code>0, false, no, off</code> in any case and with surrounding spaces; <code>env_int</code> accepts integers only and checks the bounds. Anything else raises <code>ValueError</code> whose message names the variable and the bad value.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import os
+
+def env_bool(name, default=False, environ=None):
+    pass
+
+def env_int(name, default, min_value=None, max_value=None, environ=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">env = {"DEBUG": " TRUE ", "STREAM": "off", "EMPTY": "", "FLAG": "maybe", "TOP_K": "8", "BIG": "500", "FLOAT": "8.0"}
+assert [env_bool(k, environ=env) for k in ["DEBUG", "STREAM", "EMPTY", "MISSING"]] == [True, False, False, False]
+assert env_bool("MISSING", default=True, environ=env) is True and env_int("TOP_K", 5, 1, 50, environ=env) == 8 and env_int("NONE", 5, environ=env) == 5
+for call, text in [(lambda: env_bool("FLAG", environ=env), "FLAG"), (lambda: env_int("BIG", 5, max_value=100, environ=env), "BIG"),
+                   (lambda: env_int("FLOAT", 5, environ=env), "'8.0'")]:
+    try:
+        call()
+        assert False
+    except ValueError as e:
+        assert text in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">env = {&quot;DEBUG&quot;: &quot; TRUE &quot;, &quot;STREAM&quot;: &quot;off&quot;, &quot;EMPTY&quot;: &quot;&quot;, &quot;FLAG&quot;: &quot;maybe&quot;, &quot;TOP_K&quot;: &quot;8&quot;, &quot;BIG&quot;: &quot;500&quot;, &quot;FLOAT&quot;: &quot;8.0&quot;}
+assert [env_bool(k, environ=env) for k in [&quot;DEBUG&quot;, &quot;STREAM&quot;, &quot;EMPTY&quot;, &quot;MISSING&quot;]] == [True, False, False, False]
+assert env_bool(&quot;MISSING&quot;, default=True, environ=env) is True and env_int(&quot;TOP_K&quot;, 5, 1, 50, environ=env) == 8 and env_int(&quot;NONE&quot;, 5, environ=env) == 5
+for call, text in [(lambda: env_bool(&quot;FLAG&quot;, environ=env), &quot;FLAG&quot;), (lambda: env_int(&quot;BIG&quot;, 5, max_value=100, environ=env), &quot;BIG&quot;),
+                   (lambda: env_int(&quot;FLOAT&quot;, 5, environ=env), &quot;&#x27;8.0&#x27;&quot;)]:
+    try:
+        call()
+        assert False
+    except ValueError as e:
+        assert text in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>os.environ if environ is None else environ</code>, then <code>.get(name, "").strip()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert with <code>int(raw)</code> inside <code>try</code> and re-raise a <code>ValueError</code> with your own message <code>from None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+_TRUE = {&quot;1&quot;, &quot;true&quot;, &quot;yes&quot;, &quot;on&quot;}
+_FALSE = {&quot;0&quot;, &quot;false&quot;, &quot;no&quot;, &quot;off&quot;}
+
+
+def _raw(name, environ):
+    env = os.environ if environ is None else environ
+    return env.get(name, &quot;&quot;).strip()
+
+
+def env_bool(name, default=False, environ=None):
+    raw = _raw(name, environ)
+    if not raw:
+        return default
+    if raw.lower() in _TRUE:
+        return True
+    if raw.lower() in _FALSE:
+        return False
+    raise ValueError(f&quot;{name} must be a boolean (true/false, 1/0, yes/no, on/off), got {raw!r}&quot;)
+
+
+def env_int(name, default, min_value=None, max_value=None, environ=None):
+    raw = _raw(name, environ)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f&quot;{name} must be an integer, got {raw!r}&quot;) from None
+    if min_value is not None and value &lt; min_value or max_value is not None and value &gt; max_value:
+        raise ValueError(f&quot;{name} must be between {min_value} and {max_value}, got {value}&quot;)
+    return value</code></pre></div><p>Parsing settings is validation (7.1): accept an explicit set of spellings, reject everything else with a message that names the variable and shows the bad value, so the operator knows exactly what to fix. Treating empty as missing matches how deployment tools often define unset variables (<code>KEY=</code>). Passing <code>environ</code> as a parameter, defaulting to <code>os.environ</code>, makes the functions testable with a plain dict and no global state. <code>int("8.0")</code> failing is deliberate: a fractional value for a count is a configuration mistake, not something to truncate quietly.</p></div></details>
+</article>
+<article class="prob" id="p-an-api-key-in-the-source-code" data-pid="m12-4-an-api-key-in-the-source-code" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. An API key in the source code</h3></header>
+<div class="prob-q"><p><code>auth_headers</code> builds the headers for the model API with a key pasted into the code. Make it read the key from the <code>OPENAI_API_KEY</code> environment variable at call time, and raise <code>RuntimeError("OPENAI_API_KEY is not set")</code> if it is missing or empty.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import os
+
+API_KEY = &quot;sk-proj-2pQ8...pasted-from-the-dashboard&quot;
+
+def auth_headers():
+    return {&quot;Authorization&quot;: f&quot;Bearer {API_KEY}&quot;, &quot;Content-Type&quot;: &quot;application/json&quot;}
+</textarea>
+<script type="text/plain" class="prob-tests">import os
+os.environ["OPENAI_API_KEY"] = "sk-test-123"
+assert auth_headers() == {"Authorization": "Bearer sk-test-123", "Content-Type": "application/json"}
+os.environ["OPENAI_API_KEY"] = ""
+try:
+    auth_headers()
+    assert False
+except RuntimeError as e:
+    assert str(e) == "OPENAI_API_KEY is not set"
+os.environ.pop("OPENAI_API_KEY")
+assert "API_KEY" not in globals()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os
+os.environ[&quot;OPENAI_API_KEY&quot;] = &quot;sk-test-123&quot;
+assert auth_headers() == {&quot;Authorization&quot;: &quot;Bearer sk-test-123&quot;, &quot;Content-Type&quot;: &quot;application/json&quot;}
+os.environ[&quot;OPENAI_API_KEY&quot;] = &quot;&quot;
+try:
+    auth_headers()
+    assert False
+except RuntimeError as e:
+    assert str(e) == &quot;OPENAI_API_KEY is not set&quot;
+os.environ.pop(&quot;OPENAI_API_KEY&quot;)
+assert &quot;API_KEY&quot; not in globals()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Delete the constant. <code>key = os.environ.get("OPENAI_API_KEY")</code>, then check <code>if not key:</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+def auth_headers():
+    key = os.environ.get(&quot;OPENAI_API_KEY&quot;)
+    if not key:
+        raise RuntimeError(&quot;OPENAI_API_KEY is not set&quot;)
+    return {&quot;Authorization&quot;: f&quot;Bearer {key}&quot;, &quot;Content-Type&quot;: &quot;application/json&quot;}</code></pre></div><p>A key in source code is in every clone, fork, code review, CI log and backup, and in the git history forever, even after the line is deleted; a key pasted into code that is pushed to a public repository is typically found by automated scanners within minutes. Reading it from the environment moves the secret to the deployment, where each environment can have its own key. Failing with a clear message when it is missing beats sending an unauthenticated request and debugging a 401. The official SDKs read <code>OPENAI_API_KEY</code> and <code>ANTHROPIC_API_KEY</code> from the environment for the same reason.</p></div></details>
+</article>
+<article class="prob" id="p-what-toml-gives-you" data-pid="m12-4-what-toml-gives-you" data-type="predict" data-level="easy" data-answer="[&#x27;day&#x27;, &#x27;model&#x27;, &#x27;path&#x27;, &#x27;quoted.key&#x27;, &#x27;ratio&#x27;, &#x27;server&#x27;, &#x27;size&#x27;, &#x27;started&#x27;, &#x27;title&#x27;] 1000000 0.5
+C:\new\models datetime UTC datetime.date(2025, 3, 1)
+{&#x27;name&#x27;: &#x27;small&#x27;} 1 {&#x27;port&#x27;: 8080}">
+<header class="prob-head"><h3>4. What TOML gives you</h3></header>
+<div class="code"><pre><code class="py">import tomllib
+
+doc = tomllib.loads(&#x27;&#x27;&#x27;
+title = &quot;RAG service&quot;
+path = &#x27;C:\\new\\models&#x27;
+size = 1_000_000
+ratio = 5e-1
+started = 2025-03-01T09:30:00Z
+day = 2025-03-01
+model.name = &quot;small&quot;
+&quot;quoted.key&quot; = 1
+[server]
+port = 8080
+&#x27;&#x27;&#x27;)
+print(sorted(doc), doc[&quot;size&quot;], doc[&quot;ratio&quot;])
+print(doc[&quot;path&quot;], type(doc[&quot;started&quot;]).__name__, doc[&quot;started&quot;].tzinfo, repr(doc[&quot;day&quot;]))
+print(doc[&quot;model&quot;], doc[&quot;quoted.key&quot;], doc[&quot;server&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Single-quoted TOML strings are literal: backslashes are kept. Dotted keys create nested tables; quoted keys do not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;day&#x27;, &#x27;model&#x27;, &#x27;path&#x27;, &#x27;quoted.key&#x27;, &#x27;ratio&#x27;, &#x27;server&#x27;, &#x27;size&#x27;, &#x27;started&#x27;, &#x27;title&#x27;] 1000000 0.5
+C:\new\models datetime UTC datetime.date(2025, 3, 1)
+{&#x27;name&#x27;: &#x27;small&#x27;} 1 {&#x27;port&#x27;: 8080}</pre></div><p>TOML values arrive with their types: an int with digit separators, a float, a timezone-aware <code>datetime</code> (the <code>Z</code> means UTC) and a <code>date</code>. A single-quoted string is literal, so the Windows path keeps its backslashes; in a double-quoted string, <code>\n</code> would be a newline. <code>model.name</code> creates a nested table <code>model</code>, while the quoted <code>"quoted.key"</code> is a single key containing a dot. The <code>[server]</code> header creates another nested dict. The top-level keys are sorted here only to print them in a stable order.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-parse-a-env-file" data-pid="m12-4-parse-a-env-file" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Parse a .env file</h3></header>
+<div class="prob-q"><p>Write <code>parse_dotenv(text)</code> returning a dict. Ignore blank lines and lines starting with <code>#</code>, and allow an <code>export </code> prefix. Each other line is <code>KEY=VALUE</code> with a key matching <code>[A-Za-z_][A-Za-z0-9_]*</code> (spaces around <code>=</code> allowed). Values: in double quotes, <code>\n</code> becomes a newline and <code>\"</code> a quote; in single quotes, the text is literal; after a closing quote, only spaces or a <code>#</code> comment may follow. Unquoted values are stripped, and <code> #</code> starts a comment (a <code>#</code> without a space before it is part of the value). Later keys override earlier ones. An invalid line or an unterminated quote raises <code>ValueError</code> starting with <code>f"line {n}: "</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import re
+
+def parse_dotenv(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">text = r'''# local settings, never commit
+export OPENAI_API_KEY=sk-test-123
+MODEL = small  # the cheap one
+EMPTY=
+GREETING="Hello\nWorld"
+QUOTED="say \"hi\" # not a comment"   # but this is
+RAW='no $expansion \n here'
+URL=https://x.io/a#frag
+MODEL=large
+'''
+env = parse_dotenv("\n".join(line.strip() for line in text.splitlines()))
+assert env == {"OPENAI_API_KEY": "sk-test-123", "MODEL": "large", "EMPTY": "", "GREETING": "Hello\nWorld",
+               "QUOTED": 'say "hi" # not a comment', "RAW": r"no $expansion \n here", "URL": "https://x.io/a#frag"}
+assert list(env)[:2] == ["OPENAI_API_KEY", "MODEL"]
+for bad, n in [("A=1\nthis is not valid", 2), ('X="unterminated', 1), ("1KEY=v", 1), ("Y='a' extra", 1)]:
+    try:
+        parse_dotenv(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e).startswith(f"line {n}: "), str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = r&#x27;&#x27;&#x27;# local settings, never commit
+export OPENAI_API_KEY=sk-test-123
+MODEL = small  # the cheap one
+EMPTY=
+GREETING=&quot;Hello\nWorld&quot;
+QUOTED=&quot;say \&quot;hi\&quot; # not a comment&quot;   # but this is
+RAW=&#x27;no $expansion \n here&#x27;
+URL=https://x.io/a#frag
+MODEL=large
+&#x27;&#x27;&#x27;
+env = parse_dotenv(&quot;\n&quot;.join(line.strip() for line in text.splitlines()))
+assert env == {&quot;OPENAI_API_KEY&quot;: &quot;sk-test-123&quot;, &quot;MODEL&quot;: &quot;large&quot;, &quot;EMPTY&quot;: &quot;&quot;, &quot;GREETING&quot;: &quot;Hello\nWorld&quot;,
+               &quot;QUOTED&quot;: &#x27;say &quot;hi&quot; # not a comment&#x27;, &quot;RAW&quot;: r&quot;no $expansion \n here&quot;, &quot;URL&quot;: &quot;https://x.io/a#frag&quot;}
+assert list(env)[:2] == [&quot;OPENAI_API_KEY&quot;, &quot;MODEL&quot;]
+for bad, n in [(&quot;A=1\nthis is not valid&quot;, 2), (&#x27;X=&quot;unterminated&#x27;, 1), (&quot;1KEY=v&quot;, 1), (&quot;Y=&#x27;a&#x27; extra&quot;, 1)]:
+    try:
+        parse_dotenv(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e).startswith(f&quot;line {n}: &quot;), str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Match the key part with <code>re.fullmatch(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)", line)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For a double-quoted value, walk the characters, handling a backslash followed by <code>n</code>, <code>"</code> or <code>\</code>; stop at the first unescaped <code>"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For an unquoted value, <code>re.split(r"\s#", value, maxsplit=1)[0].strip()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+_LINE = re.compile(r&quot;(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)&quot;)
+_ESCAPES = {&quot;n&quot;: &quot;\n&quot;, &#x27;&quot;&#x27;: &#x27;&quot;&#x27;, &quot;\\&quot;: &quot;\\&quot;}
+
+
+def _rest_ok(rest):
+    rest = rest.strip()
+    return not rest or rest.startswith(&quot;#&quot;)
+
+
+def _value(raw, n):
+    raw = raw.strip()
+    if raw.startswith(&#x27;&quot;&#x27;):
+        out, i = [], 1
+        while i &lt; len(raw):
+            ch = raw[i]
+            if ch == &quot;\\&quot; and i + 1 &lt; len(raw) and raw[i + 1] in _ESCAPES:
+                out.append(_ESCAPES[raw[i + 1]])
+                i += 2
+                continue
+            if ch == &#x27;&quot;&#x27;:
+                if not _rest_ok(raw[i + 1:]):
+                    raise ValueError(f&quot;line {n}: unexpected text after closing quote&quot;)
+                return &quot;&quot;.join(out)
+            out.append(ch)
+            i += 1
+        raise ValueError(f&quot;line {n}: unterminated double quote&quot;)
+    if raw.startswith(&quot;&#x27;&quot;):
+        end = raw.find(&quot;&#x27;&quot;, 1)
+        if end == -1:
+            raise ValueError(f&quot;line {n}: unterminated single quote&quot;)
+        if not _rest_ok(raw[end + 1:]):
+            raise ValueError(f&quot;line {n}: unexpected text after closing quote&quot;)
+        return raw[1:end]
+    return re.split(r&quot;\s#&quot;, raw, maxsplit=1)[0].strip()
+
+
+def parse_dotenv(text):
+    env = {}
+    for n, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(&quot;#&quot;):
+            continue
+        m = _LINE.fullmatch(stripped)
+        if not m:
+            raise ValueError(f&quot;line {n}: expected KEY=VALUE&quot;)
+        env[m.group(1)] = _value(m.group(2), n)
+    return env</code></pre></div><p>Writing the parser shows what the format really promises. Quotes exist so values can hold spaces, <code>#</code> and newlines; double quotes interpret a few escapes, single quotes nothing, which is why passwords with backslashes belong in single quotes. The comment rule (<code> #</code> needs a space before it) is what keeps URLs with fragments intact. Strict errors with line numbers turn a typo in a 40-line <code>.env</code> into a one-second fix. Dict insertion order keeps the first position of a key even when a later line overrides its value. Real loaders such as <code>python-dotenv</code> add variable expansion (<code>${HOME}</code>) and multi-line values, and, by default, do not override variables that are already set in the environment.</p></div></details>
+</article>
+<article class="prob" id="p-layer-defaults-a-toml-file-and-the-envir" data-pid="m12-4-layer-defaults-a-toml-file-and-the-envir" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Layer defaults, a TOML file and the environment</h3></header>
+<div class="prob-q"><p>Write <code>load_config(defaults, toml_text, environ, prefix="APP_")</code>. Start from a deep copy of <code>defaults</code>, deep-merge the parsed TOML into it (nested dicts merge key by key, other values replace), then apply every environment variable starting with <code>prefix</code>: the rest of the name, lower-cased and split on <code>__</code>, is the nested path (missing dicts are created), and the value is parsed as a TOML value when possible (<code>0.7</code>, <code>true</code>, <code>["a"]</code>), otherwise kept as a string. Return the result without changing <code>defaults</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import copy, tomllib
+
+def load_config(defaults, toml_text, environ, prefix=&quot;APP_&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">defaults = {"model": {"name": "small", "temperature": 0.0}, "retrieval": {"top_k": 5, "sources": ["faq"]}, "debug": False}
+toml_text = 'debug = true\n[model]\nname = "medium"\n[retrieval]\nsources = ["faq", "terms"]\n'
+env = {"APP_MODEL__TEMPERATURE": "0.7", "APP_RETRIEVAL__TOP_K": "8", "APP_MODEL__NAME": "large", "APP_TAGS": '["a", "b"]',
+       "APP_NOTE": "plain text", "APP_CACHE__REDIS__URL": "redis://cache:6379", "HOME": "/x"}
+cfg = load_config(defaults, toml_text, env)
+assert cfg == {"model": {"name": "large", "temperature": 0.7}, "retrieval": {"top_k": 8, "sources": ["faq", "terms"]}, "debug": True,
+               "tags": ["a", "b"], "note": "plain text", "cache": {"redis": {"url": "redis://cache:6379"}}}
+assert defaults["model"] == {"name": "small", "temperature": 0.0} and defaults["retrieval"]["sources"] == ["faq"]
+assert load_config(defaults, "", {})["retrieval"] is not defaults["retrieval"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">defaults = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0}, &quot;retrieval&quot;: {&quot;top_k&quot;: 5, &quot;sources&quot;: [&quot;faq&quot;]}, &quot;debug&quot;: False}
+toml_text = &#x27;debug = true\n[model]\nname = &quot;medium&quot;\n[retrieval]\nsources = [&quot;faq&quot;, &quot;terms&quot;]\n&#x27;
+env = {&quot;APP_MODEL__TEMPERATURE&quot;: &quot;0.7&quot;, &quot;APP_RETRIEVAL__TOP_K&quot;: &quot;8&quot;, &quot;APP_MODEL__NAME&quot;: &quot;large&quot;, &quot;APP_TAGS&quot;: &#x27;[&quot;a&quot;, &quot;b&quot;]&#x27;,
+       &quot;APP_NOTE&quot;: &quot;plain text&quot;, &quot;APP_CACHE__REDIS__URL&quot;: &quot;redis://cache:6379&quot;, &quot;HOME&quot;: &quot;/x&quot;}
+cfg = load_config(defaults, toml_text, env)
+assert cfg == {&quot;model&quot;: {&quot;name&quot;: &quot;large&quot;, &quot;temperature&quot;: 0.7}, &quot;retrieval&quot;: {&quot;top_k&quot;: 8, &quot;sources&quot;: [&quot;faq&quot;, &quot;terms&quot;]}, &quot;debug&quot;: True,
+               &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;], &quot;note&quot;: &quot;plain text&quot;, &quot;cache&quot;: {&quot;redis&quot;: {&quot;url&quot;: &quot;redis://cache:6379&quot;}}}
+assert defaults[&quot;model&quot;] == {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0} and defaults[&quot;retrieval&quot;][&quot;sources&quot;] == [&quot;faq&quot;]
+assert load_config(defaults, &quot;&quot;, {})[&quot;retrieval&quot;] is not defaults[&quot;retrieval&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A recursive <code>_merge(target, src)</code> that recurses when both sides are dicts and otherwise assigns a deep copy.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Parse a single value with <code>tomllib.loads(f"v = {raw}")["v"]</code> inside <code>try</code>, falling back to <code>raw</code> on <code>TOMLDecodeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy, tomllib
+
+
+def _merge(target, src):
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def _parse(raw):
+    try:
+        return tomllib.loads(f&quot;v = {raw}&quot;)[&quot;v&quot;]
+    except tomllib.TOMLDecodeError:
+        return raw
+
+
+def load_config(defaults, toml_text, environ, prefix=&quot;APP_&quot;):
+    cfg = copy.deepcopy(defaults)
+    _merge(cfg, tomllib.loads(toml_text))
+    for name, raw in environ.items():
+        if not name.startswith(prefix):
+            continue
+        *parents, last = name[len(prefix):].lower().split(&quot;__&quot;)
+        node = cfg
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[last] = _parse(raw)
+    return cfg</code></pre></div><p>Each layer is more specific than the last, so later layers win, but only for the keys they mention: the deep merge keeps the default temperature when the file changes only the model name. Lists are replaced, not concatenated, because "the sources are faq and terms" is one setting. The <code>__</code> convention maps flat variable names onto the nested structure, and parsing values as TOML gives them types for free while plain words stay strings; the trade-off is that a value such as <code>2025-01-01</code> becomes a date, so a validating model (11.4) should still check the final result. The deep copy keeps the module's defaults pristine, which matters when the loader runs more than once, as in tests.</p></div></details>
+</article>
+<article class="prob" id="p-a-test-helper-that-leaks-environment-cha" data-pid="m12-4-a-test-helper-that-leaks-environment-cha" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A test helper that leaks environment changes</h3></header>
+<div class="prob-q"><p><code>temp_env(**changes)</code> should set environment variables for the duration of a <code>with</code> block, where a value of <code>None</code> means "unset it", and restore the exact previous state afterwards, even if the block raises. It crashes on <code>None</code> values, cannot restore variables that did not exist before, and restores nothing when the block fails. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import os
+from contextlib import contextmanager
+
+@contextmanager
+def temp_env(**changes):
+    old = {k: os.environ.get(k) for k in changes}
+    for k, v in changes.items():
+        os.environ[k] = v
+    yield
+    for k, v in old.items():
+        os.environ[k] = v
+</textarea>
+<script type="text/plain" class="prob-tests">import os
+os.environ["F7_KEEP"] = "orig"
+os.environ["F7_GONE"] = "here"
+os.environ.pop("F7_NEW", None)
+def run():
+    with temp_env(F7_KEEP="tmp", F7_NEW="x", F7_GONE=None):
+        inside = (os.environ["F7_KEEP"], os.environ["F7_NEW"], "F7_GONE" in os.environ)
+        raise KeyError("test failure inside the block")
+try:
+    run()
+except KeyError:
+    pass
+assert (os.environ.get("F7_KEEP"), os.environ.get("F7_GONE"), "F7_NEW" in os.environ) == ("orig", "here", False)
+with temp_env(F7_KEEP="tmp", F7_NEW="x", F7_GONE=None):
+    assert (os.environ["F7_KEEP"], os.environ["F7_NEW"], "F7_GONE" in os.environ) == ("tmp", "x", False)
+assert os.environ["F7_KEEP"] == "orig" and "F7_NEW" not in os.environ</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os
+os.environ[&quot;F7_KEEP&quot;] = &quot;orig&quot;
+os.environ[&quot;F7_GONE&quot;] = &quot;here&quot;
+os.environ.pop(&quot;F7_NEW&quot;, None)
+def run():
+    with temp_env(F7_KEEP=&quot;tmp&quot;, F7_NEW=&quot;x&quot;, F7_GONE=None):
+        inside = (os.environ[&quot;F7_KEEP&quot;], os.environ[&quot;F7_NEW&quot;], &quot;F7_GONE&quot; in os.environ)
+        raise KeyError(&quot;test failure inside the block&quot;)
+try:
+    run()
+except KeyError:
+    pass
+assert (os.environ.get(&quot;F7_KEEP&quot;), os.environ.get(&quot;F7_GONE&quot;), &quot;F7_NEW&quot; in os.environ) == (&quot;orig&quot;, &quot;here&quot;, False)
+with temp_env(F7_KEEP=&quot;tmp&quot;, F7_NEW=&quot;x&quot;, F7_GONE=None):
+    assert (os.environ[&quot;F7_KEEP&quot;], os.environ[&quot;F7_NEW&quot;], &quot;F7_GONE&quot; in os.environ) == (&quot;tmp&quot;, &quot;x&quot;, False)
+assert os.environ[&quot;F7_KEEP&quot;] == &quot;orig&quot; and &quot;F7_NEW&quot; not in os.environ</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Put the setting and the <code>yield</code> inside <code>try</code>, and the restoring loop in <code>finally</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Both directions need the same rule: a value of <code>None</code> means <code>os.environ.pop(k, None)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+from contextlib import contextmanager
+
+def _apply(values):
+    for k, v in values.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+@contextmanager
+def temp_env(**changes):
+    old = {k: os.environ.get(k) for k in changes}
+    try:
+        _apply(changes)
+        yield
+    finally:
+        _apply(old)</code></pre></div><p><code>os.environ</code> is process-wide state, so a test that changes it and does not restore it changes every later test, the source of failures that depend on test order. Recording the previous value as <code>None</code> for missing variables lets one rule handle both directions: <code>None</code> means "absent", so it is popped, never assigned (assigning <code>None</code> raises <code>TypeError</code>). The <code>finally</code> (10.2) restores the state even when the block fails, which is exactly when a test has failed and the next one must not inherit its mess. pytest's <code>monkeypatch.setenv</code> and <code>monkeypatch.delenv</code> (13.2) do this for you.</p></div></details>
+</article>
+<article class="prob" id="p-reading-a-setting-in-a-hot-loop" data-pid="m12-4-reading-a-setting-in-a-hot-loop" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Reading a setting in a hot loop</h3></header>
+<div class="prob-q"><p>Both need the temperature setting while scoring 20,000 candidates. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import os
+os.environ[&quot;APP_TEMPERATURE&quot;] = &quot;0.2&quot;
+scores = [i / 20_000 for i in range(20_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = [s * float(os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0&quot;)) for s in scores]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">t = float(os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0&quot;))
+out = [s * t for s in scores]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does each <code>os.environ.get</code> and <code>float</code> call do, and how many happen in each option?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>21.86 ms</td></tr><tr><td>B</td><td>2.23 ms</td></tr></table></div><p><code>os.environ</code> is not a plain dict: each lookup encodes the key, looks it up in the underlying bytes mapping and decodes the value, and then <code>float</code> parses the string, 20,000 times in option A. Option B reads and parses once. Beyond speed, reading configuration once into a settings object is also the correct design: a value that could change halfway through a batch makes results inconsistent, and parsing at start-up surfaces bad values before any work is done.</p></div></details>
+</article>
+<article class="prob" id="p-layering-with-chainmap" data-pid="m12-4-layering-with-chainmap" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Layering with ChainMap</h3></header>
+<div class="prob-q"><p>Fill in <code>a</code> and <code>b</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from collections import ChainMap
+
+defaults = {&quot;model&quot;: &quot;small&quot;, &quot;top_k&quot;: 5, &quot;debug&quot;: False}
+file_cfg = {&quot;top_k&quot;: 8}
+env = {&quot;model&quot;: &quot;large&quot;}
+cfg = ChainMap({}, env, file_cfg, defaults)
+
+a, b = cfg[&quot;model&quot;], cfg[&quot;top_k&quot;]
+cfg[&quot;debug&quot;] = True
+a, b = cfg.maps[0], defaults[&quot;debug&quot;]
+del env[&quot;model&quot;]
+a, b = cfg[&quot;model&quot;], len(cfg)
+child = cfg.new_child({&quot;top_k&quot;: 1})
+a, b = child[&quot;top_k&quot;], cfg[&quot;top_k&quot;]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th></tr><tr><td>lookups</td><td><input class="cell" data-a="&#x27;large&#x27;" data-s="large" aria-label="a at lookups" autocomplete="off"></td><td><input class="cell" data-a="8" data-s="8" aria-label="b at lookups" autocomplete="off"></td></tr><tr><td>after a write</td><td><input class="cell" data-a="{&#x27;debug&#x27;: True}" data-s="{&#x27;debug&#x27;: True}" aria-label="a at after a write" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="b at after a write" autocomplete="off"></td></tr><tr><td>env changed</td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="a at env changed" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="b at env changed" autocomplete="off"></td></tr><tr><td>child scope</td><td><input class="cell" data-a="1" data-s="1" aria-label="a at child scope" autocomplete="off"></td><td><input class="cell" data-a="8" data-s="8" aria-label="b at child scope" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Lookups search the maps in order; writes and deletes only touch the first map. A ChainMap is a view, not a copy.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th></tr><tr><td>lookups</td><td><code>&#x27;large&#x27;</code></td><td><code>8</code></td></tr><tr><td>after a write</td><td><code>{&#x27;debug&#x27;: True}</code></td><td><code>False</code></td></tr><tr><td>env changed</td><td><code>&#x27;small&#x27;</code></td><td><code>3</code></td></tr><tr><td>child scope</td><td><code>1</code></td><td><code>8</code></td></tr></table></div><p><code>ChainMap</code> searches its maps in order, so the environment's model and the file's <code>top_k</code> win over the defaults. Writing goes to the first map only, the empty dict reserved for run-time overrides, and the defaults are untouched. Because it is a live view, deleting the key from <code>env</code> immediately exposes the default model; <code>len</code> counts distinct keys across all maps. <code>new_child</code> adds a map in front, a cheap way to create a temporary scope, without changing the parent.</p></div></details>
+</article>
+<article class="prob" id="p-settings-that-print-the-api-key" data-pid="m12-4-settings-that-print-the-api-key" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Settings that print the API key</h3></header>
+<div class="prob-q"><p><code>Settings</code> is logged at start-up with <code>log.info("settings: %s", settings)</code>, and the log contains the full API key. Add a <code>Secret</code> class that stores a string, shows <code>Secret('***')</code> as its <code>repr</code> and <code>***</code> as its <code>str</code>, and returns the real value from <code>get()</code>. <code>Settings</code> must still accept a plain string for <code>api_key</code> and wrap it in <code>__post_init__</code>; <code>headers()</code> keeps working.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Settings:
+    model: str
+    api_key: str
+
+    def headers(self):
+        return {&quot;Authorization&quot;: f&quot;Bearer {self.api_key}&quot;}
+</textarea>
+<script type="text/plain" class="prob-tests">key = "sk-live-abc123def456"
+s = Settings("small", key)
+assert key not in repr(s) and key not in str(s) and key not in f"{s} {s.api_key}" and key not in "%s %r" % (s, s)
+assert repr(s.api_key) == "Secret('***')" and str(s.api_key) == "***" and s.api_key.get() == key
+assert s.headers() == {"Authorization": f"Bearer {key}"} and Settings("small", Secret(key)).api_key.get() == key</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">key = &quot;sk-live-abc123def456&quot;
+s = Settings(&quot;small&quot;, key)
+assert key not in repr(s) and key not in str(s) and key not in f&quot;{s} {s.api_key}&quot; and key not in &quot;%s %r&quot; % (s, s)
+assert repr(s.api_key) == &quot;Secret(&#x27;***&#x27;)&quot; and str(s.api_key) == &quot;***&quot; and s.api_key.get() == key
+assert s.headers() == {&quot;Authorization&quot;: f&quot;Bearer {key}&quot;} and Settings(&quot;small&quot;, Secret(key)).api_key.get() == key</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Secret</code> with <code>__slots__ = ("_value",)</code>, <code>__repr__</code>, <code>__str__</code> and <code>get</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In a frozen dataclass, <code>__post_init__</code> must use <code>object.__setattr__(self, "api_key", Secret(self.api_key))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass
+
+
+class Secret:
+    __slots__ = (&quot;_value&quot;,)
+
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def __repr__(self):
+        return &quot;Secret(&#x27;***&#x27;)&quot;
+
+    def __str__(self):
+        return &quot;***&quot;
+
+
+@dataclass(frozen=True)
+class Settings:
+    model: str
+    api_key: Secret
+
+    def __post_init__(self):
+        if not isinstance(self.api_key, Secret):
+            object.__setattr__(self, &quot;api_key&quot;, Secret(self.api_key))
+
+    def headers(self):
+        return {&quot;Authorization&quot;: f&quot;Bearer {self.api_key.get()}&quot;}</code></pre></div><p>Logging the settings object at start-up is a good habit, and the dataclass <code>repr</code> includes every field, so the key leaked into every log line, log file and log platform. A wrapper type makes the safe behaviour the default: <code>repr</code> and <code>str</code> (and therefore f-strings and <code>%s</code>) show a mask, and the real value requires an explicit <code>get()</code>, which is easy to spot in review. The frozen dataclass needs <code>object.__setattr__</code> to replace the field in <code>__post_init__</code> (11.3). Pydantic's <code>SecretStr</code> (<code>get_secret_value()</code>) is the same idea. The wrapper does not stop a determined <code>print(s.api_key.get())</code>; it stops the accidental leaks.</p></div></details>
+</article>
+<article class="prob" id="p-a-model-registry-in-toml" data-pid="m12-4-a-model-registry-in-toml" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. A model registry in TOML</h3></header>
+<div class="prob-q"><p>Write <code>load_models(toml_text)</code> for a file with an optional <code>[defaults]</code> table and a <code>[[models]]</code> array. Return a dict from model name to its settings (defaults first, then the model's own keys), in file order. Allowed keys are <code>name</code>, <code>provider</code>, <code>context_window</code> and <code>cost_per_1k</code>; raise <code>ValueError</code> for a model without a name (<code>"model 2: missing name"</code>, counting from 1), a duplicate name (<code>"duplicate model 'x'"</code>), an unknown key (<code>"model 'x': unknown key 'k'"</code>), or a <code>context_window</code> that is not a positive int (<code>"model 'x': context_window must be a positive int"</code>). TOML syntax errors propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import tomllib
+
+def load_models(toml_text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import tomllib
+text = '''
+[defaults]
+provider = "local"
+context_window = 8192
+
+[[models]]
+name = "small"
+
+[[models]]
+name = "large"
+provider = "cloud"
+context_window = 128_000
+cost_per_1k = 0.01
+'''
+models = load_models(text)
+assert list(models) == ["small", "large"]
+assert models["small"] == {"provider": "local", "context_window": 8192, "name": "small"}
+assert models["large"] == {"provider": "cloud", "context_window": 128000, "name": "large", "cost_per_1k": 0.01}
+cases = [('[[models]]\nname = "a"\n[[models]]\nprovider = "x"', "model 2: missing name"),
+         ('[[models]]\nname = "a"\n[[models]]\nname = "a"', "duplicate model 'a'"),
+         ('[[models]]\nname = "a"\ntemprature = 0.2', "model 'a': unknown key 'temprature'"),
+         ('[[models]]\nname = "a"\ncontext_window = "8k"', "model 'a': context_window must be a positive int"),
+         ('[[models]]\nname = "a"\ncontext_window = true', "model 'a': context_window must be a positive int")]
+for bad, msg in cases:
+    try:
+        load_models(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e) == msg, str(e)
+assert load_models("") == {}
+try:
+    load_models("[[models]\nname = 1")
+    assert False
+except tomllib.TOMLDecodeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tomllib
+text = &#x27;&#x27;&#x27;
+[defaults]
+provider = &quot;local&quot;
+context_window = 8192
+
+[[models]]
+name = &quot;small&quot;
+
+[[models]]
+name = &quot;large&quot;
+provider = &quot;cloud&quot;
+context_window = 128_000
+cost_per_1k = 0.01
+&#x27;&#x27;&#x27;
+models = load_models(text)
+assert list(models) == [&quot;small&quot;, &quot;large&quot;]
+assert models[&quot;small&quot;] == {&quot;provider&quot;: &quot;local&quot;, &quot;context_window&quot;: 8192, &quot;name&quot;: &quot;small&quot;}
+assert models[&quot;large&quot;] == {&quot;provider&quot;: &quot;cloud&quot;, &quot;context_window&quot;: 128000, &quot;name&quot;: &quot;large&quot;, &quot;cost_per_1k&quot;: 0.01}
+cases = [(&#x27;[[models]]\nname = &quot;a&quot;\n[[models]]\nprovider = &quot;x&quot;&#x27;, &quot;model 2: missing name&quot;),
+         (&#x27;[[models]]\nname = &quot;a&quot;\n[[models]]\nname = &quot;a&quot;&#x27;, &quot;duplicate model &#x27;a&#x27;&quot;),
+         (&#x27;[[models]]\nname = &quot;a&quot;\ntemprature = 0.2&#x27;, &quot;model &#x27;a&#x27;: unknown key &#x27;temprature&#x27;&quot;),
+         (&#x27;[[models]]\nname = &quot;a&quot;\ncontext_window = &quot;8k&quot;&#x27;, &quot;model &#x27;a&#x27;: context_window must be a positive int&quot;),
+         (&#x27;[[models]]\nname = &quot;a&quot;\ncontext_window = true&#x27;, &quot;model &#x27;a&#x27;: context_window must be a positive int&quot;)]
+for bad, msg in cases:
+    try:
+        load_models(bad)
+        assert False, bad
+    except ValueError as e:
+        assert str(e) == msg, str(e)
+assert load_models(&quot;&quot;) == {}
+try:
+    load_models(&quot;[[models]\nname = 1&quot;)
+    assert False
+except tomllib.TOMLDecodeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>data.get("defaults", {})</code> and <code>data.get("models", [])</code>; merge with <code>{**defaults, **model}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>True</code> is an <code>int</code> in Python, so check <code>isinstance(v, bool)</code> too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import tomllib
+
+ALLOWED = {&quot;name&quot;, &quot;provider&quot;, &quot;context_window&quot;, &quot;cost_per_1k&quot;}
+
+
+def load_models(toml_text):
+    data = tomllib.loads(toml_text)
+    defaults = data.get(&quot;defaults&quot;, {})
+    models = {}
+    for i, entry in enumerate(data.get(&quot;models&quot;, []), start=1):
+        name = entry.get(&quot;name&quot;)
+        if not name:
+            raise ValueError(f&quot;model {i}: missing name&quot;)
+        if name in models:
+            raise ValueError(f&quot;duplicate model {name!r}&quot;)
+        merged = {**defaults, **entry}
+        for key in merged:
+            if key not in ALLOWED:
+                raise ValueError(f&quot;model {name!r}: unknown key {key!r}&quot;)
+        window = merged.get(&quot;context_window&quot;)
+        if window is not None and (not isinstance(window, int) or isinstance(window, bool) or window &lt;= 0):
+            raise ValueError(f&quot;model {name!r}: context_window must be a positive int&quot;)
+        models[name] = merged
+    return models</code></pre></div><p>TOML's typed values and <code>[[array of tables]]</code> make a registry like this readable and diff-friendly, and the defaults table removes repetition. Parsing is not validation, though: TOML happily accepts a misspelt <code>temprature</code> or <code>"8k"</code> for a size, so the loader checks names, uniqueness, allowed keys and value types, with messages that point at the model. Checking the <strong>merged</strong> settings means defaults are validated too. In a larger system this is where a Pydantic model (11.4) would take over; the shape of the code stays the same: parse, merge, validate, then hand out trusted objects.</p></div></details>
+</article>
+<article class="prob" id="p-merging-nested-settings" data-pid="m12-4-merging-nested-settings" data-type="predict" data-level="medium" data-answer="{&#x27;model&#x27;: {&#x27;name&#x27;: &#x27;large&#x27;}, &#x27;tags&#x27;: [&#x27;a&#x27;]}
+True
+[&#x27;a&#x27;, &#x27;b&#x27;]
+{&#x27;name&#x27;: &#x27;large&#x27;} [&#x27;a&#x27;, &#x27;b&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;] [] 3">
+<header class="prob-head"><h3>12. Merging nested settings</h3></header>
+<div class="code"><pre><code class="py">from collections import ChainMap
+
+base = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0}, &quot;tags&quot;: [&quot;a&quot;]}
+override = {&quot;model&quot;: {&quot;name&quot;: &quot;large&quot;}}
+print({**base, **override})
+print(base | override == {**base, **override})
+merged = dict(base)
+merged[&quot;tags&quot;].append(&quot;b&quot;)
+print(base[&quot;tags&quot;])
+cm = ChainMap(override, base)
+print(cm[&quot;model&quot;], cm[&quot;tags&quot;])
+child = cm.new_child()
+child[&quot;tags&quot;] = []
+print(cm[&quot;tags&quot;], child[&quot;tags&quot;], len(child.maps))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Unpacking and <code>|</code> are shallow merges; <code>dict(base)</code> is a shallow copy; ChainMap finds the first map with the key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;model&#x27;: {&#x27;name&#x27;: &#x27;large&#x27;}, &#x27;tags&#x27;: [&#x27;a&#x27;]}
+True
+[&#x27;a&#x27;, &#x27;b&#x27;]
+{&#x27;name&#x27;: &#x27;large&#x27;} [&#x27;a&#x27;, &#x27;b&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;] [] 3</pre></div><p>Shallow merges replace the whole <code>model</code> section, so the default temperature silently disappears, the bug deep merges exist to prevent; <code>|</code> gives the same result as unpacking. <code>dict(base)</code> copies the outer dict only, so appending to <code>merged["tags"]</code> changes the list shared with <code>base</code>. ChainMap does not merge either: it returns the first map's <code>model</code> as a whole. Writing <code>tags</code> in the child goes to the child's own new first map, leaving the parent unchanged, and the child has three maps.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-scan-text-for-secrets-before-committing" data-pid="m12-4-scan-text-for-secrets-before-committing" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Scan text for secrets before committing</h3></header>
+<div class="prob-q"><p>Write <code>scan_for_secrets(text, min_entropy=4.5)</code> returning a sorted list of <code>(line_number, kind)</code> findings, like a pre-commit hook. Kinds, by regex: <code>openai_key</code> (<code>sk-</code> then at least 20 of <code>[A-Za-z0-9_-]</code>), <code>aws_access_key</code> (<code>AKIA</code> then 16 of <code>[0-9A-Z]</code>), <code>private_key</code> (<code>-----BEGIN ... PRIVATE KEY-----</code>), and <code>password_assignment</code> (<code>password</code>, <code>passwd</code>, <code>secret</code>, <code>api_key</code> or <code>token</code>, any case, then <code>=</code> or <code>:</code>, then a quoted value of at least 6 characters). Then, on lines with no regex finding, any token of 24 or more <code>[A-Za-z0-9+/=_-]</code> characters whose Shannon entropy (<code>entropy(s)</code>, bits per character) is at least <code>min_entropy</code> is a <code>high_entropy</code> finding (once per line). Lines containing <code># allow-secret</code> are skipped.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import math, re
+from collections import Counter
+
+def entropy(s):
+    pass
+
+def scan_for_secrets(text, min_entropy=4.5):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">text = '''import os
+OPENAI_KEY = "sk-proj-A1b2C3d4E5f6G7h8I9j0K1l2M3"
+aws = "AKIAIOSFODNN7EXAMPLE"
+db_password = "hunter2-prod"
+config = {"Token": 'abc'}
+TOKEN = os.environ["TOKEN"]
+webhook = "Zx8Qp2Lm9Rt4Vb7Nc1Kd6Hf3Jg5Ws0Ye"
+name = "process_customer_complaints_in_batches"
+digest = "0123456789abcdef0123456789abcdef"
+test_key = "sk-test-FAKEFAKEFAKEFAKEFAKE"  # allow-secret
+-----BEGIN RSA PRIVATE KEY-----
+'''
+assert abs(entropy("aabb") - 1.0) < 1e-9 and entropy("aaaa") == 0 and entropy("") == 0
+assert scan_for_secrets(text) == [(2, "openai_key"), (3, "aws_access_key"), (4, "password_assignment"), (7, "high_entropy"), (11, "private_key")]
+assert (9, "high_entropy") in scan_for_secrets(text, min_entropy=3.9) and scan_for_secrets("") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = &#x27;&#x27;&#x27;import os
+OPENAI_KEY = &quot;sk-proj-A1b2C3d4E5f6G7h8I9j0K1l2M3&quot;
+aws = &quot;AKIAIOSFODNN7EXAMPLE&quot;
+db_password = &quot;hunter2-prod&quot;
+config = {&quot;Token&quot;: &#x27;abc&#x27;}
+TOKEN = os.environ[&quot;TOKEN&quot;]
+webhook = &quot;Zx8Qp2Lm9Rt4Vb7Nc1Kd6Hf3Jg5Ws0Ye&quot;
+name = &quot;process_customer_complaints_in_batches&quot;
+digest = &quot;0123456789abcdef0123456789abcdef&quot;
+test_key = &quot;sk-test-FAKEFAKEFAKEFAKEFAKE&quot;  # allow-secret
+-----BEGIN RSA PRIVATE KEY-----
+&#x27;&#x27;&#x27;
+assert abs(entropy(&quot;aabb&quot;) - 1.0) &lt; 1e-9 and entropy(&quot;aaaa&quot;) == 0 and entropy(&quot;&quot;) == 0
+assert scan_for_secrets(text) == [(2, &quot;openai_key&quot;), (3, &quot;aws_access_key&quot;), (4, &quot;password_assignment&quot;), (7, &quot;high_entropy&quot;), (11, &quot;private_key&quot;)]
+assert (9, &quot;high_entropy&quot;) in scan_for_secrets(text, min_entropy=3.9) and scan_for_secrets(&quot;&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>entropy</code>: <code>-sum(p * math.log2(p))</code> over the character frequencies <code>p = count / len(s)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the patterns in a list of <code>(kind, compiled_regex)</code> and use <code>search</code> per line; collect findings in a set and return <code>sorted(...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math, re
+from collections import Counter
+
+PATTERNS = [
+    (&quot;openai_key&quot;, re.compile(r&quot;\bsk-[A-Za-z0-9_-]{20,}&quot;)),
+    (&quot;aws_access_key&quot;, re.compile(r&quot;\bAKIA[0-9A-Z]{16}\b&quot;)),
+    (&quot;private_key&quot;, re.compile(r&quot;-----BEGIN [A-Z ]*PRIVATE KEY-----&quot;)),
+    (&quot;password_assignment&quot;, re.compile(r&quot;(?i)(?:password|passwd|secret|api_key|token)\w*[&#x27;\&quot;]?\s*[:=]\s*[&#x27;\&quot;][^&#x27;\&quot;]{6,}[&#x27;\&quot;]&quot;)),
+]
+TOKEN = re.compile(r&quot;[A-Za-z0-9+/=_-]{24,}&quot;)
+
+
+def entropy(s):
+    if not s:
+        return 0.0
+    n = len(s)
+    return -sum(c / n * math.log2(c / n) for c in Counter(s).values())
+
+
+def scan_for_secrets(text, min_entropy=4.5):
+    findings = set()
+    for n, line in enumerate(text.splitlines(), start=1):
+        if &quot;# allow-secret&quot; in line:
+            continue
+        hits = {kind for kind, pattern in PATTERNS if pattern.search(line)}
+        findings.update((n, kind) for kind in hits)
+        if not hits and any(entropy(tok) &gt;= min_entropy for tok in TOKEN.findall(line)):
+            findings.add((n, &quot;high_entropy&quot;))
+    return sorted(findings)</code></pre></div><p>Secret scanners combine two signals. <strong>Patterns</strong> catch secrets with a known shape, such as provider key prefixes and private-key headers, with few false alarms, and an assignment pattern catches hard-coded passwords while ignoring <code>os.environ["TOKEN"]</code> (no quoted literal) and short dummy values. <strong>Entropy</strong> catches unknown formats: random keys use many different characters evenly, so they score near <code>log2</code> of their length (5.0 for the 32 distinct characters here), while identifiers and English score lower (the long function name is about 3.8). The threshold is a trade-off: hex digests score about 4.0, so lowering it to 3.9 flags line 9, a false alarm for a checksum but a hit for a hex-encoded key. An explicit allow marker keeps test fixtures from blocking every commit. Real tools (<code>gitleaks</code>, <code>detect-secrets</code>, GitHub push protection) add hundreds of provider patterns and run on every commit and push.</p></div></details>
+</article>
+<article class="prob" id="p-explain-where-each-setting-came-from" data-pid="m12-4-explain-where-each-setting-came-from" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Explain where each setting came from</h3></header>
+<div class="prob-q"><p>Write <code>resolve(layers)</code> where <code>layers</code> is a list of <code>(name, dict)</code> from lowest to highest precedence. Deep-merge them (nested dicts merge; anything else, including lists and a dict replacing a scalar or the reverse, replaces) and return <code>(merged, origin)</code>, where <code>origin</code> maps the dotted path of every leaf value in <code>merged</code> to the name of the layer that set it, with keys sorted. When a layer replaces a section, origins of the old leaves under it are removed. Do not modify the inputs.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import copy
+
+def resolve(layers):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">defaults = {"model": {"name": "small", "temperature": 0.0, "limits": {"rpm": 60}}, "retrieval": {"top_k": 5, "sources": ["faq"]}, "debug": False}
+file_cfg = {"model": {"name": "large"}, "retrieval": {"sources": ["faq", "terms"]}}
+env = {"model": {"limits": {"rpm": 600, "tpm": 90000}}, "debug": True}
+cli = {"retrieval": "disabled"}
+merged, origin = resolve([("defaults", defaults), ("config.toml", file_cfg), ("env", env), ("cli", cli)])
+assert merged == {"model": {"name": "large", "temperature": 0.0, "limits": {"rpm": 600, "tpm": 90000}}, "retrieval": "disabled", "debug": True}
+assert origin == {"debug": "env", "model.limits.rpm": "env", "model.limits.tpm": "env", "model.name": "config.toml",
+                  "model.temperature": "defaults", "retrieval": "cli"}
+assert list(origin) == sorted(origin) and defaults["retrieval"] == {"top_k": 5, "sources": ["faq"]} and env["model"]["limits"] == {"rpm": 600, "tpm": 90000}
+merged2, origin2 = resolve([("a", {"x": 1}), ("b", {"x": {"y": [1]}})])
+merged2["x"]["y"].append(2)
+assert origin2 == {"x.y": "b"} and resolve([])[0] == {} and resolve([("b", {"x": {"y": [1]}})])[0] == {"x": {"y": [1]}}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">defaults = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0, &quot;limits&quot;: {&quot;rpm&quot;: 60}}, &quot;retrieval&quot;: {&quot;top_k&quot;: 5, &quot;sources&quot;: [&quot;faq&quot;]}, &quot;debug&quot;: False}
+file_cfg = {&quot;model&quot;: {&quot;name&quot;: &quot;large&quot;}, &quot;retrieval&quot;: {&quot;sources&quot;: [&quot;faq&quot;, &quot;terms&quot;]}}
+env = {&quot;model&quot;: {&quot;limits&quot;: {&quot;rpm&quot;: 600, &quot;tpm&quot;: 90000}}, &quot;debug&quot;: True}
+cli = {&quot;retrieval&quot;: &quot;disabled&quot;}
+merged, origin = resolve([(&quot;defaults&quot;, defaults), (&quot;config.toml&quot;, file_cfg), (&quot;env&quot;, env), (&quot;cli&quot;, cli)])
+assert merged == {&quot;model&quot;: {&quot;name&quot;: &quot;large&quot;, &quot;temperature&quot;: 0.0, &quot;limits&quot;: {&quot;rpm&quot;: 600, &quot;tpm&quot;: 90000}}, &quot;retrieval&quot;: &quot;disabled&quot;, &quot;debug&quot;: True}
+assert origin == {&quot;debug&quot;: &quot;env&quot;, &quot;model.limits.rpm&quot;: &quot;env&quot;, &quot;model.limits.tpm&quot;: &quot;env&quot;, &quot;model.name&quot;: &quot;config.toml&quot;,
+                  &quot;model.temperature&quot;: &quot;defaults&quot;, &quot;retrieval&quot;: &quot;cli&quot;}
+assert list(origin) == sorted(origin) and defaults[&quot;retrieval&quot;] == {&quot;top_k&quot;: 5, &quot;sources&quot;: [&quot;faq&quot;]} and env[&quot;model&quot;][&quot;limits&quot;] == {&quot;rpm&quot;: 600, &quot;tpm&quot;: 90000}
+merged2, origin2 = resolve([(&quot;a&quot;, {&quot;x&quot;: 1}), (&quot;b&quot;, {&quot;x&quot;: {&quot;y&quot;: [1]}})])
+merged2[&quot;x&quot;][&quot;y&quot;].append(2)
+assert origin2 == {&quot;x.y&quot;: &quot;b&quot;} and resolve([])[0] == {} and resolve([(&quot;b&quot;, {&quot;x&quot;: {&quot;y&quot;: [1]}})])[0] == {&quot;x&quot;: {&quot;y&quot;: [1]}}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A recursive <code>_merge(target, src, name, origin, prefix)</code>; when both values are dicts, recurse; otherwise drop origins equal to the path or starting with <code>path + "."</code>, then assign.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the new value is a dict replacing a non-dict, assign <code>{}</code> and recurse into it so its leaves get origins.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy
+
+
+def _drop(origin, dotted):
+    for key in [k for k in origin if k == dotted or k.startswith(dotted + &quot;.&quot;)]:
+        del origin[key]
+
+
+def _merge(target, src, name, origin, prefix):
+    for key, value in src.items():
+        path = prefix + (key,)
+        dotted = &quot;.&quot;.join(path)
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value, name, origin, path)
+            continue
+        _drop(origin, dotted)
+        if isinstance(value, dict):
+            target[key] = {}
+            _merge(target[key], value, name, origin, path)
+        else:
+            target[key] = copy.deepcopy(value)
+            origin[dotted] = name
+
+
+def resolve(layers):
+    merged, origin = {}, {}
+    for name, layer in layers:
+        _merge(merged, layer, name, origin, ())
+    return merged, dict(sorted(origin.items()))</code></pre></div><p>"Why is production using 600 requests per minute?" is answered by <code>origin["model.limits.rpm"]</code>, the same idea as <code>git config --show-origin</code> and the <code>--show</code> options of many CLI tools. Tracking provenance per <strong>leaf</strong> is what makes it precise: a file that overrides only <code>model.name</code> leaves <code>model.temperature</code> attributed to the defaults. Replacements must clean up: when the command line turns the whole <code>retrieval</code> section into a string, the old <code>retrieval.top_k</code> and <code>retrieval.sources</code> entries would otherwise claim values that no longer exist. Building fresh dicts and deep-copying leaves means the merged result shares nothing with the layers, so appending to a merged list cannot change the configuration it came from.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-settings-module" data-pid="m12-4-read-the-code-a-settings-module" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Read the code: a settings module</h3></header>
+<div class="prob-q"><p>This settings module reads the environment once at import, so changes made later (in tests, or after loading a <code>.env</code> file) are ignored; <code>APP_DEBUG=false</code> turns debug on; <code>APP_TIMEOUT=2.5</code> stays a string; an empty <code>APP_ORIGINS</code> gives <code>[""]</code>; and callers that modify the returned dict change it for everyone. Replace it with <code>get_settings(environ=None)</code> that reads <code>environ</code> (default <code>os.environ</code>) <strong>at call time</strong> and returns a <strong>new</strong> dict each call: <code>model</code> (default <code>"small"</code>), <code>debug</code> (strict booleans as in problem 2, default <code>False</code>), <code>timeout</code> (a float &gt; 0, default 30.0) and <code>origins</code> (comma-separated, stripped, empty items dropped, default <code>[]</code>). Invalid values raise <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import os
+
+SETTINGS = {
+    &quot;model&quot;: os.getenv(&quot;APP_MODEL&quot;, &quot;small&quot;),
+    &quot;debug&quot;: bool(os.getenv(&quot;APP_DEBUG&quot;, False)),
+    &quot;timeout&quot;: os.getenv(&quot;APP_TIMEOUT&quot;, 30),
+    &quot;origins&quot;: os.getenv(&quot;APP_ORIGINS&quot;, &quot;&quot;).split(&quot;,&quot;),
+}
+
+
+def get_settings():
+    return SETTINGS
+</textarea>
+<script type="text/plain" class="prob-tests">import os
+assert get_settings({}) == {"model": "small", "debug": False, "timeout": 30.0, "origins": []}
+s = get_settings({"APP_DEBUG": "false", "APP_TIMEOUT": "2.5", "APP_ORIGINS": " https://a.io, https://b.io,", "APP_MODEL": "medium"})
+assert s == {"model": "medium", "debug": False, "timeout": 2.5, "origins": ["https://a.io", "https://b.io"]}
+os.environ["APP_MODEL"] = "large"
+assert get_settings()["model"] == "large"
+os.environ.pop("APP_MODEL")
+first = get_settings({})
+first["origins"].append("https://evil.io")
+assert get_settings({})["origins"] == [] and get_settings({"APP_DEBUG": "ON"})["debug"] is True
+for bad in [{"APP_DEBUG": "maybe"}, {"APP_TIMEOUT": "0"}, {"APP_TIMEOUT": "fast"}, {"APP_TIMEOUT": "-1"}]:
+    try:
+        get_settings(bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os
+assert get_settings({}) == {&quot;model&quot;: &quot;small&quot;, &quot;debug&quot;: False, &quot;timeout&quot;: 30.0, &quot;origins&quot;: []}
+s = get_settings({&quot;APP_DEBUG&quot;: &quot;false&quot;, &quot;APP_TIMEOUT&quot;: &quot;2.5&quot;, &quot;APP_ORIGINS&quot;: &quot; https://a.io, https://b.io,&quot;, &quot;APP_MODEL&quot;: &quot;medium&quot;})
+assert s == {&quot;model&quot;: &quot;medium&quot;, &quot;debug&quot;: False, &quot;timeout&quot;: 2.5, &quot;origins&quot;: [&quot;https://a.io&quot;, &quot;https://b.io&quot;]}
+os.environ[&quot;APP_MODEL&quot;] = &quot;large&quot;
+assert get_settings()[&quot;model&quot;] == &quot;large&quot;
+os.environ.pop(&quot;APP_MODEL&quot;)
+first = get_settings({})
+first[&quot;origins&quot;].append(&quot;https://evil.io&quot;)
+assert get_settings({})[&quot;origins&quot;] == [] and get_settings({&quot;APP_DEBUG&quot;: &quot;ON&quot;})[&quot;debug&quot;] is True
+for bad in [{&quot;APP_DEBUG&quot;: &quot;maybe&quot;}, {&quot;APP_TIMEOUT&quot;: &quot;0&quot;}, {&quot;APP_TIMEOUT&quot;: &quot;fast&quot;}, {&quot;APP_TIMEOUT&quot;: &quot;-1&quot;}]:
+    try:
+        get_settings(bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Move all reading into the function; build and return a fresh dict.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Parse the timeout with <code>float(raw)</code> in <code>try</code>, then check <code>&gt; 0</code>; for origins, <code>[o.strip() for o in raw.split(",") if o.strip()]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+_TRUE = {&quot;1&quot;, &quot;true&quot;, &quot;yes&quot;, &quot;on&quot;}
+_FALSE = {&quot;0&quot;, &quot;false&quot;, &quot;no&quot;, &quot;off&quot;}
+
+
+def _bool(raw, name):
+    value = raw.strip().lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    raise ValueError(f&quot;{name} must be a boolean, got {raw!r}&quot;)
+
+
+def get_settings(environ=None):
+    env = os.environ if environ is None else environ
+    debug_raw = env.get(&quot;APP_DEBUG&quot;, &quot;&quot;).strip()
+    timeout_raw = env.get(&quot;APP_TIMEOUT&quot;, &quot;&quot;).strip()
+    try:
+        timeout = float(timeout_raw) if timeout_raw else 30.0
+    except ValueError:
+        raise ValueError(f&quot;APP_TIMEOUT must be a number, got {timeout_raw!r}&quot;) from None
+    if timeout &lt;= 0:
+        raise ValueError(f&quot;APP_TIMEOUT must be positive, got {timeout}&quot;)
+    return {
+        &quot;model&quot;: env.get(&quot;APP_MODEL&quot;, &quot;small&quot;),
+        &quot;debug&quot;: _bool(debug_raw, &quot;APP_DEBUG&quot;) if debug_raw else False,
+        &quot;timeout&quot;: timeout,
+        &quot;origins&quot;: [o.strip() for o in env.get(&quot;APP_ORIGINS&quot;, &quot;&quot;).split(&quot;,&quot;) if o.strip()],
+    }</code></pre></div><p>Every bug comes from treating configuration as constants. Module-level reads freeze the environment as it was at the first import, so tests that set variables, and a <code>.env</code> loaded after the import, have no effect; reading at call time (and, in an application, calling once at start-up and passing the result around) fixes that. The parsing bugs are the string traps of this lesson: <code>bool("false")</code> is <code>True</code>, a timeout that stays <code>"2.5"</code> breaks the HTTP client later and far away, and <code>"".split(",")</code> is <code>[""]</code>, which would allow an empty origin in a CORS list. Returning the same global dict let any caller change everyone's settings; a fresh dict (or a frozen dataclass or Pydantic model) removes that shared mutable state (9.1).</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-how-do-you-manage-api-keys-and-other-sec" data-pid="m12-4-how-do-you-manage-api-keys-and-other-sec" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. How do you manage API keys and other secrets for an LLM application across development, CI and production?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Secrets never live in code, notebooks or committed files. In <strong>development</strong>, each developer keeps their own keys in a git-ignored <code>.env</code> file (with a committed <code>.env.example</code> listing the names), loaded into the environment by the tooling. In <strong>CI</strong>, keys are stored as the CI system's encrypted secrets, exposed only to the jobs that need them and masked in logs; tests mostly use fakes, so few jobs need real keys. In <strong>production</strong>, a secret manager (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager, Vault) stores them, and the platform injects them as environment variables or mounted files, or the application fetches them at start-up with its own identity, with access logged. Across all three: separate keys per environment and service, least privilege and spending limits on each key, regular rotation (two valid keys during a switch), masked types so settings can be logged safely, and secret scanning in pre-commit hooks and on push. The application reads everything once into a validated settings object at start-up and fails fast if a required secret is missing.</p></div></details>
+</article>
+<article class="prob" id="p-why-is-configuration-usually-passed-thro" data-pid="m12-4-why-is-configuration-usually-passed-thro" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why is configuration usually passed through environment variables, and what are their downsides?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Environment variables are supported by every operating system, language, container runtime, CI system and cloud platform, so the same build artefact (a Docker image, say) can run anywhere and only its environment changes, which is the "twelve-factor" principle of strict separation of config from code. They are easy to override for one run and are not committed by accident the way files are. Their downsides: everything is a flat string, so types and nesting need conventions and careful parsing; there is no schema, so typos (<code>APP_TEMPRATURE</code>) are silently ignored unless the loader rejects unknown prefixed variables; they are inherited by child processes and can show up in crash reports, debug pages and <code>/proc</code> listings, so they are not perfect for secrets; and long structured settings are unreadable as variables. Hence the usual combination: typed defaults in code, a committed TOML or YAML file for structured non-secret settings, environment variables for per-deployment values and secrets, all validated into one settings object.</p></div></details>
+</article>
+<article class="prob" id="p-a-teammate-just-pushed-a-commit-containi" data-pid="m12-4-a-teammate-just-pushed-a-commit-containi" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. A teammate just pushed a commit containing a production API key. What do you do?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Treat the key as compromised the moment it was pushed, because public repositories are scanned by bots within minutes and private ones are copied to clones, forks, CI caches and backups. First <strong>revoke or rotate the key</strong> at the provider, deploy the new key from the secret manager, and confirm the old one no longer works; this is the only step that actually stops misuse. Then check the provider's usage logs and billing for activity since the push, and follow the incident process if anything is suspicious. Next, clean up: remove the key from the code and read it from the environment, and if needed rewrite history (<code>git filter-repo</code> or BFG) and ask the hosting provider to purge cached views, knowing this only reduces exposure. Finally prevent a repeat: enable push protection and secret scanning on the repository, add a pre-commit scanner, move the value into the secret manager, and review why the key was in a file in the first place. Blameless and quick beats perfect and slow: rotation first, investigation second.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Keep configuration outside the code: defaults in code, non-secret structure in TOML, per-deployment values and secrets in the environment.</li><li><code>os.environ</code> holds strings only: parse strictly (<code>bool("false")</code> is <code>True</code>), treat empty versus missing deliberately, and read at start-up, not at import.</li><li><code>.env</code> files are for local development and are git-ignored; <code>tomllib</code> reads typed TOML (binary mode for files) but does not write it.</li><li>Layer with a deep merge (or <code>ChainMap</code> for flat settings), map <code>APP_SECTION__KEY</code> variables to nested keys, and be able to say where each value came from.</li><li>Never put secrets in code, logs or reprs; use masked types, secret managers, scanning, least privilege and rotation, and rotate first when a key leaks.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

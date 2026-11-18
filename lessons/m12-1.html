@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>12.1 · pathlib and files</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m12-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 12 · Files and data</span></div>
+  <h1>12.1 pathlib and files</h1>
+  <p>Almost every ML and GenAI job starts and ends with files: corpora to index, datasets to load, checkpoints and reports to write. Paths as objects with <code>pathlib</code>, finding files with <code>glob</code>, text files and encodings, binary files and chunked reading, seeking, and atomic writes that survive crashes. Applied to corpora, checkpoints, duplicate detection and log tails.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="paths">
+<h2><span class="n">1</span>Paths as objects</h2>
+<p>File paths are strings in old code, glued together with <code>+</code> or <code>os.path.join</code> and taken apart with <code>split</code>. <strong><code>pathlib.Path</code></strong> replaces that with an object that knows how paths are built: the <code>/</code> operator joins parts (<code>root / "runs" / name</code>), and attributes take a path apart: <code>name</code> (the last part), <code>stem</code> (the name without its last suffix), <code>suffix</code> and <code>suffixes</code>, <code>parent</code> and <code>parents</code>, <code>parts</code>. Methods derive new paths: <code>with_suffix(".json")</code>, <code>with_name("config.json")</code>, <code>relative_to(root)</code>. The same code works on Windows and Linux, because <code>Path</code> is <code>WindowsPath</code> or <code>PosixPath</code> depending on the system; <code>PurePosixPath</code> and <code>PureWindowsPath</code> do the path arithmetic for one system without touching the disk, which is handy in tests.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">paths.py</span><button class="copy">Copy</button></div><pre><code class="py">from pathlib import PurePosixPath as P
+
+ckpt = P(&quot;/data/runs/exp-1/model.best.pt&quot;)
+print(ckpt.name, ckpt.stem, ckpt.suffix, ckpt.suffixes)
+print(ckpt.parent, ckpt.parent.name, ckpt.with_suffix(&quot;.onnx&quot;))
+root = P(&quot;/data&quot;)
+print(ckpt.relative_to(root), ckpt.is_relative_to(root / &quot;runs&quot;), (root / &quot;cache&quot; / &quot;emb.npy&quot;).as_posix())
+print(P(&quot;a/b/../c&quot;), P(&quot;logs&quot;) / &quot;/tmp/app.log&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>model.best.pt model.best .pt [&#x27;.best&#x27;, &#x27;.pt&#x27;]
+/data/runs/exp-1 exp-1 /data/runs/exp-1/model.best.onnx
+runs/exp-1/model.best.pt True /data/cache/emb.npy
+a/b/../c /tmp/app.log</pre></div></div>
+<p>Two details catch people. Pure path arithmetic does not resolve <code>..</code>, because <code>a/b/..</code> only equals <code>a</code> if <code>b</code> is not a symbolic link, which only the disk can say; <code>Path.resolve()</code> asks the disk and returns the absolute, normalised path. And joining an <strong>absolute</strong> path discards everything before it: <code>P("logs") / "/tmp/app.log"</code> is <code>/tmp/app.log</code>. That second rule matters for security: joining a user-supplied name to an upload folder can escape it, so check <code>(base / name).resolve().is_relative_to(base.resolve())</code> before using such a path.</p>
+<p>Paths can be passed to everything that accepts a file name (<code>open</code>, <code>json.load</code> callers, pandas, NumPy), because they implement <code>os.fspath</code>. Convert to a string with <code>str(path)</code> only when a library insists, and use <code>as_posix()</code> when you need forward slashes on every system, for example as a stable key in a manifest.</p>
+</section>
+<section class="sec" id="explore">
+<h2><span class="n">2</span>Exploring and changing the file system</h2>
+<p>Concrete paths talk to the disk: <code>exists()</code>, <code>is_file()</code>, <code>is_dir()</code>, <code>stat().st_size</code> and <code>st_mtime</code> (size and modification time). <code>iterdir()</code> lists a folder's direct children, <strong>in no guaranteed order</strong>, so sort when order matters. <strong><code>glob(pattern)</code></strong> finds matches inside a folder: <code>*</code> matches within one name, <code>?</code> one character, <code>[ab]</code> a set, and <code>**</code> any number of folders, so <code>root.glob("**/*.md")</code> and <code>root.rglob("*.md")</code> both search the whole tree. Results are lazy generators, again unordered.</p>
+<p>Changes: <code>mkdir(parents=True, exist_ok=True)</code> creates a folder and any missing parents, and does not fail if it exists (without those flags it raises <code>FileNotFoundError</code> or <code>FileExistsError</code>). <code>unlink(missing_ok=True)</code> deletes a file, <code>rmdir()</code> an empty folder, and <code>shutil.rmtree(path)</code> a whole tree. <code>rename(target)</code> and <code>replace(target)</code> move a file; <code>replace</code> overwrites an existing target on every system, which makes it the tool for atomic writes below. <code>shutil.copy2</code> copies a file with its metadata. <code>tempfile.TemporaryDirectory()</code> is a context manager (10.2) that creates a fresh folder and deletes it afterwards, which is what tests and scratch work should use.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">explore.py</span><button class="copy">Copy</button></div><pre><code class="py">import tempfile
+from pathlib import Path
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    for rel in [&quot;docs/faq.md&quot;, &quot;docs/refunds.md&quot;, &quot;docs/old/2019.md&quot;, &quot;notes.txt&quot;, &quot;.cache/x.md&quot;]:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f&quot;content of {rel}&quot;, encoding=&quot;utf-8&quot;)
+    print(sorted(p.name for p in root.iterdir()))
+    print(sorted(p.relative_to(root).as_posix() for p in root.glob(&quot;docs/*.md&quot;)))
+    print(sorted(p.relative_to(root).as_posix() for p in root.rglob(&quot;*.md&quot;)))
+    print((root / &quot;notes.txt&quot;).stat().st_size, (root / &quot;missing.txt&quot;).exists())
+print(root.exists())</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;.cache&#x27;, &#x27;docs&#x27;, &#x27;notes.txt&#x27;]
+[&#x27;docs/faq.md&#x27;, &#x27;docs/refunds.md&#x27;]
+[&#x27;.cache/x.md&#x27;, &#x27;docs/faq.md&#x27;, &#x27;docs/old/2019.md&#x27;, &#x27;docs/refunds.md&#x27;]
+20 False
+False</pre></div></div>
+<p><code>rglob</code> also walked into <code>.cache</code>: hidden folders are not skipped automatically, so a corpus loader must filter them itself (problem 5), as it must skip <code>.git</code>, <code>node_modules</code> and virtual environments.</p>
+</section>
+<section class="sec" id="text">
+<h2><span class="n">3</span>Text files and encodings</h2>
+<p><code>open(path, mode, encoding=...)</code> returns a file object. The mode says what you will do: <code>"r"</code> read (the default), <code>"w"</code> write, truncating any existing file to empty <strong>immediately</strong>, <code>"a"</code> append to the end, <code>"x"</code> create, failing with <code>FileExistsError</code> if the file exists, and <code>"+"</code> adds the other direction (<code>"r+"</code>). Always use it in a <code>with</code> block so it is closed, which also flushes buffered writes to the operating system. <code>Path.read_text()</code> and <code>write_text()</code> do open, read or write, and close in one call, for small files.</p>
+<p>A text file is bytes on disk, and an <strong>encoding</strong> turns them into characters. UTF-8 is the standard for data and code, but <code>open</code> without <code>encoding=</code> uses the platform's default, which is still a legacy code page such as cp1252 on many Windows machines, so the same code reads <code>café</code> correctly on a Mac and as <code>cafÃ©</code> (or crashes) on a colleague's laptop. <strong>Always pass <code>encoding="utf-8"</code>.</strong> Read with <code>errors="replace"</code> when the input may contain invalid bytes and losing a character is acceptable (scraped web text), and with <code>encoding="utf-8-sig"</code> when files from Excel start with a byte-order mark. Text mode also translates line endings: on reading, <code>\r\n</code> and <code>\r</code> become <code>\n</code>; on writing, <code>\n</code> becomes the platform's line ending, unless you pass <code>newline=""</code> (12.2 needs that for CSV).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">text.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;notes.txt&quot;)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    print(f.write(&quot;café\nrefund window\n&quot;))
+print(os.path.getsize(path), &quot;bytes on disk&quot;)
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    for number, line in enumerate(f, start=1):
+        print(number, repr(line))
+with open(path, encoding=&quot;latin-1&quot;) as f:
+    print(f.readline().rstrip())
+with open(path, encoding=&quot;ascii&quot;, errors=&quot;replace&quot;) as f:
+    print(f.readline().rstrip())</code></pre><div class="out"><span class="ol">Output</span><pre>19
+20 bytes on disk
+1 &#x27;café\n&#x27;
+2 &#x27;refund window\n&#x27;
+cafÃ©
+caf��</pre></div></div>
+<p><code>write</code> returns the number of <strong>characters</strong> written, 19, while the file holds 20 bytes, because <code>é</code> takes two bytes in UTF-8. Iterating over a file yields one line at a time, newline included, and reads lazily, so a 50 GB log can be processed with constant memory; <code>f.read()</code> and <code>f.readlines()</code> load everything, which is fine for small files only. Decoding UTF-8 bytes as Latin-1 never fails but produces the classic mojibake <code>cafÃ©</code>, and decoding as ASCII with <code>errors="replace"</code> turns each invalid byte into the replacement character <code>�</code>.</p>
+</section>
+<section class="sec" id="binary">
+<h2><span class="n">4</span>Binary files, chunks and seeking</h2>
+<p>Mode <code>"rb"</code> or <code>"wb"</code> opens a file in <strong>binary</strong> mode: no encoding, no newline translation, reads return <code>bytes</code>. Use it for images, model weights, NumPy and Parquet files, compressed data, and whenever you hash or copy a file exactly. Large binary files are read in <strong>chunks</strong>: <code>f.read(n)</code> returns up to <code>n</code> bytes and <code>b""</code> at the end, so <code>for chunk in iter(lambda: f.read(1 &lt;&lt; 16), b""):</code> walks any file with 64 KiB of memory. Hashing a file this way, <code>hashlib.sha256()</code> updated chunk by chunk, gives a content fingerprint used to detect duplicate documents and changed datasets (problem 7).</p>
+<p>A file object has a <strong>position</strong>. <code>f.tell()</code> returns it, <code>f.seek(offset, whence)</code> moves it: <code>whence</code> 0 counts from the start, 1 from the current position, 2 from the end (with a negative offset). In binary mode positions are byte offsets, which is how tools such as <code>tail</code> read the end of a huge log without reading the whole file (problem 12). In text mode <code>seek</code> only accepts values previously returned by <code>tell</code>, because a character may span several bytes.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">binary.py</span><button class="copy">Copy</button></div><pre><code class="py">import hashlib, os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;weights.bin&quot;)
+with open(path, &quot;wb&quot;) as f:
+    f.write(b&quot;HDR1&quot; + bytes(range(256)) * 1000)
+digest = hashlib.sha256()
+chunks = 0
+with open(path, &quot;rb&quot;) as f:
+    print(f.read(4), f.tell())
+    f.seek(0)
+    for chunk in iter(lambda: f.read(65_536), b&quot;&quot;):
+        digest.update(chunk)
+        chunks += 1
+    f.seek(-3, 2)
+    print(list(f.read()), f.tell())
+with open(path, &quot;rb&quot;) as f:
+    print(chunks, digest.hexdigest() == hashlib.sha256(f.read()).hexdigest())</code></pre><div class="out"><span class="ol">Output</span><pre>b&#x27;HDR1&#x27; 4
+[253, 254, 255] 256004
+4 True</pre></div></div>
+</section>
+<section class="sec" id="atomic">
+<h2><span class="n">5</span>Atomic writes</h2>
+<p>Opening a file with <code>"w"</code> empties it at once, and the new content is written over time. If the program crashes, is killed, or raises an exception halfway through (an unserialisable value at the end of a <code>json.dump</code>), the file is left truncated or half-written, and the old content is gone. For a model registry, a checkpoint index or a config file, that turns one failed run into a broken system.</p>
+<p>The fix is an <strong>atomic write</strong>: write the new content to a temporary file <strong>in the same folder</strong>, flush it and ask the operating system to put it on disk (<code>f.flush()</code> then <code>os.fsync(f.fileno())</code>), then call <strong><code>os.replace(tmp, target)</code></strong>. On the same file system, a rename is atomic: other readers see either the old file or the new one, never a mix. If anything fails before the rename, delete the temporary file and the target is untouched. The temporary file must be in the same folder because a rename across file systems is a copy, which is not atomic; <code>tempfile.mkstemp(dir=folder)</code> creates a uniquely named file there, so two writers never collide on the temporary name.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">atomic.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, os, tempfile
+from pathlib import Path
+
+def save_json_atomic(path, data):
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f&quot;.{path.name}.&quot;, suffix=&quot;.tmp&quot;)
+    try:
+        with os.fdopen(fd, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+target = Path(tempfile.mkdtemp()) / &quot;registry.json&quot;
+save_json_atomic(target, {&quot;best&quot;: &quot;v3&quot;})
+try:
+    save_json_atomic(target, {&quot;best&quot;: &quot;v4&quot;, &quot;model&quot;: object()})
+except TypeError as e:
+    print(&quot;failed:&quot;, e)
+print(target.read_text(encoding=&quot;utf-8&quot;), sorted(p.name for p in target.parent.iterdir()))</code></pre><div class="out"><span class="ol">Output</span><pre>failed: Object of type object is not JSON serializable
+{&quot;best&quot;: &quot;v3&quot;} [&#x27;registry.json&#x27;]</pre></div></div>
+<p>The failed save raised, its temporary file was removed, and the registry still holds the complete previous version. <code>except BaseException</code> (not <code>Exception</code>) also cleans up on <code>KeyboardInterrupt</code>, and the error is re-raised (7.2). Problem 10 fixes a non-atomic save, and problem 13 turns the pattern into a reusable context manager.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-taking-a-path-apart" data-pid="m12-1-taking-a-path-apart" data-type="predict" data-level="easy" data-answer="faq.v2.md faq.v2 .md [&#x27;.v2&#x27;, &#x27;.md&#x27;]
+en /srv /srv/corpus/en/faq.v2.json /srv/corpus/en/faq.md
+en/faq.v2.md (&#x27;/&#x27;, &#x27;srv&#x27;, &#x27;corpus&#x27;)
+/srv/corpus/x.md /etc/passwd a/b/c">
+<header class="prob-head"><h3>1. Taking a path apart</h3></header>
+<div class="code"><pre><code class="py">from pathlib import PurePosixPath as P
+
+p = P(&quot;/srv/corpus/en/faq.v2.md&quot;)
+print(p.name, p.stem, p.suffix, p.suffixes)
+print(p.parent.name, p.parents[2], p.with_suffix(&quot;.json&quot;), p.with_stem(&quot;faq&quot;))
+print(p.relative_to(&quot;/srv/corpus&quot;), p.parts[:3])
+print(P(&quot;/srv&quot;) / &quot;corpus&quot; / &quot;x.md&quot;, P(&quot;data&quot;) / &quot;/etc/passwd&quot;, P(&quot;a/./b//c&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>stem</code> drops only the last suffix. <code>parents[0]</code> is the parent. Joining an absolute path restarts from it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>faq.v2.md faq.v2 .md [&#x27;.v2&#x27;, &#x27;.md&#x27;]
+en /srv /srv/corpus/en/faq.v2.json /srv/corpus/en/faq.md
+en/faq.v2.md (&#x27;/&#x27;, &#x27;srv&#x27;, &#x27;corpus&#x27;)
+/srv/corpus/x.md /etc/passwd a/b/c</pre></div><p><code>name</code> is the last part and <code>suffix</code> its last extension, so the stem keeps <code>.v2</code>; <code>suffixes</code> lists both. <code>parents[2]</code> goes up three levels. <code>with_suffix</code> replaces only the last extension, and <code>with_stem</code> replaces the part before it, so <code>.v2</code> disappears and <code>.md</code> stays. Joining <code>"/etc/passwd"</code> discards <code>data</code> because the right-hand side is absolute, the reason user-supplied names must be checked before joining. Redundant <code>.</code> parts and double slashes are cleaned up, while <code>..</code> would be kept.</p></div></details>
+</article>
+<article class="prob" id="p-checkpoint-paths-and-the-latest-checkpoi" data-pid="m12-1-checkpoint-paths-and-the-latest-checkpoi" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Checkpoint paths and the latest checkpoint</h3></header>
+<div class="prob-q"><p>Write <code>checkpoint_path(root, run, step)</code> returning <code>Path(root) / "runs" / run / "step-000123.pt"</code> (step padded to 6 digits), and <code>latest_checkpoint(run_dir)</code> returning the path of the checkpoint with the highest step number among files named <code>step-&lt;digits&gt;.pt</code> (ignoring names like <code>step-best.pt</code> and <code>step-000010.pt.tmp</code>), or <code>None</code> if there are none. Old runs used unpadded names such as <code>step-50.pt</code>, so compare numbers, not strings.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from pathlib import Path
+
+def checkpoint_path(root, run, step):
+    pass
+
+def latest_checkpoint(run_dir):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+assert checkpoint_path(root, "exp-1", 123) == root / "runs" / "exp-1" / "step-000123.pt"
+run = checkpoint_path(root, "exp-1", 0).parent
+run.mkdir(parents=True)
+assert latest_checkpoint(run) is None
+for name in ["step-000010.pt", "step-50.pt", "step-000100.pt", "step-best.pt", "step-000999.pt.tmp", "notes.txt"]:
+    (run / name).write_bytes(b"w")
+assert latest_checkpoint(run) == run / "step-000100.pt"
+(run / "step-7000.pt").write_bytes(b"w")
+assert latest_checkpoint(run).name == "step-7000.pt"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+assert checkpoint_path(root, &quot;exp-1&quot;, 123) == root / &quot;runs&quot; / &quot;exp-1&quot; / &quot;step-000123.pt&quot;
+run = checkpoint_path(root, &quot;exp-1&quot;, 0).parent
+run.mkdir(parents=True)
+assert latest_checkpoint(run) is None
+for name in [&quot;step-000010.pt&quot;, &quot;step-50.pt&quot;, &quot;step-000100.pt&quot;, &quot;step-best.pt&quot;, &quot;step-000999.pt.tmp&quot;, &quot;notes.txt&quot;]:
+    (run / name).write_bytes(b&quot;w&quot;)
+assert latest_checkpoint(run) == run / &quot;step-000100.pt&quot;
+(run / &quot;step-7000.pt&quot;).write_bytes(b&quot;w&quot;)
+assert latest_checkpoint(run).name == &quot;step-7000.pt&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>run_dir.glob("step-*.pt")</code> finds candidates; <code>path.stem.removeprefix("step-")</code> must be all digits.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>max(candidates, key=...)</code> with the parsed int, or <code>None</code> for an empty list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pathlib import Path
+
+
+def checkpoint_path(root, run, step):
+    return Path(root) / &quot;runs&quot; / run / f&quot;step-{step:06d}.pt&quot;
+
+
+def latest_checkpoint(run_dir):
+    found = []
+    for path in Path(run_dir).glob(&quot;step-*.pt&quot;):
+        number = path.stem.removeprefix(&quot;step-&quot;)
+        if number.isdigit():
+            found.append((int(number), path))
+    if not found:
+        return None
+    return max(found)[1]</code></pre></div><p>Building paths with <code>/</code> keeps them correct on every system, and padding the step makes new names sort correctly even as strings. The glob pattern <code>step-*.pt</code> requires the name to <strong>end</strong> in <code>.pt</code>, which excludes the temporary file, and the digit check excludes <code>step-best.pt</code>. Comparing parsed integers is what makes the legacy <code>step-50.pt</code> and <code>step-7000.pt</code> order correctly: as strings, <code>"step-50.pt"</code> sorts after <code>"step-000100.pt"</code>. The <code>(number, path)</code> tuples sort by number first. Training scripts use exactly this to resume from the last checkpoint after a crash.</p></div></details>
+</article>
+<article class="prob" id="p-a-transcript-that-keeps-only-the-last-tu" data-pid="m12-1-a-transcript-that-keeps-only-the-last-tu" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A transcript that keeps only the last turn</h3></header>
+<div class="prob-q"><p><code>log_turn</code> should add one JSON line per chat turn to a transcript file, creating the file on first use. After a conversation, the file contains only the final turn. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import json
+
+def log_turn(path, role, content):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(json.dumps({&quot;role&quot;: role, &quot;content&quot;: content}) + &quot;\n&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">import json, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), "chat.jsonl")
+for role, text in [("user", "Refund?"), ("assistant", "5 days."), ("user", "Thanks, café")]:
+    log_turn(path, role, text)
+with open(path, encoding="utf-8") as f:
+    turns = [json.loads(line) for line in f]
+assert [t["role"] for t in turns] == ["user", "assistant", "user"]
+assert turns[2]["content"] == "Thanks, café"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;chat.jsonl&quot;)
+for role, text in [(&quot;user&quot;, &quot;Refund?&quot;), (&quot;assistant&quot;, &quot;5 days.&quot;), (&quot;user&quot;, &quot;Thanks, café&quot;)]:
+    log_turn(path, role, text)
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    turns = [json.loads(line) for line in f]
+assert [t[&quot;role&quot;] for t in turns] == [&quot;user&quot;, &quot;assistant&quot;, &quot;user&quot;]
+assert turns[2][&quot;content&quot;] == &quot;Thanks, café&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Mode <code>"w"</code> truncates the file every time it is opened.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def log_turn(path, role, content):
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(json.dumps({&quot;role&quot;: role, &quot;content&quot;: content}) + &quot;\n&quot;)</code></pre></div><p><code>"w"</code> empties the file the moment it is opened, so each call replaced the whole transcript with one line. <code>"a"</code> opens for appending, creating the file if needed and writing every new line at the end, which is how logs and JSON Lines transcripts grow. Appending one complete line per call also keeps the file readable after a crash: at worst the last line is incomplete, and a reader can skip it (12.2).</p></div></details>
+</article>
+<article class="prob" id="p-modes-lines-and-positions" data-pid="m12-1-modes-lines-and-positions" data-type="predict" data-level="easy" data-answer="12
+&#x27;first\n&#x27; [&#x27;second\n&#x27;, &#x27;third\n&#x27;] &#x27;&#x27;
+FileExistsError
+0">
+<header class="prob-head"><h3>4. Modes, lines and positions</h3></header>
+<div class="code"><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;notes.txt&quot;)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    print(f.write(&quot;first\nsecond&quot;))
+with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;\nthird\n&quot;)
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    print(repr(f.readline()), f.readlines(), repr(f.read()))
+try:
+    open(path, &quot;x&quot;)
+except FileExistsError as e:
+    print(type(e).__name__)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    pass
+print(os.path.getsize(path))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>write</code> returns the number of characters. <code>readline</code> keeps the newline. Opening with <code>"w"</code> truncates even if nothing is written.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>12
+&#x27;first\n&#x27; [&#x27;second\n&#x27;, &#x27;third\n&#x27;] &#x27;&#x27;
+FileExistsError
+0</pre></div><p>The first write returns 12, the characters in <code>first</code>, the newline and <code>second</code>. Appending adds the rest, so the file has three lines. <code>readline</code> returns the first line with its newline, <code>readlines</code> the remaining lines, and <code>read</code> at the end of the file returns an empty string, not an error. Mode <code>"x"</code> refuses to open an existing file. Finally, opening with <code>"w"</code> and writing nothing still empties the file to 0 bytes, the danger behind problem 10.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-load-a-document-corpus" data-pid="m12-1-load-a-document-corpus" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>5. Load a document corpus</h3></header>
+<div class="prob-q"><p>Write <code>load_corpus(root)</code> returning a dict from each document's path relative to <code>root</code> (as a POSIX string) to its text, for every <code>.md</code> and <code>.txt</code> file in the whole tree (suffix compared case-insensitively). Skip anything inside a folder whose name starts with <code>.</code>, skip files whose text is empty or only whitespace, read as UTF-8, and return the dict with keys in sorted order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from pathlib import Path
+
+def load_corpus(root):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+files = {"docs/faq.md": "Refunds take 5 days.", "docs/empty.txt": "  \n", ".git/info.txt": "x", "notes/a/b.txt": "Déjà vu",
+         "README.MD": "Readme", "docs/.drafts/wip.md": "draft", "image.png": "not text", "docs/.hidden.md": "kept"}
+for rel, text in files.items():
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding="utf-8")
+corpus = load_corpus(root)
+assert list(corpus) == ["README.MD", "docs/.hidden.md", "docs/faq.md", "notes/a/b.txt"]
+assert corpus["notes/a/b.txt"] == "Déjà vu" and load_corpus(root / "notes") == {"a/b.txt": "Déjà vu"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+files = {&quot;docs/faq.md&quot;: &quot;Refunds take 5 days.&quot;, &quot;docs/empty.txt&quot;: &quot;  \n&quot;, &quot;.git/info.txt&quot;: &quot;x&quot;, &quot;notes/a/b.txt&quot;: &quot;Déjà vu&quot;,
+         &quot;README.MD&quot;: &quot;Readme&quot;, &quot;docs/.drafts/wip.md&quot;: &quot;draft&quot;, &quot;image.png&quot;: &quot;not text&quot;, &quot;docs/.hidden.md&quot;: &quot;kept&quot;}
+for rel, text in files.items():
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(text, encoding=&quot;utf-8&quot;)
+corpus = load_corpus(root)
+assert list(corpus) == [&quot;README.MD&quot;, &quot;docs/.hidden.md&quot;, &quot;docs/faq.md&quot;, &quot;notes/a/b.txt&quot;]
+assert corpus[&quot;notes/a/b.txt&quot;] == &quot;Déjà vu&quot; and load_corpus(root / &quot;notes&quot;) == {&quot;a/b.txt&quot;: &quot;Déjà vu&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Path(root).rglob("*")</code> and filter: <code>path.is_file()</code>, <code>path.suffix.lower()</code>, and the folder parts of <code>path.relative_to(root)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only the folders matter for the hidden check: <code>rel.parts[:-1]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pathlib import Path
+
+SUFFIXES = {&quot;.md&quot;, &quot;.txt&quot;}
+
+
+def load_corpus(root):
+    root = Path(root)
+    docs = {}
+    for path in root.rglob(&quot;*&quot;):
+        if not path.is_file() or path.suffix.lower() not in SUFFIXES:
+            continue
+        rel = path.relative_to(root)
+        if any(part.startswith(&quot;.&quot;) for part in rel.parts[:-1]):
+            continue
+        text = path.read_text(encoding=&quot;utf-8&quot;)
+        if text.strip():
+            docs[rel.as_posix()] = text
+    return dict(sorted(docs.items()))</code></pre></div><p><code>rglob</code> walks the entire tree, hidden folders included, so the loader makes three decisions explicitly: which file types are documents (case-insensitive, since <code>README.MD</code> exists in real repositories), which folders are not content (<code>.git</code>, drafts, caches; a hidden <strong>file</strong> is kept, as the spec says), and which files are empty. Keys relative to the root, with forward slashes, are stable document ids: the same on Windows and Linux and independent of where the corpus is checked out, which matters when the ids are stored in a vector index (5.P). Sorting makes runs reproducible, since <code>rglob</code> order is not guaranteed.</p></div></details>
+</article>
+<article class="prob" id="p-saving-artefacts-into-a-new-folder" data-pid="m12-1-saving-artefacts-into-a-new-folder" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Saving artefacts into a new folder</h3></header>
+<div class="prob-q"><p><code>save_artifact</code> writes a file into <code>root/run/</code> for a training run. The first call for a new <code>root</code> fails with <code>FileNotFoundError</code> when <code>root</code> itself does not exist yet, and the second artefact of a run fails with <code>FileExistsError</code>. Fix it, keeping the return value.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from pathlib import Path
+
+def save_artifact(root, run, name, text):
+    folder = Path(root) / run
+    folder.mkdir()
+    path = folder / name
+    path.write_text(text, encoding=&quot;utf-8&quot;)
+    return path
+</textarea>
+<script type="text/plain" class="prob-tests">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp()) / "artifacts"
+a = save_artifact(root, "exp-1", "metrics.json", '{"f1": 0.91}')
+b = save_artifact(root, "exp-1", "notes.md", "lr 3e-4")
+assert a.read_text(encoding="utf-8") == '{"f1": 0.91}' and b.parent == a.parent == root / "exp-1"
+assert sorted(p.name for p in (root / "exp-1").iterdir()) == ["metrics.json", "notes.md"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp()) / &quot;artifacts&quot;
+a = save_artifact(root, &quot;exp-1&quot;, &quot;metrics.json&quot;, &#x27;{&quot;f1&quot;: 0.91}&#x27;)
+b = save_artifact(root, &quot;exp-1&quot;, &quot;notes.md&quot;, &quot;lr 3e-4&quot;)
+assert a.read_text(encoding=&quot;utf-8&quot;) == &#x27;{&quot;f1&quot;: 0.91}&#x27; and b.parent == a.parent == root / &quot;exp-1&quot;
+assert sorted(p.name for p in (root / &quot;exp-1&quot;).iterdir()) == [&quot;metrics.json&quot;, &quot;notes.md&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>mkdir(parents=True, exist_ok=True)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pathlib import Path
+
+def save_artifact(root, run, name, text):
+    folder = Path(root) / run
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_text(text, encoding=&quot;utf-8&quot;)
+    return path</code></pre></div><p>Plain <code>mkdir()</code> creates exactly one folder, failing if its parent is missing (<code>parents=True</code> creates the whole chain) and failing if it already exists (<code>exist_ok=True</code> makes that fine, while still raising if a <strong>file</strong> of that name is in the way). Checking <code>exists()</code> first and then creating would be a race when two processes start at once; the flags make the call safe to repeat, which is what every "make sure the output folder exists" line should be.</p></div></details>
+</article>
+<article class="prob" id="p-find-duplicate-documents" data-pid="m12-1-find-duplicate-documents" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Find duplicate documents</h3></header>
+<div class="prob-q"><p>Write <code>sha256_file(path, chunk_size=65536)</code> returning the hex SHA-256 of a file, reading it in binary chunks of <code>chunk_size</code> bytes. Then write <code>find_duplicates(root)</code> returning a sorted list of groups, each a sorted list of POSIX paths relative to <code>root</code>, of files in the tree with identical content (groups of two or more only). Only hash files whose size is shared with another file.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import hashlib
+from pathlib import Path
+
+def sha256_file(path, chunk_size=65536):
+    pass
+
+def find_duplicates(root):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import hashlib, tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+data = {"a/faq.md": b"Refunds take 5 days.", "b/faq-copy.md": b"Refunds take 5 days.", "c/faq.md": b"Refunds take 5 dayz.",
+        "x.txt": b"hello", "y/z.txt": b"hello", "w.txt": b"hello", "unique.bin": b"\x00" * 50}
+for rel, content in data.items():
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(content)
+assert sha256_file(root / "x.txt", chunk_size=2) == hashlib.sha256(b"hello").hexdigest()
+assert find_duplicates(root) == [["a/faq.md", "b/faq-copy.md"], ["w.txt", "x.txt", "y/z.txt"]]
+hashed = []
+original = sha256_file
+def counting(path, chunk_size=65536):
+    hashed.append(Path(path).name)
+    return original(path, chunk_size)
+globals()["sha256_file"] = counting
+find_duplicates(root)
+globals()["sha256_file"] = original
+assert "unique.bin" not in hashed and len(hashed) == 6</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import hashlib, tempfile
+from pathlib import Path
+root = Path(tempfile.mkdtemp())
+data = {&quot;a/faq.md&quot;: b&quot;Refunds take 5 days.&quot;, &quot;b/faq-copy.md&quot;: b&quot;Refunds take 5 days.&quot;, &quot;c/faq.md&quot;: b&quot;Refunds take 5 dayz.&quot;,
+        &quot;x.txt&quot;: b&quot;hello&quot;, &quot;y/z.txt&quot;: b&quot;hello&quot;, &quot;w.txt&quot;: b&quot;hello&quot;, &quot;unique.bin&quot;: b&quot;\x00&quot; * 50}
+for rel, content in data.items():
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(content)
+assert sha256_file(root / &quot;x.txt&quot;, chunk_size=2) == hashlib.sha256(b&quot;hello&quot;).hexdigest()
+assert find_duplicates(root) == [[&quot;a/faq.md&quot;, &quot;b/faq-copy.md&quot;], [&quot;w.txt&quot;, &quot;x.txt&quot;, &quot;y/z.txt&quot;]]
+hashed = []
+original = sha256_file
+def counting(path, chunk_size=65536):
+    hashed.append(Path(path).name)
+    return original(path, chunk_size)
+globals()[&quot;sha256_file&quot;] = counting
+find_duplicates(root)
+globals()[&quot;sha256_file&quot;] = original
+assert &quot;unique.bin&quot; not in hashed and len(hashed) == 6</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>for chunk in iter(lambda: f.read(chunk_size), b""): h.update(chunk)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>First group paths by <code>stat().st_size</code>; hash only groups with more than one file; then group by digest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import hashlib
+from pathlib import Path
+
+
+def sha256_file(path, chunk_size=65536):
+    h = hashlib.sha256()
+    with open(path, &quot;rb&quot;) as f:
+        for chunk in iter(lambda: f.read(chunk_size), b&quot;&quot;):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def find_duplicates(root):
+    root = Path(root)
+    by_size = {}
+    for path in root.rglob(&quot;*&quot;):
+        if path.is_file():
+            by_size.setdefault(path.stat().st_size, []).append(path)
+    by_hash = {}
+    for paths in by_size.values():
+        if len(paths) &lt; 2:
+            continue
+        for path in paths:
+            by_hash.setdefault(sha256_file(path), []).append(path.relative_to(root).as_posix())
+    return sorted(sorted(group) for group in by_hash.values() if len(group) &gt; 1)</code></pre></div><p>Reading in fixed-size chunks keeps memory constant whatever the file size, and the digest is identical to hashing the whole content at once. Grouping by size first is the classic optimisation: files of different sizes cannot be identical, and <code>stat</code> is far cheaper than reading, so in a real corpus most files are never hashed (here the unique 50-byte file is skipped, while the two 20-byte files are hashed and found to differ). Content hashes are how ingestion pipelines skip documents they have already embedded, and how dataset versioning tools detect changed files.</p></div></details>
+</article>
+<article class="prob" id="p-open-once-or-once-per-line" data-pid="m12-1-open-once-or-once-per-line" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Open once or once per line</h3></header>
+<div class="prob-q"><p>Both write 3,000 lines to a file. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;out.txt&quot;)
+lines = [f&quot;record {i}\n&quot; for i in range(3_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for line in lines:
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(line)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    for line in lines:
+        f.write(line)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does every <code>open</code> and <code>close</code> cost, compared with a buffered <code>write</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>54.14 ms</td></tr><tr><td>B</td><td>684.84 µs</td></tr></table></div><p>Opening a file is a system call that looks up the path, checks permissions and allocates a file object, and closing flushes the buffer with another system call, so option A pays that 3,000 times. Option B opens once, and its writes go into an in-memory buffer that is flushed to the operating system in large blocks. Keep files open for the duration of a batch; append-per-call (problem 3) is right only for events that arrive one at a time, such as log lines from separate requests.</p></div></details>
+</article>
+<article class="prob" id="p-seeking-in-a-binary-file" data-pid="m12-1-seeking-in-a-binary-file" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Seeking in a binary file</h3></header>
+<div class="prob-q"><p>Fill in <code>data</code> and <code>pos</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;b.bin&quot;)
+with open(path, &quot;wb&quot;) as f:
+    f.write(bytes(range(10, 20)))
+
+f = open(path, &quot;rb&quot;)
+data, pos = list(f.read(3)), f.tell()
+f.seek(-2, 2)
+data, pos = list(f.read()), f.tell()
+f.seek(1)
+f.seek(4, 1)
+data, pos = list(f.read(2)), f.tell()
+data, pos = list(f.read(100)), f.tell()
+f.close()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>data</code></th><th><code>pos</code></th></tr><tr><td>first read</td><td><input class="cell" data-a="[10, 11, 12]" data-s="[10, 11, 12]" aria-label="data at first read" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="pos at first read" autocomplete="off"></td></tr><tr><td>from the end</td><td><input class="cell" data-a="[18, 19]" data-s="[18, 19]" aria-label="data at from the end" autocomplete="off"></td><td><input class="cell" data-a="10" data-s="10" aria-label="pos at from the end" autocomplete="off"></td></tr><tr><td>relative seek</td><td><input class="cell" data-a="[15, 16]" data-s="[15, 16]" aria-label="data at relative seek" autocomplete="off"></td><td><input class="cell" data-a="7" data-s="7" aria-label="pos at relative seek" autocomplete="off"></td></tr><tr><td>past the end</td><td><input class="cell" data-a="[17, 18, 19]" data-s="[17, 18, 19]" aria-label="data at past the end" autocomplete="off"></td><td><input class="cell" data-a="10" data-s="10" aria-label="pos at past the end" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The file holds the bytes 10 to 19 at positions 0 to 9. <code>seek(offset, 1)</code> moves relative to the current position.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>data</code></th><th><code>pos</code></th></tr><tr><td>first read</td><td><code>[10, 11, 12]</code></td><td><code>3</code></td></tr><tr><td>from the end</td><td><code>[18, 19]</code></td><td><code>10</code></td></tr><tr><td>relative seek</td><td><code>[15, 16]</code></td><td><code>7</code></td></tr><tr><td>past the end</td><td><code>[17, 18, 19]</code></td><td><code>10</code></td></tr></table></div><p>Reading three bytes from the start returns 10, 11, 12 and leaves the position at 3. Seeking to two bytes before the end and reading the rest returns the last two bytes, leaving the position at the end, 10. Seeking to 1 and then 4 further lands on position 5, so the next two bytes are 15 and 16. Asking for more bytes than remain is not an error: <code>read</code> returns what is left, here 17, 18, 19, and the position stops at the end.</p></div></details>
+</article>
+<article class="prob" id="p-a-config-save-that-corrupts-the-file" data-pid="m12-1-a-config-save-that-corrupts-the-file" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A config save that corrupts the file</h3></header>
+<div class="prob-q"><p><code>save_config</code> writes the prompt configuration as JSON. When a value is not serialisable, the call raises, as it should, but it also leaves the file half-written, so the service cannot start. Make the save atomic: on failure, the previous file must be intact and no temporary file left behind.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import json, os
+from pathlib import Path
+
+def save_config(path, config):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        json.dump(config, f, indent=2)
+</textarea>
+<script type="text/plain" class="prob-tests">import json, tempfile
+from pathlib import Path
+target = Path(tempfile.mkdtemp()) / "prompt.json"
+save_config(target, {"model": "small", "temperature": 0.2})
+try:
+    save_config(target, {"model": "large", "temperature": 0.7, "callback": print})
+    assert False
+except TypeError:
+    pass
+assert json.loads(target.read_text(encoding="utf-8")) == {"model": "small", "temperature": 0.2}
+assert [p.name for p in target.parent.iterdir()] == ["prompt.json"]
+save_config(target, {"model": "large"})
+assert json.loads(target.read_text(encoding="utf-8")) == {"model": "large"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, tempfile
+from pathlib import Path
+target = Path(tempfile.mkdtemp()) / &quot;prompt.json&quot;
+save_config(target, {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2})
+try:
+    save_config(target, {&quot;model&quot;: &quot;large&quot;, &quot;temperature&quot;: 0.7, &quot;callback&quot;: print})
+    assert False
+except TypeError:
+    pass
+assert json.loads(target.read_text(encoding=&quot;utf-8&quot;)) == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}
+assert [p.name for p in target.parent.iterdir()] == [&quot;prompt.json&quot;]
+save_config(target, {&quot;model&quot;: &quot;large&quot;})
+assert json.loads(target.read_text(encoding=&quot;utf-8&quot;)) == {&quot;model&quot;: &quot;large&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write to a temporary file in the same folder, then <code>os.replace(tmp, path)</code>; delete the temporary file if anything fails.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, os
+from pathlib import Path
+
+def save_config(path, config):
+    path = Path(path)
+    tmp = path.with_name(path.name + &quot;.tmp&quot;)
+    try:
+        with open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+            json.dump(config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise</code></pre></div><p><code>json.dump</code> writes to the file piece by piece as it encodes, so by the time it reached the function it could not serialise, the opening <code>"w"</code> had already emptied the file and the first keys had been written: the service then failed to parse its own config. Writing to a temporary file means the target is only touched by <code>os.replace</code>, which swaps the complete new file in at once. The fixed temporary name is fine for a single writer; with concurrent writers, use <code>tempfile.mkstemp</code> for a unique name, as in the lesson's example.</p></div></details>
+</article>
+<article class="prob" id="p-encodings-and-bytes" data-pid="m12-1-encodings-and-bytes" data-type="predict" data-level="medium" data-answer="10 12 3
+naÃ¯ve cafÃ©
+b&#x27;na\xc3\xafv&#x27;
+b&#x27;\xef\xbb\xbfid&#x27; 3 False">
+<header class="prob-head"><h3>11. Encodings and bytes</h3></header>
+<div class="code"><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;t.txt&quot;)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    n = f.write(&quot;naïve café&quot;)
+print(n, os.path.getsize(path), len(&quot;✓&quot;.encode(&quot;utf-8&quot;)))
+with open(path, encoding=&quot;latin-1&quot;) as f:
+    print(f.read())
+with open(path, &quot;rb&quot;) as f:
+    print(f.read(5))
+with open(path, &quot;w&quot;, encoding=&quot;utf-8-sig&quot;) as f:
+    f.write(&quot;id&quot;)
+with open(path, &quot;rb&quot;) as f:
+    raw = f.read()
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    plain = f.read()
+print(raw, len(plain), plain == &quot;id&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ï</code> and <code>é</code> take two bytes each in UTF-8; <code>✓</code> takes three. <code>utf-8-sig</code> writes a three-byte byte-order mark.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>10 12 3
+naÃ¯ve cafÃ©
+b&#x27;na\xc3\xafv&#x27;
+b&#x27;\xef\xbb\xbfid&#x27; 3 False</pre></div><p>The text has 10 characters and 12 bytes, because two of them need two bytes in UTF-8. Reading UTF-8 bytes as Latin-1 decodes each byte as one character, producing mojibake. The first five bytes are <code>n</code>, <code>a</code>, the two bytes of <code>ï</code> (shown as escapes) and <code>v</code>: five bytes but only four characters. Writing with <code>utf-8-sig</code> prefixes the byte-order mark <code>\xef\xbb\xbf</code>; reading it back as plain <code>utf-8</code> keeps the mark as an invisible character <code>\ufeff</code>, so the string has three characters and does not equal <code>"id"</code>, the bug behind CSV headers that "do not match" (read such files with <code>utf-8-sig</code>).</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-tail-a-large-log" data-pid="m12-1-tail-a-large-log" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Tail a large log</h3></header>
+<div class="prob-q"><p>Write <code>tail(path, n, block=1024)</code> returning the last <code>n</code> lines of a UTF-8 text file (without newlines), like the <code>tail</code> command, <strong>without reading the whole file</strong>: open it in binary mode, read blocks of <code>block</code> bytes backwards from the end until you have more than <code>n</code> newlines or reach the start, then decode. Lines may contain multi-byte characters that a block boundary can cut. Return <code>[]</code> for <code>n &lt;= 0</code> or an empty file.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def tail(path, n, block=1024):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, "app.log")
+lines = [f"{i:05d} réponse ✓ ok" for i in range(5_000)]
+with open(path, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines) + "\n")
+assert tail(path, 3) == lines[-3:]
+assert tail(path, 2, block=7) == lines[-2:] and tail(path, 1, block=1) == lines[-1:]
+assert tail(path, 0) == [] and len(tail(path, 10_000, block=4096)) == 5_000
+short = os.path.join(d, "short.log")
+with open(short, "w", encoding="utf-8") as f:
+    f.write("a\nb\nc")
+assert tail(short, 2) == ["b", "c"] and tail(short, 5) == ["a", "b", "c"]
+open(os.path.join(d, "empty.log"), "w").close()
+assert tail(os.path.join(d, "empty.log"), 3) == []
+reads = []
+real_open = open
+class Spy:
+    def __init__(self, f): self.f = f
+    def __enter__(self): return self
+    def __exit__(self, *a): self.f.close()
+    def seek(self, *a): return self.f.seek(*a)
+    def tell(self): return self.f.tell()
+    def read(self, size=-1):
+        reads.append(size)
+        return self.f.read(size)
+import builtins
+builtins.open = lambda *a, **k: Spy(real_open(*a, **k))
+try:
+    tail(path, 2, block=256)
+finally:
+    builtins.open = real_open
+assert sum(reads) <= 512 and -1 not in reads</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, &quot;app.log&quot;)
+lines = [f&quot;{i:05d} réponse ✓ ok&quot; for i in range(5_000)]
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;\n&quot;.join(lines) + &quot;\n&quot;)
+assert tail(path, 3) == lines[-3:]
+assert tail(path, 2, block=7) == lines[-2:] and tail(path, 1, block=1) == lines[-1:]
+assert tail(path, 0) == [] and len(tail(path, 10_000, block=4096)) == 5_000
+short = os.path.join(d, &quot;short.log&quot;)
+with open(short, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;a\nb\nc&quot;)
+assert tail(short, 2) == [&quot;b&quot;, &quot;c&quot;] and tail(short, 5) == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+open(os.path.join(d, &quot;empty.log&quot;), &quot;w&quot;).close()
+assert tail(os.path.join(d, &quot;empty.log&quot;), 3) == []
+reads = []
+real_open = open
+class Spy:
+    def __init__(self, f): self.f = f
+    def __enter__(self): return self
+    def __exit__(self, *a): self.f.close()
+    def seek(self, *a): return self.f.seek(*a)
+    def tell(self): return self.f.tell()
+    def read(self, size=-1):
+        reads.append(size)
+        return self.f.read(size)
+import builtins
+builtins.open = lambda *a, **k: Spy(real_open(*a, **k))
+try:
+    tail(path, 2, block=256)
+finally:
+    builtins.open = real_open
+assert sum(reads) &lt;= 512 and -1 not in reads</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>f.seek(0, 2)</code> and <code>f.tell()</code> give the size. Move <code>pos</code> back by <code>min(block, pos)</code>, <code>seek(pos)</code>, and prepend <code>f.read(step)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If you stopped before the start of the file, the first line is probably cut: drop everything up to the first <code>b"\n"</code> before decoding.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>splitlines()</code> on the decoded text, then the last <code>n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def tail(path, n, block=1024):
+    if n &lt;= 0:
+        return []
+    with open(path, &quot;rb&quot;) as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        data = b&quot;&quot;
+        while pos &gt; 0 and data.count(b&quot;\n&quot;) &lt;= n:
+            step = min(block, pos)
+            pos -= step
+            f.seek(pos)
+            data = f.read(step) + data
+    if pos &gt; 0:
+        data = data[data.index(b&quot;\n&quot;) + 1:]
+    return data.decode(&quot;utf-8&quot;).splitlines()[-n:]</code></pre></div><p>The file is read from the end in blocks, so the cost depends on the size of the last few lines, not of the file: two lines of a 150 KB log need at most two 256-byte reads. Binary mode is required because only byte offsets can be seeked freely (text-mode <code>seek</code> accepts only <code>tell</code> values). The loop stops once it has <strong>more</strong> than <code>n</code> newlines, since with a trailing newline, <code>n</code> complete lines need <code>n + 1</code>. When it stopped mid-file, the first bytes belong to a line that was cut, possibly in the middle of a multi-byte character, so everything before the first newline is dropped before decoding, which also prevents a <code>UnicodeDecodeError</code> at the boundary. Log viewers, monitoring agents and "show the last error" debugging tools all work this way.</p></div></details>
+</article>
+<article class="prob" id="p-an-atomic-write-context-manager" data-pid="m12-1-an-atomic-write-context-manager" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. An atomic-write context manager</h3></header>
+<div class="prob-q"><p>Write a context manager <code>atomic_write(path, mode="w", encoding="utf-8")</code> that yields a file object for a temporary file in the same folder (created with <code>tempfile.mkstemp</code>, name starting with <code>"."</code>) and, on a clean exit, flushes, <code>fsync</code>s and replaces <code>path</code> with it. On an exception, delete the temporary file and re-raise; <code>path</code> is untouched. Support <code>"w"</code> (text, with the encoding) and <code>"wb"</code> (binary, no encoding); any other mode raises <code>ValueError</code> before creating anything.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import os, tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
+@contextmanager
+def atomic_write(path, mode=&quot;w&quot;, encoding=&quot;utf-8&quot;):
+    yield
+</textarea>
+<script type="text/plain" class="prob-tests">import json, tempfile
+from pathlib import Path
+d = Path(tempfile.mkdtemp())
+target = d / "index.json"
+with atomic_write(target) as f:
+    json.dump({"docs": 3, "name": "café"}, f)
+assert json.loads(target.read_text(encoding="utf-8")) == {"docs": 3, "name": "café"}
+try:
+    with atomic_write(target) as f:
+        f.write('{"docs": ')
+        raise RuntimeError("embedding service down")
+except RuntimeError:
+    pass
+assert json.loads(target.read_text(encoding="utf-8"))["docs"] == 3 and [p.name for p in d.iterdir()] == ["index.json"]
+with atomic_write(d / "emb.bin", "wb") as f:
+    f.write(bytes([1, 2, 3]))
+assert (d / "emb.bin").read_bytes() == bytes([1, 2, 3])
+try:
+    with atomic_write(d / "x.txt", "a") as f:
+        pass
+    assert False
+except ValueError:
+    pass
+assert sorted(p.name for p in d.iterdir()) == ["emb.bin", "index.json"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, tempfile
+from pathlib import Path
+d = Path(tempfile.mkdtemp())
+target = d / &quot;index.json&quot;
+with atomic_write(target) as f:
+    json.dump({&quot;docs&quot;: 3, &quot;name&quot;: &quot;café&quot;}, f)
+assert json.loads(target.read_text(encoding=&quot;utf-8&quot;)) == {&quot;docs&quot;: 3, &quot;name&quot;: &quot;café&quot;}
+try:
+    with atomic_write(target) as f:
+        f.write(&#x27;{&quot;docs&quot;: &#x27;)
+        raise RuntimeError(&quot;embedding service down&quot;)
+except RuntimeError:
+    pass
+assert json.loads(target.read_text(encoding=&quot;utf-8&quot;))[&quot;docs&quot;] == 3 and [p.name for p in d.iterdir()] == [&quot;index.json&quot;]
+with atomic_write(d / &quot;emb.bin&quot;, &quot;wb&quot;) as f:
+    f.write(bytes([1, 2, 3]))
+assert (d / &quot;emb.bin&quot;).read_bytes() == bytes([1, 2, 3])
+try:
+    with atomic_write(d / &quot;x.txt&quot;, &quot;a&quot;) as f:
+        pass
+    assert False
+except ValueError:
+    pass
+assert sorted(p.name for p in d.iterdir()) == [&quot;emb.bin&quot;, &quot;index.json&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate the mode first. <code>fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".")</code>, then <code>os.fdopen(fd, mode, encoding=...)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Put the <code>yield</code> inside <code>try</code>; on <code>BaseException</code>, unlink the temporary file and <code>raise</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
+
+@contextmanager
+def atomic_write(path, mode=&quot;w&quot;, encoding=&quot;utf-8&quot;):
+    if mode not in (&quot;w&quot;, &quot;wb&quot;):
+        raise ValueError(f&quot;atomic_write supports &#x27;w&#x27; and &#x27;wb&#x27;, not {mode!r}&quot;)
+    path = Path(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f&quot;.{path.name}.&quot;, suffix=&quot;.tmp&quot;)
+    try:
+        with os.fdopen(fd, mode, encoding=None if &quot;b&quot; in mode else encoding) as f:
+            yield f
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise</code></pre></div><p>The context manager packages the atomic-write recipe so callers write normally inside a <code>with</code> block (10.2). <code>mkstemp</code> creates a uniquely named file in the <strong>target's folder</strong>, so the final <code>os.replace</code> is a rename on the same file system, and concurrent writers never share a temporary file. The <code>yield</code> sits inside <code>try</code>, so an exception in the caller's block, here a failing embedding service, lands in the <code>except</code>, which removes the partial file and re-raises (a generator-based manager must re-raise, or the error would be swallowed). Only a clean exit reaches the flush, the <code>fsync</code> that forces the data to disk before the rename, and the replace. Validating the mode before <code>mkstemp</code> means a bad call leaves nothing behind. Vector-index writers, model registries and caching layers use exactly this helper.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-summarising-prediction-fil" data-pid="m12-1-read-the-code-summarising-prediction-fil" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>14. Read the code: summarising prediction files</h3></header>
+<div class="prob-q"><p><code>summarise_runs</code> counts predicted labels across the JSON prediction files of many runs and writes a summary. It misses every run in a subfolder, counts draft files (names starting with <code>_</code>) that should be ignored, crashes when the output folder does not exist, leaves file handles open, and the summary ends up with only one line, in no particular order. Fix it so the summary has one <code>label count</code> line per label, sorted by count descending and then label, written as UTF-8, and the function returns the summary path.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+from pathlib import Path
+
+
+def summarise_runs(src_dir, out_dir):
+    counts = {}
+    for path in Path(src_dir).glob(&quot;*.json&quot;):
+        data = json.loads(open(path).read())
+        for p in data[&quot;predictions&quot;]:
+            counts[p[&quot;label&quot;]] = counts.get(p[&quot;label&quot;], 0) + 1
+    out = Path(out_dir) / &quot;summary.txt&quot;
+    for label in counts:
+        with open(out, &quot;w&quot;) as f:
+            f.write(f&quot;{label} {counts[label]}\n&quot;)
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">import json, tempfile
+from pathlib import Path
+src = Path(tempfile.mkdtemp())
+runs = {"run-1.json": ["spam", "ham", "spam"], "2025/run-2.json": ["phish", "ham", "spam"], "2025/q1/run-3.json": ["ham"],
+        "_draft.json": ["spam"] * 10, "2025/_old.json": ["phish"] * 5}
+for rel, labels in runs.items():
+    (src / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src / rel).write_text(json.dumps({"predictions": [{"id": i, "label": l} for i, l in enumerate(labels)]}), encoding="utf-8")
+out = summarise_runs(src, src.parent / (src.name + "-out") / "reports")
+assert out.name == "summary.txt"
+assert out.read_text(encoding="utf-8").splitlines() == ["ham 3", "spam 3", "phish 1"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, tempfile
+from pathlib import Path
+src = Path(tempfile.mkdtemp())
+runs = {&quot;run-1.json&quot;: [&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;], &quot;2025/run-2.json&quot;: [&quot;phish&quot;, &quot;ham&quot;, &quot;spam&quot;], &quot;2025/q1/run-3.json&quot;: [&quot;ham&quot;],
+        &quot;_draft.json&quot;: [&quot;spam&quot;] * 10, &quot;2025/_old.json&quot;: [&quot;phish&quot;] * 5}
+for rel, labels in runs.items():
+    (src / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src / rel).write_text(json.dumps({&quot;predictions&quot;: [{&quot;id&quot;: i, &quot;label&quot;: l} for i, l in enumerate(labels)]}), encoding=&quot;utf-8&quot;)
+out = summarise_runs(src, src.parent / (src.name + &quot;-out&quot;) / &quot;reports&quot;)
+assert out.name == &quot;summary.txt&quot;
+assert out.read_text(encoding=&quot;utf-8&quot;).splitlines() == [&quot;ham 3&quot;, &quot;spam 3&quot;, &quot;phish 1&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>rglob("*.json")</code> plus a name check; <code>path.read_text(encoding="utf-8")</code> opens and closes the file.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Create the output folder with <code>mkdir(parents=True, exist_ok=True)</code> and write all lines once, sorted with the key <code>(-count, label)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from pathlib import Path
+
+
+def summarise_runs(src_dir, out_dir):
+    counts = {}
+    for path in sorted(Path(src_dir).rglob(&quot;*.json&quot;)):
+        if path.name.startswith(&quot;_&quot;):
+            continue
+        data = json.loads(path.read_text(encoding=&quot;utf-8&quot;))
+        for p in data[&quot;predictions&quot;]:
+            counts[p[&quot;label&quot;]] = counts.get(p[&quot;label&quot;], 0) + 1
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / &quot;summary.txt&quot;
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    out.write_text(&quot;&quot;.join(f&quot;{label} {n}\n&quot; for label, n in ordered), encoding=&quot;utf-8&quot;)
+    return out</code></pre></div><p>Each bug is a file-handling habit from this lesson. <code>glob("*.json")</code> searches one folder; <code>rglob</code> searches the tree. Draft files need an explicit rule, since nothing skips them by default. <code>open(path).read()</code> without <code>with</code> leaves closing to the garbage collector, and without <code>encoding</code> reads with the platform default; <code>read_text(encoding="utf-8")</code> fixes both. Writing needs the folder to exist (<code>mkdir</code> with both flags). The loop reopened the summary with <code>"w"</code> for every label, truncating it each time, so only the last label survived; building the whole text and writing it once fixes that, and the sort key <code>(-count, label)</code> gives a deterministic order, so summaries from two runs can be compared with a plain diff.</p></div></details>
+</article>
+<article class="prob" id="p-path-rules-across-systems" data-pid="m12-1-path-rules-across-systems" data-type="predict" data-level="hard" data-answer="True False
+C:\data\runs\exp C: D:\other
+[PurePosixPath(&#x27;a/10.txt&#x27;), PurePosixPath(&#x27;a/9.txt&#x27;), PurePosixPath(&#x27;b/2.txt&#x27;)]
+archive.tar &#x27;&#x27; .bashrc
+(&#x27;/&#x27;, &#x27;srv&#x27;, &#x27;uploads&#x27;, &#x27;..&#x27;, &#x27;etc&#x27;) x">
+<header class="prob-head"><h3>15. Path rules across systems</h3></header>
+<div class="code"><pre><code class="py">from pathlib import PurePosixPath as P, PureWindowsPath as W
+
+print(W(&quot;C:/Data/Model.PT&quot;) == W(&quot;c:\\data\\model.pt&quot;), P(&quot;Data/m.pt&quot;) == P(&quot;data/m.pt&quot;))
+print(W(&quot;C:/data/runs&quot;) / &quot;exp&quot;, W(&quot;C:/data&quot;).drive, W(&quot;C:/data&quot;) / &quot;D:/other&quot;)
+print(sorted([P(&quot;b/2.txt&quot;), P(&quot;a/10.txt&quot;), P(&quot;a/9.txt&quot;)]))
+print(P(&quot;archive.tar.gz&quot;).stem, repr(P(&quot;.bashrc&quot;).suffix), P(&quot;.bashrc&quot;).stem)
+print(P(&quot;/srv/uploads/../etc&quot;).parts, P(&quot;x&quot;).with_suffix(&quot;.txt&quot;).with_suffix(&quot;&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Windows paths compare case-insensitively and accept both separators. Pure paths sort by their parts as strings. A leading dot is not a suffix.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True False
+C:\data\runs\exp C: D:\other
+[PurePosixPath(&#x27;a/10.txt&#x27;), PurePosixPath(&#x27;a/9.txt&#x27;), PurePosixPath(&#x27;b/2.txt&#x27;)]
+archive.tar &#x27;&#x27; .bashrc
+(&#x27;/&#x27;, &#x27;srv&#x27;, &#x27;uploads&#x27;, &#x27;..&#x27;, &#x27;etc&#x27;) x</pre></div><p>Windows paths ignore case and treat <code>/</code> and <code>\</code> alike, so the two Windows paths are equal, while POSIX paths are case-sensitive. Windows paths print with backslashes, keep the drive separately, and joining a path on another drive starts over from it, like an absolute POSIX path. Paths sort by their parts as strings, so <code>10.txt</code> comes before <code>9.txt</code> (sort by a parsed number when that matters, as in problem 2). A name such as <code>.bashrc</code> is all stem and no suffix. Pure paths keep <code>..</code> as a part, which is why upload paths must be resolved before checking where they point, and <code>with_suffix("")</code> removes a suffix.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-is-an-atomic-write-and-how-do-you-i" data-pid="m12-1-what-is-an-atomic-write-and-how-do-you-i" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What is an atomic write, and how do you implement one in Python?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>An atomic write makes a file change all-or-nothing: readers and later runs see either the complete old file or the complete new one, never a truncated or half-written file, even if the process crashes or raises halfway. Opening the target with <code>"w"</code> cannot give that, because it truncates the file immediately and writes over time. The recipe: create a temporary file <strong>in the same folder</strong> (<code>tempfile.mkstemp(dir=target.parent)</code> gives a unique name), write everything to it, <code>flush()</code> and <code>os.fsync()</code> so the data reaches the disk, then <code>os.replace(tmp, target)</code>, which renames it over the target atomically on the same file system, on POSIX and Windows. On any exception, delete the temporary file and re-raise. Same folder matters because a rename across file systems becomes a copy, which is not atomic. Use it for config files, model registries, indexes, caches and any file another process reads while you write; for appending events, a log line per write is usually enough.</p></div></details>
+</article>
+<article class="prob" id="p-why-should-you-always-pass-an-encoding-w" data-pid="m12-1-why-should-you-always-pass-an-encoding-w" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why should you always pass an encoding when opening text files?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Text files are bytes, and <code>open</code> needs an encoding to turn them into characters. Without <code>encoding=</code>, Python uses the platform's default: UTF-8 on Linux and macOS, but often a legacy code page such as cp1252 on Windows. So code that reads <code>café</code> correctly on the developer's laptop produces <code>cafÃ©</code> or raises <code>UnicodeDecodeError</code> on another machine or in a container, and files it writes are unreadable elsewhere. Passing <code>encoding="utf-8"</code> makes behaviour identical everywhere. Related choices: <code>errors="replace"</code> (or <code>"ignore"</code>) for messy input where losing a character beats crashing, <code>utf-8-sig</code> for files with a byte-order mark from Excel, and binary mode for anything that is not text. Python 3.15 makes UTF-8 the default (PEP 686), and linters such as Ruff and Pylint flag <code>open</code> calls without an encoding, but explicit is still the habit to show.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-process-a-50-gb-log-or-jso" data-pid="m12-1-how-would-you-process-a-50-gb-log-or-jso" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How would you process a 50 GB log or JSONL file in Python?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Never load it: stream it. Iterating over a text file object reads one line at a time through a buffer, so memory stays constant, and generators (6.3) can filter, parse and aggregate as lines pass, keeping only running totals or a bounded structure such as a heap of top-k or a reservoir sample. For binary data, read fixed-size chunks with <code>f.read(n)</code>. Write results incrementally too, appending one line per record or flushing batches, and write final outputs atomically. Make the job <strong>resumable</strong>: record the byte offset (<code>tell()</code> in binary mode) or the line count of the last committed batch, and <code>seek</code> there on restart. For speed, measure first: parsing usually dominates I/O, so faster parsers (<code>orjson</code>), splitting the file by byte ranges at line boundaries across processes (14.3), or columnar tools (pandas <code>chunksize</code>, Polars, DuckDB scanning the file directly) are the next steps. Compressed input can be streamed with <code>gzip.open</code> in text mode. Finally, handle bad records (invalid JSON, broken encodings) by counting and logging them instead of crashing at hour three.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Use <code>pathlib.Path</code>: <code>/</code> joins, <code>name</code>, <code>stem</code>, <code>suffix</code>, <code>parent</code>, <code>relative_to</code> and <code>with_suffix</code> replace string surgery; absolute parts reset a join.</li><li><code>glob</code>, <code>rglob</code> and <code>iterdir</code> are unordered and do not skip hidden folders; sort and filter explicitly. <code>mkdir(parents=True, exist_ok=True)</code> is repeat-safe.</li><li>Always pass <code>encoding="utf-8"</code>; <code>"w"</code> truncates at once, <code>"a"</code> appends, <code>"x"</code> refuses existing files; iterate lines to stream big files.</li><li>Binary mode for bytes: read in chunks, hash with <code>hashlib</code>, and <code>seek</code>/<code>tell</code> by byte offset to read from the end.</li><li>Atomic writes: temporary file in the same folder, flush and <code>fsync</code>, then <code>os.replace</code>; delete the temporary file on failure.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

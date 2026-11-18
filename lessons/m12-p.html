@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>12.P · Module 12 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m12-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 12 · Files and data</span></div>
+  <h1>12.P Module 12 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 12: paths and files, CSV, JSON and JSON Lines, logging, and configuration. Then a mini project that needs all of it: a document ingestion job configured from TOML and the environment that walks a corpus, skips and deduplicates files, writes JSONL chunks and a manifest atomically, and logs what it did.</p>
+  <div class="chips"><span class="chip">13 problems</span><span class="chip">3 easy · 5 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>Every file-handling task raises the same four questions. <strong>Where is it?</strong> Build paths with <code>pathlib</code>, find files with explicit filters, and never trust that a folder exists (12.1). <strong>What format, and what types?</strong> CSV gives strings, JSON loses some types, JSONL streams, and every reader must decide what a bad record means (12.2). <strong>What happens if it fails halfway?</strong> Write atomically, log the failure with its traceback once, and keep going or stop deliberately (12.1, 12.3). <strong>Who decides the settings?</strong> Defaults, a file and the environment, parsed strictly at start-up, with secrets kept out of code and logs (12.4).</p>
+<p>The problems mix the lessons on purpose, and the mini project combines all four in the kind of batch job that feeds every RAG system.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-paths-json-and-files-together" data-pid="m12-p-paths-json-and-files-together" data-type="predict" data-level="easy" data-answer="43 6
+{&#x27;lr&#x27;: 0.0003, &#x27;layers&#x27;: [2, 4]} run.bak configs/run.json
+[&#x27;configs&#x27;, &#x27;run.json&#x27;] True">
+<header class="prob-head"><h3>1. Paths, JSON and files together</h3></header>
+<div class="code"><pre><code class="py">import json, tempfile
+from pathlib import Path
+
+root = Path(tempfile.mkdtemp())
+cfg = root / &quot;configs&quot; / &quot;run.json&quot;
+cfg.parent.mkdir(parents=True)
+n = cfg.write_text(json.dumps({&quot;lr&quot;: 3e-4, &quot;layers&quot;: (2, 4)}, indent=1), encoding=&quot;utf-8&quot;)
+print(n, cfg.read_text(encoding=&quot;utf-8&quot;).count(&quot;\n&quot;))
+with cfg.open(encoding=&quot;utf-8&quot;) as f:
+    data = json.load(f)
+print(data, cfg.with_suffix(&quot;.bak&quot;).name, cfg.relative_to(root).as_posix())
+print(sorted(p.name for p in root.rglob(&quot;*&quot;)), cfg.stat().st_size == n)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>write_text</code> returns the number of characters written. <code>indent=1</code> puts each value on its own line. JSON turns tuples into lists.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>43 6
+{&#x27;lr&#x27;: 0.0003, &#x27;layers&#x27;: [2, 4]} run.bak configs/run.json
+[&#x27;configs&#x27;, &#x27;run.json&#x27;] True</pre></div><p>With <code>indent=1</code>, the JSON spreads over seven lines (each list item gets its own), so it contains six newlines; <code>write_text</code> returns its character count, which equals the byte size here because the text is ASCII. Loading it back gives a list where the tuple was. <code>rglob("*")</code> yields folders as well as files, so <code>configs</code> is listed too.</p></div></details>
+</article>
+<article class="prob" id="p-append-metrics-and-find-the-best-run" data-pid="m12-p-append-metrics-and-find-the-best-run" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Append metrics and find the best run</h3></header>
+<div class="prob-q"><p>Write <code>append_metrics(path, run, metrics)</code> appending one JSONL line <code>{"run": run, **metrics}</code> to <code>path</code> (creating parent folders), and <code>best_run(path, metric)</code> streaming the file and returning <code>(run, value)</code> for the highest value of <code>metric</code>, skipping blank lines, invalid JSON and records without a numeric <code>metric</code> (booleans do not count). Return <code>None</code> if no record qualifies.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import json
+from pathlib import Path
+
+def append_metrics(path, run, metrics):
+    pass
+
+def best_run(path, metric):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import tempfile
+from pathlib import Path
+path = Path(tempfile.mkdtemp()) / "exp" / "metrics.jsonl"
+append_metrics(path, "r1", {"f1": 0.81, "loss": 0.4})
+append_metrics(path, "r2", {"f1": 0.87})
+with open(path, "a", encoding="utf-8") as f:
+    f.write("\n{broken\n" + '{"run": "r3", "f1": "0.99"}\n' + '{"run": "r4", "f1": true}\n')
+append_metrics(path, "r5", {"f1": 0.84, "loss": 0.2})
+assert best_run(path, "f1") == ("r2", 0.87) and best_run(path, "loss") == ("r1", 0.4)
+assert best_run(path, "auc") is None and path.read_text(encoding="utf-8").splitlines()[0] == '{"run": "r1", "f1": 0.81, "loss": 0.4}'</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tempfile
+from pathlib import Path
+path = Path(tempfile.mkdtemp()) / &quot;exp&quot; / &quot;metrics.jsonl&quot;
+append_metrics(path, &quot;r1&quot;, {&quot;f1&quot;: 0.81, &quot;loss&quot;: 0.4})
+append_metrics(path, &quot;r2&quot;, {&quot;f1&quot;: 0.87})
+with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;\n{broken\n&quot; + &#x27;{&quot;run&quot;: &quot;r3&quot;, &quot;f1&quot;: &quot;0.99&quot;}\n&#x27; + &#x27;{&quot;run&quot;: &quot;r4&quot;, &quot;f1&quot;: true}\n&#x27;)
+append_metrics(path, &quot;r5&quot;, {&quot;f1&quot;: 0.84, &quot;loss&quot;: 0.2})
+assert best_run(path, &quot;f1&quot;) == (&quot;r2&quot;, 0.87) and best_run(path, &quot;loss&quot;) == (&quot;r1&quot;, 0.4)
+assert best_run(path, &quot;auc&quot;) is None and path.read_text(encoding=&quot;utf-8&quot;).splitlines()[0] == &#x27;{&quot;run&quot;: &quot;r1&quot;, &quot;f1&quot;: 0.81, &quot;loss&quot;: 0.4}&#x27;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>path.parent.mkdir(parents=True, exist_ok=True)</code>, then open with <code>"a"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>isinstance(v, (int, float)) and not isinstance(v, bool)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from pathlib import Path
+
+
+def append_metrics(path, run, metrics):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(json.dumps({&quot;run&quot;: run, **metrics}) + &quot;\n&quot;)
+
+
+def best_run(path, metric):
+    best = None
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            value = record.get(metric) if isinstance(record, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if best is None or value &gt; best[1]:
+                    best = (record.get(&quot;run&quot;), value)
+    return best</code></pre></div><p>Appending one JSON line per run is the simplest durable experiment log: concurrent-safe enough for one writer, readable after a crash, and greppable. Reading it is a streaming scan with explicit tolerance for the junk that accumulates in such files (a broken line, a metric written as a string, a boolean, which Python counts as an <code>int</code>). The <code>"loss"</code> query shows the function is generic, though for a loss you would want the minimum; a real tracker (MLflow, Weights &amp; Biases) stores a direction per metric.</p></div></details>
+</article>
+<article class="prob" id="p-a-log-level-from-the-environment" data-pid="m12-p-a-log-level-from-the-environment" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A log level from the environment</h3></header>
+<div class="prob-q"><p><code>configure</code> sets the service's log level from <code>LOG_LEVEL</code>. Operators write <code>LOG_LEVEL=debug</code>, which crashes start-up with <code>ValueError: Unknown level: 'debug'</code>, and a missing variable should mean <code>INFO</code>. Accept any case and surrounding spaces, default to <code>INFO</code>, and keep rejecting unknown names.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import logging
+
+def configure(logger, environ):
+    logger.setLevel(environ.get(&quot;LOG_LEVEL&quot;))
+    return logger.level
+</textarea>
+<script type="text/plain" class="prob-tests">import logging
+log = logging.getLogger("f3.svc")
+assert configure(log, {"LOG_LEVEL": " debug "}) == logging.DEBUG and configure(log, {}) == logging.INFO
+assert configure(log, {"LOG_LEVEL": "Warning"}) == logging.WARNING and configure(log, {"LOG_LEVEL": ""}) == logging.INFO
+try:
+    configure(log, {"LOG_LEVEL": "loud"})
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import logging
+log = logging.getLogger(&quot;f3.svc&quot;)
+assert configure(log, {&quot;LOG_LEVEL&quot;: &quot; debug &quot;}) == logging.DEBUG and configure(log, {}) == logging.INFO
+assert configure(log, {&quot;LOG_LEVEL&quot;: &quot;Warning&quot;}) == logging.WARNING and configure(log, {&quot;LOG_LEVEL&quot;: &quot;&quot;}) == logging.INFO
+try:
+    configure(log, {&quot;LOG_LEVEL&quot;: &quot;loud&quot;})
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>(environ.get("LOG_LEVEL") or "INFO").strip().upper()</code>, and treat a value that is empty after stripping as <code>INFO</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+def configure(logger, environ):
+    level = (environ.get(&quot;LOG_LEVEL&quot;) or &quot;&quot;).strip().upper() or &quot;INFO&quot;
+    logger.setLevel(level)
+    return logger.level</code></pre></div><p><code>setLevel</code> accepts level names, but only in upper case, and <code>setLevel(None)</code> fails too, so the setting needs the same normalisation as any other environment variable (12.4): strip, normalise case, apply a default for missing or empty. Unknown names still raise <code>ValueError</code>, which is what you want at start-up: a typo in <code>LOG_LEVEL</code> should stop the deploy, not silently log at the wrong level.</p></div></details>
+</article>
+<article class="prob" id="p-lists-in-csv-cells" data-pid="m12-p-lists-in-csv-cells" data-type="predict" data-level="medium" data-answer="[&#x27;id,tags,tags_json&#x27;, &#x27;1,&quot;[\&#x27;billing\&#x27;, \&#x27;eu\&#x27;]&quot;,&quot;[&quot;&quot;billing&quot;&quot;, &quot;&quot;eu&quot;&quot;]&quot;&#x27;, &#x27;2,[],[]&#x27;]
+[&#x27;billing&#x27;, &#x27;eu&#x27;] str [&#x27;billing&#x27;, &#x27;eu&#x27;]">
+<header class="prob-head"><h3>4. Lists in CSV cells</h3></header>
+<div class="code"><pre><code class="py">import csv, io, json
+
+rows = [{&quot;id&quot;: 1, &quot;tags&quot;: [&quot;billing&quot;, &quot;eu&quot;]}, {&quot;id&quot;: 2, &quot;tags&quot;: []}]
+buf = io.StringIO(newline=&quot;&quot;)
+w = csv.DictWriter(buf, fieldnames=[&quot;id&quot;, &quot;tags&quot;, &quot;tags_json&quot;])
+w.writeheader()
+for r in rows:
+    w.writerow({**r, &quot;tags_json&quot;: json.dumps(r[&quot;tags&quot;])})
+print(buf.getvalue().splitlines())
+back = list(csv.DictReader(io.StringIO(buf.getvalue(), newline=&quot;&quot;)))
+print(back[0][&quot;tags&quot;], type(back[0][&quot;tags&quot;]).__name__, json.loads(back[0][&quot;tags_json&quot;]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>CSV writes every value with <code>str</code>, so a list is written as its Python repr. JSON text contains quotes and commas, so the cell is quoted.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;id,tags,tags_json&#x27;, &#x27;1,&quot;[\&#x27;billing\&#x27;, \&#x27;eu\&#x27;]&quot;,&quot;[&quot;&quot;billing&quot;&quot;, &quot;&quot;eu&quot;&quot;]&quot;&#x27;, &#x27;2,[],[]&#x27;]
+[&#x27;billing&#x27;, &#x27;eu&#x27;] str [&#x27;billing&#x27;, &#x27;eu&#x27;]</pre></div><p>CSV has no lists: the writer calls <code>str</code> on the list and stores its Python repr, which another tool cannot parse reliably and which reads back as a plain string. Encoding the list as JSON gives a cell that any language can decode; because JSON uses double quotes and commas, the writer wraps it in quotes and doubles the inner quotes, and the reader undoes that. For nested data, JSONL or Parquet is usually the better format than CSV with JSON cells.</p></div></details>
+</article>
+<article class="prob" id="p-load-prompt-templates-from-toml-files" data-pid="m12-p-load-prompt-templates-from-toml-files" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Load prompt templates from TOML files</h3></header>
+<div class="prob-q"><p>Write <code>load_prompts(folder, logger)</code> reading every <code>*.toml</code> file in <code>folder</code> (not subfolders), in name order. Each must have a string <code>name</code>, a string <code>template</code> and a list of strings <code>variables</code>. Return a dict from name to <code>{"template": ..., "variables": [...], "file": file name}</code>. Skip a file that cannot be parsed or is invalid, logging a warning <code>"skipping %s: %s"</code> with the file name and the reason, and skip a duplicate name with a warning <code>"duplicate prompt %r in %s"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import tomllib
+from pathlib import Path
+
+def load_prompts(folder, logger):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import logging, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger("w5.prompts")
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+d = Path(tempfile.mkdtemp())
+files = {"a_qa.toml": 'name = "qa"\ntemplate = "Answer {question} using {context}."\nvariables = ["question", "context"]\n',
+         "b_broken.toml": 'name = "x"\ntemplate = "unclosed\n',
+         "c_missing.toml": 'name = "summary"\ntemplate = "Summarise {text}"\n',
+         "d_dup.toml": 'name = "qa"\ntemplate = "Other"\nvariables = []\n',
+         "e_tone.toml": 'name = "tone"\ntemplate = "Rewrite politely: {text}"\nvariables = ["text"]\n',
+         "notes.txt": "not a prompt"}
+for name, text in files.items():
+    (d / name).write_text(text, encoding="utf-8")
+(d / "old").mkdir()
+(d / "old" / "z.toml").write_text('name = "old"\ntemplate = "x"\nvariables = []\n', encoding="utf-8")
+prompts = load_prompts(d, log)
+assert list(prompts) == ["qa", "tone"] and prompts["qa"] == {"template": "Answer {question} using {context}.", "variables": ["question", "context"], "file": "a_qa.toml"}
+msgs = [r.getMessage() for r in cap.records]
+assert [r.levelname for r in cap.records] == ["WARNING"] * 3 and msgs[0].startswith("skipping b_broken.toml: ")
+assert msgs[1].startswith("skipping c_missing.toml: ") and msgs[2] == "duplicate prompt 'qa' in d_dup.toml"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import logging, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger(&quot;w5.prompts&quot;)
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+d = Path(tempfile.mkdtemp())
+files = {&quot;a_qa.toml&quot;: &#x27;name = &quot;qa&quot;\ntemplate = &quot;Answer {question} using {context}.&quot;\nvariables = [&quot;question&quot;, &quot;context&quot;]\n&#x27;,
+         &quot;b_broken.toml&quot;: &#x27;name = &quot;x&quot;\ntemplate = &quot;unclosed\n&#x27;,
+         &quot;c_missing.toml&quot;: &#x27;name = &quot;summary&quot;\ntemplate = &quot;Summarise {text}&quot;\n&#x27;,
+         &quot;d_dup.toml&quot;: &#x27;name = &quot;qa&quot;\ntemplate = &quot;Other&quot;\nvariables = []\n&#x27;,
+         &quot;e_tone.toml&quot;: &#x27;name = &quot;tone&quot;\ntemplate = &quot;Rewrite politely: {text}&quot;\nvariables = [&quot;text&quot;]\n&#x27;,
+         &quot;notes.txt&quot;: &quot;not a prompt&quot;}
+for name, text in files.items():
+    (d / name).write_text(text, encoding=&quot;utf-8&quot;)
+(d / &quot;old&quot;).mkdir()
+(d / &quot;old&quot; / &quot;z.toml&quot;).write_text(&#x27;name = &quot;old&quot;\ntemplate = &quot;x&quot;\nvariables = []\n&#x27;, encoding=&quot;utf-8&quot;)
+prompts = load_prompts(d, log)
+assert list(prompts) == [&quot;qa&quot;, &quot;tone&quot;] and prompts[&quot;qa&quot;] == {&quot;template&quot;: &quot;Answer {question} using {context}.&quot;, &quot;variables&quot;: [&quot;question&quot;, &quot;context&quot;], &quot;file&quot;: &quot;a_qa.toml&quot;}
+msgs = [r.getMessage() for r in cap.records]
+assert [r.levelname for r in cap.records] == [&quot;WARNING&quot;] * 3 and msgs[0].startswith(&quot;skipping b_broken.toml: &quot;)
+assert msgs[1].startswith(&quot;skipping c_missing.toml: &quot;) and msgs[2] == &quot;duplicate prompt &#x27;qa&#x27; in d_dup.toml&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(Path(folder).glob("*.toml"))</code>; open each in binary mode for <code>tomllib.load</code>, or use <code>tomllib.loads(path.read_text(...))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate with a small function that raises <code>ValueError("...")</code>; <code>TOMLDecodeError</code> is a <code>ValueError</code> too, so one <code>except ValueError</code> handles both.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import tomllib
+from pathlib import Path
+
+
+def _validate(data):
+    if not isinstance(data.get(&quot;name&quot;), str) or not data[&quot;name&quot;]:
+        raise ValueError(&quot;missing name&quot;)
+    if not isinstance(data.get(&quot;template&quot;), str):
+        raise ValueError(&quot;missing template&quot;)
+    variables = data.get(&quot;variables&quot;)
+    if not isinstance(variables, list) or not all(isinstance(v, str) for v in variables):
+        raise ValueError(&quot;variables must be a list of strings&quot;)
+
+
+def load_prompts(folder, logger):
+    prompts = {}
+    for path in sorted(Path(folder).glob(&quot;*.toml&quot;)):
+        try:
+            with open(path, &quot;rb&quot;) as f:
+                data = tomllib.load(f)
+            _validate(data)
+        except ValueError as e:
+            logger.warning(&quot;skipping %s: %s&quot;, path.name, e)
+            continue
+        if data[&quot;name&quot;] in prompts:
+            logger.warning(&quot;duplicate prompt %r in %s&quot;, data[&quot;name&quot;], path.name)
+            continue
+        prompts[data[&quot;name&quot;]] = {&quot;template&quot;: data[&quot;template&quot;], &quot;variables&quot;: data[&quot;variables&quot;], &quot;file&quot;: path.name}
+    return prompts</code></pre></div><p>Prompts kept as files outside the code can be reviewed, diffed and changed without a deploy, and TOML handles multi-line templates well. The loader combines the module: <code>glob</code> (not <code>rglob</code>) for one folder and <code>sorted</code> for a deterministic order (12.1), <code>tomllib.load</code> on a <strong>binary</strong> file (12.4), validation of the parsed data, and warnings with lazy arguments (12.3). Because <code>TOMLDecodeError</code> subclasses <code>ValueError</code>, syntax errors and validation errors share one handler. Whether a bad prompt file should be a warning or a start-up failure is a policy choice; failing hard is safer when the missing prompt would break a feature.</p></div></details>
+</article>
+<article class="prob" id="p-rewriting-a-file-while-reading-it" data-pid="m12-p-rewriting-a-file-while-reading-it" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Rewriting a file while reading it</h3></header>
+<div class="prob-q"><p><code>compact(path)</code> should rewrite a JSONL file keeping only the <strong>last</strong> record for each <code>id</code>, in order of first appearance, and return how many it kept. It returns 0 and leaves an empty file. Fix it so it works, and make the rewrite atomic so a crash cannot lose the data.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import json, os
+
+def compact(path):
+    latest = {}
+    with open(path, encoding=&quot;utf-8&quot;) as src, open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as dst:
+        for line in src:
+            record = json.loads(line)
+            latest[record[&quot;id&quot;]] = record
+        for record in latest.values():
+            dst.write(json.dumps(record) + &quot;\n&quot;)
+    return len(latest)
+</textarea>
+<script type="text/plain" class="prob-tests">import json, os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, "docs.jsonl")
+records = [{"id": "a", "v": 1}, {"id": "b", "v": 1}, {"id": "a", "v": 2}, {"id": "c", "v": 1}, {"id": "b", "v": 3}]
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(json.dumps(r) + "\n" for r in records)
+assert compact(path) == 3
+with open(path, encoding="utf-8") as f:
+    assert [json.loads(line) for line in f] == [{"id": "a", "v": 2}, {"id": "b", "v": 3}, {"id": "c", "v": 1}]
+assert sorted(os.listdir(d)) == ["docs.jsonl"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, &quot;docs.jsonl&quot;)
+records = [{&quot;id&quot;: &quot;a&quot;, &quot;v&quot;: 1}, {&quot;id&quot;: &quot;b&quot;, &quot;v&quot;: 1}, {&quot;id&quot;: &quot;a&quot;, &quot;v&quot;: 2}, {&quot;id&quot;: &quot;c&quot;, &quot;v&quot;: 1}, {&quot;id&quot;: &quot;b&quot;, &quot;v&quot;: 3}]
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.writelines(json.dumps(r) + &quot;\n&quot; for r in records)
+assert compact(path) == 3
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    assert [json.loads(line) for line in f] == [{&quot;id&quot;: &quot;a&quot;, &quot;v&quot;: 2}, {&quot;id&quot;: &quot;b&quot;, &quot;v&quot;: 3}, {&quot;id&quot;: &quot;c&quot;, &quot;v&quot;: 1}]
+assert sorted(os.listdir(d)) == [&quot;docs.jsonl&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Opening with <code>"w"</code> truncates the file before the first line is read. Read everything into <code>latest</code> first, then write a temporary file and <code>os.replace</code> it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, os
+
+def compact(path):
+    latest = {}
+    with open(path, encoding=&quot;utf-8&quot;) as src:
+        for line in src:
+            if line.strip():
+                record = json.loads(line)
+                latest[record[&quot;id&quot;]] = record
+    tmp = path + &quot;.tmp&quot;
+    try:
+        with open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;) as dst:
+            for record in latest.values():
+                dst.write(json.dumps(record) + &quot;\n&quot;)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return len(latest)</code></pre></div><p>Both <code>open</code> calls run before the loop, and <code>"w"</code> empties the file at once, so the reader found nothing: the data was destroyed by the attempt to rewrite it. Reading into memory first and writing to a temporary file that replaces the original (12.1) fixes both the logic and the crash-safety. Assigning to an existing dict key keeps its original position while updating the value, which gives "last record, in order of first appearance" for free. For files too large for memory, the same job writes the compacted output to a new file in a second streaming pass, or uses a database.</p></div></details>
+</article>
+<article class="prob" id="p-json-dump-to-a-file-or-one-write" data-pid="m12-p-json-dump-to-a-file-or-one-write" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. json.dump to a file, or one write</h3></header>
+<div class="prob-q"><p>Both write the same 2,000-record payload to an open text file. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import io, json
+payload = [{&quot;id&quot;: i, &quot;text&quot;: &quot;refund policy &quot; * 5, &quot;score&quot;: i / 2_000, &quot;tags&quot;: [&quot;faq&quot;, &quot;eu&quot;]} for i in range(2_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">f = io.StringIO()
+json.dump(payload, f)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">f = io.StringIO()
+f.write(json.dumps(payload))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>json.dump</code> writes each piece as the encoder produces it; <code>json.dumps</code> builds the whole string in C first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>23.84 ms</td></tr><tr><td>B</td><td>5.17 ms</td></tr></table></div><p><code>json.dump</code> streams: it walks the data and calls <code>f.write</code> for every small chunk the encoder produces (each key, value and separator), so the cost is dominated by thousands of method calls. <code>json.dumps</code> encodes everything in the C accelerator into one string, and a single <code>write</code> follows. The trade-off is memory: <code>dumps</code> holds the whole document as one string, which is fine for megabytes and wasteful for gigabytes, where streaming (or JSONL, one <code>dumps</code> per record) is the better structure anyway.</p></div></details>
+</article>
+<article class="prob" id="p-rotate-log-files-by-size" data-pid="m12-p-rotate-log-files-by-size" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Rotate log files by size</h3></header>
+<div class="prob-q"><p>Write <code>rotate(path, max_bytes, backups)</code> that does nothing if <code>path</code> does not exist or is at most <code>max_bytes</code> bytes. Otherwise it shifts the backups: <code>app.log.{backups-1}</code> becomes <code>app.log.{backups}</code> (replacing it), down to <code>app.log.1</code> becoming <code>app.log.2</code>, then renames <code>app.log</code> to <code>app.log.1</code>, and returns <code>True</code>. With <code>backups=0</code> it just deletes the file. Write <code>log_line(path, line, max_bytes, backups)</code> that rotates when needed, then appends the line and a newline.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">from pathlib import Path
+
+def rotate(path, max_bytes, backups):
+    pass
+
+def log_line(path, line, max_bytes, backups):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import tempfile
+from pathlib import Path
+d = Path(tempfile.mkdtemp())
+log = d / "app.log"
+assert rotate(log, 10, 2) is False
+for i in range(7):
+    log_line(log, f"event {i}", max_bytes=16, backups=2)
+assert sorted(p.name for p in d.iterdir()) == ["app.log", "app.log.1", "app.log.2"]
+assert log.read_text(encoding="utf-8") == "event 6\n"
+assert (d / "app.log.1").read_text(encoding="utf-8") == "event 3\nevent 4\nevent 5\n" and (d / "app.log.2").read_text(encoding="utf-8") == "event 0\nevent 1\nevent 2\n"
+small = d / "small.log"
+small.write_text("x" * 20, encoding="utf-8")
+assert rotate(small, 10, 0) is True and not small.exists()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import tempfile
+from pathlib import Path
+d = Path(tempfile.mkdtemp())
+log = d / &quot;app.log&quot;
+assert rotate(log, 10, 2) is False
+for i in range(7):
+    log_line(log, f&quot;event {i}&quot;, max_bytes=16, backups=2)
+assert sorted(p.name for p in d.iterdir()) == [&quot;app.log&quot;, &quot;app.log.1&quot;, &quot;app.log.2&quot;]
+assert log.read_text(encoding=&quot;utf-8&quot;) == &quot;event 6\n&quot;
+assert (d / &quot;app.log.1&quot;).read_text(encoding=&quot;utf-8&quot;) == &quot;event 3\nevent 4\nevent 5\n&quot; and (d / &quot;app.log.2&quot;).read_text(encoding=&quot;utf-8&quot;) == &quot;event 0\nevent 1\nevent 2\n&quot;
+small = d / &quot;small.log&quot;
+small.write_text(&quot;x&quot; * 20, encoding=&quot;utf-8&quot;)
+assert rotate(small, 10, 0) is True and not small.exists()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the size with <code>path.stat().st_size</code>. Shift from the oldest down: <code>for i in range(backups - 1, 0, -1)</code>, renaming <code>.i</code> to <code>.i+1</code> with <code>replace</code> when it exists.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>path.with_name(f"{path.name}.{i}")</code> builds the backup names.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pathlib import Path
+
+
+def rotate(path, max_bytes, backups):
+    path = Path(path)
+    if not path.exists() or path.stat().st_size &lt;= max_bytes:
+        return False
+    if backups &lt;= 0:
+        path.unlink()
+        return True
+    for i in range(backups - 1, 0, -1):
+        older = path.with_name(f&quot;{path.name}.{i}&quot;)
+        if older.exists():
+            older.replace(path.with_name(f&quot;{path.name}.{i + 1}&quot;))
+    path.replace(path.with_name(f&quot;{path.name}.1&quot;))
+    return True
+
+
+def log_line(path, line, max_bytes, backups):
+    rotate(path, max_bytes, backups)
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(line + &quot;\n&quot;)</code></pre></div><p>Each event line is 8 bytes, so the file passes 16 bytes with its third line and is rotated before the fourth write, which is why each backup holds three complete events. Shifting must start with the <strong>oldest</strong> backup, or renaming <code>.1</code> to <code>.2</code> would overwrite <code>.2</code> before it moved on; <code>replace</code> overwrites the last backup, which is how old logs fall off the end. This is what <code>logging.handlers.RotatingFileHandler(path, maxBytes=..., backupCount=...)</code> does for you, and why services rotate logs at all: unbounded log files fill disks, which takes down far more than logging.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-nightly-metrics-export" data-pid="m12-p-read-the-code-a-nightly-metrics-export" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. Read the code: a nightly metrics export</h3></header>
+<div class="prob-q"><p><code>export_metrics</code> reads per-run metric files (<code>*.json</code> anywhere under <code>runs_dir</code>) and writes a CSV summary. Problems found in review: it prints instead of logging, so failures are invisible in production; one broken JSON file crashes the whole export; the CSV is written with hand-joined strings and no header; <code>EXPORT_DECIMALS</code> from the environment is used as a string; and a crash halfway leaves a truncated CSV that the dashboard then reads. Fix it: log a warning per unreadable file and skip it, write <code>run,f1,loss</code> with the <code>csv</code> module, format numbers with the configured decimals (default 3, read at call time), write atomically, and return the number of rows.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import json, os
+from pathlib import Path
+
+
+def export_metrics(runs_dir, out_path, logger):
+    decimals = os.getenv(&quot;EXPORT_DECIMALS&quot;, 3)
+    rows = []
+    for path in Path(runs_dir).glob(&quot;*.json&quot;):
+        data = json.loads(path.read_text())
+        rows.append((path.stem, data[&quot;f1&quot;], data[&quot;loss&quot;]))
+    print(f&quot;exporting {len(rows)} runs&quot;)
+    with open(out_path, &quot;w&quot;) as f:
+        for run, f1, loss in rows:
+            f.write(f&quot;{run},{round(f1, decimals)},{round(loss, decimals)}\n&quot;)
+    return len(rows)
+</textarea>
+<script type="text/plain" class="prob-tests">import csv, json, logging, os, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger("f9.export")
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+root = Path(tempfile.mkdtemp())
+runs = root / "runs"
+(runs / "2025").mkdir(parents=True)
+(runs / "r1.json").write_text(json.dumps({"f1": 0.81234, "loss": 0.4}), encoding="utf-8")
+(runs / "2025" / "r2.json").write_text(json.dumps({"f1": 0.9, "loss": 0.123456}), encoding="utf-8")
+(runs / "2025" / "r3.json").write_text("{broken", encoding="utf-8")
+(runs / "r4.json").write_text(json.dumps({"f1": 0.5}), encoding="utf-8")
+out = root / "report" / "metrics.csv"
+os.environ["EXPORT_DECIMALS"] = "2"
+assert export_metrics(runs, out, log) == 2
+os.environ.pop("EXPORT_DECIMALS")
+with open(out, encoding="utf-8", newline="") as f:
+    assert list(csv.reader(f)) == [["run", "f1", "loss"], ["r1", "0.81", "0.40"], ["r2", "0.90", "0.12"]]
+warnings = sorted(r.getMessage() for r in cap.records if r.levelname == "WARNING")
+assert len(warnings) == 2 and warnings[0].startswith("skipping r3.json") and warnings[1].startswith("skipping r4.json")
+assert export_metrics(runs, out, log) == 2 and open(out, encoding="utf-8").read().splitlines()[1] == "r1,0.812,0.400"
+assert sorted(p.name for p in out.parent.iterdir()) == ["metrics.csv"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import csv, json, logging, os, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger(&quot;f9.export&quot;)
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+root = Path(tempfile.mkdtemp())
+runs = root / &quot;runs&quot;
+(runs / &quot;2025&quot;).mkdir(parents=True)
+(runs / &quot;r1.json&quot;).write_text(json.dumps({&quot;f1&quot;: 0.81234, &quot;loss&quot;: 0.4}), encoding=&quot;utf-8&quot;)
+(runs / &quot;2025&quot; / &quot;r2.json&quot;).write_text(json.dumps({&quot;f1&quot;: 0.9, &quot;loss&quot;: 0.123456}), encoding=&quot;utf-8&quot;)
+(runs / &quot;2025&quot; / &quot;r3.json&quot;).write_text(&quot;{broken&quot;, encoding=&quot;utf-8&quot;)
+(runs / &quot;r4.json&quot;).write_text(json.dumps({&quot;f1&quot;: 0.5}), encoding=&quot;utf-8&quot;)
+out = root / &quot;report&quot; / &quot;metrics.csv&quot;
+os.environ[&quot;EXPORT_DECIMALS&quot;] = &quot;2&quot;
+assert export_metrics(runs, out, log) == 2
+os.environ.pop(&quot;EXPORT_DECIMALS&quot;)
+with open(out, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    assert list(csv.reader(f)) == [[&quot;run&quot;, &quot;f1&quot;, &quot;loss&quot;], [&quot;r1&quot;, &quot;0.81&quot;, &quot;0.40&quot;], [&quot;r2&quot;, &quot;0.90&quot;, &quot;0.12&quot;]]
+warnings = sorted(r.getMessage() for r in cap.records if r.levelname == &quot;WARNING&quot;)
+assert len(warnings) == 2 and warnings[0].startswith(&quot;skipping r3.json&quot;) and warnings[1].startswith(&quot;skipping r4.json&quot;)
+assert export_metrics(runs, out, log) == 2 and open(out, encoding=&quot;utf-8&quot;).read().splitlines()[1] == &quot;r1,0.812,0.400&quot;
+assert sorted(p.name for p in out.parent.iterdir()) == [&quot;metrics.csv&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>rglob("*.json")</code> sorted by stem; wrap each file's parsing in <code>try</code> and catch <code>(json.JSONDecodeError, KeyError, TypeError)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Format with <code>f"{value:.{decimals}f}"</code>; write to <code>out.with_name(out.name + ".tmp")</code> with <code>newline=""</code>, then <code>os.replace</code>. Create the folder first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv, json, os
+from pathlib import Path
+
+
+def export_metrics(runs_dir, out_path, logger):
+    decimals = int(os.environ.get(&quot;EXPORT_DECIMALS&quot;, &quot;3&quot;))
+    rows = []
+    for path in sorted(Path(runs_dir).rglob(&quot;*.json&quot;), key=lambda p: p.stem):
+        try:
+            data = json.loads(path.read_text(encoding=&quot;utf-8&quot;))
+            rows.append((path.stem, float(data[&quot;f1&quot;]), float(data[&quot;loss&quot;])))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.warning(&quot;skipping %s: %s: %s&quot;, path.name, type(e).__name__, e)
+    logger.info(&quot;exporting %d runs&quot;, len(rows))
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(out.name + &quot;.tmp&quot;)
+    try:
+        with open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+            writer = csv.writer(f)
+            writer.writerow([&quot;run&quot;, &quot;f1&quot;, &quot;loss&quot;])
+            for run, f1, loss in rows:
+                writer.writerow([run, f&quot;{f1:.{decimals}f}&quot;, f&quot;{loss:.{decimals}f}&quot;])
+        os.replace(tmp, out)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return len(rows)</code></pre></div><p>The fix touches every lesson of the module. Files: <code>rglob</code> finds runs in subfolders, sorting makes the report stable, the output folder is created, and the temporary file plus <code>os.replace</code> means the dashboard always reads a complete CSV, old or new (12.1). Formats: the <code>csv</code> writer with a header and <code>newline=""</code> replaces string joining, and fixed-decimal formatting replaces <code>round</code>, which prints <code>0.4</code> instead of <code>0.40</code> (12.2). Logging: one warning per skipped file with the reason, instead of a crash or a <code>print</code> nobody sees (12.3). Configuration: the environment value is parsed as an int when the function runs, not used as the string <code>"2"</code>, which would make <code>round</code> fail (12.4).</p></div></details>
+</article>
+<article class="prob" id="p-structured-logs-to-a-file" data-pid="m12-p-structured-logs-to-a-file" data-type="predict" data-level="hard" data-answer="2 True
+[{&#x27;level&#x27;: &#x27;INFO&#x27;, &#x27;msg&#x27;: &#x27;started&#x27;, &#x27;file&#x27;: None}, {&#x27;level&#x27;: &#x27;WARNING&#x27;, &#x27;msg&#x27;: &#x27;skipped a.pdf&#x27;, &#x27;file&#x27;: &#x27;a.pdf&#x27;}]">
+<header class="prob-head"><h3>10. Structured logs to a file</h3></header>
+<div class="code"><pre><code class="py">import json, logging, tempfile
+from pathlib import Path
+
+class JsonLines(logging.Formatter):
+    def format(self, record):
+        return json.dumps({&quot;level&quot;: record.levelname, &quot;msg&quot;: record.getMessage(), &quot;file&quot;: getattr(record, &quot;file&quot;, None)})
+
+path = Path(tempfile.mkdtemp()) / &quot;logs&quot; / &quot;ingest.jsonl&quot;
+path.parent.mkdir()
+handler = logging.FileHandler(path, encoding=&quot;utf-8&quot;)
+handler.setFormatter(JsonLines())
+log = logging.getLogger(&quot;p11.ingest&quot;)
+log.handlers[:] = [handler]
+log.setLevel(logging.INFO)
+log.propagate = False
+log.info(&quot;started&quot;)
+log.warning(&quot;skipped %s&quot;, &quot;a.pdf&quot;, extra={&quot;file&quot;: &quot;a.pdf&quot;})
+log.debug(&quot;details&quot;)
+print(path.read_text(encoding=&quot;utf-8&quot;).count(&quot;\n&quot;), handler.terminator == &quot;\n&quot;)
+handler.close()
+records = [json.loads(line) for line in path.read_text(encoding=&quot;utf-8&quot;).splitlines()]
+print(records)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>FileHandler</code> writes each formatted record followed by its <code>terminator</code>; the debug record is below the logger's level.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2 True
+[{&#x27;level&#x27;: &#x27;INFO&#x27;, &#x27;msg&#x27;: &#x27;started&#x27;, &#x27;file&#x27;: None}, {&#x27;level&#x27;: &#x27;WARNING&#x27;, &#x27;msg&#x27;: &#x27;skipped a.pdf&#x27;, &#x27;file&#x27;: &#x27;a.pdf&#x27;}]</pre></div><p>The handler appends each record's formatted text plus a newline, and flushes after every record, so the file already holds two complete lines before it is closed: one JSON object per line, which makes the log file itself a JSONL file. The debug record never reaches the handler. <code>extra</code> fields become record attributes, so the formatter finds <code>file</code> on the warning and falls back to <code>None</code> on the other record.</p></div></details>
+</article>
+<article class="prob" id="p-walk-through-how-you-would-design-a-batc" data-pid="m12-p-walk-through-how-you-would-design-a-batc" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>11. Walk through how you would design a batch job that turns a folder of documents into chunks for a vector index.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Configuration first: source and output locations, file types, chunk size and overlap, read from a TOML file with environment overrides and validated at start-up (12.4). Discovery: walk the tree with explicit filters (types, hidden and vendor folders), sorted for reproducibility, and read each file with an explicit encoding, treating undecodable or empty files as skipped, not fatal (12.1). Identity: give every document a stable id (its relative path) and a content hash, so unchanged documents can be skipped on the next run and duplicates detected. Output: stream chunks to a JSONL file with the document id, chunk number and hash, written to a temporary file and atomically replaced, plus a manifest with counts, skipped and duplicate files and the configuration used (12.2). Observability: log one line per skipped file with the reason and a summary at the end, structured so it can be charted (12.3). Then embedding and upserting read the JSONL, which also makes those steps restartable without redoing the parsing.</p></div></details>
+</article>
+<article class="prob" id="p-your-batch-job-runs-fine-locally-but-pro" data-pid="m12-p-your-batch-job-runs-fine-locally-but-pro" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>12. Your batch job runs fine locally but produces different output in production. How do you investigate?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Start with the inputs the code does not control. <strong>Configuration</strong>: print or log the effective settings at start-up with their sources (masking secrets), and compare; a different environment variable, a stale <code>.env</code>, or a default used because a variable was misspelt is the commonest cause. <strong>Data</strong>: compare file lists and content hashes, since a different checkout, mounted folder or <code>rglob</code> order (unsorted) can change results. <strong>Encodings and locale</strong>: a missing <code>encoding=</code> uses the platform default, so the same file decodes differently on Windows and in a Linux container; line endings and BOMs differ too. <strong>Versions</strong>: pin and compare dependency versions and the Python version. <strong>Time and randomness</strong>: time zones, the current date, and unseeded random generators. Make the job reproducible by design: explicit encodings, sorted iteration, a manifest that records config, input hashes and versions, and structured logs, so the two runs can be diffed instead of guessed at.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a document ingestion job</h2>
+<p>A RAG system needs its documents as chunks with stable ids. The nightly ingestion job reads its settings from TOML with environment overrides, walks the corpus, skips what is not a document, detects duplicates by content, writes the chunks as JSONL and a manifest describing the run, both atomically, and logs what it did. Build it from the pieces of this module.</p>
+<article class="prob" id="p-ingest-job" data-pid="m12-p-ingest-job" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>13. Ingest a corpus into JSONL chunks</h3></header>
+<div class="prob-q"><p>Implement <code>run_ingest(config_toml, environ, logger)</code>.</p>
+<ul><li><strong>Configuration (12.4):</strong> the TOML has an <code>[ingest]</code> table with <code>source</code> and <code>output</code> (paths), <code>max_words</code> (int, default 50) and <code>suffixes</code> (default <code>[".md", ".txt"]</code>). The environment variables <code>INGEST_OUTPUT</code> and <code>INGEST_MAX_WORDS</code> override them; <code>INGEST_MAX_WORDS</code> must be a positive integer, otherwise raise <code>ValueError</code>.</li><li><strong>Discovery (12.1):</strong> every file under <code>source</code>, sorted by relative POSIX path, whose suffix (case-insensitive) is in <code>suffixes</code> and which is not inside a folder starting with <code>.</code>.</li><li><strong>Reading:</strong> decode as UTF-8; a file that is not valid UTF-8 or is empty after stripping is <strong>skipped</strong>, with a warning <code>"skipping %s: %s"</code> (relative path and <code>"not UTF-8"</code> or <code>"empty"</code>).</li><li><strong>Duplicates:</strong> a file whose SHA-256 equals an earlier file's is a <strong>duplicate</strong>, logged at <code>INFO</code> as <code>"duplicate %s of %s"</code>, and not chunked.</li><li><strong>Output (12.2):</strong> a JSONL file at <code>output</code> (parents created) with one record per chunk of at most <code>max_words</code> words: <code>{"doc": relative path, "chunk": k, "sha256": first 12 hex digits, "text": words joined by spaces}</code>, and a manifest at <code>output</code> with the suffix replaced by <code>.manifest.json</code>: <code>{"documents": n, "chunks": m, "duplicates": [...], "skipped": [...], "max_words": ...}</code> with <code>indent=2</code>. Both are written atomically; no temporary files remain.</li><li><strong>Logging (12.3):</strong> a final <code>INFO</code> record <code>"ingest done"</code> with <code>extra</code> fields <code>documents</code> and <code>chunks</code>.</li><li>Return the manifest dict.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import hashlib, json, os, tomllib
+from pathlib import Path
+
+
+def run_ingest(config_toml, environ, logger):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json, logging, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger("proj.ingest")
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+
+root = Path(tempfile.mkdtemp())
+src = root / "corpus"
+docs = {"faq/refunds.md": "Refunds take five business days after we receive the item.",
+        "faq/copy-of-refunds.md": "Refunds take five business days after we receive the item.",
+        "terms.TXT": "No refunds after thirty days.",
+        "notes/empty.md": "   \n",
+        ".git/HEAD.txt": "ref: main",
+        "logo.png": "binary"}
+for rel, text in docs.items():
+    (src / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src / rel).write_text(text, encoding="utf-8")
+(src / "legacy.txt").write_bytes(b"caf\xe9 menu")
+config = f'''[ingest]\nsource = '{src.as_posix()}'\noutput = '{(root / "ignored.jsonl").as_posix()}'\nmax_words = 50\n'''
+out = root / "build" / "index" / "chunks.jsonl"
+manifest = run_ingest(config, {"INGEST_OUTPUT": str(out), "INGEST_MAX_WORDS": "4"}, log)
+
+assert manifest == {"documents": 2, "chunks": 5, "duplicates": ["faq/refunds.md"], "skipped": ["legacy.txt", "notes/empty.md"], "max_words": 4}
+lines = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
+assert [(r["doc"], r["chunk"]) for r in lines] == [("faq/copy-of-refunds.md", 0), ("faq/copy-of-refunds.md", 1), ("faq/copy-of-refunds.md", 2), ("terms.TXT", 0), ("terms.TXT", 1)]
+assert lines[0]["text"] == "Refunds take five business" and lines[2]["text"] == "the item." and len(lines[0]["sha256"]) == 12
+assert json.loads((out.parent / "chunks.manifest.json").read_text(encoding="utf-8")) == manifest
+assert sorted(p.name for p in out.parent.iterdir()) == ["chunks.jsonl", "chunks.manifest.json"] and not (root / "ignored.jsonl").exists()
+msgs = [(r.levelname, r.getMessage()) for r in cap.records]
+assert msgs[:3] == [("INFO", "duplicate faq/refunds.md of faq/copy-of-refunds.md"), ("WARNING", "skipping legacy.txt: not UTF-8"), ("WARNING", "skipping notes/empty.md: empty")]
+assert msgs[-1] == ("INFO", "ingest done") and (cap.records[-1].documents, cap.records[-1].chunks) == (2, 5)
+
+default_out = root / "default.jsonl"
+cfg2 = f'''[ingest]\nsource = '{src.as_posix()}'\noutput = '{default_out.as_posix()}'\n'''
+assert run_ingest(cfg2, {}, log)["max_words"] == 50 and default_out.exists()
+for bad in ["0", "ten", "-3"]:
+    try:
+        run_ingest(cfg2, {"INGEST_MAX_WORDS": bad}, log)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 8 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, logging, tempfile
+from pathlib import Path
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger(&quot;proj.ingest&quot;)
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+
+root = Path(tempfile.mkdtemp())
+src = root / &quot;corpus&quot;
+docs = {&quot;faq/refunds.md&quot;: &quot;Refunds take five business days after we receive the item.&quot;,
+        &quot;faq/copy-of-refunds.md&quot;: &quot;Refunds take five business days after we receive the item.&quot;,
+        &quot;terms.TXT&quot;: &quot;No refunds after thirty days.&quot;,
+        &quot;notes/empty.md&quot;: &quot;   \n&quot;,
+        &quot;.git/HEAD.txt&quot;: &quot;ref: main&quot;,
+        &quot;logo.png&quot;: &quot;binary&quot;}
+for rel, text in docs.items():
+    (src / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src / rel).write_text(text, encoding=&quot;utf-8&quot;)
+(src / &quot;legacy.txt&quot;).write_bytes(b&quot;caf\xe9 menu&quot;)
+config = f&#x27;&#x27;&#x27;[ingest]\nsource = &#x27;{src.as_posix()}&#x27;\noutput = &#x27;{(root / &quot;ignored.jsonl&quot;).as_posix()}&#x27;\nmax_words = 50\n&#x27;&#x27;&#x27;
+out = root / &quot;build&quot; / &quot;index&quot; / &quot;chunks.jsonl&quot;
+manifest = run_ingest(config, {&quot;INGEST_OUTPUT&quot;: str(out), &quot;INGEST_MAX_WORDS&quot;: &quot;4&quot;}, log)
+
+assert manifest == {&quot;documents&quot;: 2, &quot;chunks&quot;: 5, &quot;duplicates&quot;: [&quot;faq/refunds.md&quot;], &quot;skipped&quot;: [&quot;legacy.txt&quot;, &quot;notes/empty.md&quot;], &quot;max_words&quot;: 4}
+lines = [json.loads(l) for l in out.read_text(encoding=&quot;utf-8&quot;).splitlines()]
+assert [(r[&quot;doc&quot;], r[&quot;chunk&quot;]) for r in lines] == [(&quot;faq/copy-of-refunds.md&quot;, 0), (&quot;faq/copy-of-refunds.md&quot;, 1), (&quot;faq/copy-of-refunds.md&quot;, 2), (&quot;terms.TXT&quot;, 0), (&quot;terms.TXT&quot;, 1)]
+assert lines[0][&quot;text&quot;] == &quot;Refunds take five business&quot; and lines[2][&quot;text&quot;] == &quot;the item.&quot; and len(lines[0][&quot;sha256&quot;]) == 12
+assert json.loads((out.parent / &quot;chunks.manifest.json&quot;).read_text(encoding=&quot;utf-8&quot;)) == manifest
+assert sorted(p.name for p in out.parent.iterdir()) == [&quot;chunks.jsonl&quot;, &quot;chunks.manifest.json&quot;] and not (root / &quot;ignored.jsonl&quot;).exists()
+msgs = [(r.levelname, r.getMessage()) for r in cap.records]
+assert msgs[:3] == [(&quot;INFO&quot;, &quot;duplicate faq/refunds.md of faq/copy-of-refunds.md&quot;), (&quot;WARNING&quot;, &quot;skipping legacy.txt: not UTF-8&quot;), (&quot;WARNING&quot;, &quot;skipping notes/empty.md: empty&quot;)]
+assert msgs[-1] == (&quot;INFO&quot;, &quot;ingest done&quot;) and (cap.records[-1].documents, cap.records[-1].chunks) == (2, 5)
+
+default_out = root / &quot;default.jsonl&quot;
+cfg2 = f&#x27;&#x27;&#x27;[ingest]\nsource = &#x27;{src.as_posix()}&#x27;\noutput = &#x27;{default_out.as_posix()}&#x27;\n&#x27;&#x27;&#x27;
+assert run_ingest(cfg2, {}, log)[&quot;max_words&quot;] == 50 and default_out.exists()
+for bad in [&quot;0&quot;, &quot;ten&quot;, &quot;-3&quot;]:
+    try:
+        run_ingest(cfg2, {&quot;INGEST_MAX_WORDS&quot;: bad}, log)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Settings: <code>tomllib.loads(config_toml)["ingest"]</code>, then <code>environ.get(...)</code> overrides; parse <code>INGEST_MAX_WORDS</code> with <code>int</code> in <code>try</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Discovery: <code>sorted(...)</code> the matching files by <code>rel.as_posix()</code>; read bytes with <code>read_bytes()</code>, hash them, then <code>decode("utf-8")</code> in <code>try</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Atomic writes: a small helper that writes text to <code>path.with_name(path.name + ".tmp")</code> and <code>os.replace</code>s it; build the JSONL text as a list of lines.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import hashlib, json, os, tomllib
+from pathlib import Path
+
+
+def _settings(config_toml, environ):
+    cfg = tomllib.loads(config_toml)[&quot;ingest&quot;]
+    source = Path(cfg[&quot;source&quot;])
+    output = Path(environ.get(&quot;INGEST_OUTPUT&quot;) or cfg[&quot;output&quot;])
+    max_words = cfg.get(&quot;max_words&quot;, 50)
+    raw = environ.get(&quot;INGEST_MAX_WORDS&quot;, &quot;&quot;).strip()
+    if raw:
+        try:
+            max_words = int(raw)
+        except ValueError:
+            raise ValueError(f&quot;INGEST_MAX_WORDS must be an integer, got {raw!r}&quot;) from None
+    if not isinstance(max_words, int) or max_words &lt;= 0:
+        raise ValueError(f&quot;max_words must be a positive integer, got {max_words!r}&quot;)
+    suffixes = {s.lower() for s in cfg.get(&quot;suffixes&quot;, [&quot;.md&quot;, &quot;.txt&quot;])}
+    return source, output, max_words, suffixes
+
+
+def _discover(source, suffixes):
+    found = []
+    for path in source.rglob(&quot;*&quot;):
+        if not path.is_file() or path.suffix.lower() not in suffixes:
+            continue
+        rel = path.relative_to(source)
+        if any(part.startswith(&quot;.&quot;) for part in rel.parts[:-1]):
+            continue
+        found.append((rel.as_posix(), path))
+    return sorted(found)
+
+
+def _write_atomic(path, text):
+    tmp = path.with_name(path.name + &quot;.tmp&quot;)
+    try:
+        tmp.write_text(text, encoding=&quot;utf-8&quot;)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def run_ingest(config_toml, environ, logger):
+    source, output, max_words, suffixes = _settings(config_toml, environ)
+    seen, lines, duplicates, skipped = {}, [], [], []
+    documents = 0
+    for rel, path in _discover(source, suffixes):
+        data = path.read_bytes()
+        try:
+            text = data.decode(&quot;utf-8&quot;)
+        except UnicodeDecodeError:
+            logger.warning(&quot;skipping %s: %s&quot;, rel, &quot;not UTF-8&quot;)
+            skipped.append(rel)
+            continue
+        words = text.split()
+        if not words:
+            logger.warning(&quot;skipping %s: %s&quot;, rel, &quot;empty&quot;)
+            skipped.append(rel)
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if digest in seen:
+            logger.info(&quot;duplicate %s of %s&quot;, rel, seen[digest])
+            duplicates.append(rel)
+            continue
+        seen[digest] = rel
+        documents += 1
+        for k, start in enumerate(range(0, len(words), max_words)):
+            record = {&quot;doc&quot;: rel, &quot;chunk&quot;: k, &quot;sha256&quot;: digest[:12], &quot;text&quot;: &quot; &quot;.join(words[start:start + max_words])}
+            lines.append(json.dumps(record, ensure_ascii=False) + &quot;\n&quot;)
+    manifest = {&quot;documents&quot;: documents, &quot;chunks&quot;: len(lines), &quot;duplicates&quot;: duplicates, &quot;skipped&quot;: skipped, &quot;max_words&quot;: max_words}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomic(output, &quot;&quot;.join(lines))
+    _write_atomic(output.with_suffix(&quot;.manifest.json&quot;), json.dumps(manifest, indent=2))
+    logger.info(&quot;ingest done&quot;, extra={&quot;documents&quot;: documents, &quot;chunks&quot;: len(lines)})
+    return manifest</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Paths and files (12.1):</strong> <code>rglob</code> with explicit filters for suffix (case-insensitive, so <code>terms.TXT</code> counts) and hidden folders, sorting by relative path so "first seen" and the output are deterministic, <code>mkdir(parents=True, exist_ok=True)</code> for the output folder, and atomic writes so the index builder never reads half a file. Reading <strong>bytes</strong> once serves both the hash and the decoding.</li><li><strong>Formats (12.2):</strong> chunks are JSONL, one record per line with the metadata a vector index needs, and the manifest is indented JSON for people. The duplicate is reported against the file seen first in sorted order, <code>copy-of-refunds.md</code>.</li><li><strong>Logging (12.3):</strong> each skipped or duplicate file gets one line with lazy arguments, and the summary record carries its numbers as <code>extra</code> fields.</li><li><strong>Configuration (12.4):</strong> TOML provides the structure, the environment overrides the output location and chunk size, and a bad override fails at start-up with a clear message, before any work is done.</li></ul>
+<p>The manifest makes runs comparable: if tonight's run has fewer documents than last night's, the skipped list says why. Production versions add overlap between chunks, token-based sizes, incremental runs that skip unchanged hashes, and parallel reading, but keep this structure.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Build paths with <code>pathlib</code>, filter and sort what <code>rglob</code> finds, and never assume folders exist.</li><li>Rewrite files through a temporary file and <code>os.replace</code>; opening the target with <code>"w"</code> destroys it first.</li><li>Pick the format for the data: CSV for flat tables (strings only), JSON for documents, JSONL for record streams, and decide what a bad record means.</li><li>Log skips and failures once, with the reason and context, and summarise runs with structured fields.</li><li>Read configuration at start-up from defaults, files and the environment, parse it strictly, and keep secrets out of code and logs.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>12.2 · csv, json and JSON Lines</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m12-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 12 · Files and data</span></div>
+  <h1>12.2 csv, json and JSON Lines</h1>
+  <p>The three text formats that move most data between tools: CSV for tables, JSON for nested records and API payloads, and JSON Lines for datasets, logs and LLM batch files. Readers and writers, quoting and dialects, JSON type mapping and its traps, custom encoders and decoders, and streaming JSONL with bad-line handling. Applied to labels, metrics, evaluation exports, chunked corpora and event logs.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="csv">
+<h2><span class="n">1</span>CSV with the <code>csv</code> module</h2>
+<p>CSV looks simple enough to split on commas, and that is the bug: a field can contain a comma, a quote or even a newline, in which case it is wrapped in double quotes and inner quotes are doubled (a field <code>Smith, "Jr"</code> is written as <code>"Smith, ""Jr"""</code>). The <strong><code>csv</code></strong> module implements those rules. <code>csv.reader(f)</code> yields each row as a list of strings, <code>csv.writer(f).writerow(values)</code> writes one, and the dictionary versions are what you usually want: <strong><code>csv.DictReader</code></strong> uses the header row as keys, and <strong><code>csv.DictWriter(f, fieldnames=...)</code></strong> writes dicts, with <code>writeheader()</code> for the header line and <code>extrasaction="ignore"</code> to skip keys that are not columns (by default extra keys raise <code>ValueError</code>).</p>
+<p>Three rules make CSV code correct. Open files with <strong><code>newline=""</code></strong>, so the <code>csv</code> module, not text mode, handles line endings, including newlines inside quoted fields (the writer ends rows with <code>\r\n</code>, as the format specifies). Remember that <strong>every value read is a string</strong>, so convert types yourself: <code>int(row["id"])</code>, <code>float(row["score"])</code>, and treat <code>""</code> as missing. And pick the encoding deliberately: files saved by Excel as "CSV UTF-8" start with a byte-order mark, which <code>encoding="utf-8-sig"</code> removes (problem 10). Other dialects are options: <code>delimiter=";"</code> for European exports, <code>delimiter="\t"</code> for TSV, and <code>quoting=csv.QUOTE_ALL</code> or <code>QUOTE_NONNUMERIC</code> to control quoting.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">csv_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv, io
+
+rows = [{&quot;id&quot;: 1, &quot;question&quot;: &quot;Refund, or credit?&quot;, &quot;answer&quot;: &#x27;She said &quot;5 days&quot;&#x27;, &quot;score&quot;: 0.9},
+        {&quot;id&quot;: 2, &quot;question&quot;: &quot;Two\nlines&quot;, &quot;answer&quot;: &quot;ok&quot;, &quot;score&quot;: 0.25}]
+buf = io.StringIO(newline=&quot;&quot;)
+writer = csv.DictWriter(buf, fieldnames=[&quot;id&quot;, &quot;question&quot;, &quot;answer&quot;, &quot;score&quot;])
+writer.writeheader()
+writer.writerows(rows)
+text = buf.getvalue()
+print(repr(text))
+back = list(csv.DictReader(io.StringIO(text, newline=&quot;&quot;)))
+print(back[0])
+print(back[1][&quot;question&quot;] == &quot;Two\nlines&quot;, type(back[1][&quot;score&quot;]).__name__, float(back[1][&quot;score&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>&#x27;id,question,answer,score\r\n1,&quot;Refund, or credit?&quot;,&quot;She said &quot;&quot;5 days&quot;&quot;&quot;,0.9\r\n2,&quot;Two\nlines&quot;,ok,0.25\r\n&#x27;
+{&#x27;id&#x27;: &#x27;1&#x27;, &#x27;question&#x27;: &#x27;Refund, or credit?&#x27;, &#x27;answer&#x27;: &#x27;She said &quot;5 days&quot;&#x27;, &#x27;score&#x27;: &#x27;0.9&#x27;}
+True str 0.25</pre></div></div>
+<p><code>io.StringIO</code> is an in-memory text file, convenient for examples and tests; the same code works with a real file opened as <code>open(path, "w", encoding="utf-8", newline="")</code>. The writer quoted only the fields that needed it, doubled the inner quotes, and the reader reconstructed every value exactly, as strings.</p>
+</section>
+<section class="sec" id="json">
+<h2><span class="n">2</span>JSON: type mapping and options</h2>
+<p><code>json.dumps(obj)</code> turns Python data into a JSON string and <code>json.loads(text)</code> parses one; <code>json.dump(obj, f)</code> and <code>json.load(f)</code> do the same with a file. The mapping is: dict to object, list <strong>and tuple</strong> to array, str to string, int and float to number, <code>True</code>/<code>False</code> to <code>true</code>/<code>false</code>, <code>None</code> to <code>null</code>. It is lossy in ways that matter: tuples come back as lists, <strong>dictionary keys become strings</strong> (<code>{1: "a"}</code> round-trips to <code>{"1": "a"}</code>), and anything else, such as <code>datetime</code>, <code>Decimal</code>, <code>set</code>, NumPy numbers and your own classes, raises <code>TypeError: Object of type ... is not JSON serializable</code>.</p>
+<p>Useful options: <code>indent=2</code> for human-readable output, <code>sort_keys=True</code> for stable output that diffs cleanly, <code>ensure_ascii=False</code> to write <code>é</code> instead of <code>\u00e9</code> (keep the file UTF-8), and <code>separators=(",", ":")</code> for the most compact form. One trap deserves its own line: by default Python writes <code>float("nan")</code> and infinities as <code>NaN</code> and <code>Infinity</code>, which are <strong>not valid JSON</strong>: JavaScript's <code>JSON.parse</code>, many databases and strict parsers reject them. Pass <code>allow_nan=False</code> to make that an error and replace such values deliberately (problem 7).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">json_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+data = {&quot;id&quot;: 7, 3: &quot;int key&quot;, &quot;pair&quot;: (1, 2), &quot;name&quot;: &quot;café&quot;, &quot;ok&quot;: True, &quot;missing&quot;: None}
+text = json.dumps(data)
+print(text)
+print(json.loads(text))
+print(json.dumps({&quot;b&quot;: 1, &quot;a&quot;: [1, 2]}, indent=2, sort_keys=True))
+print(json.dumps({&quot;loss&quot;: float(&quot;nan&quot;)}), json.dumps({&quot;name&quot;: &quot;café&quot;}, ensure_ascii=False))
+try:
+    json.dumps({&quot;loss&quot;: float(&quot;inf&quot;)}, allow_nan=False)
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&quot;id&quot;: 7, &quot;3&quot;: &quot;int key&quot;, &quot;pair&quot;: [1, 2], &quot;name&quot;: &quot;caf\u00e9&quot;, &quot;ok&quot;: true, &quot;missing&quot;: null}
+{&#x27;id&#x27;: 7, &#x27;3&#x27;: &#x27;int key&#x27;, &#x27;pair&#x27;: [1, 2], &#x27;name&#x27;: &#x27;café&#x27;, &#x27;ok&#x27;: True, &#x27;missing&#x27;: None}
+{
+  &quot;a&quot;: [
+    1,
+    2
+  ],
+  &quot;b&quot;: 1
+}
+{&quot;loss&quot;: NaN} {&quot;name&quot;: &quot;café&quot;}
+ValueError: Out of range float values are not JSON compliant: inf</pre></div></div>
+<p>A parse failure raises <strong><code>json.JSONDecodeError</code></strong>, a subclass of <code>ValueError</code>, with the message, <code>lineno</code>, <code>colno</code> and character offset <code>pos</code>, which is what you report for a broken file or an LLM reply cut off mid-object (problem 9).</p>
+</section>
+<section class="sec" id="custom">
+<h2><span class="n">3</span>Custom encoders and decoders</h2>
+<p>To serialise other types, pass <strong><code>default=</code></strong> to <code>dumps</code>: a function called for every object the encoder does not know, which must return something it does know (a string, number, list or dict), or raise <code>TypeError</code>. A single <code>default</code> handles dates (<code>isoformat()</code>), <code>Decimal</code> (<code>str</code>, to keep exact digits), sets (a sorted list), dataclasses (<code>dataclasses.asdict</code>), paths, and NumPy values, which are the commonest cause of "not JSON serializable" in ML code, since <code>np.float32(0.9)</code> is not a Python <code>float</code> (problem 6). Subclassing <code>json.JSONEncoder</code> and overriding its <code>default</code> method does the same thing in class form.</p>
+<p>In the other direction, <strong><code>object_hook=</code></strong> is called with every decoded object (as a dict), and whatever it returns replaces it, which lets you turn tagged dicts back into rich types (problem 14). <code>parse_float=Decimal</code> parses every number with a fraction as an exact <code>Decimal</code>, useful for money. Note what cannot be customised: <code>default</code> is never called for types JSON already handles, so a tuple always becomes an array, and dict keys must be strings, numbers, booleans or <code>None</code>; any other key raises <code>TypeError</code> even with a <code>default</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">custom.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from decimal import Decimal
+
+@dataclass
+class Run:
+    name: str
+    started: datetime
+    cost: Decimal
+    tags: set
+
+def default(o):
+    if isinstance(o, datetime):
+        return o.isoformat()
+    if isinstance(o, Decimal):
+        return str(o)
+    if isinstance(o, set):
+        return sorted(o)
+    if hasattr(o, &quot;__dataclass_fields__&quot;):
+        return asdict(o)
+    raise TypeError(f&quot;cannot serialise {type(o).__name__}&quot;)
+
+run = Run(&quot;exp-1&quot;, datetime(2025, 3, 1, 9, 30), Decimal(&quot;0.10&quot;), {&quot;rag&quot;, &quot;eval&quot;})
+print(json.dumps(run, default=default))
+print(json.loads(&#x27;{&quot;price&quot;: 0.10}&#x27;, parse_float=Decimal))</code></pre><div class="out"><span class="ol">Output</span><pre>{&quot;name&quot;: &quot;exp-1&quot;, &quot;started&quot;: &quot;2025-03-01T09:30:00&quot;, &quot;cost&quot;: &quot;0.10&quot;, &quot;tags&quot;: [&quot;eval&quot;, &quot;rag&quot;]}
+{&#x27;price&#x27;: Decimal(&#x27;0.10&#x27;)}</pre></div></div>
+</section>
+<section class="sec" id="jsonl">
+<h2><span class="n">4</span>JSON Lines: streaming records</h2>
+<p>A big JSON array must be parsed whole before you can use its first element. <strong>JSON Lines</strong> puts one JSON object per line instead: a reader handles one line at a time with constant memory, a writer appends records as they are produced, a crash loses at most the last line, and files can be split, concatenated and counted with ordinary line tools. That is why datasets (Hugging Face), fine-tuning data, LLM batch request and result files, evaluation sets and structured logs are almost always <code>.jsonl</code>.</p>
+<p>Write each record with <code>json.dumps(record, ensure_ascii=False)</code> followed by <code>"\n"</code> (no <code>indent</code>, which would spread one record over many lines). Read by iterating over the file, skipping blank lines, and decide what a bad line means: in a pipeline over millions of records, one broken line should usually be <strong>counted and reported with its line number</strong>, not crash the job; for a hand-edited evaluation set, it should fail loudly. Compressed files stream the same way with <code>gzip.open(path, "rt", encoding="utf-8")</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">jsonl.py</span><button class="copy">Copy</button></div><pre><code class="py">import gzip, json, os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;batch.jsonl.gz&quot;)
+requests = [{&quot;custom_id&quot;: f&quot;req-{i}&quot;, &quot;body&quot;: {&quot;prompt&quot;: f&quot;Summarise ticket {i}&quot;}} for i in range(3)]
+with gzip.open(path, &quot;wt&quot;, encoding=&quot;utf-8&quot;) as f:
+    for r in requests:
+        f.write(json.dumps(r, ensure_ascii=False) + &quot;\n&quot;)
+    f.write(&#x27;{&quot;custom_id&quot;: &quot;req-3&quot;, &quot;body&quot;: {&quot;prom\n&#x27;)
+good, bad = [], []
+with gzip.open(path, &quot;rt&quot;, encoding=&quot;utf-8&quot;) as f:
+    for number, line in enumerate(f, start=1):
+        if not line.strip():
+            continue
+        try:
+            good.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            bad.append((number, e.msg))
+print(len(good), good[-1][&quot;custom_id&quot;], bad)</code></pre><div class="out"><span class="ol">Output</span><pre>3 req-2 [(4, &#x27;Invalid control character at&#x27;)]</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-csv-quoting-and-types" data-pid="m12-2-csv-quoting-and-types" data-type="predict" data-level="easy" data-answer="[&#x27;id,text,score&#x27;, &#x27;1,plain,0.5&#x27;, &#x27;2,&quot;a, b&quot;,&#x27;, &#x27;3,&quot;say &quot;&quot;hi&quot;&quot;&quot;,True&#x27;]
+[&#x27;2&#x27;, &#x27;a, b&#x27;, &#x27;&#x27;] say &quot;hi&quot; 4">
+<header class="prob-head"><h3>1. CSV quoting and types</h3></header>
+<div class="code"><pre><code class="py">import csv, io
+
+buf = io.StringIO(newline=&quot;&quot;)
+w = csv.writer(buf)
+w.writerow([&quot;id&quot;, &quot;text&quot;, &quot;score&quot;])
+w.writerow([1, &quot;plain&quot;, 0.5])
+w.writerow([2, &quot;a, b&quot;, None])
+w.writerow([3, &#x27;say &quot;hi&quot;&#x27;, True])
+print(buf.getvalue().splitlines())
+rows = list(csv.reader(io.StringIO(buf.getvalue(), newline=&quot;&quot;)))
+print(rows[2], rows[3][1], len(rows))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only fields containing the delimiter, a quote or a newline are quoted, and inner quotes are doubled. <code>None</code> is written as an empty string.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;id,text,score&#x27;, &#x27;1,plain,0.5&#x27;, &#x27;2,&quot;a, b&quot;,&#x27;, &#x27;3,&quot;say &quot;&quot;hi&quot;&quot;&quot;,True&#x27;]
+[&#x27;2&#x27;, &#x27;a, b&#x27;, &#x27;&#x27;] say &quot;hi&quot; 4</pre></div><p>The writer converts every value with <code>str</code>, except <code>None</code>, which becomes an empty field, so the reader gets back strings: <code>"2"</code>, not 2, and <code>""</code> where the <code>None</code> was. A field with a comma is wrapped in quotes and a field with quotes is wrapped and has its quotes doubled; the reader undoes both, so <code>rows[3][1]</code> is the original text. Four rows were written, header included.</p></div></details>
+</article>
+<article class="prob" id="p-read-labelled-examples-from-csv" data-pid="m12-2-read-labelled-examples-from-csv" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Read labelled examples from CSV</h3></header>
+<div class="prob-q"><p>Write <code>read_examples(path)</code> reading a UTF-8 CSV with the columns <code>id</code>, <code>text</code>, <code>label</code> and <code>score</code>, and returning a list of dicts with <code>id</code> as an int, <code>text</code> and <code>label</code> stripped, and <code>score</code> as a float, or <code>None</code> when the cell is empty. Skip rows whose <code>text</code> is empty after stripping.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import csv
+
+def read_examples(path):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+path = os.path.join(tempfile.mkdtemp(), "train.csv")
+with open(path, "w", encoding="utf-8", newline="") as f:
+    f.write('id,text,label,score\r\n1,"Win a prize, now!",spam ,0.97\r\n2,  ,ham,0.1\r\n3,"Meeting\nat 3",ham,\r\n4,Café hours?, ham,0.2\r\n')
+rows = read_examples(path)
+assert [r["id"] for r in rows] == [1, 3, 4]
+assert rows[0] == {"id": 1, "text": "Win a prize, now!", "label": "spam", "score": 0.97}
+assert rows[1]["text"] == "Meeting\nat 3" and rows[1]["score"] is None and rows[2]["label"] == "ham"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;train.csv&quot;)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    f.write(&#x27;id,text,label,score\r\n1,&quot;Win a prize, now!&quot;,spam ,0.97\r\n2,  ,ham,0.1\r\n3,&quot;Meeting\nat 3&quot;,ham,\r\n4,Café hours?, ham,0.2\r\n&#x27;)
+rows = read_examples(path)
+assert [r[&quot;id&quot;] for r in rows] == [1, 3, 4]
+assert rows[0] == {&quot;id&quot;: 1, &quot;text&quot;: &quot;Win a prize, now!&quot;, &quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.97}
+assert rows[1][&quot;text&quot;] == &quot;Meeting\nat 3&quot; and rows[1][&quot;score&quot;] is None and rows[2][&quot;label&quot;] == &quot;ham&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>csv.DictReader(f)</code> with the file opened using <code>newline=""</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>float(cell) if cell.strip() else None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv
+
+
+def read_examples(path):
+    out = []
+    with open(path, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+        for row in csv.DictReader(f):
+            text = row[&quot;text&quot;].strip()
+            if not text:
+                continue
+            score = row[&quot;score&quot;].strip()
+            out.append({&quot;id&quot;: int(row[&quot;id&quot;]), &quot;text&quot;: text, &quot;label&quot;: row[&quot;label&quot;].strip(),
+                        &quot;score&quot;: float(score) if score else None})
+    return out</code></pre></div><p><code>DictReader</code> handles the quoting, so a comma or a newline inside a quoted text stays part of the field, which a <code>split(",")</code> would break. Everything arrives as a string, so the function converts each column explicitly and decides what an empty cell means (<code>None</code>, not 0.0, which would be a wrong score). Stripping matters because hand-edited CSVs are full of stray spaces, and <code>"spam "</code> would become a separate class in a training set.</p></div></details>
+</article>
+<article class="prob" id="p-an-export-with-no-header-that-crashes-on" data-pid="m12-2-an-export-with-no-header-that-crashes-on" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. An export with no header that crashes on extra keys</h3></header>
+<div class="prob-q"><p><code>export_tickets</code> writes tickets to CSV with the columns <code>id</code>, <code>title</code> and <code>status</code>. The file has no header row, and tickets that carry extra keys such as <code>internal_note</code> crash the export with <code>ValueError</code>. Fix both, keeping the column order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import csv
+
+def export_tickets(path, tickets):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+        writer = csv.DictWriter(f, fieldnames=[&quot;id&quot;, &quot;title&quot;, &quot;status&quot;])
+        writer.writerows(tickets)
+</textarea>
+<script type="text/plain" class="prob-tests">import csv, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), "tickets.csv")
+export_tickets(path, [{"id": 1, "title": "Refund", "status": "open"}, {"id": 2, "status": "closed", "title": "Login", "internal_note": "VIP"}])
+with open(path, encoding="utf-8", newline="") as f:
+    rows = list(csv.DictReader(f))
+assert [r["title"] for r in rows] == ["Refund", "Login"]
+assert list(rows[1]) == ["id", "title", "status"] and "VIP" not in open(path, encoding="utf-8").read()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import csv, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;tickets.csv&quot;)
+export_tickets(path, [{&quot;id&quot;: 1, &quot;title&quot;: &quot;Refund&quot;, &quot;status&quot;: &quot;open&quot;}, {&quot;id&quot;: 2, &quot;status&quot;: &quot;closed&quot;, &quot;title&quot;: &quot;Login&quot;, &quot;internal_note&quot;: &quot;VIP&quot;}])
+with open(path, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    rows = list(csv.DictReader(f))
+assert [r[&quot;title&quot;] for r in rows] == [&quot;Refund&quot;, &quot;Login&quot;]
+assert list(rows[1]) == [&quot;id&quot;, &quot;title&quot;, &quot;status&quot;] and &quot;VIP&quot; not in open(path, encoding=&quot;utf-8&quot;).read()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>writer.writeheader()</code> before the rows, and <code>extrasaction="ignore"</code> in the constructor.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv
+
+def export_tickets(path, tickets):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+        writer = csv.DictWriter(f, fieldnames=[&quot;id&quot;, &quot;title&quot;, &quot;status&quot;], extrasaction=&quot;ignore&quot;)
+        writer.writeheader()
+        writer.writerows(tickets)</code></pre></div><p><code>DictWriter</code> never writes a header on its own; without it, a reader treats the first ticket as column names. By default it also refuses dicts with keys that are not columns, which is a safety feature (a misspelt column would otherwise vanish), so ignoring extras should be a decision: here it is right, because <code>internal_note</code> must <strong>not</strong> leave the system. Columns come out in <code>fieldnames</code> order whatever the order of each dict's keys.</p></div></details>
+</article>
+<article class="prob" id="p-what-json-keeps-and-loses" data-pid="m12-2-what-json-keeps-and-loses" data-type="predict" data-level="easy" data-answer="{&quot;n&quot;: 1, &quot;2&quot;: &quot;two&quot;, &quot;t&quot;: [1, 2], &quot;f&quot;: 1.0, &quot;none&quot;: null, &quot;yes&quot;: true}
+False [1, 2] [&#x27;n&#x27;, &#x27;2&#x27;, &#x27;t&#x27;, &#x27;f&#x27;, &#x27;none&#x27;, &#x27;yes&#x27;] float
+[NaN, -Infinity] &quot;\u00e9&quot; &quot;é&quot;">
+<header class="prob-head"><h3>4. What JSON keeps and loses</h3></header>
+<div class="code"><pre><code class="py">import json
+
+data = {&quot;n&quot;: 1, 2: &quot;two&quot;, &quot;t&quot;: (1, 2), &quot;f&quot;: 1.0, &quot;none&quot;: None, &quot;yes&quot;: True}
+text = json.dumps(data)
+print(text)
+back = json.loads(text)
+print(back == data, back[&quot;t&quot;], list(back), type(back[&quot;f&quot;]).__name__)
+print(json.dumps([float(&quot;nan&quot;), -float(&quot;inf&quot;)]), json.dumps(&quot;é&quot;), json.dumps(&quot;é&quot;, ensure_ascii=False))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Integer keys become strings, tuples become arrays, and floats stay floats.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&quot;n&quot;: 1, &quot;2&quot;: &quot;two&quot;, &quot;t&quot;: [1, 2], &quot;f&quot;: 1.0, &quot;none&quot;: null, &quot;yes&quot;: true}
+False [1, 2] [&#x27;n&#x27;, &#x27;2&#x27;, &#x27;t&#x27;, &#x27;f&#x27;, &#x27;none&#x27;, &#x27;yes&#x27;] float
+[NaN, -Infinity] &quot;\u00e9&quot; &quot;é&quot;</pre></div><p>Keys are converted to strings, so <code>2</code> comes back as <code>"2"</code>, and the tuple comes back as a list; those two changes make the round trip unequal. <code>1.0</code> stays a float because JSON writes it as <code>1.0</code>. NaN and infinity are written as <code>NaN</code> and <code>-Infinity</code>, which Python accepts but standard JSON does not. With the default <code>ensure_ascii=True</code>, non-ASCII characters are escaped.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-read-and-write-json-lines" data-pid="m12-2-read-and-write-json-lines" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Read and write JSON Lines</h3></header>
+<div class="prob-q"><p>Write <code>write_jsonl(path, records)</code> writing one compact JSON object per line (non-ASCII kept as is, UTF-8) and returning the number written, and a <strong>generator</strong> <code>read_jsonl(path, errors=None)</code> yielding each object. Skip blank lines. A line that is not valid JSON or not a JSON object is bad: if <code>errors</code> is a list, append <code>(line_number, message)</code> and continue (the message is the <code>JSONDecodeError</code>'s <code>msg</code>, or <code>"not an object"</code>); otherwise raise <code>ValueError(f"line {n}: {message}")</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import json
+
+def write_jsonl(path, records):
+    pass
+
+def read_jsonl(path, errors=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, "turns.jsonl")
+assert write_jsonl(path, [{"role": "user", "content": "Où est ma commande ?"}, {"role": "assistant", "content": "En route."}]) == 2
+assert open(path, encoding="utf-8").read().splitlines()[0] == '{"role": "user", "content": "Où est ma commande ?"}'
+with open(path, "a", encoding="utf-8") as f:
+    f.write("\n[1, 2]\n{\"role\": \"user\", \"content\": \"cut\n")
+errs = []
+assert [r["role"] for r in read_jsonl(path, errs)] == ["user", "assistant"]
+assert errs == [(4, "not an object"), (5, "Invalid control character at")]
+gen = read_jsonl(os.path.join(d, "missing.jsonl"))
+try:
+    next(gen)
+    assert False
+except FileNotFoundError:
+    pass
+try:
+    list(read_jsonl(path))
+    assert False
+except ValueError as e:
+    assert str(e) == "line 4: not an object"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+path = os.path.join(d, &quot;turns.jsonl&quot;)
+assert write_jsonl(path, [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Où est ma commande ?&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;En route.&quot;}]) == 2
+assert open(path, encoding=&quot;utf-8&quot;).read().splitlines()[0] == &#x27;{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Où est ma commande ?&quot;}&#x27;
+with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;\n[1, 2]\n{\&quot;role\&quot;: \&quot;user\&quot;, \&quot;content\&quot;: \&quot;cut\n&quot;)
+errs = []
+assert [r[&quot;role&quot;] for r in read_jsonl(path, errs)] == [&quot;user&quot;, &quot;assistant&quot;]
+assert errs == [(4, &quot;not an object&quot;), (5, &quot;Invalid control character at&quot;)]
+gen = read_jsonl(os.path.join(d, &quot;missing.jsonl&quot;))
+try:
+    next(gen)
+    assert False
+except FileNotFoundError:
+    pass
+try:
+    list(read_jsonl(path))
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;line 4: not an object&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>json.dumps(record, ensure_ascii=False) + "\n"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Because <code>read_jsonl</code> is a generator, nothing runs (not even <code>open</code>) until the first <code>next</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+def write_jsonl(path, records):
+    count = 0
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        for record in records:
+            f.write(json.dumps(record, ensure_ascii=False) + &quot;\n&quot;)
+            count += 1
+    return count
+
+
+def read_jsonl(path, errors=None):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        for n, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+                message = None if isinstance(obj, dict) else &quot;not an object&quot;
+            except json.JSONDecodeError as e:
+                message = e.msg
+            if message is None:
+                yield obj
+            elif errors is not None:
+                errors.append((n, message))
+            else:
+                raise ValueError(f&quot;line {n}: {message}&quot;)</code></pre></div><p>The writer produces exactly one line per record because <code>dumps</code> without <code>indent</code> never emits a newline (newlines inside strings are escaped as <code>\n</code>). The reader is a generator, so a file of any size is processed one line at a time, and the caller chooses the policy: collect bad lines with their numbers (an ingestion job reports "2 bad lines" and continues) or fail at the first one (a test set). Blank lines are skipped without counting, but line numbers still count them, so the reported number is the one an editor shows. The truncated last line, typical of a crashed writer or an interrupted download, is reported instead of losing the whole file.</p></div></details>
+</article>
+<article class="prob" id="p-serialise-ml-objects-to-json" data-pid="m12-2-serialise-ml-objects-to-json" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Serialise ML objects to JSON</h3></header>
+<div class="prob-q"><p>Write <code>to_json(obj, **kwargs)</code> that calls <code>json.dumps</code> with a <code>default</code> function handling: <code>datetime</code> and <code>date</code> (ISO strings), <code>Decimal</code> (string), <code>set</code> and <code>frozenset</code> (sorted list), dataclass instances (<code>asdict</code>), <code>pathlib.Path</code> (POSIX string), NumPy scalars (<code>.item()</code>) and NumPy arrays (<code>.tolist()</code>). Anything else raises <code>TypeError</code> naming the type. Extra keyword arguments go to <code>json.dumps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import json
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import PurePath
+
+import numpy as np
+
+def to_json(obj, **kwargs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import PurePosixPath
+import numpy as np
+
+@dataclass
+class Metrics:
+    f1: float
+    day: date
+
+payload = {"acc": np.float32(0.5), "n": np.int64(3), "emb": np.array([[1, 2], [3, 4]]), "when": datetime(2025, 3, 1, 9, 30),
+           "cost": Decimal("0.10"), "tags": {"b", "a"}, "model": PurePosixPath("models/v3.pt"), "m": Metrics(0.9, date(2025, 3, 1))}
+out = json.loads(to_json(payload, sort_keys=True))
+assert out == {"acc": 0.5, "cost": "0.10", "emb": [[1, 2], [3, 4]], "m": {"day": "2025-03-01", "f1": 0.9}, "model": "models/v3.pt",
+               "n": 3, "tags": ["a", "b"], "when": "2025-03-01T09:30:00"}
+assert to_json({"x": 1}, indent=1) == '{\n "x": 1\n}'
+try:
+    to_json({"f": print})
+    assert False
+except TypeError as e:
+    assert "builtin_function_or_method" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import PurePosixPath
+import numpy as np
+
+@dataclass
+class Metrics:
+    f1: float
+    day: date
+
+payload = {&quot;acc&quot;: np.float32(0.5), &quot;n&quot;: np.int64(3), &quot;emb&quot;: np.array([[1, 2], [3, 4]]), &quot;when&quot;: datetime(2025, 3, 1, 9, 30),
+           &quot;cost&quot;: Decimal(&quot;0.10&quot;), &quot;tags&quot;: {&quot;b&quot;, &quot;a&quot;}, &quot;model&quot;: PurePosixPath(&quot;models/v3.pt&quot;), &quot;m&quot;: Metrics(0.9, date(2025, 3, 1))}
+out = json.loads(to_json(payload, sort_keys=True))
+assert out == {&quot;acc&quot;: 0.5, &quot;cost&quot;: &quot;0.10&quot;, &quot;emb&quot;: [[1, 2], [3, 4]], &quot;m&quot;: {&quot;day&quot;: &quot;2025-03-01&quot;, &quot;f1&quot;: 0.9}, &quot;model&quot;: &quot;models/v3.pt&quot;,
+               &quot;n&quot;: 3, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;], &quot;when&quot;: &quot;2025-03-01T09:30:00&quot;}
+assert to_json({&quot;x&quot;: 1}, indent=1) == &#x27;{\n &quot;x&quot;: 1\n}&#x27;
+try:
+    to_json({&quot;f&quot;: print})
+    assert False
+except TypeError as e:
+    assert &quot;builtin_function_or_method&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>datetime</code>/<code>date</code> with one <code>isinstance(o, (datetime, date))</code>; <code>np.generic</code> is the base class of NumPy scalars.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>is_dataclass(o) and not isinstance(o, type)</code> tells an instance from the class itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import PurePath
+
+import numpy as np
+
+
+def _default(o):
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()
+    if isinstance(o, Decimal):
+        return str(o)
+    if isinstance(o, (set, frozenset)):
+        return sorted(o)
+    if is_dataclass(o) and not isinstance(o, type):
+        return asdict(o)
+    if isinstance(o, PurePath):
+        return o.as_posix()
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f&quot;Object of type {type(o).__name__} is not JSON serializable&quot;)
+
+
+def to_json(obj, **kwargs):
+    return json.dumps(obj, default=_default, **kwargs)</code></pre></div><p>The encoder calls <code>default</code> only for objects it cannot handle, and then encodes whatever <code>default</code> returns, recursively. That is why the dataclass works in two steps: <code>asdict</code> returns a dict that still holds a <code>date</code>, and the encoder calls <code>default</code> again for it. NumPy is the everyday case in ML: metrics computed with NumPy are <code>np.float32</code> or <code>np.int64</code>, not Python numbers, so <code>json.dumps(metrics)</code> fails at the end of a training run unless they are converted with <code>.item()</code>; arrays become nested lists with <code>.tolist()</code>. Decimals become strings to keep their exact digits. Raising <code>TypeError</code> for unknown types keeps the standard error instead of silently writing something like <code>str(obj)</code>.</p></div></details>
+</article>
+<article class="prob" id="p-metrics-json-that-other-tools-reject" data-pid="m12-2-metrics-json-that-other-tools-reject" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Metrics JSON that other tools reject</h3></header>
+<div class="prob-q"><p><code>metrics_json</code> serialises evaluation metrics for a dashboard, but when a metric is undefined (NaN, for example precision with no positive predictions) or infinite, the output contains <code>NaN</code> or <code>Infinity</code>, and the dashboard's JSON parser rejects the whole document. Make it write <code>null</code> for every non-finite float, at any depth in dicts and lists, and pass <code>allow_nan=False</code> so any missed case fails loudly.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import json
+import math
+
+def metrics_json(metrics):
+    return json.dumps(metrics, sort_keys=True)
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+def strict_loads(text):
+    def bad(name):
+        raise ValueError(f"non-standard constant {name}")
+    return json.loads(text, parse_constant=bad)
+m = {"precision": float("nan"), "recall": 0.0, "per_class": [{"label": "spam", "f1": float("inf")}, {"label": "ham", "f1": 0.8}], "n": 10}
+out = strict_loads(metrics_json(m))
+assert out == {"n": 10, "per_class": [{"f1": None, "label": "spam"}, {"f1": 0.8, "label": "ham"}], "precision": None, "recall": 0.0}
+assert metrics_json({"loss": -float("inf"), "steps": (1, float("nan"))}) == '{"loss": null, "steps": [1, null]}'
+assert m["precision"] != m["precision"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+def strict_loads(text):
+    def bad(name):
+        raise ValueError(f&quot;non-standard constant {name}&quot;)
+    return json.loads(text, parse_constant=bad)
+m = {&quot;precision&quot;: float(&quot;nan&quot;), &quot;recall&quot;: 0.0, &quot;per_class&quot;: [{&quot;label&quot;: &quot;spam&quot;, &quot;f1&quot;: float(&quot;inf&quot;)}, {&quot;label&quot;: &quot;ham&quot;, &quot;f1&quot;: 0.8}], &quot;n&quot;: 10}
+out = strict_loads(metrics_json(m))
+assert out == {&quot;n&quot;: 10, &quot;per_class&quot;: [{&quot;f1&quot;: None, &quot;label&quot;: &quot;spam&quot;}, {&quot;f1&quot;: 0.8, &quot;label&quot;: &quot;ham&quot;}], &quot;precision&quot;: None, &quot;recall&quot;: 0.0}
+assert metrics_json({&quot;loss&quot;: -float(&quot;inf&quot;), &quot;steps&quot;: (1, float(&quot;nan&quot;))}) == &#x27;{&quot;loss&quot;: null, &quot;steps&quot;: [1, null]}&#x27;
+assert m[&quot;precision&quot;] != m[&quot;precision&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small recursive function: dicts and lists/tuples are rebuilt, floats checked with <code>math.isfinite</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Do not modify the caller's dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+import math
+
+def _clean(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _clean(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean(v) for v in value]
+    return value
+
+def metrics_json(metrics):
+    return json.dumps(_clean(metrics), sort_keys=True, allow_nan=False)</code></pre></div><p>Python's <code>json</code> module happily writes <code>NaN</code> and <code>Infinity</code> because JavaScript has those values, but the JSON standard does not, so browsers' <code>JSON.parse</code>, many databases and strict parsers reject the document. The <code>default</code> hook cannot help, because floats are a type JSON "already handles", so the values must be cleaned before encoding, recursively and without mutating the caller's metrics (which still hold the NaN, as the last assert shows). <code>null</code> is the honest value for an undefined metric, and <code>allow_nan=False</code> turns any future slip into an exception instead of a broken dashboard.</p></div></details>
+</article>
+<article class="prob" id="p-copying-nested-data-deepcopy-or-a-json-r" data-pid="m12-2-copying-nested-data-deepcopy-or-a-json-r" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Copying nested data: deepcopy or a JSON round trip</h3></header>
+<div class="prob-q"><p>Both copy a list of 300 nested records made only of dicts, lists, strings and numbers. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import copy, json
+records = [{&quot;id&quot;: i, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;], &quot;meta&quot;: {&quot;score&quot;: 0.5, &quot;source&quot;: &quot;faq.md&quot;, &quot;spans&quot;: [[0, 10], [12, 20]]}} for i in range(300)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = copy.deepcopy(records)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = json.loads(json.dumps(records))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>copy.deepcopy</code> is written in Python and handles any object, with a memo of everything it copied; the <code>json</code> module has a C accelerator.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>5.16 ms</td></tr><tr><td>B</td><td>2.69 ms</td></tr></table></div><p><code>deepcopy</code> is general: for every object it looks up a copier, records the object in a memo dictionary (so shared and recursive references survive), and runs in Python code. <code>json.dumps</code> and <code>json.loads</code> run in C and only understand plain data, which makes the round trip faster for exactly this kind of payload. The price is that it is <strong>lossy</strong>: tuples become lists, non-string keys become strings, and anything else raises, so use it only for data that is already plain JSON, such as parsed API responses; for anything else, <code>deepcopy</code> is the correct tool.</p></div></details>
+</article>
+<article class="prob" id="p-reading-jsondecodeerror" data-pid="m12-2-reading-jsondecodeerror" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Reading JSONDecodeError</h3></header>
+<div class="prob-q"><p>Fill in <code>msg</code>, <code>line</code> and <code>col</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import json
+
+def info(text):
+    try:
+        json.loads(text)
+        return &quot;ok&quot;, 0, 0
+    except json.JSONDecodeError as e:
+        return e.msg, e.lineno, e.colno
+
+msg, line, col = info(&#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;)
+msg, line, col = info(&#x27;{&quot;label&quot;: &quot;spam&quot;,\n &quot;score&quot;: 0.9&#x27;)
+msg, line, col = info(&quot;{&#x27;label&#x27;: &#x27;spam&#x27;}&quot;)
+msg, line, col = info(&#x27;{&quot;a&quot;: 1} Hope this helps!&#x27;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>msg</code></th><th><code>line</code></th><th><code>col</code></th></tr><tr><td>valid</td><td><input class="cell" data-a="&#x27;ok&#x27;" data-s="ok" aria-label="msg at valid" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="line at valid" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="col at valid" autocomplete="off"></td></tr><tr><td>cut off</td><td><input class="cell" data-a="&quot;Expecting &#x27;,&#x27; delimiter&quot;" data-s="Expecting &#x27;,&#x27; delimiter" aria-label="msg at cut off" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="line at cut off" autocomplete="off"></td><td><input class="cell" data-a="14" data-s="14" aria-label="col at cut off" autocomplete="off"></td></tr><tr><td>single quotes</td><td><input class="cell" data-a="&#x27;Expecting property name enclosed in double quotes&#x27;" data-s="Expecting property name enclosed in double quotes" aria-label="msg at single quotes" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="line at single quotes" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="col at single quotes" autocomplete="off"></td></tr><tr><td>chatty reply</td><td><input class="cell" data-a="&#x27;Extra data&#x27;" data-s="Extra data" aria-label="msg at chatty reply" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="line at chatty reply" autocomplete="off"></td><td><input class="cell" data-a="10" data-s="10" aria-label="col at chatty reply" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The messages used here are <code>Expecting ',' delimiter</code>, <code>Expecting property name enclosed in double quotes</code> and <code>Extra data</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>lineno</code> and <code>colno</code> count from 1; the position is where the parser was when it gave up.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>msg</code></th><th><code>line</code></th><th><code>col</code></th></tr><tr><td>valid</td><td><code>&#x27;ok&#x27;</code></td><td><code>0</code></td><td><code>0</code></td></tr><tr><td>cut off</td><td><code>&quot;Expecting &#x27;,&#x27; delimiter&quot;</code></td><td><code>2</code></td><td><code>14</code></td></tr><tr><td>single quotes</td><td><code>&#x27;Expecting property name enclosed in double quotes&#x27;</code></td><td><code>1</code></td><td><code>2</code></td></tr><tr><td>chatty reply</td><td><code>&#x27;Extra data&#x27;</code></td><td><code>1</code></td><td><code>10</code></td></tr></table></div><p>A truncated object fails where the parser expected a comma or a closing brace: at the end of the text, line 2, just after <code>0.9</code>. Python-style single quotes are not JSON, so the parser fails at once on the first key, column 2. A valid object followed by chatter fails with "Extra data" at the first character after the object, column 10: <code>json.loads</code> insists the whole text is one value. These three are the commonest failures when parsing LLM output, and reporting the line and column (or the <code>pos</code> offset) makes them quick to diagnose.</p></div></details>
+</article>
+<article class="prob" id="p-a-csv-from-excel-whose-header-does-not-m" data-pid="m12-2-a-csv-from-excel-whose-header-does-not-m" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. A CSV from Excel whose header does not match</h3></header>
+<div class="prob-q"><p><code>load_ids</code> reads the <code>id</code> column of a CSV. It works on the team's exported files but raises <code>KeyError: 'id'</code> on the file a colleague saved from Excel, although the header clearly reads <code>id,name</code>. Fix it so both kinds of file work.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import csv
+
+def load_ids(path):
+    with open(path, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+        return [int(row[&quot;id&quot;]) for row in csv.DictReader(f)]
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+excel, plain = os.path.join(d, "excel.csv"), os.path.join(d, "plain.csv")
+with open(excel, "w", encoding="utf-8-sig", newline="") as f:
+    f.write("id,name\r\n7,Ana\r\n9,Bo\r\n")
+with open(plain, "w", encoding="utf-8", newline="") as f:
+    f.write("id,name\n1,Cy\n")
+assert load_ids(excel) == [7, 9]
+assert load_ids(plain) == [1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+excel, plain = os.path.join(d, &quot;excel.csv&quot;), os.path.join(d, &quot;plain.csv&quot;)
+with open(excel, &quot;w&quot;, encoding=&quot;utf-8-sig&quot;, newline=&quot;&quot;) as f:
+    f.write(&quot;id,name\r\n7,Ana\r\n9,Bo\r\n&quot;)
+with open(plain, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    f.write(&quot;id,name\n1,Cy\n&quot;)
+assert load_ids(excel) == [7, 9]
+assert load_ids(plain) == [1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look at the first bytes of the Excel file: <code>open(excel, "rb").read(5)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv
+
+def load_ids(path):
+    with open(path, encoding=&quot;utf-8-sig&quot;, newline=&quot;&quot;) as f:
+        return [int(row[&quot;id&quot;]) for row in csv.DictReader(f)]</code></pre></div><p>Excel's "CSV UTF-8" format starts the file with a byte-order mark, the bytes <code>EF BB BF</code>. Decoded as plain UTF-8 they become the invisible character <code>\ufeff</code>, so the first column is really named <code>"\ufeffid"</code>, and <code>row["id"]</code> fails although the header looks right when printed. The <code>utf-8-sig</code> codec removes a leading mark if there is one and otherwise behaves exactly like UTF-8, so it is the safe choice for reading any CSV that may have passed through Excel. When <strong>writing</strong> for Excel users, <code>utf-8-sig</code> also makes Excel detect the encoding correctly.</p></div></details>
+</article>
+<article class="prob" id="p-turn-a-csv-of-documents-into-jsonl-chunk" data-pid="m12-2-turn-a-csv-of-documents-into-jsonl-chunk" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. Turn a CSV of documents into JSONL chunks</h3></header>
+<div class="prob-q"><p>Write <code>csv_to_chunks(csv_path, out_path, max_words=50)</code>. The CSV has columns <code>id</code>, <code>title</code> and <code>body</code> (bodies contain commas, quotes and newlines). Split each body into words (<code>split()</code>) and write one JSONL record per chunk of at most <code>max_words</code> words: <code>{"doc_id": id, "chunk": k, "title": title, "text": the words joined with single spaces}</code>, with <code>k</code> counting from 0 per document. Skip documents whose body is empty. Return <code>(documents, chunks)</code> written.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import csv, json
+
+def csv_to_chunks(csv_path, out_path, max_words=50):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import csv, json, os, tempfile
+d = tempfile.mkdtemp()
+src, out = os.path.join(d, "docs.csv"), os.path.join(d, "chunks.jsonl")
+body = "Refunds take five days, \"business\" days.\nContact support if late. " + " ".join(f"w{i}" for i in range(12))
+with open(src, "w", encoding="utf-8", newline="") as f:
+    w = csv.writer(f)
+    w.writerows([["id", "title", "body"], ["faq-1", "Refunds", body], ["faq-2", "Empty", "   "], ["faq-3", "Café", "Open daily"]])
+assert csv_to_chunks(src, out, max_words=10) == (2, 4)
+with open(out, encoding="utf-8") as f:
+    recs = [json.loads(line) for line in f]
+assert [(r["doc_id"], r["chunk"]) for r in recs] == [("faq-1", 0), ("faq-1", 1), ("faq-1", 2), ("faq-3", 0)]
+assert recs[0]["text"] == 'Refunds take five days, "business" days. Contact support if late.' and recs[2]["text"] == "w10 w11"
+assert recs[3] == {"doc_id": "faq-3", "chunk": 0, "title": "Café", "text": "Open daily"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import csv, json, os, tempfile
+d = tempfile.mkdtemp()
+src, out = os.path.join(d, &quot;docs.csv&quot;), os.path.join(d, &quot;chunks.jsonl&quot;)
+body = &quot;Refunds take five days, \&quot;business\&quot; days.\nContact support if late. &quot; + &quot; &quot;.join(f&quot;w{i}&quot; for i in range(12))
+with open(src, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    w = csv.writer(f)
+    w.writerows([[&quot;id&quot;, &quot;title&quot;, &quot;body&quot;], [&quot;faq-1&quot;, &quot;Refunds&quot;, body], [&quot;faq-2&quot;, &quot;Empty&quot;, &quot;   &quot;], [&quot;faq-3&quot;, &quot;Café&quot;, &quot;Open daily&quot;]])
+assert csv_to_chunks(src, out, max_words=10) == (2, 4)
+with open(out, encoding=&quot;utf-8&quot;) as f:
+    recs = [json.loads(line) for line in f]
+assert [(r[&quot;doc_id&quot;], r[&quot;chunk&quot;]) for r in recs] == [(&quot;faq-1&quot;, 0), (&quot;faq-1&quot;, 1), (&quot;faq-1&quot;, 2), (&quot;faq-3&quot;, 0)]
+assert recs[0][&quot;text&quot;] == &#x27;Refunds take five days, &quot;business&quot; days. Contact support if late.&#x27; and recs[2][&quot;text&quot;] == &quot;w10 w11&quot;
+assert recs[3] == {&quot;doc_id&quot;: &quot;faq-3&quot;, &quot;chunk&quot;: 0, &quot;title&quot;: &quot;Café&quot;, &quot;text&quot;: &quot;Open daily&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Read with <code>csv.DictReader</code> and write with <code>json.dumps(..., ensure_ascii=False)</code> inside the same loop, so nothing is held in memory.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>words[i:i + max_words]</code> for <code>i</code> in <code>range(0, len(words), max_words)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv, json
+
+
+def csv_to_chunks(csv_path, out_path, max_words=50):
+    documents = chunks = 0
+    with open(csv_path, encoding=&quot;utf-8-sig&quot;, newline=&quot;&quot;) as src, open(out_path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as out:
+        for row in csv.DictReader(src):
+            words = row[&quot;body&quot;].split()
+            if not words:
+                continue
+            documents += 1
+            for k, start in enumerate(range(0, len(words), max_words)):
+                record = {&quot;doc_id&quot;: row[&quot;id&quot;], &quot;chunk&quot;: k, &quot;title&quot;: row[&quot;title&quot;], &quot;text&quot;: &quot; &quot;.join(words[start:start + max_words])}
+                out.write(json.dumps(record, ensure_ascii=False) + &quot;\n&quot;)
+                chunks += 1
+    return documents, chunks</code></pre></div><p>The two formats meet in one streaming loop: <code>DictReader</code> parses quoted bodies with commas, quotes and newlines correctly, and each chunk is written as soon as it is made, so a corpus of any size needs memory for one document only. <code>split()</code> also normalises whitespace, which is why the newline inside the body disappears from the chunk text. Each record carries its document id, chunk number and title, the metadata a RAG system stores next to the embedding so that answers can cite their source (5.P). Real chunkers split on tokens or sentences and overlap neighbouring chunks, but the file handling stays exactly this.</p></div></details>
+</article>
+<article class="prob" id="p-dialects-and-quote-nonnumeric" data-pid="m12-2-dialects-and-quote-nonnumeric" data-type="predict" data-level="medium" data-answer="3 [&#x27;1&#x27;, &#x27;Smith; J&#x27;, &#x27;0.5&#x27;] [&#x27;2&#x27;, &#x27;multi\nline&#x27;, &#x27;0.7&#x27;]
+&#x27;&quot;a&quot;,1,2.5,&quot;&quot;\r\n&#x27;
+[&#x27;a&#x27;, 1.0, 2.5, &#x27;&#x27;]">
+<header class="prob-head"><h3>12. Dialects and QUOTE_NONNUMERIC</h3></header>
+<div class="code"><pre><code class="py">import csv, io
+
+text = &#x27;id;name;score\n1;&quot;Smith; J&quot;;0.5\n2;&quot;multi\nline&quot;;0.7\n&#x27;
+rows = list(csv.reader(io.StringIO(text, newline=&quot;&quot;), delimiter=&quot;;&quot;))
+print(len(rows), rows[1], rows[2])
+buf = io.StringIO(newline=&quot;&quot;)
+csv.writer(buf, quoting=csv.QUOTE_NONNUMERIC).writerow([&quot;a&quot;, 1, 2.5, None])
+print(repr(buf.getvalue()))
+print(next(csv.reader(io.StringIO(buf.getvalue(), newline=&quot;&quot;), quoting=csv.QUOTE_NONNUMERIC)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A quoted field may contain the delimiter and newlines. <code>QUOTE_NONNUMERIC</code> quotes every non-number when writing, and converts every unquoted field to <code>float</code> when reading.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 [&#x27;1&#x27;, &#x27;Smith; J&#x27;, &#x27;0.5&#x27;] [&#x27;2&#x27;, &#x27;multi\nline&#x27;, &#x27;0.7&#x27;]
+&#x27;&quot;a&quot;,1,2.5,&quot;&quot;\r\n&#x27;
+[&#x27;a&#x27;, 1.0, 2.5, &#x27;&#x27;]</pre></div><p>With <code>;</code> as the delimiter, the quoted <code>Smith; J</code> is one field, and the quoted field with a newline keeps the second record together, so there are three rows, not four. <code>QUOTE_NONNUMERIC</code> quotes strings (and <code>None</code>, written as <code>""</code>) but not numbers, and rows end with <code>\r\n</code>. Reading with the same option turns every unquoted field into a float, so <code>1</code> comes back as <code>1.0</code>, while the quoted empty string stays a string.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-summarise-a-compressed-event-log" data-pid="m12-2-summarise-a-compressed-event-log" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Summarise a compressed event log</h3></header>
+<div class="prob-q"><p>Write <code>summarise_events(path)</code> for a JSONL event log that may be gzip-compressed (when the name ends in <code>.gz</code>). Each good line is an object with a string <code>type</code> and an optional integer <code>tokens</code> (default 0). Return <code>{"events": count of good lines, "by_type": {type: count} with types sorted, "tokens": total tokens, "bad_lines": [line numbers]}</code>, where a bad line is invalid JSON, not an object, has no string <code>type</code>, or has <code>tokens</code> that is not an <code>int</code> (booleans do not count). Blank lines are ignored. Stream the file; do not read it whole.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import gzip, json
+
+def summarise_events(path):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import gzip, json, os, tempfile
+d = tempfile.mkdtemp()
+lines = ['{"type": "request", "tokens": 120}', '{"type": "tool_call"}', '', '{"type": "request", "tokens": 80}',
+         '["not", "object"]', '{"tokens": 5}', '{"type": "request", "tokens": "12"}', '{"type": "error", "tokens": true}',
+         '{"type": "response", "tokens": 200}', '{"type": "resp']
+text = "\n".join(lines) + "\n"
+plain, packed = os.path.join(d, "events.jsonl"), os.path.join(d, "events.jsonl.gz")
+with open(plain, "w", encoding="utf-8") as f:
+    f.write(text)
+with gzip.open(packed, "wt", encoding="utf-8") as f:
+    f.write(text)
+expected = {"events": 4, "by_type": {"request": 2, "response": 1, "tool_call": 1}, "tokens": 400, "bad_lines": [5, 6, 7, 8, 10]}
+assert summarise_events(plain) == expected
+assert summarise_events(packed) == expected and list(summarise_events(packed)["by_type"]) == ["request", "response", "tool_call"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import gzip, json, os, tempfile
+d = tempfile.mkdtemp()
+lines = [&#x27;{&quot;type&quot;: &quot;request&quot;, &quot;tokens&quot;: 120}&#x27;, &#x27;{&quot;type&quot;: &quot;tool_call&quot;}&#x27;, &#x27;&#x27;, &#x27;{&quot;type&quot;: &quot;request&quot;, &quot;tokens&quot;: 80}&#x27;,
+         &#x27;[&quot;not&quot;, &quot;object&quot;]&#x27;, &#x27;{&quot;tokens&quot;: 5}&#x27;, &#x27;{&quot;type&quot;: &quot;request&quot;, &quot;tokens&quot;: &quot;12&quot;}&#x27;, &#x27;{&quot;type&quot;: &quot;error&quot;, &quot;tokens&quot;: true}&#x27;,
+         &#x27;{&quot;type&quot;: &quot;response&quot;, &quot;tokens&quot;: 200}&#x27;, &#x27;{&quot;type&quot;: &quot;resp&#x27;]
+text = &quot;\n&quot;.join(lines) + &quot;\n&quot;
+plain, packed = os.path.join(d, &quot;events.jsonl&quot;), os.path.join(d, &quot;events.jsonl.gz&quot;)
+with open(plain, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(text)
+with gzip.open(packed, &quot;wt&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(text)
+expected = {&quot;events&quot;: 4, &quot;by_type&quot;: {&quot;request&quot;: 2, &quot;response&quot;: 1, &quot;tool_call&quot;: 1}, &quot;tokens&quot;: 400, &quot;bad_lines&quot;: [5, 6, 7, 8, 10]}
+assert summarise_events(plain) == expected
+assert summarise_events(packed) == expected and list(summarise_events(packed)[&quot;by_type&quot;]) == [&quot;request&quot;, &quot;response&quot;, &quot;tool_call&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Choose the opener once: <code>opener = gzip.open if str(path).endswith(".gz") else open</code>, then <code>opener(path, "rt", encoding="utf-8")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>isinstance(True, int)</code> is <code>True</code>, so exclude <code>bool</code> explicitly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import gzip, json
+
+
+def _good(obj):
+    if not isinstance(obj, dict) or not isinstance(obj.get(&quot;type&quot;), str):
+        return False
+    tokens = obj.get(&quot;tokens&quot;, 0)
+    return isinstance(tokens, int) and not isinstance(tokens, bool)
+
+
+def summarise_events(path):
+    opener = gzip.open if str(path).endswith(&quot;.gz&quot;) else open
+    events = tokens = 0
+    by_type, bad = {}, []
+    with opener(path, &quot;rt&quot;, encoding=&quot;utf-8&quot;) as f:
+        for n, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                bad.append(n)
+                continue
+            if not _good(obj):
+                bad.append(n)
+                continue
+            events += 1
+            by_type[obj[&quot;type&quot;]] = by_type.get(obj[&quot;type&quot;], 0) + 1
+            tokens += obj.get(&quot;tokens&quot;, 0)
+    return {&quot;events&quot;: events, &quot;by_type&quot;: dict(sorted(by_type.items())), &quot;tokens&quot;: tokens, &quot;bad_lines&quot;: bad}</code></pre></div><p><code>gzip.open</code> in text mode returns a file object that decompresses as it is read, so the same streaming loop handles both files, and choosing the opener once keeps the loop free of special cases. Validation is explicit because JSON gives no guarantees: an array, a missing <code>type</code>, a token count written as a string, and <code>true</code> (a <code>bool</code>, which Python counts as an <code>int</code>) are all rejected and reported by line number, and the truncated last line from an interrupted writer is just another bad line. Usage dashboards built from LLM gateway logs are computed exactly like this; with tens of gigabytes, the same loop runs per file in parallel (14.3) and the summaries are merged.</p></div></details>
+</article>
+<article class="prob" id="p-round-trip-rich-types-with-tags" data-pid="m12-2-round-trip-rich-types-with-tags" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Round-trip rich types with tags</h3></header>
+<div class="prob-q"><p>Write <code>dumps_tagged(obj)</code> and <code>loads_tagged(text)</code> so that <code>datetime</code>, <code>date</code>, <code>Decimal</code>, <code>set</code> and <code>complex</code> values survive a JSON round trip. Encode each as an object <code>{"__type__": name, "value": ...}</code> with names <code>"datetime"</code>, <code>"date"</code> (ISO strings), <code>"decimal"</code> (string), <code>"set"</code> (a sorted list) and <code>"complex"</code> (<code>[real, imag]</code>). When decoding, convert objects that have exactly the keys <code>__type__</code> and <code>value</code>; an unknown <code>__type__</code> raises <code>ValueError</code>; other objects are returned unchanged.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+from datetime import date, datetime
+from decimal import Decimal
+
+def dumps_tagged(obj):
+    pass
+
+def loads_tagged(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from datetime import date, datetime
+from decimal import Decimal
+data = {"run": "exp-1", "started": datetime(2025, 3, 1, 9, 30, 15), "day": date(2025, 3, 1), "cost": Decimal("0.10"),
+        "labels": {"spam", "ham"}, "z": 1 + 2j, "nested": [{"when": date(2024, 12, 31)}]}
+text = dumps_tagged(data)
+back = loads_tagged(text)
+assert back == data and type(back["started"]) is datetime and type(back["day"]) is date
+assert '{"__type__": "date", "value": "2025-03-01"}' in text and '"value": ["ham", "spam"]' in text
+assert loads_tagged('{"__type__": "note", "value": 1, "extra": true}') == {"__type__": "note", "value": 1, "extra": True}
+assert loads_tagged(dumps_tagged((1, 2))) == [1, 2]
+try:
+    loads_tagged('{"__type__": "bytes", "value": "AA=="}')
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from datetime import date, datetime
+from decimal import Decimal
+data = {&quot;run&quot;: &quot;exp-1&quot;, &quot;started&quot;: datetime(2025, 3, 1, 9, 30, 15), &quot;day&quot;: date(2025, 3, 1), &quot;cost&quot;: Decimal(&quot;0.10&quot;),
+        &quot;labels&quot;: {&quot;spam&quot;, &quot;ham&quot;}, &quot;z&quot;: 1 + 2j, &quot;nested&quot;: [{&quot;when&quot;: date(2024, 12, 31)}]}
+text = dumps_tagged(data)
+back = loads_tagged(text)
+assert back == data and type(back[&quot;started&quot;]) is datetime and type(back[&quot;day&quot;]) is date
+assert &#x27;{&quot;__type__&quot;: &quot;date&quot;, &quot;value&quot;: &quot;2025-03-01&quot;}&#x27; in text and &#x27;&quot;value&quot;: [&quot;ham&quot;, &quot;spam&quot;]&#x27; in text
+assert loads_tagged(&#x27;{&quot;__type__&quot;: &quot;note&quot;, &quot;value&quot;: 1, &quot;extra&quot;: true}&#x27;) == {&quot;__type__&quot;: &quot;note&quot;, &quot;value&quot;: 1, &quot;extra&quot;: True}
+assert loads_tagged(dumps_tagged((1, 2))) == [1, 2]
+try:
+    loads_tagged(&#x27;{&quot;__type__&quot;: &quot;bytes&quot;, &quot;value&quot;: &quot;AA==&quot;}&#x27;)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>datetime</code> before <code>date</code>: a <code>datetime</code> is an instance of <code>date</code> too.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>json.loads(text, object_hook=...)</code> calls the hook for every object, innermost first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from datetime import date, datetime
+from decimal import Decimal
+
+
+def _encode(o):
+    if isinstance(o, datetime):
+        return {&quot;__type__&quot;: &quot;datetime&quot;, &quot;value&quot;: o.isoformat()}
+    if isinstance(o, date):
+        return {&quot;__type__&quot;: &quot;date&quot;, &quot;value&quot;: o.isoformat()}
+    if isinstance(o, Decimal):
+        return {&quot;__type__&quot;: &quot;decimal&quot;, &quot;value&quot;: str(o)}
+    if isinstance(o, set):
+        return {&quot;__type__&quot;: &quot;set&quot;, &quot;value&quot;: sorted(o)}
+    if isinstance(o, complex):
+        return {&quot;__type__&quot;: &quot;complex&quot;, &quot;value&quot;: [o.real, o.imag]}
+    raise TypeError(f&quot;Object of type {type(o).__name__} is not JSON serializable&quot;)
+
+
+_DECODERS = {
+    &quot;datetime&quot;: datetime.fromisoformat,
+    &quot;date&quot;: date.fromisoformat,
+    &quot;decimal&quot;: Decimal,
+    &quot;set&quot;: set,
+    &quot;complex&quot;: lambda v: complex(v[0], v[1]),
+}
+
+
+def _decode(d):
+    if set(d) == {&quot;__type__&quot;, &quot;value&quot;}:
+        kind = d[&quot;__type__&quot;]
+        if kind not in _DECODERS:
+            raise ValueError(f&quot;unknown __type__: {kind!r}&quot;)
+        return _DECODERS[kind](d[&quot;value&quot;])
+    return d
+
+
+def dumps_tagged(obj):
+    return json.dumps(obj, default=_encode)
+
+
+def loads_tagged(text):
+    return json.loads(text, object_hook=_decode)</code></pre></div><p><code>default</code> and <code>object_hook</code> are the two halves of a custom format: the encoder replaces each unknown object with a tagged plain object, and the decoder sees every decoded object (innermost first, so nested values are already converted) and turns tags back into rich types. Checking <code>datetime</code> before <code>date</code> matters because <code>datetime</code> is a subclass of <code>date</code>; the other order would silently drop the time. Requiring exactly the two keys avoids misreading ordinary data that happens to contain a <code>__type__</code> field, and unknown tags fail loudly. The tuple shows the limit: JSON already "handles" tuples as arrays, so <code>default</code> is never called and they come back as lists. Serialisation libraries (and job queues such as Celery and Kombu) use this same tagging trick.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-evaluation-export" data-pid="m12-2-read-the-code-an-evaluation-export" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Read the code: an evaluation export</h3></header>
+<div class="prob-q"><p><code>export_results</code> writes evaluation results to CSV for a spreadsheet review. Answers often contain commas, quotes and newlines, which break the columns; there is no header; the file is written without an explicit encoding, and the scores are rounded to 2 places. Rewrite it with the <code>csv</code> module: a header <code>id,answer,score</code>, one row per result in order, the score formatted with 3 decimals (<code>0.900</code>), extra keys ignored, UTF-8 and the correct <code>newline</code> argument.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def export_results(path, results):
+    with open(path, &quot;w&quot;) as f:
+        for r in results:
+            f.write(str(r[&quot;id&quot;]) + &quot;,&quot; + r[&quot;answer&quot;] + &quot;,&quot; + str(round(r[&quot;score&quot;], 2)) + &quot;\n&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">import csv, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), "review.csv")
+results = [{"id": 1, "answer": "Refunds take 5 days, usually.", "score": 0.9, "latency_ms": 812},
+           {"id": 2, "answer": 'She said "no"\nand left.', "score": 0.12345},
+           {"id": 3, "answer": "Café opens at 9", "score": 1}]
+export_results(path, results)
+with open(path, encoding="utf-8", newline="") as f:
+    rows = list(csv.DictReader(f))
+assert rows == [{"id": "1", "answer": "Refunds take 5 days, usually.", "score": "0.900"},
+                {"id": "2", "answer": 'She said "no"\nand left.', "score": "0.123"},
+                {"id": "3", "answer": "Café opens at 9", "score": "1.000"}]
+assert open(path, "rb").read().startswith(b"id,answer,score\r\n")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import csv, os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;review.csv&quot;)
+results = [{&quot;id&quot;: 1, &quot;answer&quot;: &quot;Refunds take 5 days, usually.&quot;, &quot;score&quot;: 0.9, &quot;latency_ms&quot;: 812},
+           {&quot;id&quot;: 2, &quot;answer&quot;: &#x27;She said &quot;no&quot;\nand left.&#x27;, &quot;score&quot;: 0.12345},
+           {&quot;id&quot;: 3, &quot;answer&quot;: &quot;Café opens at 9&quot;, &quot;score&quot;: 1}]
+export_results(path, results)
+with open(path, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+    rows = list(csv.DictReader(f))
+assert rows == [{&quot;id&quot;: &quot;1&quot;, &quot;answer&quot;: &quot;Refunds take 5 days, usually.&quot;, &quot;score&quot;: &quot;0.900&quot;},
+                {&quot;id&quot;: &quot;2&quot;, &quot;answer&quot;: &#x27;She said &quot;no&quot;\nand left.&#x27;, &quot;score&quot;: &quot;0.123&quot;},
+                {&quot;id&quot;: &quot;3&quot;, &quot;answer&quot;: &quot;Café opens at 9&quot;, &quot;score&quot;: &quot;1.000&quot;}]
+assert open(path, &quot;rb&quot;).read().startswith(b&quot;id,answer,score\r\n&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>csv.DictWriter(f, fieldnames=["id", "answer", "score"], extrasaction="ignore")</code> on a file opened with <code>encoding="utf-8", newline=""</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build each row as a new dict with the formatted score: <code>{**r, "score": f"{r['score']:.3f}"}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import csv
+
+FIELDS = [&quot;id&quot;, &quot;answer&quot;, &quot;score&quot;]
+
+
+def export_results(path, results):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;, newline=&quot;&quot;) as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDS, extrasaction=&quot;ignore&quot;)
+        writer.writeheader()
+        for r in results:
+            writer.writerow({**r, &quot;score&quot;: f&quot;{r[&#x27;score&#x27;]:.3f}&quot;})</code></pre></div><p>Joining fields with <code>","</code> is the original CSV sin: the first answer's comma creates a fourth column and the second answer's newline starts a new row, so the spreadsheet is garbage. <code>DictWriter</code> quotes exactly the fields that need it and doubles inner quotes. <code>newline=""</code> is required so the writer's own <code>\r\n</code> row endings are not translated, and so newlines inside quoted fields are written as they are. A fixed format such as <code>.3f</code> gives aligned, comparable scores, where <code>round</code> produces <code>0.9</code> and <code>1</code>. Copying each row with <code>{**r, ...}</code> formats the score without changing the caller's results, and <code>extrasaction="ignore"</code> drops the latency column on purpose.</p></div></details>
+</article>
+<article class="prob" id="p-json-edge-cases" data-pid="m12-2-json-edge-cases" data-type="predict" data-level="hard" data-answer="{&#x27;a&#x27;: 2} 12345678901234567890124
+inf 0.30000000000000004 café
+{&quot;1&quot;: &quot;a&quot;, &quot;null&quot;: &quot;c&quot;, &quot;2.5&quot;: &quot;d&quot;}
+TypeError: keys must be str, int, float, bool or None, not tuple
+[1, 2.0, True, None] {&quot;s&quot;: &quot;line\nbreak&quot;}">
+<header class="prob-head"><h3>16. JSON edge cases</h3></header>
+<div class="code"><pre><code class="py">import json
+
+print(json.loads(&#x27;{&quot;a&quot;: 1, &quot;a&quot;: 2}&#x27;), json.loads(&quot;12345678901234567890123&quot;) + 1)
+print(json.loads(&quot;1e400&quot;), json.dumps(0.1 + 0.2), json.loads(&#x27;&quot;caf\\u00e9&quot;&#x27;))
+print(json.dumps({1: &quot;a&quot;, None: &quot;c&quot;, 2.5: &quot;d&quot;}))
+try:
+    json.dumps({(1, 2): &quot;pair&quot;})
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(json.loads(&quot;[1, 2.0, true, null]&quot;), json.dumps({&quot;s&quot;: &quot;line\nbreak&quot;}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Duplicate keys: the last one wins. Python ints have unlimited size. Keys may be str, int, float, bool or None; anything else is an error.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;a&#x27;: 2} 12345678901234567890124
+inf 0.30000000000000004 café
+{&quot;1&quot;: &quot;a&quot;, &quot;null&quot;: &quot;c&quot;, &quot;2.5&quot;: &quot;d&quot;}
+TypeError: keys must be str, int, float, bool or None, not tuple
+[1, 2.0, True, None] {&quot;s&quot;: &quot;line\nbreak&quot;}</pre></div><p>JSON allows duplicate keys and Python keeps the last, silently, which can hide a bug in a generated document. Python parses big integers exactly (JavaScript would round this one, the reason APIs send large ids as strings). A number too large for a float becomes infinity; floats are written with the shortest repr that round-trips, so <code>0.1 + 0.2</code> shows its binary error; and <code>\u00e9</code> escapes decode to <code>é</code>. <code>int</code>, <code>None</code> and <code>float</code> keys are converted to strings, but a tuple key raises <code>TypeError</code> even though tuples are valid values. Finally, a newline inside a string is written as the escape <code>\n</code>, which is why one record always fits on one line in JSONL.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-csv-json-json-lines-or-parquet-how-do-yo" data-pid="m12-2-csv-json-json-lines-or-parquet-how-do-yo" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. CSV, JSON, JSON Lines or Parquet: how do you choose a format?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><strong>CSV</strong> is for flat tables exchanged with people and spreadsheet tools: universal, but untyped (everything is a string), ambiguous in encoding and dialect, and unable to hold nested data. <strong>JSON</strong> suits nested records, configuration and API payloads, with basic types, but a single document must be parsed whole. <strong>JSON Lines</strong> keeps JSON's flexibility while streaming: one record per line, appendable, splittable and robust to a truncated last line, which is why datasets, fine-tuning files, LLM batch jobs and logs use it. <strong>Parquet</strong> is a typed, compressed, <strong>columnar</strong> binary format for large analytical tables: reading two columns of a billion rows reads only those columns, with types preserved, which makes it the default for data lakes and feature tables (pandas, Polars, Spark, DuckDB). Rule of thumb: Parquet for analytics at scale, JSONL for record streams and ML/LLM data, JSON for configs and APIs, CSV only at the human or legacy boundary.</p></div></details>
+</article>
+<article class="prob" id="p-what-can-go-wrong-when-data-round-trips-" data-pid="m12-2-what-can-go-wrong-when-data-round-trips-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What can go wrong when data round-trips through JSON?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Types are lost or changed: tuples become lists, integer dict keys become strings, sets, dates, <code>Decimal</code>, bytes and NumPy values cannot be serialised without a <code>default</code>, and floats that were <code>Decimal</code> lose exactness. Numbers have edge cases: Python writes <code>NaN</code> and <code>Infinity</code>, which are not valid JSON and are rejected elsewhere (use <code>allow_nan=False</code>); integers beyond <code>2**53</code> are exact in Python but rounded in JavaScript, so large ids should travel as strings. Duplicate keys are silently resolved by keeping the last. Encoding matters: <code>ensure_ascii=True</code> escapes everything, <code>False</code> requires the file to be UTF-8. And structure is not validated, so a parsed value can be an array where you expected an object; validate it with a schema or Pydantic model (11.4) at the boundary.</p></div></details>
+</article>
+<article class="prob" id="p-an-ingestion-job-reads-millions-of-jsonl" data-pid="m12-2-an-ingestion-job-reads-millions-of-jsonl" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. An ingestion job reads millions of JSONL records and some are malformed. How do you handle them?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Stream the file line by line so memory stays constant, and separate the <strong>policy</strong> from the parsing. Parse each line inside <code>try</code>, then validate its shape (an object, required fields, types, ideally a Pydantic model). Bad records should not crash the job at hour three, but they must not disappear either: count them, log the line number, file and error type (not the full content if it may hold personal data), and write the raw line to a dead-letter or quarantine file so it can be inspected and replayed after a fix. Define a threshold: if more than, say, 0.1% of records are bad, fail the run, because that signals an upstream schema change rather than noise. Make the job idempotent and resumable (record the last committed offset or batch, write outputs atomically), and report the counts (read, good, bad, by error type) as metrics, so a jump is visible on a dashboard.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Use the <code>csv</code> module, never <code>split(",")</code>; open files with <code>newline=""</code>, convert types yourself, and use <code>utf-8-sig</code> for files from Excel.</li><li><code>DictReader</code> and <code>DictWriter</code> map rows to dicts; call <code>writeheader()</code>, and set <code>extrasaction</code> deliberately.</li><li>JSON loses types: tuples become lists, keys become strings; <code>NaN</code> is not valid JSON, so clean it and pass <code>allow_nan=False</code>.</li><li><code>default=</code> serialises unknown types (dates, Decimal, NumPy) and <code>object_hook=</code> decodes them; neither applies to types JSON already handles.</li><li>JSON Lines streams one record per line: write without <code>indent</code>, read line by line, and report bad lines with their numbers.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

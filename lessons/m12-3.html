@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>12.3 · logging</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m12-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 12 · Files and data</span></div>
+  <h1>12.3 logging</h1>
+  <p>When a service misbehaves at 3 a.m., its logs are the only witness. The <code>logging</code> module from the ground up: loggers and their hierarchy, levels, handlers and formatters, lazy formatting, exceptions with tracebacks, configuration for applications versus libraries, filters for redaction and request context, and structured JSON logs. Applied to LLM calls, retrieval libraries and ETL jobs.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>Why logging instead of print</h2>
+<p><code>print</code> writes text to standard output and that is all. A real program needs more from its diagnostic messages: a <strong>severity</strong> so routine chatter can be hidden and errors cannot, a <strong>source</strong> (which module said it), a <strong>destination</strong> that may be a console, a file, or a log service, a <strong>format</strong> with timestamps and context, and the ability to change all of that <strong>without editing the code that emits the messages</strong>, because the same library runs inside a notebook, a test and a production server. The <code>logging</code> module separates those concerns: code calls a logger, and the application decides, once, where records go and which ones are kept.</p>
+<p>The five standard levels are numbers, so they compare: <code>DEBUG</code> (10) for detail useful while diagnosing, <code>INFO</code> (20) for normal milestones (a job started, a model loaded), <code>WARNING</code> (30) for something unexpected that was handled (a retry, a fallback), <code>ERROR</code> (40) for an operation that failed, and <code>CRITICAL</code> (50) for a failure of the whole program. A logger or handler set to a level drops everything below it.</p>
+</section>
+<section class="sec" id="loggers">
+<h2><span class="n">2</span>Loggers, the hierarchy and levels</h2>
+<p>Every module gets its own logger with <strong><code>log = logging.getLogger(__name__)</code></strong>. <code>__name__</code> is the module's dotted import name (<code>myapp.retrieval.search</code>), so loggers form a tree that mirrors the package, and <code>getLogger</code> returns the <strong>same</strong> object for the same name, wherever it is called. A record created on a logger is checked against that logger's <strong>effective level</strong> (its own level, or if it has none, <code>NOTSET</code>, the nearest ancestor's), then passed to the logger's handlers and, because <code>propagate</code> is <code>True</code> by default, to the handlers of every ancestor up to the <strong>root logger</strong>. That is why an application usually attaches handlers only to the root (or to its top package logger), and every module's messages arrive there.</p>
+<p>Call the level methods with a format string and <strong>separate arguments</strong>: <code>log.info("loaded %d docs from %s", n, path)</code>. The message is only formatted if a handler will actually emit it, and the arguments are kept in the record, which structured logging uses. An f-string, <code>log.debug(f"state {state}")</code>, is formatted <strong>before</strong> the call, even when debug logging is off. Note that arguments are still <strong>evaluated</strong>: <code>log.debug("%s", expensive())</code> runs <code>expensive()</code> every time, so guard truly expensive work with <code>if log.isEnabledFor(logging.DEBUG):</code> (problem 8).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hierarchy.py</span><button class="copy">Copy</button></div><pre><code class="py">import io, logging
+
+stream = io.StringIO()
+handler = logging.StreamHandler(stream)
+handler.setFormatter(logging.Formatter(&quot;%(levelname)-7s %(name)s: %(message)s&quot;))
+app = logging.getLogger(&quot;shop&quot;)
+app.addHandler(handler)
+app.setLevel(logging.INFO)
+app.propagate = False
+
+db = logging.getLogger(&quot;shop.db&quot;)
+print(db.parent.name, db.level, db.getEffectiveLevel(), logging.getLogger(&quot;shop.db&quot;) is db)
+db.debug(&quot;SELECT * FROM orders&quot;)
+db.info(&quot;loaded %d orders in %.1f ms&quot;, 120, 4.25)
+db.warning(&quot;slow query: %s&quot;, &quot;orders by customer&quot;)
+app.error(&quot;checkout failed for order %s&quot;, &quot;A-17&quot;)
+print(stream.getvalue(), end=&quot;&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>shop 0 20 True
+INFO    shop.db: loaded 120 orders in 4.2 ms
+WARNING shop.db: slow query: orders by customer
+ERROR   shop: checkout failed for order A-17</pre></div></div>
+<p><code>shop.db</code> has no level of its own (<code>0</code>, <code>NOTSET</code>), so it inherits <code>INFO</code> from <code>shop</code>; the debug message is dropped, the others travel up to the handler on <code>shop</code>, and the format shows which logger produced each one. The examples here attach handlers to their own loggers and set <code>propagate = False</code>, so they do not depend on the root logger; an application would normally configure the root instead.</p>
+</section>
+<section class="sec" id="handlers">
+<h2><span class="n">3</span>Handlers, formatters and configuration</h2>
+<p>A <strong>handler</strong> delivers records: <code>StreamHandler</code> (standard error by default, or any file-like stream), <code>FileHandler</code>, <code>RotatingFileHandler</code> and <code>TimedRotatingFileHandler</code> (start a new file at a size or time and keep a fixed number of old ones), <code>logging.handlers.QueueHandler</code> for handing records to a background thread, and handlers for syslog, HTTP and cloud log services. Each handler has its own level, so one logger can send everything to a file and only errors to the console. A <strong>formatter</strong> turns a record into text with <code>%</code>-style fields: <code>%(asctime)s</code>, <code>%(levelname)s</code>, <code>%(name)s</code>, <code>%(message)s</code>, <code>%(module)s</code>, <code>%(funcName)s</code>, <code>%(lineno)d</code>, <code>%(process)d</code>, <code>%(threadName)s</code>.</p>
+<p><strong>Applications configure logging once, at start-up; libraries never do.</strong> In a script, <code>logging.basicConfig(level=logging.INFO, format=...)</code> adds one handler to the root logger; larger applications use <code>logging.config.dictConfig(config)</code>, a dict (often loaded from a file) describing formatters, handlers and logger levels (problem 14), including quieting chatty dependencies such as <code>logging.getLogger("httpx").setLevel(logging.WARNING)</code>. A library only creates loggers and, by convention, attaches a <code>logging.NullHandler()</code> to its top-level logger, so it stays silent unless the application asks to see its messages. A library calling <code>logging.basicConfig</code>, or the module-level shortcuts <code>logging.info(...)</code> (which log to the root and <strong>configure it</strong> if it has no handlers), takes that decision away from the application (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">handlers.py</span><button class="copy">Copy</button></div><pre><code class="py">import io, logging
+
+stream = io.StringIO()
+errors_only = io.StringIO()
+everything = logging.StreamHandler(stream)
+everything.setFormatter(logging.Formatter(&quot;%(levelname)s [%(name)s.%(funcName)s] %(message)s&quot;))
+alerts = logging.StreamHandler(errors_only)
+alerts.setLevel(logging.ERROR)
+alerts.setFormatter(logging.Formatter(&quot;ALERT %(message)s&quot;))
+
+log = logging.getLogger(&quot;ingest&quot;)
+log.setLevel(logging.DEBUG)
+log.propagate = False
+log.handlers[:] = [everything, alerts]
+
+def load(path):
+    log.debug(&quot;opening %s&quot;, path)
+    log.error(&quot;cannot parse %s&quot;, path)
+
+load(&quot;docs/faq.md&quot;)
+print(stream.getvalue(), end=&quot;&quot;)
+print(errors_only.getvalue(), end=&quot;&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>DEBUG [ingest.load] opening docs/faq.md
+ERROR [ingest.load] cannot parse docs/faq.md
+ALERT cannot parse docs/faq.md</pre></div></div>
+</section>
+<section class="sec" id="exceptions">
+<h2><span class="n">4</span>Logging exceptions</h2>
+<p>Inside an <code>except</code> block, <strong><code>log.exception("message")</code></strong> logs at <code>ERROR</code> level <strong>with the traceback</strong>, which is what makes the record useful later; <code>log.error("failed: %s", e)</code> keeps only the exception's message and loses where it happened (problem 3). Any level method accepts <code>exc_info=True</code> to attach the current exception (<code>log.warning("retrying", exc_info=True)</code>), and <code>stack_info=True</code> adds the current call stack even without an exception. Log an exception <strong>once</strong>, where it is handled; logging and re-raising at every layer prints the same traceback five times.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">exceptions.py</span><button class="copy">Copy</button></div><pre><code class="py">import io, logging
+
+stream = io.StringIO()
+h = logging.StreamHandler(stream)
+h.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+log = logging.getLogger(&quot;llm.client&quot;)
+log.handlers[:] = [h]
+log.propagate = False
+
+def parse(reply):
+    import json
+    return json.loads(reply)
+
+try:
+    parse(&#x27;{&quot;label&quot;: &quot;spam&quot;&#x27;)
+except ValueError:
+    log.exception(&quot;could not parse reply for request %s&quot;, &quot;r-42&quot;)
+lines = stream.getvalue().splitlines()
+print(lines[0])
+print(lines[1])
+print(lines[-1])</code></pre><div class="out"><span class="ol">Output</span><pre>ERROR could not parse reply for request r-42
+Traceback (most recent call last):
+json.decoder.JSONDecodeError: Expecting &#x27;,&#x27; delimiter: line 1 column 17 (char 16)</pre></div></div>
+</section>
+<section class="sec" id="context">
+<h2><span class="n">5</span>Extra fields, filters and request context</h2>
+<p>Every record carries standard attributes, and <code>extra={"request_id": "r-42", "latency_ms": 812}</code> adds your own, available to formatters as <code>%(request_id)s</code> and to handlers as <code>record.request_id</code>. A <strong>filter</strong>, either an object with a <code>filter(record)</code> method or a plain function, is attached to a logger or a handler and returns <code>False</code> to drop a record; it may also <strong>modify</strong> the record, which is how you add context to every message or redact secrets (problems 7 and 11). Filters on a <strong>handler</strong> see every record that reaches it, including those propagated from child loggers; filters on a logger only see records created on that logger.</p>
+<p>In a web service, the context you need on every line is the request: its id, the user or tenant, the model. Passing it to every call is impractical, so it is stored in a <strong><code>contextvars.ContextVar</code></strong>, which behaves like a global variable but has a separate value per request, even when requests interleave in threads or <code>asyncio</code> tasks (14.4), and a filter copies it onto each record.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">context.py</span><button class="copy">Copy</button></div><pre><code class="py">import io, logging
+from contextvars import ContextVar
+
+request_id = ContextVar(&quot;request_id&quot;, default=&quot;-&quot;)
+
+def add_request_id(record):
+    record.request_id = request_id.get()
+    return True
+
+stream = io.StringIO()
+h = logging.StreamHandler(stream)
+h.addFilter(add_request_id)
+h.setFormatter(logging.Formatter(&quot;%(request_id)s %(levelname)s %(message)s&quot;))
+log = logging.getLogger(&quot;api&quot;)
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+
+log.info(&quot;server started&quot;)
+token = request_id.set(&quot;r-7&quot;)
+log.info(&quot;retrieved %d chunks&quot;, 5, extra={&quot;latency_ms&quot;: 41})
+request_id.reset(token)
+log.info(&quot;idle&quot;)
+print(stream.getvalue(), end=&quot;&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>- INFO server started
+r-7 INFO retrieved 5 chunks
+- INFO idle</pre></div></div>
+</section>
+<section class="sec" id="structured">
+<h2><span class="n">6</span>Structured logs</h2>
+<p>Text logs are written for people; production logs are read by machines first. Log platforms (Elasticsearch and Kibana, Datadog, Grafana Loki, CloudWatch) work best with <strong>structured logs</strong>: one JSON object per line with consistent fields such as <code>time</code>, <code>level</code>, <code>logger</code>, <code>message</code>, <code>request_id</code>, <code>model</code>, <code>latency_ms</code> and <code>tokens</code>, so you can filter "all errors for tenant X with latency above 2 s" instead of grepping. In Python that is a formatter whose <code>format(record)</code> returns <code>json.dumps</code> of the fields you choose (problem 5); libraries such as <code>structlog</code> and <code>python-json-logger</code> provide one.</p>
+<p>Two rules apply to every log line. <strong>Never log secrets</strong> (API keys, passwords, tokens) or more personal data than you need; full prompts and documents often contain both, so log ids, sizes and hashes instead of content by default, and redact patterns such as keys and e-mail addresses with a filter as a safety net. And <strong>log at boundaries</strong>: one line when a request or job starts and ends, one per external call (model, database, tool) with its latency and outcome, and one per handled failure. Logging inside tight loops slows the program and buries the lines that matter.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-levels-and-effective-levels" data-pid="m12-3-levels-and-effective-levels" data-type="predict" data-level="easy" data-answer="30 WARNING 20 40
+[&#x27;WARNING:p1.app:w&#x27;, &#x27;ERROR:p1.app:e 1&#x27;, &#x27;CRITICAL:p1.app.worker:child critical&#x27;]">
+<header class="prob-head"><h3>1. Levels and effective levels</h3></header>
+<div class="code"><pre><code class="py">import io, logging
+
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(levelname)s:%(name)s:%(message)s&quot;))
+log = logging.getLogger(&quot;p1.app&quot;)
+log.addHandler(h)
+log.propagate = False
+log.setLevel(logging.WARNING)
+print(log.level, logging.getLevelName(log.getEffectiveLevel()), logging.INFO, logging.ERROR)
+log.debug(&quot;d&quot;)
+log.info(&quot;i&quot;)
+log.warning(&quot;w&quot;)
+log.error(&quot;e %s&quot;, 1)
+child = logging.getLogger(&quot;p1.app.worker&quot;)
+child.info(&quot;child info&quot;)
+child.critical(&quot;child critical&quot;)
+print(s.getvalue().splitlines())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A logger drops records below its effective level; a child with no level of its own uses its parent's.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>30 WARNING 20 40
+[&#x27;WARNING:p1.app:w&#x27;, &#x27;ERROR:p1.app:e 1&#x27;, &#x27;CRITICAL:p1.app.worker:child critical&#x27;]</pre></div><p>The logger is set to <code>WARNING</code> (30), so <code>debug</code> and <code>info</code> are dropped and <code>warning</code> and <code>error</code> are emitted, the latter with its argument formatted in. The child has no level of its own, inherits <code>WARNING</code> from <code>p1.app</code>, drops its <code>info</code>, and its <code>critical</code> record propagates to the parent's handler, where the format shows the child's name.</p></div></details>
+</article>
+<article class="prob" id="p-a-logger-factory-that-does-not-duplicate" data-pid="m12-3-a-logger-factory-that-does-not-duplicate" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A logger factory that does not duplicate handlers</h3></header>
+<div class="prob-q"><p>Write <code>make_logger(name, stream, level="INFO")</code> returning the logger <code>name</code> configured with exactly one <code>StreamHandler</code> writing to <code>stream</code>, the format <code>"%(levelname)s %(name)s: %(message)s"</code>, the given level (a name such as <code>"DEBUG"</code>) and <code>propagate = False</code>. Calling it again for the same name must replace the handler (so the new stream and level apply) rather than add a second one.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import logging
+
+def make_logger(name, stream, level=&quot;INFO&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, logging
+first, second = io.StringIO(), io.StringIO()
+log = make_logger("w2.etl", first)
+log.debug("hidden")
+log.info("rows=%d", 3)
+assert first.getvalue() == "INFO w2.etl: rows=3\n"
+again = make_logger("w2.etl", second, level="DEBUG")
+again.debug("now visible")
+assert again is log and len(log.handlers) == 1 and log.propagate is False
+assert first.getvalue() == "INFO w2.etl: rows=3\n" and second.getvalue() == "DEBUG w2.etl: now visible\n"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, logging
+first, second = io.StringIO(), io.StringIO()
+log = make_logger(&quot;w2.etl&quot;, first)
+log.debug(&quot;hidden&quot;)
+log.info(&quot;rows=%d&quot;, 3)
+assert first.getvalue() == &quot;INFO w2.etl: rows=3\n&quot;
+again = make_logger(&quot;w2.etl&quot;, second, level=&quot;DEBUG&quot;)
+again.debug(&quot;now visible&quot;)
+assert again is log and len(log.handlers) == 1 and log.propagate is False
+assert first.getvalue() == &quot;INFO w2.etl: rows=3\n&quot; and second.getvalue() == &quot;DEBUG w2.etl: now visible\n&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>logging.getLogger(name)</code> always returns the same object; clear its handlers with <code>log.handlers.clear()</code> before adding the new one.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>setLevel</code> accepts level names as strings.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+
+def make_logger(name, stream, level=&quot;INFO&quot;):
+    log = logging.getLogger(name)
+    log.handlers.clear()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(&quot;%(levelname)s %(name)s: %(message)s&quot;))
+    log.addHandler(handler)
+    log.setLevel(level)
+    log.propagate = False
+    return log</code></pre></div><p>Loggers are process-wide singletons per name, so configuration done inside a function accumulates: a factory that only calls <code>addHandler</code> gives every message twice after the second call, three times after the third, the classic "duplicate log lines" bug in notebooks, where cells are re-run. Clearing the handlers makes the function idempotent. <code>propagate = False</code> stops the records from also reaching the root logger's handlers. In an application this configuration belongs in one start-up function; a factory like this is handy for scripts and tests.</p></div></details>
+</article>
+<article class="prob" id="p-errors-logged-without-a-traceback" data-pid="m12-3-errors-logged-without-a-traceback" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Errors logged without a traceback</h3></header>
+<div class="prob-q"><p><code>summarise</code> logs failures of the model call, but the log only says <code>model call failed: division by zero</code>, with no traceback to show where it happened. Make it log the traceback, at <code>ERROR</code> level, and still return <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import logging
+
+log = logging.getLogger(&quot;f3.summarise&quot;)
+
+def summarise(text, model):
+    try:
+        return model(text)
+    except Exception as e:
+        log.error(&quot;model call failed: %s&quot;, e)
+        return None
+</textarea>
+<script type="text/plain" class="prob-tests">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+log.handlers[:] = [h]
+log.propagate = False
+def broken(text):
+    return len(text) / 0
+assert summarise("hello", broken) is None and summarise("ok", str.upper) == "OK"
+out = s.getvalue()
+assert out.startswith("ERROR model call failed") and "Traceback (most recent call last):" in out and "in broken" in out
+assert out.rstrip().endswith("ZeroDivisionError: division by zero")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+log.handlers[:] = [h]
+log.propagate = False
+def broken(text):
+    return len(text) / 0
+assert summarise(&quot;hello&quot;, broken) is None and summarise(&quot;ok&quot;, str.upper) == &quot;OK&quot;
+out = s.getvalue()
+assert out.startswith(&quot;ERROR model call failed&quot;) and &quot;Traceback (most recent call last):&quot; in out and &quot;in broken&quot; in out
+assert out.rstrip().endswith(&quot;ZeroDivisionError: division by zero&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>log.exception(...)</code> inside the <code>except</code> block, which adds <code>exc_info</code> automatically.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+log = logging.getLogger(&quot;f3.summarise&quot;)
+
+def summarise(text, model):
+    try:
+        return model(text)
+    except Exception:
+        log.exception(&quot;model call failed&quot;)
+        return None</code></pre></div><p>An exception's message rarely tells you where or why it happened; the traceback does, down to <code>broken</code>'s line. <code>log.exception</code> logs at <code>ERROR</code> and attaches the exception being handled, which the formatter renders as the full traceback after the message, ending with the exception type and message, so repeating the message in the text is unnecessary. This matters most exactly where code swallows an exception and returns a fallback: without the traceback, the failure becomes invisible.</p></div></details>
+</article>
+<article class="prob" id="p-what-lazy-formatting-saves" data-pid="m12-3-what-lazy-formatting-saves" data-type="predict" data-level="easy" data-answer="  build() ran
+2 [&#x27;INFO state: big object&#x27;]">
+<header class="prob-head"><h3>4. What lazy formatting saves</h3></header>
+<div class="code"><pre><code class="py">import io, logging
+
+class Expensive:
+    calls = 0
+    def __str__(self):
+        Expensive.calls += 1
+        return &quot;big object&quot;
+
+def build():
+    print(&quot;  build() ran&quot;)
+    return Expensive()
+
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+log = logging.getLogger(&quot;p4.lazy&quot;)
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+
+log.debug(&quot;state: %s&quot;, build())
+log.debug(f&quot;state: {Expensive()}&quot;)
+log.info(&quot;state: %s&quot;, Expensive())
+print(Expensive.calls, s.getvalue().splitlines())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Arguments are always evaluated before the call. Formatting with <code>%s</code> only happens if the record is emitted; an f-string is formatted before the call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  build() ran
+2 [&#x27;INFO state: big object&#x27;]</pre></div><p><code>build()</code> runs even though the debug message is dropped: Python evaluates arguments before calling <code>log.debug</code>. What lazy formatting saves is the string conversion, so <code>__str__</code> is not called for that record. The f-string converts its object before the call, so <code>__str__</code> runs although the message is then dropped. The emitted <code>info</code> record converts its argument once. Lazy <code>%s</code> arguments avoid formatting costs; an <code>isEnabledFor</code> guard is needed to avoid computing the arguments themselves.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-a-json-formatter" data-pid="m12-3-a-json-formatter" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A JSON formatter</h3></header>
+<div class="prob-q"><p>Write <code>JsonFormatter(logging.Formatter)</code> whose constructor takes <code>fields=()</code>, the names of extra record attributes to include. <code>format(record)</code> returns one JSON line (no trailing newline) with <code>level</code>, <code>logger</code> and <code>message</code> (the formatted message), then each listed field the record has, then <code>exc</code> (the formatted traceback) if the record carries exception info. Non-JSON values are converted with <code>str</code>; non-ASCII characters are written as is.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import json, logging
+
+class JsonFormatter(logging.Formatter):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, json, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(JsonFormatter(fields=("request_id", "latency_ms", "model")))
+log = logging.getLogger("w5.api")
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+log.info("retrieved %d docs for %s", 3, "café", extra={"request_id": "r-1", "latency_ms": 12, "model": object})
+try:
+    1 / 0
+except ZeroDivisionError:
+    log.exception("failed", extra={"request_id": "r-2"})
+first, second = [json.loads(line) for line in s.getvalue().splitlines()]
+assert first == {"level": "INFO", "logger": "w5.api", "message": "retrieved 3 docs for café", "request_id": "r-1", "latency_ms": 12, "model": "<class 'object'>"}
+assert list(second) == ["level", "logger", "message", "request_id", "exc"] and second["exc"].startswith("Traceback")
+assert second["exc"].endswith("ZeroDivisionError: division by zero") and "café" in s.getvalue()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, json, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(JsonFormatter(fields=(&quot;request_id&quot;, &quot;latency_ms&quot;, &quot;model&quot;)))
+log = logging.getLogger(&quot;w5.api&quot;)
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+log.info(&quot;retrieved %d docs for %s&quot;, 3, &quot;café&quot;, extra={&quot;request_id&quot;: &quot;r-1&quot;, &quot;latency_ms&quot;: 12, &quot;model&quot;: object})
+try:
+    1 / 0
+except ZeroDivisionError:
+    log.exception(&quot;failed&quot;, extra={&quot;request_id&quot;: &quot;r-2&quot;})
+first, second = [json.loads(line) for line in s.getvalue().splitlines()]
+assert first == {&quot;level&quot;: &quot;INFO&quot;, &quot;logger&quot;: &quot;w5.api&quot;, &quot;message&quot;: &quot;retrieved 3 docs for café&quot;, &quot;request_id&quot;: &quot;r-1&quot;, &quot;latency_ms&quot;: 12, &quot;model&quot;: &quot;&lt;class &#x27;object&#x27;&gt;&quot;}
+assert list(second) == [&quot;level&quot;, &quot;logger&quot;, &quot;message&quot;, &quot;request_id&quot;, &quot;exc&quot;] and second[&quot;exc&quot;].startswith(&quot;Traceback&quot;)
+assert second[&quot;exc&quot;].endswith(&quot;ZeroDivisionError: division by zero&quot;) and &quot;café&quot; in s.getvalue()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Call <code>super().__init__()</code> and store the fields. <code>record.getMessage()</code> applies the arguments.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>self.formatException(record.exc_info)</code> renders a traceback; <code>json.dumps(data, default=str, ensure_ascii=False)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, logging
+
+
+class JsonFormatter(logging.Formatter):
+    def __init__(self, fields=()):
+        super().__init__()
+        self.fields = tuple(fields)
+
+    def format(self, record):
+        data = {&quot;level&quot;: record.levelname, &quot;logger&quot;: record.name, &quot;message&quot;: record.getMessage()}
+        for name in self.fields:
+            if hasattr(record, name):
+                data[name] = getattr(record, name)
+        if record.exc_info:
+            data[&quot;exc&quot;] = self.formatException(record.exc_info)
+        return json.dumps(data, default=str, ensure_ascii=False)</code></pre></div><p>A formatter is the single place where a record becomes text, so switching an application to structured logs is one class, with no change to the code that logs. <code>getMessage()</code> merges the arguments into the message; <code>extra=</code> values are plain attributes of the record, included only when present, so the schema stays stable. The traceback, which a text formatter would print over several lines, becomes one escaped string field, keeping the one-record-per-line guarantee that log shippers rely on. <code>default=str</code> makes sure a strange value never breaks logging, which must not crash the program it is observing. A real formatter would also add <code>time</code> from <code>record.created</code>.</p></div></details>
+</article>
+<article class="prob" id="p-every-worker-message-appears-twice" data-pid="m12-3-every-worker-message-appears-twice" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Every worker message appears twice</h3></header>
+<div class="prob-q"><p><code>setup</code> configures logging for an ETL job. Messages from the <code>f6.etl</code> logger appear once, but every message from <code>f6.etl.worker</code> appears twice. Fix the configuration so each message appears exactly once, keeping the <code>f6.etl</code> handler.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import logging
+
+def setup(stream):
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(&quot;%(name)s %(message)s&quot;))
+    app = logging.getLogger(&quot;f6.etl&quot;)
+    app.setLevel(logging.INFO)
+    app.propagate = False
+    app.handlers[:] = [handler]
+    worker = logging.getLogger(&quot;f6.etl.worker&quot;)
+    worker.handlers[:] = [handler]
+    return app, worker
+</textarea>
+<script type="text/plain" class="prob-tests">import io
+s = io.StringIO()
+app, worker = setup(s)
+worker.info("batch %d done", 1)
+app.info("job finished")
+assert s.getvalue().splitlines() == ["f6.etl.worker batch 1 done", "f6.etl job finished"]
+s2 = io.StringIO()
+app, worker = setup(s2)
+worker.warning("slow")
+assert s2.getvalue() == "f6.etl.worker slow\n"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io
+s = io.StringIO()
+app, worker = setup(s)
+worker.info(&quot;batch %d done&quot;, 1)
+app.info(&quot;job finished&quot;)
+assert s.getvalue().splitlines() == [&quot;f6.etl.worker batch 1 done&quot;, &quot;f6.etl job finished&quot;]
+s2 = io.StringIO()
+app, worker = setup(s2)
+worker.warning(&quot;slow&quot;)
+assert s2.getvalue() == &quot;f6.etl.worker slow\n&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A record is handled by its own logger's handlers <strong>and</strong>, while <code>propagate</code> is true, by each ancestor's.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+def setup(stream):
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(&quot;%(name)s %(message)s&quot;))
+    app = logging.getLogger(&quot;f6.etl&quot;)
+    app.setLevel(logging.INFO)
+    app.propagate = False
+    app.handlers[:] = [handler]
+    worker = logging.getLogger(&quot;f6.etl.worker&quot;)
+    worker.handlers.clear()
+    return app, worker</code></pre></div><p>The worker's records were emitted by the worker's own handler and then propagated to <code>f6.etl</code>, whose handler emitted them again. The design rule is to attach handlers high in the tree, usually only at the root or the application's top logger, and let child loggers propagate; giving each module its own handler always duplicates. Setting <code>worker.propagate = False</code> would also stop the duplicates, but then every module needs its own handler and configuration, which defeats the hierarchy.</p></div></details>
+</article>
+<article class="prob" id="p-redact-secrets-from-log-messages" data-pid="m12-3-redact-secrets-from-log-messages" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Redact secrets from log messages</h3></header>
+<div class="prob-q"><p>Write <code>RedactFilter(logging.Filter)</code> that replaces API keys (<code>sk-</code> followed by at least 8 letters, digits, <code>_</code> or <code>-</code>) and e-mail addresses in the <strong>formatted</strong> message with <code>[REDACTED]</code>, stores the result as the record's message with no arguments, and always returns <code>True</code>. Attach it to a handler so it also covers child loggers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import logging, re
+
+class RedactFilter(logging.Filter):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.addFilter(RedactFilter())
+h.setFormatter(logging.Formatter("%(name)s %(message)s"))
+root = logging.getLogger("w7")
+root.handlers[:] = [h]
+root.setLevel(logging.INFO)
+root.propagate = False
+logging.getLogger("w7.client").info("calling model with key %s for %s", "sk-proj_AbC123xyz-99", "ana.lee+test@shop.io")
+root.info("100%% of %d requests ok; short sk-abc stays", 5)
+assert "sk-proj" not in s.getvalue() and "ana.lee" not in s.getvalue()
+assert s.getvalue().splitlines() == ["w7.client calling model with key [REDACTED] for [REDACTED]", "w7 100% of 5 requests ok; short sk-abc stays"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.addFilter(RedactFilter())
+h.setFormatter(logging.Formatter(&quot;%(name)s %(message)s&quot;))
+root = logging.getLogger(&quot;w7&quot;)
+root.handlers[:] = [h]
+root.setLevel(logging.INFO)
+root.propagate = False
+logging.getLogger(&quot;w7.client&quot;).info(&quot;calling model with key %s for %s&quot;, &quot;sk-proj_AbC123xyz-99&quot;, &quot;ana.lee+test@shop.io&quot;)
+root.info(&quot;100%% of %d requests ok; short sk-abc stays&quot;, 5)
+assert &quot;sk-proj&quot; not in s.getvalue() and &quot;ana.lee&quot; not in s.getvalue()
+assert s.getvalue().splitlines() == [&quot;w7.client calling model with key [REDACTED] for [REDACTED]&quot;, &quot;w7 100% of 5 requests ok; short sk-abc stays&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>record.getMessage()</code> gives the message with arguments applied; then set <code>record.msg</code> to the redacted text and <code>record.args = None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging, re
+
+_PATTERNS = [
+    re.compile(r&quot;sk-[A-Za-z0-9_-]{8,}&quot;),
+    re.compile(r&quot;[\w.+-]+@[\w-]+(\.[\w-]+)+&quot;),
+]
+
+
+class RedactFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        for pattern in _PATTERNS:
+            message = pattern.sub(&quot;[REDACTED]&quot;, message)
+        record.msg = message
+        record.args = None
+        return True</code></pre></div><p>Secrets usually arrive through the <strong>arguments</strong>, not the format string, so redacting <code>record.msg</code> alone would miss the key; formatting first with <code>getMessage()</code> and then redacting covers both. Storing the result with <code>args = None</code> stops the message from being formatted a second time, which matters because <code>%%</code> has already been turned into <code>%</code> and a stray <code>%</code> would break a second formatting pass. Attached to the handler, the filter sees records propagated from every child logger; on the <code>w7</code> logger it would only see records created there. Redaction is a safety net, not a licence: the first defence is not passing secrets to log calls at all.</p></div></details>
+</article>
+<article class="prob" id="p-logging-an-expensive-debug-value" data-pid="m12-3-logging-an-expensive-debug-value" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Logging an expensive debug value</h3></header>
+<div class="prob-q"><p>Debug logging is off. Both run in the hot path 50 times per request. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import json, logging
+log = logging.getLogger(&quot;c8.quiet&quot;)
+log.setLevel(logging.INFO)
+log.propagate = False
+log.handlers[:] = [logging.NullHandler()]
+state = {&quot;docs&quot;: [{&quot;id&quot;: i, &quot;text&quot;: &quot;x&quot; * 50} for i in range(200)]}</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for _ in range(50):
+    log.debug(&quot;state %s&quot;, json.dumps(state))</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">for _ in range(50):
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(&quot;state %s&quot;, json.dumps(state))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Is <code>json.dumps(state)</code> evaluated in option A when the record is dropped?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>10.50 ms</td></tr><tr><td>B</td><td>8.43 µs</td></tr></table></div><p>Lazy <code>%s</code> formatting only defers turning the arguments into text; the arguments themselves are evaluated before <code>log.debug</code> is even called, so option A serialises the whole state 50 times and throws the result away. The <code>isEnabledFor</code> guard skips the work entirely when debug is off, and costs almost nothing (the result is cached per logger). Use the guard only when computing an argument is expensive; for ordinary values, lazy arguments are enough.</p></div></details>
+</article>
+<article class="prob" id="p-where-records-go" data-pid="m12-3-where-records-go" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Where records go</h3></header>
+<div class="prob-q"><p>Fill in <code>last</code> (the last line written) and <code>count</code> (lines written so far) after each marked line.</p></div>
+<div class="code"><pre><code class="py">import io, logging
+
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(name)s %(levelname)s %(message)s&quot;))
+app = logging.getLogger(&quot;t9.app&quot;)
+app.setLevel(logging.INFO)
+app.handlers[:] = [h]
+app.propagate = False
+db = logging.getLogger(&quot;t9.app.db&quot;)
+
+def step(method, message):
+    method(message)
+    lines = s.getvalue().splitlines()
+    return (lines[-1] if lines else &quot;&quot;), len(lines)
+
+last, count = step(db.debug, &quot;query&quot;)
+last, count = step(db.warning, &quot;slow query&quot;)
+db.setLevel(logging.DEBUG)
+last, count = step(db.debug, &quot;plan&quot;)
+h.setLevel(logging.WARNING)
+last, count = step(db.info, &quot;rows=3&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>last</code></th><th><code>count</code></th></tr><tr><td>debug from child</td><td><input class="cell" data-a="&#x27;&#x27;" data-s="" aria-label="last at debug from child" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="count at debug from child" autocomplete="off"></td></tr><tr><td>warning from child</td><td><input class="cell" data-a="&#x27;t9.app.db WARNING slow query&#x27;" data-s="t9.app.db WARNING slow query" aria-label="last at warning from child" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="count at warning from child" autocomplete="off"></td></tr><tr><td>child level lowered</td><td><input class="cell" data-a="&#x27;t9.app.db DEBUG plan&#x27;" data-s="t9.app.db DEBUG plan" aria-label="last at child level lowered" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="count at child level lowered" autocomplete="off"></td></tr><tr><td>handler raised</td><td><input class="cell" data-a="&#x27;t9.app.db DEBUG plan&#x27;" data-s="t9.app.db DEBUG plan" aria-label="last at handler raised" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="count at handler raised" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The level check happens on the logger where the record is created; handlers then apply their own level.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>last</code></th><th><code>count</code></th></tr><tr><td>debug from child</td><td><code>&#x27;&#x27;</code></td><td><code>0</code></td></tr><tr><td>warning from child</td><td><code>&#x27;t9.app.db WARNING slow query&#x27;</code></td><td><code>1</code></td></tr><tr><td>child level lowered</td><td><code>&#x27;t9.app.db DEBUG plan&#x27;</code></td><td><code>2</code></td></tr><tr><td>handler raised</td><td><code>&#x27;t9.app.db DEBUG plan&#x27;</code></td><td><code>2</code></td></tr></table></div><p>The child inherits <code>INFO</code>, so its debug record is never created and nothing is written. Its warning passes and propagates to the handler on <code>t9.app</code>. Once the child's own level is <code>DEBUG</code>, its debug records pass the logger check and the parent's handler, at <code>NOTSET</code>, writes them, even though the <strong>parent logger</strong> is at <code>INFO</code>: ancestors' levels are not consulted during propagation, only their handlers' levels. Raising the handler to <code>WARNING</code> then drops the info record, so the last line and the count stay the same.</p></div></details>
+</article>
+<article class="prob" id="p-a-library-that-logs-to-the-root-logger" data-pid="m12-3-a-library-that-logs-to-the-root-logger" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. A library that logs to the root logger</h3></header>
+<div class="prob-q"><p><code>ragkit.search.rag_search</code> is a small library function. It logs with <code>logging.info</code> and <code>logging.warning</code>, so applications cannot raise or lower its verbosity separately, and its records claim to come from <code>root</code>. Make it log through the logger <code>ragkit.search</code> and give the package logger <code>ragkit</code> a <code>NullHandler</code>, as libraries should.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import logging
+
+def rag_search(query, index):
+    logging.info(&quot;searching for %r&quot;, query)
+    hits = [doc for doc in index if query.lower() in doc.lower()]
+    if not hits:
+        logging.warning(&quot;no hits for %r&quot;, query)
+    return hits
+</textarea>
+<script type="text/plain" class="prob-tests">import logging
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+pkg = logging.getLogger("ragkit")
+cap = ListHandler()
+pkg.addHandler(cap)
+pkg.setLevel(logging.INFO)
+pkg.propagate = False
+assert rag_search("refund", ["Refund policy", "Shipping"]) == ["Refund policy"] and rag_search("tax", ["Shipping"]) == []
+assert [(r.name, r.levelname, r.getMessage()) for r in cap.records] == [("ragkit.search", "INFO", "searching for 'refund'"),
+    ("ragkit.search", "INFO", "searching for 'tax'"), ("ragkit.search", "WARNING", "no hits for 'tax'")]
+assert any(isinstance(h, logging.NullHandler) for h in pkg.handlers)
+pkg.removeHandler(cap)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import logging
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+pkg = logging.getLogger(&quot;ragkit&quot;)
+cap = ListHandler()
+pkg.addHandler(cap)
+pkg.setLevel(logging.INFO)
+pkg.propagate = False
+assert rag_search(&quot;refund&quot;, [&quot;Refund policy&quot;, &quot;Shipping&quot;]) == [&quot;Refund policy&quot;] and rag_search(&quot;tax&quot;, [&quot;Shipping&quot;]) == []
+assert [(r.name, r.levelname, r.getMessage()) for r in cap.records] == [(&quot;ragkit.search&quot;, &quot;INFO&quot;, &quot;searching for &#x27;refund&#x27;&quot;),
+    (&quot;ragkit.search&quot;, &quot;INFO&quot;, &quot;searching for &#x27;tax&#x27;&quot;), (&quot;ragkit.search&quot;, &quot;WARNING&quot;, &quot;no hits for &#x27;tax&#x27;&quot;)]
+assert any(isinstance(h, logging.NullHandler) for h in pkg.handlers)
+pkg.removeHandler(cap)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>log = logging.getLogger("ragkit.search")</code> at module level (in the real package, <code>getLogger(__name__)</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>logging.getLogger("ragkit").addHandler(logging.NullHandler())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+logging.getLogger(&quot;ragkit&quot;).addHandler(logging.NullHandler())
+log = logging.getLogger(&quot;ragkit.search&quot;)
+
+def rag_search(query, index):
+    log.info(&quot;searching for %r&quot;, query)
+    hits = [doc for doc in index if query.lower() in doc.lower()]
+    if not hits:
+        log.warning(&quot;no hits for %r&quot;, query)
+    return hits</code></pre></div><p>Module-level <code>logging.info</code> logs on the root logger, so the application can only turn the library up or down together with everything else, and log lines do not say where they came from. Worse, when the root has no handlers, those functions call <code>basicConfig()</code> themselves, configuring the application's logging behind its back. A named logger fits into the hierarchy, so <code>logging.getLogger("ragkit").setLevel(logging.WARNING)</code> silences the library's chatter alone. The <code>NullHandler</code> stops Python's "last resort" handler from printing the library's warnings to standard error when the application has configured nothing, and leaves the decision to the application.</p></div></details>
+</article>
+<article class="prob" id="p-request-ids-on-every-line" data-pid="m12-3-request-ids-on-every-line" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Request ids on every line</h3></header>
+<div class="prob-q"><p>Write a <code>ContextVar</code> <code>request_id</code> (default <code>"-"</code>), a <code>ContextFilter(logging.Filter)</code> that sets <code>record.request_id</code> from it and returns <code>True</code>, and <code>handle(rid, fn, *args)</code> that sets the request id, calls <code>fn(*args)</code>, and restores the previous id afterwards, even if <code>fn</code> raises.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import logging
+from contextvars import ContextVar
+
+def handle(rid, fn, *args):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.addFilter(ContextFilter())
+h.setFormatter(logging.Formatter("%(request_id)s %(message)s"))
+log = logging.getLogger("w11.api")
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+def retrieve(q):
+    log.info("retrieving %s", q)
+    return 3
+def answer(q):
+    log.info("answering %s", q)
+    n = handle("r-1.sub", retrieve, q)
+    log.info("got %d docs", n)
+    raise TimeoutError("model slow")
+log.info("start")
+try:
+    handle("r-1", answer, "refunds")
+except TimeoutError:
+    log.info("after failure")
+assert s.getvalue().splitlines() == ["- start", "r-1 answering refunds", "r-1.sub retrieving refunds", "r-1 got 3 docs", "- after failure"]
+assert request_id.get() == "-"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, logging
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.addFilter(ContextFilter())
+h.setFormatter(logging.Formatter(&quot;%(request_id)s %(message)s&quot;))
+log = logging.getLogger(&quot;w11.api&quot;)
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+def retrieve(q):
+    log.info(&quot;retrieving %s&quot;, q)
+    return 3
+def answer(q):
+    log.info(&quot;answering %s&quot;, q)
+    n = handle(&quot;r-1.sub&quot;, retrieve, q)
+    log.info(&quot;got %d docs&quot;, n)
+    raise TimeoutError(&quot;model slow&quot;)
+log.info(&quot;start&quot;)
+try:
+    handle(&quot;r-1&quot;, answer, &quot;refunds&quot;)
+except TimeoutError:
+    log.info(&quot;after failure&quot;)
+assert s.getvalue().splitlines() == [&quot;- start&quot;, &quot;r-1 answering refunds&quot;, &quot;r-1.sub retrieving refunds&quot;, &quot;r-1 got 3 docs&quot;, &quot;- after failure&quot;]
+assert request_id.get() == &quot;-&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>token = request_id.set(rid)</code>, then <code>request_id.reset(token)</code> in a <code>finally</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+from contextvars import ContextVar
+
+request_id = ContextVar(&quot;request_id&quot;, default=&quot;-&quot;)
+
+
+class ContextFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = request_id.get()
+        return True
+
+
+def handle(rid, fn, *args):
+    token = request_id.set(rid)
+    try:
+        return fn(*args)
+    finally:
+        request_id.reset(token)</code></pre></div><p>The filter adds the current request id to every record passing through the handler, so no logging call needs to mention it, and a formatter can use <code>%(request_id)s</code> safely because every record has it. <code>set</code> returns a token, and <code>reset(token)</code> restores exactly the previous value, which makes nested scopes (a sub-request inside a request) and failures behave: after the timeout, the id is back to <code>-</code>. Because context variables are per thread and per <code>asyncio</code> task, concurrent requests each see their own id (14.4); a module-level global would mix them up. Searching the logs for <code>r-1</code> then shows one request's whole story.</p></div></details>
+</article>
+<article class="prob" id="p-exceptions-and-exc-info" data-pid="m12-3-exceptions-and-exc-info" data-type="predict" data-level="medium" data-answer="ERROR lookup failed for b | Traceback (most recent call last): | KeyError: &#x27;b&#x27; | WARNING handled
+[&#x27;INFO outside&#x27;, &#x27;NoneType: None&#x27;]">
+<header class="prob-head"><h3>12. Exceptions and exc_info</h3></header>
+<div class="code"><pre><code class="py">import io, logging
+
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+log = logging.getLogger(&quot;p12.exc&quot;)
+log.handlers[:] = [h]
+log.setLevel(logging.INFO)
+log.propagate = False
+
+try:
+    {&quot;a&quot;: 1}[&quot;b&quot;]
+except KeyError:
+    log.exception(&quot;lookup failed for %s&quot;, &quot;b&quot;)
+    log.warning(&quot;handled&quot;, exc_info=False)
+lines = s.getvalue().splitlines()
+print(lines[0], &quot;|&quot;, lines[1], &quot;|&quot;, lines[-2], &quot;|&quot;, lines[-1])
+log.info(&quot;outside&quot;, exc_info=True)
+print(s.getvalue().splitlines()[-2:])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>exception</code> adds the traceback; <code>exc_info=True</code> outside an <code>except</code> block has no exception to attach.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ERROR lookup failed for b | Traceback (most recent call last): | KeyError: &#x27;b&#x27; | WARNING handled
+[&#x27;INFO outside&#x27;, &#x27;NoneType: None&#x27;]</pre></div><p><code>log.exception</code> writes the message and then the traceback, which starts with the usual header and ends with the exception type and its message; the warning with <code>exc_info=False</code> is a single line. Outside an <code>except</code> block there is no current exception, so <code>exc_info=True</code> attaches the empty triple and the formatter prints <code>NoneType: None</code>, a sign in real logs that someone passed <code>exc_info=True</code> in the wrong place.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-decorator-that-logs-llm-calls" data-pid="m12-3-a-decorator-that-logs-llm-calls" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A decorator that logs LLM calls</h3></header>
+<div class="prob-q"><p>Write <code>log_llm_calls(logger, model, clock=time.perf_counter)</code>, a decorator factory for functions <code>fn(prompt, **kwargs)</code>. On success it logs at <code>INFO</code> the message <code>"llm_call"</code> with <code>extra</code> fields <code>model</code>, <code>latency_ms</code> (rounded int) and <code>prompt_chars</code>, and returns the result. On an exception it logs at <code>ERROR</code> the message <code>"llm_call failed"</code> with the traceback and the same fields, then re-raises. Preserve the function's name with <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import functools, logging, time
+
+def log_llm_calls(logger, model, clock=time.perf_counter):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import logging
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger("w13.llm")
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+ticks = iter([10.0, 10.25, 20.0, 21.5])
+
+@log_llm_calls(log, "small-v2", clock=lambda: next(ticks))
+def complete(prompt, temperature=0.0):
+    if "crash" in prompt:
+        raise ConnectionError("reset by peer")
+    return prompt.upper()
+
+assert complete("hello", temperature=0.5) == "HELLO" and complete.__name__ == "complete"
+try:
+    complete("please crash")
+    assert False
+except ConnectionError:
+    pass
+ok, bad = cap.records
+assert (ok.levelname, ok.getMessage(), ok.model, ok.latency_ms, ok.prompt_chars, ok.exc_info) == ("INFO", "llm_call", "small-v2", 250, 5, None)
+assert (bad.levelname, bad.getMessage(), bad.latency_ms, bad.prompt_chars) == ("ERROR", "llm_call failed", 1500, 12) and bad.exc_info[0] is ConnectionError</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import logging
+class ListHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+    def emit(self, record):
+        self.records.append(record)
+cap = ListHandler()
+log = logging.getLogger(&quot;w13.llm&quot;)
+log.handlers[:] = [cap]
+log.setLevel(logging.INFO)
+log.propagate = False
+ticks = iter([10.0, 10.25, 20.0, 21.5])
+
+@log_llm_calls(log, &quot;small-v2&quot;, clock=lambda: next(ticks))
+def complete(prompt, temperature=0.0):
+    if &quot;crash&quot; in prompt:
+        raise ConnectionError(&quot;reset by peer&quot;)
+    return prompt.upper()
+
+assert complete(&quot;hello&quot;, temperature=0.5) == &quot;HELLO&quot; and complete.__name__ == &quot;complete&quot;
+try:
+    complete(&quot;please crash&quot;)
+    assert False
+except ConnectionError:
+    pass
+ok, bad = cap.records
+assert (ok.levelname, ok.getMessage(), ok.model, ok.latency_ms, ok.prompt_chars, ok.exc_info) == (&quot;INFO&quot;, &quot;llm_call&quot;, &quot;small-v2&quot;, 250, 5, None)
+assert (bad.levelname, bad.getMessage(), bad.latency_ms, bad.prompt_chars) == (&quot;ERROR&quot;, &quot;llm_call failed&quot;, 1500, 12) and bad.exc_info[0] is ConnectionError</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Take <code>start = clock()</code> before the call and compute the latency in both branches.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>logger.exception("llm_call failed", extra=...)</code> inside <code>except</code>, then a bare <code>raise</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, logging, time
+
+
+def log_llm_calls(logger, model, clock=time.perf_counter):
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(prompt, **kwargs):
+            start = clock()
+            try:
+                result = fn(prompt, **kwargs)
+            except Exception:
+                fields = {&quot;model&quot;: model, &quot;latency_ms&quot;: round((clock() - start) * 1000), &quot;prompt_chars&quot;: len(prompt)}
+                logger.exception(&quot;llm_call failed&quot;, extra=fields)
+                raise
+            fields = {&quot;model&quot;: model, &quot;latency_ms&quot;: round((clock() - start) * 1000), &quot;prompt_chars&quot;: len(prompt)}
+            logger.info(&quot;llm_call&quot;, extra=fields)
+            return result
+        return wrapper
+    return decorator</code></pre></div><p>Every external call should produce one record with its outcome and latency, and a decorator (8.2) adds that to any client function without touching its code. The message is a fixed event name, <code>llm_call</code>, and the variable data travels in <code>extra</code> fields, which is what structured logs need: a dashboard can then group by <code>model</code> and chart <code>latency_ms</code> without parsing text. The clock is injectable so the test is deterministic, and the failure path logs the traceback once and re-raises, so the caller can still retry or handle it (7.3). The prompt's <strong>length</strong> is logged, not its content, which may contain personal data.</p></div></details>
+</article>
+<article class="prob" id="p-configure-an-application-s-logging-with-" data-pid="m12-3-configure-an-application-s-logging-with-" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Configure an application's logging with dictConfig</h3></header>
+<div class="prob-q"><p>Write <code>configure_logging(level="INFO", json_format=False, stream=None)</code> that configures the <strong>root</strong> logger with <code>logging.config.dictConfig</code>: one <code>StreamHandler</code> writing to <code>stream</code> (default <code>sys.stderr</code>), formatted either as <code>"%(levelname)s %(name)s: %(message)s"</code> or with the given <code>JsonFormatter</code>; the root at <code>level</code>; the noisy libraries <code>httpx</code>, <code>urllib3</code> and <code>openai</code> at <code>WARNING</code>; and loggers that already exist left enabled. Calling it again must replace the configuration, not add handlers. An unknown level raises <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json, logging, logging.config, sys
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({&quot;level&quot;: record.levelname, &quot;logger&quot;: record.name, &quot;message&quot;: record.getMessage()})
+
+NOISY = (&quot;httpx&quot;, &quot;urllib3&quot;, &quot;openai&quot;)
+
+def configure_logging(level=&quot;INFO&quot;, json_format=False, stream=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import io, json, logging
+root = logging.getLogger()
+saved = (root.handlers[:], root.level)
+early = logging.getLogger("w14.early")
+out = io.StringIO()
+configure_logging("DEBUG", stream=out)
+configure_logging("INFO", stream=out)
+logging.getLogger("w14.app").info("started %s", "v1")
+logging.getLogger("w14.app").debug("hidden")
+logging.getLogger("httpx").info("GET /v1/models 200")
+early.warning("still enabled")
+assert out.getvalue().splitlines() == ["INFO w14.app: started v1", "WARNING w14.early: still enabled"]
+assert len(root.handlers) == 1 and logging.getLogger("openai").level == logging.WARNING
+jout = io.StringIO()
+configure_logging("WARNING", json_format=True, stream=jout)
+logging.getLogger("w14.app").error("boom")
+assert json.loads(jout.getvalue()) == {"level": "ERROR", "logger": "w14.app", "message": "boom"} and len(out.getvalue().splitlines()) == 2
+def bad_level():
+    try:
+        configure_logging("LOUD", stream=io.StringIO())
+    except ValueError:
+        return True
+    return False
+assert bad_level()
+root.handlers[:] = saved[0]
+root.setLevel(saved[1])
+for name in NOISY:
+    logging.getLogger(name).setLevel(logging.NOTSET)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io, json, logging
+root = logging.getLogger()
+saved = (root.handlers[:], root.level)
+early = logging.getLogger(&quot;w14.early&quot;)
+out = io.StringIO()
+configure_logging(&quot;DEBUG&quot;, stream=out)
+configure_logging(&quot;INFO&quot;, stream=out)
+logging.getLogger(&quot;w14.app&quot;).info(&quot;started %s&quot;, &quot;v1&quot;)
+logging.getLogger(&quot;w14.app&quot;).debug(&quot;hidden&quot;)
+logging.getLogger(&quot;httpx&quot;).info(&quot;GET /v1/models 200&quot;)
+early.warning(&quot;still enabled&quot;)
+assert out.getvalue().splitlines() == [&quot;INFO w14.app: started v1&quot;, &quot;WARNING w14.early: still enabled&quot;]
+assert len(root.handlers) == 1 and logging.getLogger(&quot;openai&quot;).level == logging.WARNING
+jout = io.StringIO()
+configure_logging(&quot;WARNING&quot;, json_format=True, stream=jout)
+logging.getLogger(&quot;w14.app&quot;).error(&quot;boom&quot;)
+assert json.loads(jout.getvalue()) == {&quot;level&quot;: &quot;ERROR&quot;, &quot;logger&quot;: &quot;w14.app&quot;, &quot;message&quot;: &quot;boom&quot;} and len(out.getvalue().splitlines()) == 2
+def bad_level():
+    try:
+        configure_logging(&quot;LOUD&quot;, stream=io.StringIO())
+    except ValueError:
+        return True
+    return False
+assert bad_level()
+root.handlers[:] = saved[0]
+root.setLevel(saved[1])
+for name in NOISY:
+    logging.getLogger(name).setLevel(logging.NOTSET)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The dict needs <code>version: 1</code>, <code>disable_existing_loggers: False</code>, <code>formatters</code>, <code>handlers</code>, <code>root</code> and <code>loggers</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A formatter entry <code>{"()": JsonFormatter}</code> builds a custom class; a handler entry can pass <code>"stream": stream</code> straight to <code>StreamHandler</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, logging, logging.config, sys
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({&quot;level&quot;: record.levelname, &quot;logger&quot;: record.name, &quot;message&quot;: record.getMessage()})
+
+
+NOISY = (&quot;httpx&quot;, &quot;urllib3&quot;, &quot;openai&quot;)
+
+
+def configure_logging(level=&quot;INFO&quot;, json_format=False, stream=None):
+    config = {
+        &quot;version&quot;: 1,
+        &quot;disable_existing_loggers&quot;: False,
+        &quot;formatters&quot;: {
+            &quot;plain&quot;: {&quot;format&quot;: &quot;%(levelname)s %(name)s: %(message)s&quot;},
+            &quot;json&quot;: {&quot;()&quot;: JsonFormatter},
+        },
+        &quot;handlers&quot;: {
+            &quot;main&quot;: {
+                &quot;class&quot;: &quot;logging.StreamHandler&quot;,
+                &quot;formatter&quot;: &quot;json&quot; if json_format else &quot;plain&quot;,
+                &quot;stream&quot;: stream if stream is not None else sys.stderr,
+            },
+        },
+        &quot;root&quot;: {&quot;level&quot;: level, &quot;handlers&quot;: [&quot;main&quot;]},
+        &quot;loggers&quot;: {name: {&quot;level&quot;: &quot;WARNING&quot;} for name in NOISY},
+    }
+    logging.config.dictConfig(config)</code></pre></div><p><code>dictConfig</code> describes the whole logging setup as data, which is why real applications load it from a YAML or TOML file and adjust it per environment. It <strong>replaces</strong> the root's handlers each time, so the function is idempotent. <code>disable_existing_loggers: False</code> is essential: the default <code>True</code> silently disables every logger created before the call, typically all module-level loggers of already-imported modules, and their messages vanish. The <code>loggers</code> section quiets HTTP and SDK libraries that log every request at <code>INFO</code>, a common source of noise in LLM services. An invalid level fails loudly at start-up with <code>ValueError</code>, which is where configuration errors should surface.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-logging-in-a-chat-service" data-pid="m12-3-read-the-code-logging-in-a-chat-service" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Read the code: logging in a chat service</h3></header>
+<div class="prob-q"><p><code>answer</code> calls a model and logs as it goes. In production: each call adds another handler, so lines multiply; the full API key appears in the logs; the debug f-string formats the question even with debug off; and failures are logged without a traceback. Fix all four: one handler however many calls, only the key's last 4 characters (<code>key ...wxyz</code>), lazy debug arguments, and <code>log.exception("model call failed")</code>. <code>answer</code> still returns <code>None</code> on failure.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import logging
+
+
+def get_logger(stream):
+    log = logging.getLogger(&quot;f15.chat&quot;)
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    return log
+
+
+def answer(question, client, api_key, stream):
+    log = get_logger(stream)
+    log.info(f&quot;calling model with key {api_key}&quot;)
+    log.debug(f&quot;question: {question}&quot;)
+    try:
+        return client(question, api_key)
+    except Exception as e:
+        log.error(f&quot;model call failed: {e}&quot;)
+        return None
+</textarea>
+<script type="text/plain" class="prob-tests">import io
+class Question:
+    conversions = 0
+    def __init__(self, text):
+        self.text = text
+    def __str__(self):
+        Question.conversions += 1
+        return self.text
+    def __format__(self, spec):
+        Question.conversions += 1
+        return self.text
+def client(q, key):
+    if "fail" in q.text:
+        raise RuntimeError("upstream 503")
+    return f"answer to {q.text}"
+import logging
+logging.getLogger("f15.chat").handlers.clear()
+s = io.StringIO()
+key = "sk-live-1234567890wxyz"
+assert answer(Question("refunds?"), client, key, s) == "answer to refunds?"
+assert answer(Question("please fail"), client, key, s) is None
+lines = s.getvalue().splitlines()
+assert lines[:3] == ["INFO calling model with key ...wxyz", "INFO calling model with key ...wxyz", "ERROR model call failed"]
+assert key not in s.getvalue() and "RuntimeError: upstream 503" in lines[-1] and "Traceback (most recent call last):" in lines
+assert Question.conversions == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import io
+class Question:
+    conversions = 0
+    def __init__(self, text):
+        self.text = text
+    def __str__(self):
+        Question.conversions += 1
+        return self.text
+    def __format__(self, spec):
+        Question.conversions += 1
+        return self.text
+def client(q, key):
+    if &quot;fail&quot; in q.text:
+        raise RuntimeError(&quot;upstream 503&quot;)
+    return f&quot;answer to {q.text}&quot;
+import logging
+logging.getLogger(&quot;f15.chat&quot;).handlers.clear()
+s = io.StringIO()
+key = &quot;sk-live-1234567890wxyz&quot;
+assert answer(Question(&quot;refunds?&quot;), client, key, s) == &quot;answer to refunds?&quot;
+assert answer(Question(&quot;please fail&quot;), client, key, s) is None
+lines = s.getvalue().splitlines()
+assert lines[:3] == [&quot;INFO calling model with key ...wxyz&quot;, &quot;INFO calling model with key ...wxyz&quot;, &quot;ERROR model call failed&quot;]
+assert key not in s.getvalue() and &quot;RuntimeError: upstream 503&quot; in lines[-1] and &quot;Traceback (most recent call last):&quot; in lines
+assert Question.conversions == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Create the handler only if the logger has none (<code>if not log.handlers:</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>log.info("calling model with key ...%s", api_key[-4:])</code> and <code>log.debug("question: %s", question)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+
+def get_logger(stream):
+    log = logging.getLogger(&quot;f15.chat&quot;)
+    if not log.handlers:
+        handler = logging.StreamHandler(stream)
+        handler.setFormatter(logging.Formatter(&quot;%(levelname)s %(message)s&quot;))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+    return log
+
+
+def answer(question, client, api_key, stream):
+    log = get_logger(stream)
+    log.info(&quot;calling model with key ...%s&quot;, api_key[-4:])
+    log.debug(&quot;question: %s&quot;, question)
+    try:
+        return client(question, api_key)
+    except Exception:
+        log.exception(&quot;model call failed&quot;)
+        return None</code></pre></div><p>Each bug is a lesson section. Handlers were added on every call because loggers are global singletons, so configuration must happen once (here guarded by <code>if not log.handlers</code>; in an application, at start-up). A full key in a log file is a leaked key, since logs are copied to many systems and kept for months, so log only an identifying suffix, or nothing. The f-string formatted the question, calling <code>__format__</code>, for a debug message that was then dropped; lazy <code>%s</code> arguments are only converted when emitted, so the conversion counter stays at 0. <code>log.error</code> with the message loses the traceback, while <code>log.exception</code> keeps it. Together, these are the logging review comments seen most often on LLM service code.</p></div></details>
+</article>
+<article class="prob" id="p-propagation-levels-and-disable" data-pid="m12-3-propagation-levels-and-disable" data-type="predict" data-level="hard" data-answer="[&#x27;p16.worker:twice?&#x27;, &#x27;p16.worker:twice?&#x27;, &#x27;p16.worker:once&#x27;, &#x27;p16.worker:err&#x27;, &#x27;p16.worker:err&#x27;, &#x27;p16.worker:crit&#x27;, &#x27;p16.worker:crit&#x27;]
+40 40 p16">
+<header class="prob-head"><h3>16. Propagation, levels and disable</h3></header>
+<div class="code"><pre><code class="py">import io, logging
+
+s = io.StringIO()
+h = logging.StreamHandler(s)
+h.setFormatter(logging.Formatter(&quot;%(name)s:%(message)s&quot;))
+parent = logging.getLogger(&quot;p16&quot;)
+parent.setLevel(logging.INFO)
+parent.handlers[:] = [h]
+parent.propagate = False
+child = logging.getLogger(&quot;p16.worker&quot;)
+child.handlers[:] = [h]
+
+child.info(&quot;twice?&quot;)
+child.propagate = False
+child.info(&quot;once&quot;)
+child.propagate = True
+child.setLevel(logging.ERROR)
+parent.setLevel(logging.CRITICAL)
+child.warning(&quot;dropped&quot;)
+child.error(&quot;err&quot;)
+logging.disable(logging.ERROR)
+child.error(&quot;disabled&quot;)
+child.critical(&quot;crit&quot;)
+logging.disable(logging.NOTSET)
+print(s.getvalue().splitlines())
+print(child.getEffectiveLevel(), logging.getLogger(&quot;p16.worker.sub&quot;).getEffectiveLevel(), child.parent.name)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A record goes to its logger's handlers and to every ancestor's while <code>propagate</code> is true; ancestors' logger levels are not checked.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>logging.disable(level)</code> drops everything at that level and below, everywhere.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;p16.worker:twice?&#x27;, &#x27;p16.worker:twice?&#x27;, &#x27;p16.worker:once&#x27;, &#x27;p16.worker:err&#x27;, &#x27;p16.worker:err&#x27;, &#x27;p16.worker:crit&#x27;, &#x27;p16.worker:crit&#x27;]
+40 40 p16</pre></div><p>With the same handler on child and parent, a propagating record is written twice; with <code>propagate = False</code>, once. The child's own <code>ERROR</code> level drops the warning. The error is written twice even though the parent is now at <code>CRITICAL</code>, because during propagation only the ancestors' <strong>handlers</strong> are used, not their logger levels. <code>logging.disable(logging.ERROR)</code> is a global switch that drops records of <code>ERROR</code> and below on every logger, so only the critical record appears, twice again. The grandchild inherits the child's level, 40.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-why-use-logging-instead-of-print-and-wha" data-pid="m12-3-why-use-logging-instead-of-print-and-wha" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why use logging instead of print, and what would you log in an LLM-backed service?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>logging</code> gives every message a severity, a source (the logger name), a timestamp and context, and lets the application decide at run time where messages go and which levels are kept, without changing the code that emits them; libraries can log without forcing output on their users. <code>print</code> has none of that and mixes diagnostics with real output. In an LLM service I would log, at boundaries: request start and end with a request id, route, status and total latency; every model call with model name, latency, token counts, cost estimate, retries and finish reason; retrieval with the number of chunks and top scores; tool calls with name, outcome and latency; validation failures of structured output with error types; and every handled exception with its traceback, once. I would not log raw prompts, documents or answers by default (personal data, secrets, volume), only their ids, sizes or hashes, with content sampling behind an explicit, access-controlled switch. Logs go out as structured JSON with a request id on every line.</p></div></details>
+</article>
+<article class="prob" id="p-should-a-library-configure-logging-what-" data-pid="m12-3-should-a-library-configure-logging-what-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Should a library configure logging? What should it do instead?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>No. Configuration (handlers, formats, levels, destinations) belongs to the <strong>application</strong>, because only it knows whether it runs in a notebook, a test, a CLI or a server with a log shipper. A library that calls <code>logging.basicConfig</code>, adds handlers to the root, or prints, overrides or duplicates the application's choices, and module-level <code>logging.info(...)</code> calls can configure the root logger implicitly. A library should create loggers with <code>logging.getLogger(__name__)</code>, so its messages are namespaced under the package and can be tuned with one line by the application; log with lazy arguments at sensible levels (<code>DEBUG</code> for detail, <code>WARNING</code> for handled problems, never <code>ERROR</code> for something it re-raises); attach a <code>logging.NullHandler()</code> to its top-level logger so nothing is printed when the application has not configured logging; and never log secrets passed to it.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-debug-one-failing-request-in-" data-pid="m12-3-how-do-you-debug-one-failing-request-in-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How do you debug one failing request in a busy, concurrent service from its logs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Without correlation, lines from hundreds of interleaved requests are useless, so every request gets an id at the edge (or reuses an incoming <code>X-Request-ID</code> or trace id), stored in a <code>ContextVar</code> and attached to every record by a filter, so it survives threads and <code>asyncio</code> tasks. The id is returned to the client and passed to downstream services in headers, so one search in the log platform shows the whole story across services. Logs are structured JSON with consistent fields (request id, user or tenant, model, latency, error type), so you can filter instead of grep. Each boundary logs one line with its outcome and latency, and each handled exception logs its traceback once. For latency questions, logs are complemented by <strong>tracing</strong> (OpenTelemetry spans for each step, model call and tool call), and by <strong>metrics</strong> for rates and percentiles, since logs are expensive to aggregate. Finally, sample verbose debug logs, keep retention and access controls on logs that may contain personal data, and make log levels adjustable at run time so you can raise detail for one component while investigating.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Use <code>logging.getLogger(__name__)</code> per module; loggers form a dotted tree, inherit levels, and propagate records to ancestors' handlers.</li><li>Levels DEBUG &lt; INFO &lt; WARNING &lt; ERROR &lt; CRITICAL filter on loggers and handlers; pass arguments lazily, and guard expensive ones with <code>isEnabledFor</code>.</li><li>Applications configure once (<code>basicConfig</code>, <code>dictConfig</code> with <code>disable_existing_loggers: False</code>); libraries only add a <code>NullHandler</code>.</li><li><code>log.exception</code> in <code>except</code> keeps the traceback; log each exception once, where it is handled.</li><li>Filters add context (request ids via <code>ContextVar</code>) and redact secrets; structured JSON logs with consistent fields serve machines and people.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
