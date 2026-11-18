@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m7-3", num="7.3", title="Designing error handling",
@@ -15,6 +16,11 @@ term("Race condition", "A bug where the result depends on timing, such as a file
 term("Graceful degradation", "Continuing with reduced service when a part fails, such as using a cached answer when the model is down, and recording that it happened.")
 
 section("eafp", "Asking permission or forgiveness",
+    fig(table(["style", "code", "risk"], [
+        ["look before you leap", "if key in d: v = d[key]", "the check and the use can disagree (races)"],
+        ["ask forgiveness", "try: v = d[key] / except KeyError", "must catch narrowly"],
+    ], label="LBYL versus EAFP"),
+        "Python usually prefers trying the operation and handling the specific failure, which avoids a gap between checking and acting."),
     p("""There are two styles of dealing with operations that may fail. **LBYL**, "look before you leap", checks every condition
     first: `if key in d: value = d[key]`. **EAFP**, "easier to ask forgiveness than permission", just does it and handles the
     failure: `try: value = d[key]` / `except KeyError: ...`. Python's culture leans towards EAFP, and there are good reasons,
@@ -61,6 +67,8 @@ section("eafp", "Asking permission or forgiveness",
 )
 
 section("where", "Where to handle each error",
+    fig(chain(["low-level code|raises specific errors", "middle layers|add context, re-raise", ("the boundary (API, CLI, job)|logs, replies, sets exit code", "accent")]),
+        "Errors are raised deep, enriched on the way up, and handled once at the boundary where the program talks to the outside world."),
     p("""Every exception is eventually handled somewhere, even if "somewhere" is the top level, where Python prints a traceback and
     stops. The design question is **which layer** should handle it. The rule of thumb: **handle an error at the lowest level that
     knows what to do about it**, and let it travel up until then. A function that parses a date does not know whether a bad date
@@ -168,6 +176,8 @@ section("logging", "Logging an exception, once",
 )
 
 section("consistency", "Leaving data consistent",
+    fig(chain(["write to a temporary place", "validate everything", "commit: rename or COMMIT", ("on any error: roll back,|the original is untouched", "good")]),
+        "Leaving data consistent: do the risky work on a copy and switch over in one step, so a failure halfway changes nothing."),
     p("""An exception can interrupt a function **halfway through** a change: three of five orders applied, half of a file written,
     the cache updated but not the database. The caller then holds data in a state that no code path was designed for. The defence
     is to make changes **all or nothing**, using one of three patterns:"""),

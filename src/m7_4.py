@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m7-4", num="7.4", title="Errors in LLM and API code",
@@ -16,6 +17,15 @@ term("Jitter", "Randomness added to retry delays so many clients that failed tog
 term("Idempotent", "An operation that has the same effect whether it runs once or several times, which is what makes it safe to retry.")
 
 section("modes", "How remote calls fail",
+    fig(table(["failure", "retry?", "what to do"], [
+        ["timeout, connection reset", "yes", "back off and try again"],
+        ["429 rate limited", "yes", "wait, honour Retry-After"],
+        ["500, 502, 503", "yes", "back off, limited attempts"],
+        ["400 bad request", "no", "fix the request"],
+        ["401, 403", "no", "fix the credentials"],
+        ["valid reply, wrong content", "maybe", "validate, ask again with the errors"],
+    ], hl={(3, 1), (4, 1)}, label="which remote failures are worth retrying"),
+        "Retry only failures that can succeed on another attempt; retrying a bad request just spends quota."),
     p("""A call to a model API crosses the network to a service you do not control, so it can fail in many more ways than a local
     function. It helps to sort failures by **what you should do about them**, because that, not the exception's name, decides the
     handling code."""),
@@ -58,6 +68,14 @@ section("modes", "How remote calls fail",
 )
 
 section("backoff", "Retrying: exponential backoff and jitter",
+    fig(table(["attempt", "ceiling: base * 2 ** attempt (base 0.5, cap 8)", "full jitter waits"], [
+        ["1", "0.5 s", "random between 0 and 0.5 s"],
+        ["2", "1 s", "random between 0 and 1 s"],
+        ["3", "2 s", "random between 0 and 2 s"],
+        ["4", "4 s", "random between 0 and 4 s"],
+        ["5 and later", "8 s (the cap)", "random between 0 and 8 s"],
+    ], label="exponential backoff with full jitter"),
+        "Each retry waits longer, up to a cap, and the random jitter spreads clients out so they do not all retry at the same moment."),
     p("""Retrying immediately after a transient failure usually fails again: the server is still overloaded, the rate limit window
     has not passed. **Exponential backoff** waits longer after each failure, typically doubling from a base delay up to a cap:
     with a base of 1 second and a cap of 30, the waits are 1, 2, 4, 8, 16, 30, 30... seconds. The total wait grows quickly, so a
@@ -92,6 +110,8 @@ section("backoff", "Retrying: exponential backoff and jitter",
 )
 
 section("deadline", "Timeouts and deadlines",
+    fig(chain(["request budget: 10 s", "attempt 1 times out|after 3 s", "attempt 2 gets the|remaining 7 s", ("budget spent:|stop and report", "warn")]),
+        "A deadline caps the whole operation, retries included, so a slow dependency cannot hold a request forever."),
     p("""Every network call needs a **timeout**: without one, a stuck connection can block a worker forever. SDKs accept a timeout
     per request (the OpenAI and Anthropic clients default to 10 minutes, far too long for an interactive feature), and many
     distinguish a **connect** timeout (how long to wait to establish the connection, usually a few seconds) from a **read**
@@ -162,6 +182,8 @@ section("output", "When the answer itself is wrong",
 )
 
 section("batches", "Partial failures in batches",
+    fig(chain(["a batch of items", "process each|independently", "collect successes|and failures", ("return partial results|with an error list", "good")]),
+        "In batches, one bad item should become one error record, not the end of the whole batch."),
     p("""When you process many items (embed 10,000 chunks, classify a dataset, call a tool for each search result), some will fail
     while others succeed. The rule is to **keep every success**, record every failure with its item and reason, and decide
     separately what to do with the failures: retry the transient ones in a later round (with backoff between rounds), report

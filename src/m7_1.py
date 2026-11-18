@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m7-1", num="7.1", title="Exceptions and try / except",
@@ -15,6 +16,18 @@ term("Call stack", "The list of function calls currently running, each waiting f
 term("Exception hierarchy", "Exception classes inherit from each other, so `except LookupError` also catches `KeyError` and `IndexError`.")
 
 section("travel", "What happens when an exception is raised",
+    fig(stage_map(7, "a resilient JSON client"), "Module 7 at a glance: how exceptions travel, how to raise and design them, and how remote calls fail, building up to a client that survives all of it."),
+    fig(flowchart({
+        "raise": ("bad", 1, 0, "an exception is raised"),
+        "here": ("ask", 1, 1, "a matching except|in this function?"),
+        "handle": ("good", 2, 1, "run that handler,|continue after try"),
+        "caller": ("ask", 1, 2, "is there a caller?"),
+        "up": ("step", 0, 2, "leave this function,|go to the caller"),
+        "crash": ("bad", 1, 3, "traceback printed,|program stops"),
+    }, [("raise", "here"), ("here", "handle", "yes"), ("here", "caller", "no"), ("caller", "up", "yes"),
+        ("up", "here", "", {"route": [(0, 1)]}), ("caller", "crash", "no")], cell=(210, 80),
+        label="an exception travels up the call stack until a handler matches"),
+        "An exception climbs the call stack function by function until an `except` matches its type; if none does, the program stops with a traceback."),
     p("""An **exception** is an object that describes an error. When Python hits a problem it cannot continue from, such as dividing
     by zero, a missing dict key or a string that is not a number, it **raises** an exception: it creates the exception object
     and stops running the current code immediately. No further line of that block runs. What happens next depends on whether
@@ -116,6 +129,12 @@ section("except", "`try` and `except`: catching by type",
 )
 
 section("elsefinally", "`else` and `finally`: what runs when",
+    fig(table(["what happens in try", "except", "else", "finally"], [
+        ["no exception", "skipped", "runs", "runs"],
+        ["exception, a handler matches", "runs", "skipped", "runs"],
+        ["exception, no handler matches", "skipped", "skipped", "runs, then it propagates"],
+    ], hl={(0, 3), (1, 3), (2, 3)}, label="which blocks run in each case"),
+        "`finally` runs in every case; `else` runs only when the `try` body finished without an exception."),
     p("""A `try` statement can have two more clauses. **`else`** runs only if the `try` block finished **without** an exception.
     **`finally`** runs **always**, whether the block succeeded, raised an exception that was handled, raised one that was not
     handled, or left early with `return`, `break` or `continue`. The full order is: `try` block; then either the matching
@@ -167,6 +186,20 @@ section("elsefinally", "`else` and `finally`: what runs when",
 )
 
 section("hierarchy", "The exception hierarchy",
+    fig(flowchart({
+        "base": ("accent", 2, 0, "BaseException"),
+        "sys": ("step", 0, 1, "SystemExit"),
+        "kb": ("step", 1, 1, "KeyboardInterrupt"),
+        "exc": ("accent2", 3, 1, "Exception"),
+        "val": ("step", 2, 2, "ValueError"),
+        "look": ("step", 3, 2, "LookupError"),
+        "os": ("step", 5, 2, "OSError"),
+        "key": ("step", 3, 3, "KeyError"),
+        "idx": ("step", 4, 3, "IndexError"),
+        "fnf": ("step", 5, 3, "FileNotFoundError"),
+    }, [("base", "sys"), ("base", "kb"), ("base", "exc"), ("exc", "val"), ("exc", "look"), ("exc", "os"),
+        ("look", "key"), ("look", "idx"), ("os", "fnf")], cell=(160, 70), label="part of the built-in exception hierarchy"),
+        "`except LookupError` also catches `KeyError` and `IndexError`; `except Exception` deliberately leaves out `SystemExit` and `KeyboardInterrupt`."),
     p("""Exception types are classes arranged in a tree, and that tree decides what each `except` clause catches. At the root is
     `BaseException`. Directly under it are a few special exceptions that are **not errors** in the usual sense:
     `KeyboardInterrupt` (the user pressed Ctrl+C), `SystemExit` (raised by `sys.exit()`), and `GeneratorExit` (used to close
@@ -202,6 +235,12 @@ section("hierarchy", "The exception hierarchy",
 )
 
 section("narrow", "Catching narrowly",
+    fig(flowchart({
+        "ask": ("ask", 0, 0, "can this code do something|useful about the error?"),
+        "catch": ("good", 1, 0, "catch that specific type|and handle it"),
+        "let": ("step", 0, 1, "let it propagate to|a layer that can"),
+    }, [("ask", "catch", "yes"), ("ask", "let", "no")], cell=(270, 90), label="catch only what you can handle"),
+        "Catch an exception only where you can recover from it, and only the types you expect; everything else should travel on."),
     p("""The hardest part of exception handling is not the syntax but deciding **what not to catch**. A handler is a promise: "if
     this goes wrong, I know what to do instead". Every exception you catch without being able to keep that promise turns a loud
     bug into a silent wrong result. Three rules follow from that:"""),

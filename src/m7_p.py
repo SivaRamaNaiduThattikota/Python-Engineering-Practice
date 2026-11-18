@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m7-p", num="7.P", title="Module 7 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(7, "a resilient JSON client"), "Module 7 at a glance: how exceptions travel, how to raise and design them, and how remote calls fail, building up to a client that survives all of it."),
     p("""For every error in a problem, ask the three questions this module has been about. **Who should handle it?** The lowest
     level that can do something useful; everyone else lets it pass (7.3). **What kind is it?** Expected and recoverable (bad
     input, a missing optional value), transient (timeouts, rate limits, overloaded servers), permanent (a bad request, a wrong
@@ -616,6 +618,19 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: a resilient JSON client",
+    fig(flowchart({
+        "send": ("start", 1, 0, "send the request"),
+        "ok": ("ask", 1, 1, "request|succeeded?"),
+        "valid": ("ask", 1, 2, "reply is|valid JSON?"),
+        "ret": ("end", 1, 3, "return the data"),
+        "trans": ("ask", 2, 1, "transient error and|attempts left?"),
+        "wait": ("step", 2, 0, "wait (backoff)"),
+        "fail": ("bad", 3, 1, "raise with context"),
+        "repair": ("warn", 0, 2, "ask again with|the parse error"),
+    }, [("send", "ok"), ("ok", "valid", "yes"), ("ok", "trans", "no"), ("trans", "wait", "yes"), ("wait", "send"),
+        ("trans", "fail", "no"), ("valid", "ret", "yes"), ("valid", "repair", "no"), ("repair", "send", "", {"route": [(0, 0)]})],
+        cell=(190, 82), label="the resilient JSON client's control flow"),
+        "The client's flow: transient failures are retried with backoff, bad JSON is repaired by asking again, and anything else is raised with context."),
     p("""Your application needs structured answers from a model: a JSON object with specific keys. Two providers are available, a
     primary and a fallback. The client must retry transient failures with backoff, move on to the fallback when the primary keeps
     failing, repair invalid output by telling the model what was wrong, stop within a deadline, and raise clear, specific

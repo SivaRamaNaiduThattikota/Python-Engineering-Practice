@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m7-2", num="7.2", title="Raising and custom exceptions",
@@ -15,6 +16,8 @@ term("Exception chaining", "Linking a new exception to the one that caused it wi
 term("Exception group", "An `ExceptionGroup` bundles several exceptions raised together; `except*` handles the ones of a given type.")
 
 section("raise", "Raising: the type, the message, and re-raising",
+    fig(chain(["raise ValueError(msg)", "travels to a handler", "handler adds context:|raise ... from e", ("traceback shows both,|cause first", "good")]),
+        "Raise with a specific type and a message that says what was wrong; when translating an error, chain it so the original stays visible."),
     p("""`raise SomeError("message")` creates an exception object and raises it. You can also write `raise SomeError` without
     parentheses; Python then creates the instance for you with no arguments. The two decisions that matter are **which type**
     and **what message**, because those are what the caller and the person reading the log will act on."""),
