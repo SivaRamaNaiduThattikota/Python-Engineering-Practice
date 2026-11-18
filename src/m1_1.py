@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m1-1", num="1.1", title="Numbers, operators and truthiness",
@@ -35,6 +36,8 @@ NUMBER_LINE = """
 </svg>"""
 
 section("rules", "The rules in one screen",
+    fig(module_map([("1.1", "Numbers, operators and truthiness"), ("1.2", "Control flow and loops")], "a payment batch checker"),
+        "Module 1 at a glance: the two lessons give you the tools, and the practice page combines them in one small program."),
     p("""Three number types cover daily work: `int` (whole numbers with no size limit), `float` (64-bit binary,
     about 15 to 16 significant digits) and `bool`, which is a kind of int: `True` is 1 and `False` is 0."""),
     ex("""
@@ -69,6 +72,8 @@ section("rules", "The rules in one screen",
     p("""Floats are stored in binary, so 0.1 is already slightly off before you add anything. Never compare floats
     with `==`. Use `math.isclose` (in numpy `np.isclose`, in tests `pytest.approx`). `round()` rounds a tie to the
     nearest even number, called **banker's rounding**. And 2.675 is really stored as 2.67499999..., so it rounds down."""),
+    fig(chain(["0.1 as typed", "nearest binary fraction|0.1000000000000000055...", "plus 0.2, also rounded", ("result|0.30000000000000004", "bad")]),
+        "Each float is the nearest value binary can store, so tiny errors are already there before you add, and they can show up in the result."),
     callout("sql", "Matching a SQL or Excel report", """`ROUND(2.5, 0)` gives 3 in SQL Server and in Excel: both round
     a tie away from zero. Python gives 2. When a Python number has to match a finance report to the cent, use
     `decimal.Decimal` with `ROUND_HALF_UP` (problem 12)."""),
@@ -80,6 +85,17 @@ section("rules", "The rules in one screen",
     p("""`**` binds tighter than the minus sign in front of it, and it groups right to left: `2 ** 3 ** 2` is
     `2 ** 9`. Comparisons chain: `a < b < c` means `a < b and b < c`. `not` is weaker than `==`, so
     `not 1 == 2` is `not (1 == 2)`."""),
+    fig(table(["binds", "operators", "example"], [
+        ["tightest", "**", "2 ** 3 ** 2 is 2 ** 9 (right to left)"],
+        ["", "-x (unary minus)", "-2 ** 2 is -(2 ** 2)"],
+        ["", "*  /  //  %", "left to right"],
+        ["", "+  -", "left to right"],
+        ["", "<  <=  ==  !=  in  is", "a < b < c means a < b and b < c"],
+        ["", "not", "not a == b is not (a == b)"],
+        ["", "and", "stops at the first falsy value"],
+        ["loosest", "or", "stops at the first truthy value"],
+    ], hl={(0, 1), (7, 1)}, label="operator precedence from tightest to loosest"),
+        "Operator precedence from tightest to loosest. When in doubt, add brackets: they cost nothing and save the reader the table."),
     ex("""
     for v in [0, 0.0, "", [], {}, None, "0", " ", [0], -1]:
         # Inside {v!r:>5} there are two formatting instructions:
@@ -96,6 +112,16 @@ section("rules", "The rules in one screen",
     prints `0`, with `print(f"{'0'!r}")`, which prints `'0'`. Strings (Module 5) covers f-string formatting fully."""),
     p("""Falsy means "acts as False in an `if`": `None`, `False`, zero of any number type, and empty containers.
     Everything else is truthy, including the string `"0"`, a space, and a list holding a zero."""),
+    fig(table(["value", "bool(value)", "why"], [
+        ["0, 0.0", "False", "zero of any number type"],
+        ["'', [], {}", "False", "empty containers"],
+        ["None", "False", "nothing"],
+        ["'0'", "True", "a non-empty string"],
+        ["' '", "True", "a space is a character"],
+        ["[0]", "True", "a list with one item"],
+        ["-1", "True", "any non-zero number"],
+    ], hl={(3, 1), (4, 1), (5, 1), (6, 1)}, label="falsy and truthy values"),
+        "The short list of falsy values; everything else, including the ones that look empty or zero-ish, is truthy."),
     ex("""
     print(0 or "default")
     print("" and 5)
@@ -105,9 +131,25 @@ section("rules", "The rules in one screen",
     p("""`and` and `or` return one of their operands, not `True` or `False`. `or` returns the first truthy value
     (or the last one if none are). `and` returns the first falsy value (or the last one). Both stop early, which
     is called **short-circuit** evaluation."""),
+    fig(flowchart({
+        "start": ("start", 0, 0, "x or y"),
+        "ask": ("ask", 0, 1, "is x truthy?"),
+        "left": ("good", 1, 1, "result is x|(y never runs)"),
+        "right": ("step", 0, 2, "evaluate y"),
+        "end": ("end", 0, 3, "result is y"),
+    }, [("start", "ask"), ("ask", "left", "yes"), ("ask", "right", "no"), ("right", "end")], cell=(210, 76),
+        label="x or y: if x is truthy the result is x, otherwise y is evaluated and returned"),
+        "How `x or y` is evaluated. `x and y` is the mirror image: if `x` is falsy the result is `x`, otherwise it is `y`."),
     callout("warn", "The COALESCE trap", """`x or default` looks like SQL's `COALESCE(x, default)`, but COALESCE only
     replaces NULL. `or` also replaces `0`, `""` and `[]`, which are often valid values. The real COALESCE is
     `default if x is None else x`."""),
+    fig(table(["x", "x or 'n/a'", "'n/a' if x is None else x"], [
+        ["None", "'n/a'", "'n/a'"],
+        ["0", "'n/a'", "0"],
+        ["''", "'n/a'", "''"],
+        ["42", "42", "42"],
+    ], hl={(1, 1), (2, 1)}, label="or replaces every falsy value, the None check replaces only None"),
+        "The highlighted cells are where `or` silently replaces a real value; only the explicit `None` check behaves like SQL's COALESCE."),
 )
 
 section("warmup", "Warm-up",

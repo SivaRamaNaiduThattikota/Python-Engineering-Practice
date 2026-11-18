@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m1-p", num="1.P", title="Module 1 practice set and mini project",
@@ -12,6 +13,8 @@ section("how", "How to use this page",
     p("""No recap here: each problem says which lesson it leans on only in its hint. Try each one cold first. If you
     get stuck for more than ten minutes, open a hint, not the solution. Problems you solve after opening the solution
     are marked that way, so the score on this page stays honest."""),
+    fig(module_map([("1.1", "Numbers, operators and truthiness"), ("1.2", "Control flow and loops")], "a payment batch checker"),
+        "Module 1 at a glance: the two lessons give you the tools, and the practice page combines them in one small program."),
 )
 
 section("set", "Practice set",
@@ -338,6 +341,14 @@ section("project", "Mini project: a payment batch checker",
     short summary. The amounts are floats. Some are missing (`None`), some are refunds (negative), and `0` is a real,
     valid payment. Build three functions; the tests check all three."""),
     fig(PROJECT_FIG, "Two small helpers, then one function that loops over the batch once and uses both."),
+    fig(table(["i", "amount", "band(amount)", "running total", "note"], [
+        ["0", "120.0", "medium", "120.0", ""],
+        ["1", "None", "", "120.0", "missing += 1"],
+        ["2", "-15.5", "refund", "104.5", ""],
+        ["3", "0", "small", "104.5", "0 is a real payment"],
+        ["4", "2500.0", "large", "2604.5", "first_over = 4"],
+    ], hl={(1, 1), (4, 4)}, label="one pass over a sample batch with limit 1000"),
+        "One pass over `[120.0, None, -15.5, 0, 2500.0]` with `limit=1000`: the result is count 4, missing 1, total 2604.5, and `ok` is False."),
     write("Payment batch checker", "hard", key="batch-checker", tag="Project",
         prompt="""**1. `band(amount)`** returns `"refund"` for negative amounts, `"small"` for 0 up to (not including)
         100, `"medium"` for 100 up to 1000, and `"large"` for 1000 and over.

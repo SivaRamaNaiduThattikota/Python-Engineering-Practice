@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m1-2", num="1.2", title="Control flow and loops",
@@ -29,6 +30,19 @@ LOOP_FIG = """
 </svg>"""
 
 section("rules", "The rules in one screen",
+    p("""An `if` chain checks its conditions from top to bottom and runs only the **first** branch whose condition is true; once one
+    branch has run, every later `elif` and the `else` are skipped, even if their conditions are also true."""),
+    fig(flowchart({
+        "a": ("ask", 0, 0, "score >= 90?"),
+        "ra": ("good", 1, 0, "grade = 'A'"),
+        "b": ("ask", 0, 1, "score >= 75?"),
+        "rb": ("step", 1, 1, "grade = 'B'"),
+        "rc": ("step", 1, 2, "else: grade = 'C'"),
+        "after": ("end", 2, 1, "code after the if"),
+    }, [("a", "ra", "yes"), ("a", "b", "no"), ("b", "rb", "yes"), ("b", "rc", "no", {"route": "vh"}),
+        ("ra", "after"), ("rb", "after"), ("rc", "after")], cell=(190, 80),
+        label="if, elif, else: the first true condition wins and the rest are skipped"),
+        "Order matters: with the checks reversed (`>= 75` first), a score of 95 would get a B."),
     ex("""
     print(list(range(5)))
     print(list(range(2, 10, 3)))
@@ -37,6 +51,13 @@ section("rules", "The rules in one screen",
     """, "ranges.py"),
     p("""`range(start, stop, step)` includes `start` and stops **before** `stop`, like a half-open interval.
     The length of `range(a, b)` is `b - a`. A step that goes the wrong way gives an empty range, not an error."""),
+    fig(table(["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], [
+        ["range(5)", "0", "1", "2", "3", "4", "", "", "", "", ""],
+        ["range(2, 10, 3)", "", "", "2", "", "", "5", "", "", "8", ""],
+        ["range(5, 0, -1)", "", "1", "2", "3", "4", "5", "", "", "", ""],
+    ], hl={(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (1, 3), (1, 6), (1, 9), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6)},
+        label="which numbers each range produces"),
+        "`start` is included and `stop` never is; `range(5, 0, -1)` counts down 5, 4, 3, 2, 1 and also stops before 0."),
     ex("""
     names = ["Ana", "Ben", "Chi"]
     scores = [91, 78, 85]
@@ -50,6 +71,12 @@ section("rules", "The rules in one screen",
     callout("sql", "SQL / Power BI", """`enumerate` is `ROW_NUMBER()`. `zip` is a join **by position**, not by key: if
     one list is sorted differently or has a missing row, `zip` pairs the wrong rows and says nothing. It also silently stops
     at the shorter list. Pass `strict=True` and Python raises instead."""),
+    fig(table(["position", "names", "scores", "zip(names, scores)"], [
+        ["0", "Ana", "91", "('Ana', 91)"],
+        ["1", "Ben", "78", "('Ben', 78)"],
+        ["2", "Chi", "(missing)", "stops here, no pair"],
+    ], hl={(2, 3)}, label="zip pairs items by position and stops at the shorter list"),
+        "`zip` pairs by position and quietly drops Chi; with `strict=True` it raises `ValueError` instead."),
     ex("""
     for n in [3, 5, 8, 9]:
         if n % 2 == 0:
@@ -83,6 +110,18 @@ section("rules", "The rules in one screen",
     """, "after_the_loop.py"),
     p("""The loop variable still exists after the loop and keeps its last value. `x if cond else y` is the one-line
     if, called a conditional expression. Use `while` when you do not know the number of passes in advance."""),
+    fig(flowchart({
+        "start": ("start", 1, 0, "n = 37, steps = 0"),
+        "ask": ("ask", 1, 1, "n != 1?"),
+        "done": ("end", 2, 1, "print(steps)"),
+        "even": ("ask", 1, 2, "n even?"),
+        "half": ("step", 1, 3, "n = n // 2"),
+        "odd": ("step", 2, 2, "n = 3 * n + 1"),
+        "count": ("accent", 1, 4, "steps += 1"),
+    }, [("start", "ask"), ("ask", "done", "no"), ("ask", "even", "yes"), ("even", "half", "yes"), ("even", "odd", "no"),
+        ("half", "count"), ("odd", "count", "", {"route": "vh"}), ("count", "ask", "repeat", {"route": [(0.35, 4), (0.35, 1)], "style": "a"})],
+        cell=(196, 74), label="a while loop repeats its body until the condition is false"),
+        "The `while` condition is checked before every pass; when it becomes false the loop ends and the code after it runs."),
     callout("warn", "Changing a list while looping over it", """Removing items from a list inside `for x in items`
     makes the loop skip the item after each removal, because the positions shift under it. Build a new list instead
     (problem 6)."""),
