@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-3", num="16.3", title="Two pointers and binary search",
@@ -15,6 +16,14 @@ term("Binary search", "Finding a position in sorted data by repeatedly comparing
 term("Monotone predicate", "A yes/no test that flips only once along an ordered range, for example false for small values and true from some point on.")
 
 section("pointers", "Two pointers",
+    fig(flowchart({
+        "s": ("start", 0, 0, "i at the left, j at the right|(sorted list)"),
+        "ask": ("ask", 0, 1, "a[i] + a[j]|vs target"),
+        "eq": ("good", 1, 1, "equal: found"),
+        "lo": ("step", 0, 2, "too small: i += 1|too big: j -= 1"),
+    }, [("s", "ask"), ("ask", "eq", "equal"), ("ask", "lo", "not equal"), ("lo", "ask", "", {"route": [(-0.45, 2), (-0.45, 1)]})],
+        cell=(250, 80), label="two pointers on a sorted list"),
+        "Each step rules out one element for good, so the scan takes at most n steps."),
     p("""On **sorted** data, two indices can replace a nested loop. To find a pair with a given sum, start one pointer at each end: if the pair's sum is too small, the left
     element is too small for **every** remaining partner, so move left forward; if too large, move right back. Each step discards one element for good, O(n) total with O(1)
     extra memory, compared with the hash-set approach of 16.2, which needs O(n) memory but no sorting. Pointers moving **in step** merge two sorted lists (the merge step of
@@ -51,6 +60,13 @@ section("pointers", "Two pointers",
 )
 
 section("bisect", "Binary search and the bisect module",
+    fig(table(["a = [1, 3, 3, 3, 7, 9]", "result", "meaning"], [
+        ["bisect_left(a, 3)", "1", "first index with a[i] >= 3"],
+        ["bisect_right(a, 3)", "4", "index after the last 3"],
+        ["bisect_left(a, 5)", "4", "where 5 would be inserted"],
+        ["right - left", "3", "how many 3s there are"],
+    ], label="what bisect returns"),
+        "Checked in Python: the two functions differ only when the value is present."),
     p("""Binary search keeps an interval that must contain the answer and halves it each step: n = 1,000,000 takes about 20 comparisons. Python's **`bisect`** module implements it
     for sorted lists: **`bisect_left(a, x)`** returns the first index where `x` could be inserted keeping order (the index of the first element `>= x`), **`bisect_right(a, x)`**
     the index after the last element `<= x`; their difference counts occurrences of `x`, and `bisect_right(a, x) - 1` is the last element at or before `x`. `insort` inserts
@@ -84,6 +100,16 @@ section("bisect", "Binary search and the bisect module",
 )
 
 section("answer", "Binary search on the answer",
+    fig(flowchart({
+        "s": ("start", 0, 0, "lo, hi = smallest and|largest possible value"),
+        "loop": ("ask", 0, 1, "lo < hi?"),
+        "done": ("end", 1, 1, "answer is lo"),
+        "mid": ("ask", 0, 2, "ok(mid)?|(mid = (lo + hi) // 2)"),
+        "hi": ("step", 1, 2, "hi = mid,|repeat the check"),
+        "lo": ("step", 0, 3, "lo = mid + 1,|repeat the check"),
+    }, [("s", "loop"), ("loop", "done", "no"), ("loop", "mid", "yes"), ("mid", "hi", "yes"), ("mid", "lo", "no")],
+        cell=(250, 80), label="binary search on the answer"),
+        "If `ok` is monotone, halving the range finds the smallest value that works in O(log range) checks."),
     p("""Binary search is not only for lists. Whenever a question asks for the **smallest (or largest) value** of some parameter that satisfies a condition, and the condition is
     **monotone** (once true, true for all larger values), you can binary search the parameter itself: the smallest capacity that ships all packages within D days, the
     largest batch size that fits in GPU memory, the lowest classifier threshold that keeps recall above 90%, the smallest number of workers that meets a deadline. Each

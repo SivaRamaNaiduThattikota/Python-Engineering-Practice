@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-5", num="16.5", title="Dynamic programming",
@@ -15,6 +16,11 @@ term("Memoization", "Caching a function's results by its arguments, so repeated 
 term("Recurrence", "An equation that defines the answer for a state in terms of answers for smaller states, plus base cases that stop it.")
 
 section("idea", "Overlapping subproblems",
+    fig(table(["n", "5", "10", "20", "25"], [
+        ["calls of naive fib(n)", "15", "177", "21,891", "242,785"],
+        ["distinct states", "6", "11", "21", "26"],
+    ], hl={(0, 4)}, label="the same subproblems, again and again"),
+        "Counted in Python: naive recursion repeats work exponentially, while there are only n + 1 distinct states to compute."),
     p("""Some recursive solutions call themselves with the **same arguments many times**. The naive Fibonacci `fib(n) = fib(n - 1) + fib(n - 2)` recomputes `fib(n - 2)` from both
     branches, and the number of calls grows exponentially, about 1.6^n. Dynamic programming applies when a problem has **optimal substructure** (the answer for a state is built
     from answers for smaller states) and **overlapping subproblems** (the same smaller states recur). Then each distinct state is computed **once**: the cost becomes the number
@@ -25,6 +31,14 @@ section("idea", "Overlapping subproblems",
 )
 
 section("memo", "Top-down: memoization",
+    fig(flowchart({
+        "c": ("start", 0, 0, "f(state)"),
+        "ask": ("ask", 0, 1, "state in the memo?"),
+        "ret": ("good", 1, 1, "return it"),
+        "comp": ("step", 0, 2, "compute from smaller|states (recursive calls)"),
+        "save": ("end", 0, 3, "store in the memo, return"),
+    }, [("c", "ask"), ("ask", "ret", "yes"), ("ask", "comp", "no"), ("comp", "save")], cell=(250, 80), label="top-down memoization"),
+        "Memoization keeps the recursive code and adds a cache, so each state is computed once."),
     p("""The quickest way from a correct recursive solution to an efficient one is a cache: **`@functools.cache`** (or `@functools.lru_cache(maxsize=None)`) stores each call's result by
     its arguments, which must therefore be hashable (tuples, not lists; problem 3). The code stays close to the recurrence, and only states that are actually reached are
     computed. The costs are Python's recursion limit (about 1,000 frames by default; deep recursion can also crash browser-based Python such as this site's) and function-call
@@ -49,6 +63,8 @@ section("memo", "Top-down: memoization",
 )
 
 section("table", "Bottom-up: tabulation",
+    fig(chain(["base cases|dp[0], dp[1]", "loop i upwards", "dp[i] from|dp[i - 1], dp[i - 2]", ("answer: dp[n]", "good")], note="only the last two values are needed: O(1) memory"),
+        "Tabulation fills the table in dependency order with plain loops."),
     p("""Bottom-up DP fills a table from the base cases upwards in an order where every state's dependencies are already computed, with plain loops: no recursion limit, no call
     overhead, and often a chance to keep only the last row or two (O(n) memory instead of O(n^2)). Two-sequence problems use a table `dp[i][j]` for the first `i` items of one
     sequence and the first `j` of the other, with an extra row and column for the empty prefixes; most off-by-one errors come from forgetting those (problem 7). To return the

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-1", num="16.1", title="Big-O in practice",
@@ -15,6 +16,12 @@ term("Amortised cost", "The average cost per operation over a long sequence, whe
 term("Time complexity", "How the number of basic steps an algorithm performs grows with the input size.")
 
 section("what", "What Big-O measures",
+    fig(stage_map(16, "a small search engine"), "Module 16 at a glance: measuring cost, then the core patterns (hashing, windows, pointers, binary search, graphs, DP), building up to a search engine."),
+    fig(table(["n", "O(log n)", "O(n)", "O(n log n)", "O(n^2)"], [
+        ["1,000", "10", "1,000", "10,000", "1,000,000"],
+        ["1,000,000", "20", "1,000,000", "20,000,000", "10^12"],
+    ], hl={(1, 4)}, label="steps, roughly, as n grows"),
+        "Big-O is about growth: at a million items a quadratic algorithm needs a million million steps, a log one only 20."),
     p("""Big-O answers one question: **when the input doubles, what happens to the cost?** An algorithm is **O(n)** if its work grows proportionally to n (double the
     input, double the time), **O(n^2)** if it grows with the square (double the input, four times the time), **O(log n)** if each doubling adds only a constant amount of
     work, and **O(1)** if the work does not depend on n at all. Constant factors and smaller terms are dropped, so `3n + 100` is O(n) and `n^2/2 + n` is O(n^2): at large
@@ -35,6 +42,13 @@ section("measure", "Measuring instead of guessing",
 )
 
 section("builtins", "The cost of Python's built-ins",
+    fig(table(["operation", "list", "deque", "dict / set"], [
+        ["append at the end", "O(1) amortised", "O(1)", "O(1) insert"],
+        ["insert or remove at the front", "O(n)", "O(1)", ""],
+        ["x in items", "O(n)", "O(n)", "O(1) average"],
+        ["index i", "O(1)", "O(n) in the middle", ""],
+    ], hl={(1, 1), (2, 1)}, label="the cost of common operations"),
+        "The two costly list operations are front edits and membership tests; `deque` and `set` fix them."),
     p("""**Lists** are dynamic arrays: indexing, `len`, `append` and `pop()` from the end are O(1) (append is **amortised** O(1): occasionally the list grows its storage by a
     proportion and copies everything, but that cost averages out over many appends); `insert(0, x)`, `pop(0)` and `del items[i]` shift every later element, O(n); `x in
     items`, `items.index(x)` and `items.count(x)` scan, O(n); slicing copies, O(k) for k elements; `sort` is O(n log n) (Timsort, which is O(n) on already-sorted runs).
@@ -72,6 +86,8 @@ section("builtins", "The cost of Python's built-ins",
 )
 
 section("hidden", "Hidden quadratic costs",
+    fig(chain(["for x in items:", "if x in seen_list:|(scans the list)", ("n x n = O(n^2)", "bad"), ("seen = set():|O(n) overall", "good")]),
+        "Hidden quadratic cost: an O(n) step inside a loop. Changing one data structure fixes it."),
     p("""Most real performance bugs are an O(n) operation hiding inside a loop: `if x not in seen_list` (use a set), `queue.pop(0)` (use a deque), `sorted(...)` or `max(...)`
     recomputed every iteration (compute once, or maintain a heap), `result = result + [x]` or string `+=` (append, then join), `list.index` to find each item's position
     (build a dict from item to index once), slicing in recursion (pass indices instead), and calling `len()` on a generator by first converting it to a list each time.

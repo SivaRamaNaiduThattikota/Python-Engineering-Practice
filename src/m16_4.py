@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-4", num="16.4", title="Graphs",
@@ -15,6 +16,10 @@ term("DAG", "A directed acyclic graph: directed edges and no cycles, the shape o
 term("Topological order", "An ordering of a DAG's nodes in which every node comes after all the nodes it depends on.")
 
 section("represent", "Representing graphs",
+    fig(table(["node", "neighbours (adjacency list)"], [
+        ["a", "b, c"], ["b", "d"], ["c", "d"], ["d", ""],
+    ], label="graph = {'a': ['b', 'c'], 'b': ['d'], 'c': ['d'], 'd': []}"),
+        "An adjacency list stores each node's neighbours, so visiting them costs only as much as there are."),
     p("""In Python, a graph is usually a **dict from each node to its neighbours**, an adjacency list: `{"ingest": ["chunk"], "chunk": ["embed"], ...}`, with sets instead of lists
     when you need fast "is there an edge?" checks, and dicts of dicts (`{"a": {"b": 3}}`) for weighted edges. Undirected edges are stored in both directions. This uses O(V + E)
     memory for V nodes and E edges, and iterating a node's neighbours costs O(its degree). An adjacency matrix (a V-by-V table) costs O(V^2) memory and suits only small,
@@ -23,6 +28,15 @@ section("represent", "Representing graphs",
 )
 
 section("bfs", "Breadth-first search",
+    fig(flowchart({
+        "s": ("start", 0, 0, "queue = [start],|visited = {start}"),
+        "ask": ("ask", 0, 1, "queue empty?"),
+        "end": ("end", 1, 1, "done"),
+        "pop": ("step", 0, 2, "node = popleft()"),
+        "nb": ("accent", 0, 3, "each unvisited neighbour:|mark visited, append"),
+    }, [("s", "ask"), ("ask", "end", "yes"), ("ask", "pop", "no"), ("pop", "nb"), ("nb", "ask", "", {"route": [(-0.45, 3), (-0.45, 1)]})],
+        cell=(260, 80), label="breadth-first search"),
+        "Marking nodes when they are queued means each node is queued once, and the first visit is along a path with the fewest edges."),
     p("""**BFS** explores a graph in layers: first the start node, then all its neighbours, then their unvisited neighbours, and so on, using a **queue** (`collections.deque`,
     16.1) and a `visited` set marked when a node is **enqueued**. Because it reaches nodes in order of distance, the first time BFS reaches a node it has found a path with the
     **fewest edges**, so it computes shortest paths in unweighted graphs; recording each node's **parent** lets you rebuild the path backwards (problem 5). It runs in
@@ -68,6 +82,8 @@ section("dfs", "Depth-first search",
 )
 
 section("topo", "Topological sort",
+    fig(chain([("round 1:|load, fetch", "accent"), "round 2:|clean", "round 3:|embed, index", ("round 4:|evaluate", "good")], note="every task in one round can run in parallel"),
+        "Kahn's algorithm in rounds: each round holds the tasks whose dependencies are all done."),
     p("""A **topological order** lists the nodes of a DAG so that each node comes after its dependencies; it exists exactly when there is no cycle. **Kahn's algorithm** counts each
     node's unmet dependencies (its in-degree), starts with the nodes that have none, and repeatedly removes a ready node, decrementing its dependants' counts and adding any
     that reach zero; if some nodes never become ready, they are on or behind a cycle. Processing the ready set in **rounds** also gives **levels**: every node in one round can

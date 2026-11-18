@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-2", num="16.2", title="Hashing patterns",
@@ -15,6 +16,14 @@ term("Sliding window", "A range of consecutive elements that moves along a seque
 term("Prefix sum", "The running total up to each position; the sum of any range is the difference of two prefix sums.")
 
 section("idea", "The core idea: remember what you have seen",
+    fig(flowchart({
+        "x": ("start", 0, 0, "next value x"),
+        "ask": ("ask", 0, 1, "target - x in seen?"),
+        "found": ("good", 1, 1, "found a pair"),
+        "add": ("step", 0, 2, "seen[x] = index"),
+    }, [("x", "ask"), ("ask", "found", "yes"), ("ask", "add", "no"), ("add", "x", "", {"route": [(-0.45, 2), (-0.45, 0)]})],
+        cell=(240, 80), label="two-sum in one pass"),
+        "Remember what you have seen in a dict, and each new value needs one O(1) lookup instead of a scan."),
     p("""Brute force often compares every element with every other, O(n^2). Hashing replaces the inner loop with a **lookup**: as you pass over the data once, store what you need
     in a dict or a set, and for each new element ask the table an O(1) question ("have I seen this?", "how many times?", "where was its complement?"). The result is O(n)
     time for O(n) extra memory, the trade behind most "optimise this" interview answers. The questions decide the structure: a **set** for presence, a **dict** from key to
@@ -47,6 +56,12 @@ section("idea", "The core idea: remember what you have seen",
 )
 
 section("windows", "Sliding windows",
+    fig(table(["values", "3", "1", "4", "1", "5", "window sum"], [
+        ["window 1", "in", "in", "in", "", "", "8"],
+        ["window 2", "out", "in", "in", "in", "", "8 - 3 + 1 = 6"],
+        ["window 3", "", "out", "in", "in", "in", "6 - 1 + 5 = 10"],
+    ], hl={(1, 1), (2, 2)}, label="a sliding window of size 3"),
+        "Each step adds the value that enters and subtracts the one that leaves, so the whole scan is O(n)."),
     p("""Many problems ask about **contiguous** ranges: the best sum of k consecutive values, the longest substring without repeated characters, the shortest span containing
     every keyword, requests in the last 60 seconds. Recomputing each window from scratch is O(n * k); a **sliding window** keeps a summary of the current range (a sum, a
     Counter, a set, a deque of timestamps) and updates it as one element enters at the right and, when needed, others leave at the left. Each element enters and leaves
@@ -55,6 +70,11 @@ section("windows", "Sliding windows",
 )
 
 section("prefix", "Prefix sums and hash maps",
+    fig(table(["k", "0", "1", "2", "3", "4", "5"], [
+        ["values[k]", "3", "1", "4", "1", "5", ""],
+        ["prefix[k]", "0", "3", "4", "8", "9", "14"],
+    ], hl={(1, 2), (1, 5)}, label="sum(values[2:5]) = prefix[5] - prefix[2] = 14 - 4 = 10"),
+        "Prefix sums: one pass up front, then every range sum is a single subtraction."),
     p("""The sum of `values[i:j]` equals `prefix[j] - prefix[i]`, where `prefix[k]` is the sum of the first k values, so after one O(n) pass any range sum costs O(1). Combined with
     a dict this answers counting questions: the number of subarrays summing to k is the number of pairs of prefix sums that differ by k, so as you compute each prefix sum
     `p`, add how many earlier prefix sums equal `p - k` (problem 7). Seeding the dict with `{0: 1}`, the empty prefix, is what lets subarrays that start at index 0 count."""),

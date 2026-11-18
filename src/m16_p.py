@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m16-p", num="16.P", title="Module 16 practice set and mini project",
@@ -11,6 +12,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(16, "a small search engine"), "Module 16 at a glance: measuring cost, then the core patterns (hashing, windows, pointers, binary search, graphs, DP), building up to a search engine."),
     p("""For every problem, first say the brute force and its cost (16.1), then ask which structure removes the repeated work: a dict or set for lookups and counts (16.2), sorting
     plus two pointers or binary search for ordered data and monotone questions (16.3), a graph search for connections and dependencies (16.4), or a table of subproblems when
     the same smaller question recurs (16.5). State the final time and memory complexity, and test the edge cases: empty input, one element, duplicates, and the extremes."""),
@@ -381,6 +383,8 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: a small search engine",
+    fig(chain(["add(): inverted|index (dict)", "search(): TF-IDF,|heapq.nlargest", "snippet():|minimum window", "dedupe():|union-find", ("pack(): knapsack|into a budget", "good")]),
+        "MiniSearch: each method is one technique from this module, at the complexity it promises."),
     p("""Retrieval is the first half of every RAG system. Build `MiniSearch`, an in-memory engine that indexes documents, ranks them for a query, shows the most relevant snippet, merges
     near-duplicate documents in its results, and packs the best results into a token budget for the prompt. Each part is one technique from this module, and its complexity
     should be the one the technique promises."""),
