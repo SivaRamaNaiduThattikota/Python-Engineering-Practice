@@ -63,6 +63,39 @@ section("kinds", "Objects that can change and objects that cannot",
     return `None`**. `list.sort()`, `list.append()`, `dict.update()`, `set.add()` and `random.shuffle()` all return
     `None`. Functions that leave their input alone and build something new return it: `sorted()`, `reversed()`,
     `str.upper()`. Writing `xs = xs.sort()` therefore replaces your list with `None` (problem 3)."""),
+    p("""It is worth knowing the full list of in-place list operations, because each one changes the object every alias sees:
+    `append`, `extend`, `insert`, `pop`, `remove`, `clear`, `sort`, `reverse`, `del xs[i]`, `xs[i] = v`, and **slice
+    assignment**, `xs[:] = new_items`. The last one is the subtle one. `xs = new_items` rebinds the name and leaves the old
+    list alone, while `xs[:] = new_items` keeps the same list object and replaces its **contents**, so every alias sees the
+    new items. Code that "resets" a shared list has to choose between the two on purpose."""),
+    ex("""
+    shared = [1, 2, 3]
+    alias = shared
+    shared = [9]                   # rebinding: alias still sees the old list
+    print(alias)
+
+    shared = alias
+    shared[:] = [9]                # slice assignment: same object, new contents
+    print(alias, alias is shared)
+    """, "slice_assign.py"),
+    p("""Why have immutable types at all? Three reasons, all practical. An immutable object can be **shared safely**: you can pass
+    a string or a tuple anywhere without worrying that someone will change it under you. It can be **hashed**, which is what
+    dict keys and set members need: a key's hash must never change, or the dict could no longer find it (4.5). And it is
+    simpler to reason about in concurrent code, since two threads cannot race to change it. When you need a read-only
+    version of a mutable type, Python has some: `tuple` for lists, `frozenset` for sets, and `types.MappingProxyType(d)`,
+    a read-only **view** of a dict that reflects changes to `d` but refuses writes through itself."""),
+    ex("""
+    from types import MappingProxyType
+
+    _settings = {"model": "small"}
+    SETTINGS = MappingProxyType(_settings)
+    try:
+        SETTINGS["model"] = "large"
+    except TypeError as e:
+        print("TypeError:", e)
+    _settings["model"] = "medium"            # the owner can still change it
+    print(SETTINGS["model"], frozenset({"a", "b"}) == frozenset({"b", "a"}))
+    """, "read_only.py"),
 )
 
 section("aliasing", "Aliasing: one object, several names",
@@ -90,6 +123,24 @@ section("aliasing", "Aliasing: one object, several names",
     callout("sql", "SQL / Power BI", """An alias is like two Power BI visuals bound to the **same** measure. Edit the
     measure and both visuals change, because there is one measure, not two. A copy is like duplicating the measure
     under a new name: editing one no longer touches the other."""),
+    p("""Aliasing also happens **in time**: the same list being changed while it is being read. Removing items from a list while a
+    `for` loop walks over it skips items, because the loop keeps an index into the list and every removal shifts the
+    remaining items one place to the left, under the index. The loop then steps over the item that moved into the gap. The
+    fix is to build a new list (a comprehension, 6.1), or to loop over a copy, `for x in xs[:]`."""),
+    ex("""
+    scores = [0.2, 0.1, 0.9, 0.3, 0.05]
+    for s in scores:
+        if s < 0.5:
+            scores.remove(s)               # changing the list being iterated
+    print(scores)                          # 0.1 and 0.05 survived
+
+    scores = [0.2, 0.1, 0.9, 0.3, 0.05]
+    print([s for s in scores if s >= 0.5]) # a new list instead
+    """, "mutate_while_iterating.py"),
+    p("""Step by step: the loop reads index 0 (`0.2`), removes it, and everything shifts left, so `0.1` is now at index 0. The loop
+    moves on to index 1, which now holds `0.9`, so `0.1` is never checked. The same happens to `0.05` after `0.3` is removed.
+    Dicts and sets protect themselves: changing their size during iteration raises `RuntimeError: dictionary changed size during
+    iteration`, which is noisier but much safer."""),
 )
 
 section("operators", "Changing versus rebinding: `+=`, `+` and friends",
@@ -110,6 +161,26 @@ section("operators", "Changing versus rebinding: `+=`, `+` and friends",
     print(t, u)
     """, "plus_equals.py"),
     fig(PLUS_FIG, "`+=` on a list changes the object both names share. `x = x + [2]` builds a new list for `x` only."),
+    p("""The mechanism behind this: `x += y` first asks the type of `x` for an **in-place add** (the method `__iadd__`). Lists,
+    dicts (`|=`), sets (`|=`, `&=`, `-=`), numpy arrays and DataFrames provide one, so the object changes and the name is then
+    re-bound to the same object. If the type has no in-place version, as for `int`, `str` and `tuple`, Python falls back to
+    `x = x + y`: it builds a new object and rebinds the name. The same rule covers `-=`, `*=`, `|=` and the others."""),
+    p("""One famous consequence combines everything so far. `t[0] += [3]`, where `t` is a tuple holding a list, first extends the
+    list in place (that succeeds), then tries to store the result back into `t[0]` (that fails, because tuples cannot be
+    assigned to). You get a `TypeError` **and** the list has changed."""),
+    ex("""
+    t = ([1, 2], "label")
+    try:
+        t[0] += [3]
+    except TypeError as e:
+        print("TypeError:", e)
+    print(t)                              # the list changed anyway
+
+    import numpy as np
+    a = np.array([1.0, 2.0]); b = a
+    a *= 10                               # in place on the shared array
+    print(b)
+    """, "iadd_details.py"),
 )
 
 section("tuples", "Tuples are immutable, their contents may not be",
@@ -127,6 +198,15 @@ section("tuples", "Tuples are immutable, their contents may not be",
         print("TypeError:", e)
     print(hash((1, "label")) == hash((1, "label")))
     """, "tuple_contents.py"),
+    p("""The hash rule is the reason. A tuple's hash is computed from the hashes of its items, so if an item could change, the
+    tuple's hash would change with it, and a dict that stored the tuple as a key would look for it in the wrong place. Python
+    therefore refuses to hash a tuple that contains anything unhashable. When you need a composite key with a "set-like" part,
+    such as a combination of tags, use a `frozenset`, which is hashable and ignores order."""),
+    ex("""
+    runs = {}
+    runs[("small", frozenset({"eu", "prod"}))] = 0.91
+    print(runs[("small", frozenset({"prod", "eu"}))])     # order of tags does not matter
+    """, "hashable_keys.py"),
 )
 
 section("views", "numpy views and pandas 3 Copy-on-Write",
@@ -145,6 +225,21 @@ section("views", "numpy views and pandas 3 Copy-on-Write",
     picked[0] = -1
     print(a, np.shares_memory(a, picked))
     """, "numpy_views.py"),
+    p("""Other numpy operations return views too: `reshape` (when the memory layout allows it), the transpose `a.T`, and
+    `a.ravel()` in the common case. When you need an independent array, call `.copy()` explicitly. That is cheap insurance in
+    two situations: when you slice a small part of a huge array and want to keep only the part (the view keeps the whole big
+    buffer alive, 2.1), and when you hand an array to code that might change it."""),
+    ex("""
+    import numpy as np
+
+    big = np.zeros(1_000_000)
+    small_view = big[:3]
+    small_copy = big[:3].copy()
+    print(small_view.base is big, small_copy.base is None)
+    m = np.arange(6).reshape(2, 3)
+    m.T[0, 0] = 42
+    print(m[0, 0], np.shares_memory(m, m.T))
+    """, "numpy_more_views.py"),
     p("""**pandas** used to behave in a confusing mix of views and copies, which is what `SettingWithCopyWarning` was
     about. **pandas 3.0 made Copy-on-Write the only behaviour**: anything you take out of a DataFrame (a column, a
     filtered subset) acts as its own copy, so changing it never changes the original. To change the original, change it

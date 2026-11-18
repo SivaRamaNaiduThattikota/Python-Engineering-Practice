@@ -57,6 +57,31 @@ section("names", "Names point at objects",
       of them, because there is only one object. (Changing objects is lesson 2.2.)
     - **Pointing a name somewhere else changes nothing else.** `a = a + [2]` did not touch the old list, so `b` was
       not affected."""),
+    p("""It helps to see the two steps of an assignment separately. **First** Python evaluates the right-hand side completely,
+    which produces (or finds) an object. **Then** it binds the name on the left to that object, by storing the pair "name to
+    object" in a **namespace**. A namespace is literally a dictionary: at the top level of a script it is the one returned
+    by `globals()`, and inside a function it is the function's local namespace (3.3). So `x = 5` is, underneath, close to
+    `globals()["x"] = 5`: a key in a dict now refers to the object `5`."""),
+    ex("""
+    a = [1, 2]
+    print(globals()["a"] is a)      # the name lives in a dict of names
+
+    x = y = []                      # ONE list, two names: the right side is evaluated once
+    x.append("shared")
+    print(y, x is y)
+
+    a, b = 1, 2
+    a, b = b, a                     # the right side (2, 1) is built first, then unpacked
+    print(a, b)
+    """, "assignment_steps.py"),
+    p("""The two steps explain both of the other lines. In `x = y = []`, the right-hand side `[]` is evaluated **once**, and
+    both names are bound to that single list, so a change through `x` shows through `y`: a common bug when someone writes
+    `seen = results = []` meaning two empty lists. (For immutable values like `a = b = 0` it is harmless, because nobody can
+    change the `0`.) And the swap `a, b = b, a` works without a temporary variable because the right-hand side builds the
+    tuple `(2, 1)` from the **current** values before any name is rebound."""),
+    p("""Containers hold references too. A list does not contain its items; it contains **references** to item objects, exactly
+    like names do. That is why the same object can be in two lists at once, and why putting a list inside a dict and then
+    changing the list changes what the dict shows. Lesson 2.2 builds on this."""),
 )
 
 section("identity", "Identity and equality",
@@ -82,6 +107,20 @@ section("identity", "Identity and equality",
     returns an array. pandas does the same with a Series. Some libraries go further: in SQLAlchemy, `column == None`
     does not compare anything at all, it builds a piece of SQL (`IS NULL`). `is` can never be redefined by a type, so it
     always means exactly one thing and is very fast."""),
+    p("""Equality also works **across types** in ways worth knowing. Numbers compare by value whatever their type, so `1 == 1.0`
+    and even `1 == True` are true (`bool` is a subtype of `int`). Containers of different types are not equal even with the
+    same contents: `[1, 2] == (1, 2)` is false. And for an object whose type does not define its own `__eq__`, Python falls
+    back to identity: two separate `object()` instances are never equal. The negated forms follow the same split: `!=` asks
+    the type, `is not` compares identities, and `a is not b` is the readable way to write `not (a is b)`."""),
+    ex("""
+    print(1 == 1.0, 1 == True, [1, 2] == (1, 2), list((1, 2)) == [1, 2])
+    o1, o2 = object(), object()
+    print(o1 == o2, o1 == o1, o1 is not o2)
+    print({"a": 1} == {"a": 1.0}, "1" == 1)
+    """, "equality_rules.py"),
+    p("""The last line shows a real data-cleaning trap: the string `"1"` and the number `1` are never equal. Ids read from a CSV
+    are strings, ids from a JSON API are often numbers, and a join or a membership test between them silently finds
+    nothing. Convert to one type at the boundary, where the data comes in."""),
     callout("key", "Rule of thumb", """Use `==` to compare values. Use `is` only to ask "is this that exact object?":
     with `None` and the other singletons, with sentinels, and when you really mean identity (problem 14). Never use
     `is` to compare numbers or strings: Python even warns you (`SyntaxWarning: "is" with 'int' literal`)."""),
@@ -145,6 +184,19 @@ section("caching", "Caching is not a rule",
     p("""So `is` on numbers or strings can be `True` in your test and `False` in production with other data. Values
     that come from files, APIs and databases are created at run time, so they are usually separate objects even when they
     are equal. Always compare them with `==`."""),
+    p("""The reason for caching is memory and speed: a program creates small numbers and identifier-like strings all the time,
+    and sharing one copy saves allocations, and lets dictionary lookups on interned strings compare by identity first. You
+    can use the same trick deliberately with `sys.intern`, which returns the one shared copy of a string. It is worth it when
+    you hold millions of copies of a few distinct strings, such as labels or category names in a large dataset loaded row by
+    row; pandas solves the same problem with its `category` dtype."""),
+    ex("""
+    import sys
+
+    rows = ["".join(["sp", "am"]) for _ in range(3)]       # three separate but equal strings
+    print(rows[0] == rows[1], rows[0] is rows[1])
+    shared = [sys.intern(r) for r in rows]
+    print(shared[0] is shared[1] is shared[2])
+    """, "intern.py"),
 )
 
 section("containers", "Containers check identity first",
@@ -181,6 +233,31 @@ section("lifetime", "Object lifetime and id reuse",
     # memory. The result depends on the run: never rely on it either way.
     print(id([]) == id([]))
     """, "lifetime.py"),
+    p("""How does Python know when nothing points at an object? CPython keeps a **reference count** in every object: the number of
+    names, containers and other places that currently refer to it. Binding a name, putting the object in a list or passing it
+    to a function adds one; a name being rebound or deleted, or the list being emptied, subtracts one. When the count reaches
+    zero, the object is freed immediately. `sys.getrefcount(x)` shows the count (it reports one extra, for its own
+    argument)."""),
+    ex("""
+    import sys, gc
+
+    data = ["a large", "list"]
+    before = sys.getrefcount(data)
+    holder = [data, data]                  # two more references, from inside a list
+    print(sys.getrefcount(data) - before)
+    holder.clear()
+    print(sys.getrefcount(data) - before)
+
+    a = []
+    a.append(a)                            # a list that contains itself: a reference cycle
+    del a                                  # the count never reaches zero by itself...
+    print(gc.collect() >= 1)               # ...so the cycle collector frees it
+    """, "refcount.py"),
+    p("""Reference counting cannot free a **cycle**, a group of objects that refer to each other but are not reachable from the
+    program, so CPython also runs a cycle-detecting garbage collector from time to time (`gc.collect()` forces a run). In
+    everyday code you rarely think about either. They matter when memory keeps growing in a long-running service: a global
+    cache, a list of past requests or a closure (3.4) that holds a reference keeps every object it reaches alive, however
+    large, which is the usual cause of "memory leaks" in Python."""),
     callout("warn", "Never key long-lived data by id()", """`id()` is only unique among objects that are alive **at the
     same time**. A cache keyed by `id(prompt)` misses when an equal prompt arrives as a new object, and can even return
     another prompt's answer once the old object is freed and its id reused (problem 8). Key by the value instead."""),

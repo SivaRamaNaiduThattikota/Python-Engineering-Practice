@@ -60,6 +60,31 @@ section("rule", "One rule: parameters are assigned, not copied",
     p("""So a function can **change a mutable argument in place** and the caller sees it, but **assigning to a parameter
     never affects the caller**. With immutable arguments (numbers, strings, tuples) a function cannot affect the caller's
     object at all; it can only return a new value."""),
+    p("""Here is what happens during a call, step by step. Python evaluates each argument expression in the caller, which gives an
+    object. It creates a fresh **local namespace** for this one call (a new set of local names, 3.3). Then it assigns each
+    parameter name to its argument object, in that namespace: positional arguments in order, keyword arguments by name, defaults
+    for the rest. The body runs with those names. When the function returns, `return value` hands back a reference to an
+    object, exactly like an assignment in the other direction, and the local namespace is thrown away. The names disappear;
+    the objects survive if anything else still refers to them (2.1)."""),
+    ex("""
+    def inspect_args(items, label="x"):
+        print(id(items) == id(cart), label)
+        return items                       # hands back the same object
+
+    cart = ["a"]
+    same = inspect_args(cart, label="checked")
+    print(same is cart)
+
+    _store = {"items": ["kept"]}           # a module's internal state
+
+    def get_items():
+        return _store["items"]             # returning internal state: callers get an alias
+    get_items().append("oops")
+    print(_store["items"])
+    """, "call_steps.py"),
+    p("""The last part shows that returning is aliasing too. A function that returns its internal list gives every caller a way to
+    change that internal state, as if it were a public variable. If callers should only read it, return a copy (`list(...)`),
+    a tuple, or a read-only view (2.2), so the object's owner stays in control."""),
     callout("sql", "SQL / Power BI", """Passing a list to a function is like giving a stored procedure the **name of a
     table**, not a copy of it: an `UPDATE` inside the procedure changes the real table. Assigning a new value to the
     parameter is like the procedure pointing its local variable at another table: the caller's table is untouched."""),
@@ -81,6 +106,11 @@ section("defaults", "Mutable default arguments",
     """, "mutable_default.py"),
     p("""The fix is the `None` default plus a fresh object inside the function. If `None` is a valid value for that
     parameter, use a sentinel (2.1)."""),
+    p("""Why does Python behave like this? Because `def` is an ordinary **statement** that runs once, usually at import time, and
+    creates a function object. The default expressions are part of that statement, so they are evaluated then, and the resulting
+    objects are stored on the function in `__defaults__` (and `__kwdefaults__` for keyword-only parameters). A call that omits
+    the argument does not re-run the expression; it reuses the stored object. That is cheap, and it is the same mechanism that
+    `lambda i=i: ...` uses on purpose to capture a value at creation time (6.1)."""),
     ex("""
     def log_event(event, log=None):
         if log is None:
@@ -112,6 +142,33 @@ section("design", "Designing functions that are safe to call",
     p("""What to avoid is the mixture: a function that changes its argument **and** returns it, so the caller thinks they
     got a new object but actually holds an alias (problems 7 and 11). pandas offers both styles through an
     `inplace=True` parameter, and has been moving away from it because the mixture caused so many bugs."""),
+    p("""A real GenAI example shows why the choice matters. A helper sends a conversation to a model and appends the reply. If it
+    appends to the caller's `messages` list in place, then a retry after a timeout sends the conversation **with the failed
+    attempt already in it**, and the history grows a duplicate turn each time. A pure version builds a new list and returns it,
+    so a retry starts from exactly the same input."""),
+    ex("""
+    def fake_model(messages):
+        return {"role": "assistant", "content": f"reply to {len(messages)} messages"}
+
+    def ask_in_place(messages, question):
+        messages.append({"role": "user", "content": question})     # side effect on the caller's list
+        return fake_model(messages)
+
+    def ask_pure(messages, question):
+        request = [*messages, {"role": "user", "content": question}]   # new list; input untouched
+        return fake_model(request)
+
+    history = [{"role": "system", "content": "Be brief."}]
+    ask_in_place(history, "Refund?")
+    ask_in_place(history, "Refund?")                     # a retry
+    print(len(history), [m["content"] for m in history][1:])
+
+    history = [{"role": "system", "content": "Be brief."}]
+    print(ask_pure(history, "Refund?")["content"], ask_pure(history, "Refund?")["content"], len(history))
+    """, "retry_safe.py"),
+    p("""The pure version is **idempotent** for the caller's data: calling it twice with the same input gives the same request,
+    which is the property retries, caching and tests all depend on. The caller then decides explicitly what to keep, for
+    example `history = [*history, question_message, reply]` once a call has succeeded."""),
     callout("note", "*args and **kwargs (preview of 3.2)", """`*args` arrives as a **new tuple** and `**kwargs` as a
     **new dict** on every call, so changing those containers never affects the caller. The values inside them are still
     the caller's objects (problem 10)."""),

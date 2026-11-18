@@ -46,6 +46,28 @@ s = s.upper()              # str cannot change: a new string, name moved
 print(s, id(s) == before)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 3] True
 DATA False</pre></div></div>
 <p>A useful convention follows from this: in the standard library, <strong>methods that change an object in place return <code>None</code></strong>. <code>list.sort()</code>, <code>list.append()</code>, <code>dict.update()</code>, <code>set.add()</code> and <code>random.shuffle()</code> all return <code>None</code>. Functions that leave their input alone and build something new return it: <code>sorted()</code>, <code>reversed()</code>, <code>str.upper()</code>. Writing <code>xs = xs.sort()</code> therefore replaces your list with <code>None</code> (problem 3).</p>
+<p>It is worth knowing the full list of in-place list operations, because each one changes the object every alias sees: <code>append</code>, <code>extend</code>, <code>insert</code>, <code>pop</code>, <code>remove</code>, <code>clear</code>, <code>sort</code>, <code>reverse</code>, <code>del xs[i]</code>, <code>xs[i] = v</code>, and <strong>slice assignment</strong>, <code>xs[:] = new_items</code>. The last one is the subtle one. <code>xs = new_items</code> rebinds the name and leaves the old list alone, while <code>xs[:] = new_items</code> keeps the same list object and replaces its <strong>contents</strong>, so every alias sees the new items. Code that "resets" a shared list has to choose between the two on purpose.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">slice_assign.py</span><button class="copy">Copy</button></div><pre><code class="py">shared = [1, 2, 3]
+alias = shared
+shared = [9]                   # rebinding: alias still sees the old list
+print(alias)
+
+shared = alias
+shared[:] = [9]                # slice assignment: same object, new contents
+print(alias, alias is shared)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 3]
+[9] True</pre></div></div>
+<p>Why have immutable types at all? Three reasons, all practical. An immutable object can be <strong>shared safely</strong>: you can pass a string or a tuple anywhere without worrying that someone will change it under you. It can be <strong>hashed</strong>, which is what dict keys and set members need: a key's hash must never change, or the dict could no longer find it (4.5). And it is simpler to reason about in concurrent code, since two threads cannot race to change it. When you need a read-only version of a mutable type, Python has some: <code>tuple</code> for lists, <code>frozenset</code> for sets, and <code>types.MappingProxyType(d)</code>, a read-only <strong>view</strong> of a dict that reflects changes to <code>d</code> but refuses writes through itself.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">read_only.py</span><button class="copy">Copy</button></div><pre><code class="py">from types import MappingProxyType
+
+_settings = {&quot;model&quot;: &quot;small&quot;}
+SETTINGS = MappingProxyType(_settings)
+try:
+    SETTINGS[&quot;model&quot;] = &quot;large&quot;
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+_settings[&quot;model&quot;] = &quot;medium&quot;            # the owner can still change it
+print(SETTINGS[&quot;model&quot;], frozenset({&quot;a&quot;, &quot;b&quot;}) == frozenset({&quot;b&quot;, &quot;a&quot;}))</code></pre><div class="out"><span class="ol">Output</span><pre>TypeError: &#x27;mappingproxy&#x27; object does not support item assignment
+medium True</pre></div></div>
 </section>
 <section class="sec" id="aliasing">
 <h2><span class="n">2</span>Aliasing: one object, several names</h2>
@@ -63,6 +85,17 @@ print(settings[&quot;batch&quot;][&quot;retries&quot;])</code></pre><div class="
 <p>Aliases hide in places that do not look like assignment:</p>
 <ul><li><strong>Containers:</strong> putting the same list or dict into two slots (above), or <code>dict.fromkeys(keys, [])</code>, which uses one list for every key (problem 5).</li><li><strong>Return values:</strong> a function that returns its internal list hands the caller a way to change its state (problem 6).</li><li><strong>Repetition:</strong> <code>[[]] * 3</code> repeats one inner list three times (the grid trap; lesson 2.3 shows the fix).</li><li><strong>Default arguments and function arguments</strong> (lesson 2.4).</li></ul>
 <div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>An alias is like two Power BI visuals bound to the <strong>same</strong> measure. Edit the measure and both visuals change, because there is one measure, not two. A copy is like duplicating the measure under a new name: editing one no longer touches the other.</p></div></div>
+<p>Aliasing also happens <strong>in time</strong>: the same list being changed while it is being read. Removing items from a list while a <code>for</code> loop walks over it skips items, because the loop keeps an index into the list and every removal shifts the remaining items one place to the left, under the index. The loop then steps over the item that moved into the gap. The fix is to build a new list (a comprehension, 6.1), or to loop over a copy, <code>for x in xs[:]</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mutate_while_iterating.py</span><button class="copy">Copy</button></div><pre><code class="py">scores = [0.2, 0.1, 0.9, 0.3, 0.05]
+for s in scores:
+    if s &lt; 0.5:
+        scores.remove(s)               # changing the list being iterated
+print(scores)                          # 0.1 and 0.05 survived
+
+scores = [0.2, 0.1, 0.9, 0.3, 0.05]
+print([s for s in scores if s &gt;= 0.5]) # a new list instead</code></pre><div class="out"><span class="ol">Output</span><pre>[0.1, 0.9, 0.05]
+[0.9]</pre></div></div>
+<p>Step by step: the loop reads index 0 (<code>0.2</code>), removes it, and everything shifts left, so <code>0.1</code> is now at index 0. The loop moves on to index 1, which now holds <code>0.9</code>, so <code>0.1</code> is never checked. The same happens to <code>0.05</code> after <code>0.3</code> is removed. Dicts and sets protect themselves: changing their size during iteration raises <code>RuntimeError: dictionary changed size during iteration</code>, which is noisier but much safer.</p>
 </section>
 <section class="sec" id="operators">
 <h2><span class="n">3</span>Changing versus rebinding: <code>+=</code>, <code>+</code> and friends</h2>
@@ -99,6 +132,21 @@ print(t, u)</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 
   <path d="M380 106 L466 108" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m1)"/>
   <text x="535" y="144" class="mid">y keeps [1]</text>
 </svg></div><figcaption><code>+=</code> on a list changes the object both names share. <code>x = x + [2]</code> builds a new list for <code>x</code> only.</figcaption></figure>
+<p>The mechanism behind this: <code>x += y</code> first asks the type of <code>x</code> for an <strong>in-place add</strong> (the method <code>__iadd__</code>). Lists, dicts (<code>|=</code>), sets (<code>|=</code>, <code>&amp;=</code>, <code>-=</code>), numpy arrays and DataFrames provide one, so the object changes and the name is then re-bound to the same object. If the type has no in-place version, as for <code>int</code>, <code>str</code> and <code>tuple</code>, Python falls back to <code>x = x + y</code>: it builds a new object and rebinds the name. The same rule covers <code>-=</code>, <code>*=</code>, <code>|=</code> and the others.</p>
+<p>One famous consequence combines everything so far. <code>t[0] += [3]</code>, where <code>t</code> is a tuple holding a list, first extends the list in place (that succeeds), then tries to store the result back into <code>t[0]</code> (that fails, because tuples cannot be assigned to). You get a <code>TypeError</code> <strong>and</strong> the list has changed.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">iadd_details.py</span><button class="copy">Copy</button></div><pre><code class="py">t = ([1, 2], &quot;label&quot;)
+try:
+    t[0] += [3]
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(t)                              # the list changed anyway
+
+import numpy as np
+a = np.array([1.0, 2.0]); b = a
+a *= 10                               # in place on the shared array
+print(b)</code></pre><div class="out"><span class="ol">Output</span><pre>TypeError: &#x27;tuple&#x27; object does not support item assignment
+([1, 2, 3], &#x27;label&#x27;)
+[10. 20.]</pre></div></div>
 </section>
 <section class="sec" id="tuples">
 <h2><span class="n">4</span>Tuples are immutable, their contents may not be</h2>
@@ -113,6 +161,10 @@ except TypeError as e:
 print(hash((1, &quot;label&quot;)) == hash((1, &quot;label&quot;)))</code></pre><div class="out"><span class="ol">Output</span><pre>([1, 2, 3], &#x27;label&#x27;)
 TypeError: unhashable type: &#x27;list&#x27;
 True</pre></div></div>
+<p>The hash rule is the reason. A tuple's hash is computed from the hashes of its items, so if an item could change, the tuple's hash would change with it, and a dict that stored the tuple as a key would look for it in the wrong place. Python therefore refuses to hash a tuple that contains anything unhashable. When you need a composite key with a "set-like" part, such as a combination of tags, use a <code>frozenset</code>, which is hashable and ignores order.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hashable_keys.py</span><button class="copy">Copy</button></div><pre><code class="py">runs = {}
+runs[(&quot;small&quot;, frozenset({&quot;eu&quot;, &quot;prod&quot;}))] = 0.91
+print(runs[(&quot;small&quot;, frozenset({&quot;prod&quot;, &quot;eu&quot;}))])     # order of tags does not matter</code></pre><div class="out"><span class="ol">Output</span><pre>0.91</pre></div></div>
 </section>
 <section class="sec" id="views">
 <h2><span class="n">5</span>numpy views and pandas 3 Copy-on-Write</h2>
@@ -128,6 +180,17 @@ picked = a[a &gt; 3]             # boolean mask: a copy
 picked[0] = -1
 print(a, np.shares_memory(a, picked))</code></pre><div class="out"><span class="ol">Output</span><pre>[99  1  2  3  4  5] True
 [99  1  2  3  4  5] False</pre></div></div>
+<p>Other numpy operations return views too: <code>reshape</code> (when the memory layout allows it), the transpose <code>a.T</code>, and <code>a.ravel()</code> in the common case. When you need an independent array, call <code>.copy()</code> explicitly. That is cheap insurance in two situations: when you slice a small part of a huge array and want to keep only the part (the view keeps the whole big buffer alive, 2.1), and when you hand an array to code that might change it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">numpy_more_views.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+
+big = np.zeros(1_000_000)
+small_view = big[:3]
+small_copy = big[:3].copy()
+print(small_view.base is big, small_copy.base is None)
+m = np.arange(6).reshape(2, 3)
+m.T[0, 0] = 42
+print(m[0, 0], np.shares_memory(m, m.T))</code></pre><div class="out"><span class="ol">Output</span><pre>True True
+42 True</pre></div></div>
 <p><strong>pandas</strong> used to behave in a confusing mix of views and copies, which is what <code>SettingWithCopyWarning</code> was about. <strong>pandas 3.0 made Copy-on-Write the only behaviour</strong>: anything you take out of a DataFrame (a column, a filtered subset) acts as its own copy, so changing it never changes the original. To change the original, change it directly with <code>.loc</code>.</p>
 <div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pandas_cow.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
 
@@ -350,7 +413,7 @@ for i in range(n):
     out = out + [i * i]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = []
 for i in range(n):
     out.append(i * i)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
-<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>out + [i * i]</code> builds a whole new list each time. How many items get copied in total?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>339.59 ms</td></tr><tr><td>B</td><td>1.55 ms</td></tr></table></div><p>A copies the entire list on every pass: 1 + 2 + ... + n items, which is O(n²). B changes one list in place, and <code>append</code> is O(1) on average, so the whole loop is O(n). The same trap exists for strings (<code>s = s + piece</code> in a loop), with <code>"".join(parts)</code> as the fix (Module 5).</p></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>out + [i * i]</code> builds a whole new list each time. How many items get copied in total?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>335.18 ms</td></tr><tr><td>B</td><td>1.59 ms</td></tr></table></div><p>A copies the entire list on every pass: 1 + 2 + ... + n items, which is O(n²). B changes one list in place, and <code>append</code> is O(1) on average, so the whole loop is O(n). The same trap exists for strings (<code>s = s + piece</code> in a loop), with <code>"".join(parts)</code> as the fix (Module 5).</p></div></details>
 </article>
 <article class="prob" id="p-features-added-twice" data-pid="m2-2-features-added-twice" data-type="fix" data-level="medium">
 <header class="prob-head"><span class="ptag">ML</span><h3>10. Features added twice</h3></header>

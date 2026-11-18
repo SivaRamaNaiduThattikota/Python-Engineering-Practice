@@ -64,6 +64,24 @@ count = 1
 print(bump(count), count)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;]
 2 1</pre></div></div>
 <p>So a function can <strong>change a mutable argument in place</strong> and the caller sees it, but <strong>assigning to a parameter never affects the caller</strong>. With immutable arguments (numbers, strings, tuples) a function cannot affect the caller's object at all; it can only return a new value.</p>
+<p>Here is what happens during a call, step by step. Python evaluates each argument expression in the caller, which gives an object. It creates a fresh <strong>local namespace</strong> for this one call (a new set of local names, 3.3). Then it assigns each parameter name to its argument object, in that namespace: positional arguments in order, keyword arguments by name, defaults for the rest. The body runs with those names. When the function returns, <code>return value</code> hands back a reference to an object, exactly like an assignment in the other direction, and the local namespace is thrown away. The names disappear; the objects survive if anything else still refers to them (2.1).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">call_steps.py</span><button class="copy">Copy</button></div><pre><code class="py">def inspect_args(items, label=&quot;x&quot;):
+    print(id(items) == id(cart), label)
+    return items                       # hands back the same object
+
+cart = [&quot;a&quot;]
+same = inspect_args(cart, label=&quot;checked&quot;)
+print(same is cart)
+
+_store = {&quot;items&quot;: [&quot;kept&quot;]}           # a module&#x27;s internal state
+
+def get_items():
+    return _store[&quot;items&quot;]             # returning internal state: callers get an alias
+get_items().append(&quot;oops&quot;)
+print(_store[&quot;items&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>True checked
+True
+[&#x27;kept&#x27;, &#x27;oops&#x27;]</pre></div></div>
+<p>The last part shows that returning is aliasing too. A function that returns its internal list gives every caller a way to change that internal state, as if it were a public variable. If callers should only read it, return a copy (<code>list(...)</code>), a tuple, or a read-only view (2.2), so the object's owner stays in control.</p>
 <div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>Passing a list to a function is like giving a stored procedure the <strong>name of a table</strong>, not a copy of it: an <code>UPDATE</code> inside the procedure changes the real table. Assigning a new value to the parameter is like the procedure pointing its local variable at another table: the caller's table is untouched.</p></div></div>
 </section>
 <section class="sec" id="defaults">
@@ -79,6 +97,7 @@ print(log_event.__defaults__)</code></pre><div class="out"><span class="ol">Outp
 [&#x27;start&#x27;, &#x27;stop&#x27;]
 ([&#x27;start&#x27;, &#x27;stop&#x27;],)</pre></div></div>
 <p>The fix is the <code>None</code> default plus a fresh object inside the function. If <code>None</code> is a valid value for that parameter, use a sentinel (2.1).</p>
+<p>Why does Python behave like this? Because <code>def</code> is an ordinary <strong>statement</strong> that runs once, usually at import time, and creates a function object. The default expressions are part of that statement, so they are evaluated then, and the resulting objects are stored on the function in <code>__defaults__</code> (and <code>__kwdefaults__</code> for keyword-only parameters). A call that omits the argument does not re-run the expression; it reuses the stored object. That is cheap, and it is the same mechanism that <code>lambda i=i: ...</code> uses on purpose to capture a value at creation time (6.1).</p>
 <div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">none_default.py</span><button class="copy">Copy</button></div><pre><code class="py">def log_event(event, log=None):
     if log is None:
         log = []                   # a new list on every call that needs one
@@ -99,6 +118,27 @@ print(shared)                      # passing a list on purpose still works</code
 <p>Because a function receives your actual objects, every function makes a choice, whether it says so or not:</p>
 <ul><li><strong>Pure:</strong> read the arguments, return a new result, change nothing. Easiest to test, safe to call twice, safe to retry. The default choice for data transformations: <code>sorted</code>, <code>dict | dict</code>, comprehensions.</li><li><strong>In place:</strong> change the argument and return <code>None</code>, like <code>list.sort()</code>. Saves memory on big data. The name or docstring should make the side effect obvious, and the <code>None</code> return stops callers from assuming they got a copy.</li><li><strong>Defensive copy at the boundary:</strong> when you call code you do not control (plugins, agent tools, user callbacks), pass a copy so it cannot change your data (problem 15).</li></ul>
 <p>What to avoid is the mixture: a function that changes its argument <strong>and</strong> returns it, so the caller thinks they got a new object but actually holds an alias (problems 7 and 11). pandas offers both styles through an <code>inplace=True</code> parameter, and has been moving away from it because the mixture caused so many bugs.</p>
+<p>A real GenAI example shows why the choice matters. A helper sends a conversation to a model and appends the reply. If it appends to the caller's <code>messages</code> list in place, then a retry after a timeout sends the conversation <strong>with the failed attempt already in it</strong>, and the history grows a duplicate turn each time. A pure version builds a new list and returns it, so a retry starts from exactly the same input.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">retry_safe.py</span><button class="copy">Copy</button></div><pre><code class="py">def fake_model(messages):
+    return {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: f&quot;reply to {len(messages)} messages&quot;}
+
+def ask_in_place(messages, question):
+    messages.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question})     # side effect on the caller&#x27;s list
+    return fake_model(messages)
+
+def ask_pure(messages, question):
+    request = [*messages, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]   # new list; input untouched
+    return fake_model(request)
+
+history = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}]
+ask_in_place(history, &quot;Refund?&quot;)
+ask_in_place(history, &quot;Refund?&quot;)                     # a retry
+print(len(history), [m[&quot;content&quot;] for m in history][1:])
+
+history = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}]
+print(ask_pure(history, &quot;Refund?&quot;)[&quot;content&quot;], ask_pure(history, &quot;Refund?&quot;)[&quot;content&quot;], len(history))</code></pre><div class="out"><span class="ol">Output</span><pre>3 [&#x27;Refund?&#x27;, &#x27;Refund?&#x27;]
+reply to 2 messages reply to 2 messages 1</pre></div></div>
+<p>The pure version is <strong>idempotent</strong> for the caller's data: calling it twice with the same input gives the same request, which is the property retries, caching and tests all depend on. The caller then decides explicitly what to keep, for example <code>history = [*history, question_message, reply]</code> once a call has succeeded.</p>
 <div class="callout c-note"><div class="ci">•</div><div><div class="ct">*args and **kwargs (preview of 3.2)</div><p><code>*args</code> arrives as a <strong>new tuple</strong> and <code>**kwargs</code> as a <strong>new dict</strong> on every call, so changing those containers never affects the caller. The values inside them are still the caller's objects (problem 10).</p></div></div>
 </section>
 <section class="sec" id="warmup">
@@ -316,7 +356,7 @@ assert scale_rows([], 3) == []</code></pre></div></div></details>
 def first(xs):
     return xs[0]</code></pre></div>
 <div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">x = first(big)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">x = first(list(big))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
-<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python copy when you call <code>total(big)</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>0.11 µs</td></tr><tr><td>B</td><td>7.51 ms</td></tr></table></div><p>Passing <code>big</code> copies nothing: the parameter just points at the same list, so A costs one index lookup, no matter how big the list is. B first builds a full copy of a million references, then throws it away. When the function itself does heavy work (say, summing every item), that work can hide the copy's cost in a measurement, but the copy is still wasted time and memory. Copy only when the function would otherwise change data the caller needs, or when calling code you do not trust.</p></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python copy when you call <code>total(big)</code>?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>0.11 µs</td></tr><tr><td>B</td><td>7.24 ms</td></tr></table></div><p>Passing <code>big</code> copies nothing: the parameter just points at the same list, so A costs one index lookup, no matter how big the list is. B first builds a full copy of a million references, then throws it away. When the function itself does heavy work (say, summing every item), that work can hide the copy's cost in a measurement, but the copy is still wasted time and memory. Copy only when the function would otherwise change data the caller needs, or when calling code you do not trust.</p></div></details>
 </article>
 <article class="prob" id="p-what-args-and-kwargs-receive" data-pid="m2-4-what-args-and-kwargs-receive" data-type="predict" data-level="medium" data-answer="[&#x27;x&#x27;, &#x27;y&#x27;] {&#x27;k&#x27;: 5}
 tuple False">

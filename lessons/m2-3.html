@@ -73,6 +73,17 @@ print(a[0] is shallow[0], a[0] is deep[0])</code></pre><div class="out"><span cl
 [[1, 2], [3, 7]]
 True False</pre></div></div>
 <p>A shallow copy is enough when the inner objects are <strong>immutable</strong> (a list of numbers or strings, a dict of strings), because nobody can change them anyway. You need a deep copy, or a smarter design, as soon as there is a mutable object inside: a list of dicts, a dict of lists, a nested config.</p>
+<p>It helps to see exactly what a shallow copy does, step by step. <code>b = a.copy()</code> creates a <strong>new, empty list</strong>, then walks <code>a</code> and puts into <code>b</code> a reference to <strong>the same object</strong> that each slot of <code>a</code> refers to. It is precisely <code>b = [item for item in a]</code>. No item is copied; only the outer list is new. So the question "is a shallow copy enough?" is the question "will anyone change one of the <strong>items</strong> in place?" For dicts it is the same with values: <code>d.copy()</code> is a new dict whose keys refer to the same value objects.</p>
+<p>The classic place this bites is configuration. An experiment script copies a base config for each run and changes it, believing each run has its own settings. But a config is usually nested, and the shallow copy shares the inner dicts, so the change to "run 2" also changes the base config and every run that copies it later.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">shallow_config.py</span><button class="copy">Copy</button></div><pre><code class="py">base = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}, &quot;tags&quot;: [&quot;eval&quot;]}
+
+run2 = base.copy()                       # shallow: new outer dict only
+run2[&quot;model&quot;][&quot;temperature&quot;] = 0.9       # changes the SHARED inner dict
+run2[&quot;tags&quot;] = [&quot;eval&quot;, &quot;hot&quot;]           # rebinding a key: only run2 changes
+print(base[&quot;model&quot;][&quot;temperature&quot;], base[&quot;tags&quot;])
+print(run2[&quot;model&quot;] is base[&quot;model&quot;], run2[&quot;tags&quot;] is base[&quot;tags&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>0.9 [&#x27;eval&#x27;]
+True False</pre></div></div>
+<p>The two lines behave differently for the reason 2.2 gave: <code>run2["model"]["temperature"] = 0.9</code> changes an object that both dicts share, while <code>run2["tags"] = [...]</code> points one key of the new outer dict at a new list. Shallow copies protect you against <strong>rebinding</strong> at the top level, never against <strong>changes inside</strong> shared items.</p>
 <div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A shallow copy is like a new table of <strong>foreign keys</strong> pointing at the same dimension rows: add a row to your copy and the original does not see it, but edit a dimension row and both tables see it. A deep copy also duplicates the dimension rows.</p></div></div>
 </section>
 <section class="sec" id="grids">
@@ -103,11 +114,36 @@ print(clone, data)
 print(clone[&quot;a&quot;] is clone[&quot;b&quot;], clone[&quot;a&quot;] is data[&quot;a&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;a&#x27;: [0, 1], &#x27;b&#x27;: [0, 1]} {&#x27;a&#x27;: [0], &#x27;b&#x27;: [0]}
 True False</pre></div></div>
 <p>The costs: deepcopy is pure Python and visits every object, so it is slow on big data (problem 8). It cannot copy some objects at all, such as open files, network connections, locks and generators, and it copies objects you may have wanted to share, like a large read-only lookup table or a loaded model. Classes can control this with <code>__copy__</code> and <code>__deepcopy__</code> methods (Module 9).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">deepcopy_limits.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy
+
+def numbers():
+    yield 1
+
+for thing in [{&quot;cfg&quot;: [1]}, numbers()]:
+    try:
+        print(copy.deepcopy(thing))
+    except TypeError as e:
+        print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;cfg&#x27;: [1]}
+TypeError: cannot pickle &#x27;generator&#x27; object</pre></div></div>
+<p>A popular shortcut for "deep copy" of data that came from JSON is <code>json.loads(json.dumps(x))</code>. It does produce an independent copy, and it is sometimes faster than <code>deepcopy</code> for plain data, but it is <strong>not</strong> a faithful copy: it only works for JSON types, and it changes some of them on the way. Tuples come back as lists and integer dict keys come back as strings, which silently breaks code that looks up <code>d[1]</code> afterwards. Use it only when the data is JSON-shaped already.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">json_copy.py</span><button class="copy">Copy</button></div><pre><code class="py">import copy, json
+
+data = {1: (&quot;a&quot;, &quot;b&quot;), &quot;scores&quot;: [0.5]}
+via_json = json.loads(json.dumps(data))
+print(via_json, copy.deepcopy(data) == data, via_json == data)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;1&#x27;: [&#x27;a&#x27;, &#x27;b&#x27;], &#x27;scores&#x27;: [0.5]} True False</pre></div></div>
 </section>
 <section class="sec" id="avoid">
 <h2><span class="n">4</span>Often the best copy is no copy</h2>
 <p>Copying is a defence against changes. Two designs need much less of it:</p>
 <ul><li><strong>Build new values instead of changing old ones.</strong> <code>cfg | {"temperature": 0.9}</code>, <code>row + [1.0]</code>, <code>sorted(xs)</code> and comprehensions all build new objects and leave the input alone, so there is nothing to protect.</li><li><strong>Make shared data read-only.</strong> Tuples, <code>frozenset</code> and <code>types.MappingProxyType</code> (a read-only view of a dict) cannot be changed, so they can be shared freely (problem 17).</li><li><strong>Copy only the path that changes.</strong> To change one nested value, copy the dicts along the path to it and reuse every other branch. This is called <strong>structural sharing</strong>, and it is how immutable data libraries stay fast (problem 14).</li></ul>
+<p>Structural sharing is easier to see than to describe. To change <code>cfg["model"]["temperature"]</code> without touching <code>cfg</code>, build a new outer dict and a new <code>model</code> dict, and let everything else (here the large <code>data</code> section) be shared by reference. Only the two dicts on the path to the change are new; nothing is deep-copied, and the original is untouched.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">structural_sharing.py</span><button class="copy">Copy</button></div><pre><code class="py">cfg = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.2}, &quot;data&quot;: {&quot;paths&quot;: [&quot;a.jsonl&quot;, &quot;b.jsonl&quot;]}}
+
+new = {**cfg, &quot;model&quot;: {**cfg[&quot;model&quot;], &quot;temperature&quot;: 0.9}}
+print(cfg[&quot;model&quot;][&quot;temperature&quot;], new[&quot;model&quot;][&quot;temperature&quot;])
+print(new[&quot;data&quot;] is cfg[&quot;data&quot;], new[&quot;model&quot;] is cfg[&quot;model&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>0.2 0.9
+True False</pre></div></div>
+<p>This only stays safe if nobody changes the shared branches in place later, which is why it pairs naturally with the "build new values" habit above. It is the style of React state updates, of Redux, and of libraries such as <code>pyrsistent</code>: every change produces a new version that shares most of its structure with the old one, which is cheap and makes the history of versions available for free.</p>
 <div class="callout c-note"><div class="ci">•</div><div><div class="ct">numpy and pandas</div><p><code>arr.copy()</code> copies a numeric numpy array completely. <code>df.copy()</code> (deep by default) copies the data and the index, but <strong>not</strong> Python objects stored inside an object column, such as lists in a <code>tags</code> column (problem 13). With pandas 3 Copy-on-Write (2.2) you rarely need <code>df.copy()</code> just to protect a DataFrame from changes made through a derived one.</p></div></div>
 </section>
 <section class="sec" id="warmup">
@@ -263,7 +299,7 @@ c[1] = [0]</code></pre></div>
 doc = [{&quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;refund&quot;, &quot;k&quot;: 5, &quot;filters&quot;: {&quot;year&quot;: 2025, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;]}}, &quot;ok&quot;: True}
        for _ in range(3000)]</code></pre></div>
 <div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">clone = copy.deepcopy(doc)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">clone = json.loads(json.dumps(doc))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
-<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>deepcopy</code> is written in Python and keeps a memo for every object. Where does the <code>json</code> module do its work?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>31.73 ms</td></tr><tr><td>B</td><td>19.70 ms</td></tr></table></div><p><code>json.dumps</code> and <code>json.loads</code> run in C, while <code>deepcopy</code> runs Python code for every single object and records each one in its memo. In the timings above the round trip is faster, though not by a huge margin; the exact margin depends on the data's shape and the Python build, so measure on your own data. But it is only a copy <strong>for JSON data</strong>: tuples come back as lists, non-string dict keys become strings, and anything that is not JSON (dates, sets, custom objects) raises an error (problem 12). Use it when you know the data is pure JSON, such as a parsed API response.</p></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>deepcopy</code> is written in Python and keeps a memo for every object. Where does the <code>json</code> module do its work?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>32.81 ms</td></tr><tr><td>B</td><td>19.35 ms</td></tr></table></div><p><code>json.dumps</code> and <code>json.loads</code> run in C, while <code>deepcopy</code> runs Python code for every single object and records each one in its memo. In the timings above the round trip is faster, though not by a huge margin; the exact margin depends on the data's shape and the Python build, so measure on your own data. But it is only a copy <strong>for JSON data</strong>: tuples come back as lists, non-string dict keys become strings, and anything that is not JSON (dates, sets, custom objects) raises an error (problem 12). Use it when you know the data is pure JSON, such as a parsed API response.</p></div></details>
 </article>
 <article class="prob" id="p-rows-that-are-copies-of-shared-rows" data-pid="m2-3-rows-that-are-copies-of-shared-rows" data-type="predict" data-level="medium" data-answer="[[&#x27;x&#x27;], [&#x27;x&#x27;], [&#x27;x&#x27;]]
 [[&#x27;x&#x27;], [], []]

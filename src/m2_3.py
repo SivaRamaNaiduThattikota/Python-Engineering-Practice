@@ -67,6 +67,26 @@ section("three", "Alias, shallow copy, deep copy",
     p("""A shallow copy is enough when the inner objects are **immutable** (a list of numbers or strings, a dict of
     strings), because nobody can change them anyway. You need a deep copy, or a smarter design, as soon as there is a
     mutable object inside: a list of dicts, a dict of lists, a nested config."""),
+    p("""It helps to see exactly what a shallow copy does, step by step. `b = a.copy()` creates a **new, empty list**, then walks
+    `a` and puts into `b` a reference to **the same object** that each slot of `a` refers to. It is precisely
+    `b = [item for item in a]`. No item is copied; only the outer list is new. So the question "is a shallow copy enough?"
+    is the question "will anyone change one of the **items** in place?" For dicts it is the same with values: `d.copy()` is a new
+    dict whose keys refer to the same value objects."""),
+    p("""The classic place this bites is configuration. An experiment script copies a base config for each run and changes it,
+    believing each run has its own settings. But a config is usually nested, and the shallow copy shares the inner dicts, so the
+    change to "run 2" also changes the base config and every run that copies it later."""),
+    ex("""
+    base = {"model": {"name": "small", "temperature": 0.2}, "tags": ["eval"]}
+
+    run2 = base.copy()                       # shallow: new outer dict only
+    run2["model"]["temperature"] = 0.9       # changes the SHARED inner dict
+    run2["tags"] = ["eval", "hot"]           # rebinding a key: only run2 changes
+    print(base["model"]["temperature"], base["tags"])
+    print(run2["model"] is base["model"], run2["tags"] is base["tags"])
+    """, "shallow_config.py"),
+    p("""The two lines behave differently for the reason 2.2 gave: `run2["model"]["temperature"] = 0.9` changes an object that
+    both dicts share, while `run2["tags"] = [...]` points one key of the new outer dict at a new list. Shallow copies protect
+    you against **rebinding** at the top level, never against **changes inside** shared items."""),
     callout("sql", "SQL / Power BI", """A shallow copy is like a new table of **foreign keys** pointing at the same
     dimension rows: add a row to your copy and the original does not see it, but edit a dimension row and both tables see
     it. A deep copy also duplicates the dimension rows."""),
@@ -108,6 +128,29 @@ section("deepcopy", "What deepcopy does for you, and what it costs",
     copy some objects at all, such as open files, network connections, locks and generators, and it copies objects you
     may have wanted to share, like a large read-only lookup table or a loaded model. Classes can control this with
     `__copy__` and `__deepcopy__` methods (Module 9)."""),
+    ex("""
+    import copy
+
+    def numbers():
+        yield 1
+
+    for thing in [{"cfg": [1]}, numbers()]:
+        try:
+            print(copy.deepcopy(thing))
+        except TypeError as e:
+            print("TypeError:", e)
+    """, "deepcopy_limits.py"),
+    p("""A popular shortcut for "deep copy" of data that came from JSON is `json.loads(json.dumps(x))`. It does produce an
+    independent copy, and it is sometimes faster than `deepcopy` for plain data, but it is **not** a faithful copy: it only works
+    for JSON types, and it changes some of them on the way. Tuples come back as lists and integer dict keys come back as
+    strings, which silently breaks code that looks up `d[1]` afterwards. Use it only when the data is JSON-shaped already."""),
+    ex("""
+    import copy, json
+
+    data = {1: ("a", "b"), "scores": [0.5]}
+    via_json = json.loads(json.dumps(data))
+    print(via_json, copy.deepcopy(data) == data, via_json == data)
+    """, "json_copy.py"),
 )
 
 section("avoid", "Often the best copy is no copy",
@@ -119,6 +162,20 @@ section("avoid", "Often the best copy is no copy",
     - **Copy only the path that changes.** To change one nested value, copy the dicts along the path to it and reuse
       every other branch. This is called **structural sharing**, and it is how immutable data libraries stay fast
       (problem 14)."""),
+    p("""Structural sharing is easier to see than to describe. To change `cfg["model"]["temperature"]` without touching `cfg`,
+    build a new outer dict and a new `model` dict, and let everything else (here the large `data` section) be shared by
+    reference. Only the two dicts on the path to the change are new; nothing is deep-copied, and the original is untouched."""),
+    ex("""
+    cfg = {"model": {"name": "small", "temperature": 0.2}, "data": {"paths": ["a.jsonl", "b.jsonl"]}}
+
+    new = {**cfg, "model": {**cfg["model"], "temperature": 0.9}}
+    print(cfg["model"]["temperature"], new["model"]["temperature"])
+    print(new["data"] is cfg["data"], new["model"] is cfg["model"])
+    """, "structural_sharing.py"),
+    p("""This only stays safe if nobody changes the shared branches in place later, which is why it pairs naturally with the
+    "build new values" habit above. It is the style of React state updates, of Redux, and of libraries such as `pyrsistent`:
+    every change produces a new version that shares most of its structure with the old one, which is cheap and makes the
+    history of versions available for free."""),
     callout("note", "numpy and pandas", """`arr.copy()` copies a numeric numpy array completely. `df.copy()` (deep by
     default) copies the data and the index, but **not** Python objects stored inside an object column, such as lists in
     a `tags` column (problem 13). With pandas 3 Copy-on-Write (2.2) you rarely need `df.copy()` just to protect a DataFrame
