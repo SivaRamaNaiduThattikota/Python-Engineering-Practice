@@ -17,6 +17,23 @@ The build runs every snippet in the same Pyodide the site uses, so every output 
 is real. It stops if a solution fails its tests, a starter already passes, or the "faster"
 option is not actually faster.
 
+The build needs a few package wheels next to the local Pyodide:
+
+    python build/fetch_wheels.py numpy pandas pydantic pytest packaging
+
+## How some modules are graded
+
+`assets/py-helper.js` is shared by the build and the browser, so both grade the same way.
+
+- Module 13 (testing): learners write test files. `lessontools.run_pytest` runs real pytest on
+  them, and `swap_impl` replaces the code under test (between `# --- code under test` and
+  `# --- tests`) with buggy versions that the tests must catch.
+- Module 14 (concurrency): the browser cannot start threads or processes, so executors and
+  `Thread.start` run tasks inline (the process pool still checks picklability), and
+  `asyncio.run` uses an event loop on simulated time, so timings are exact.
+- Module 15 (imports): `lessontools.make_tree` writes small packages to disk and puts them on
+  `sys.path`; `forget` clears them from the import cache.
+
 ## Running locally
 
     python -m http.server
