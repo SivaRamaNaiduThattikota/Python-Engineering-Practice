@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7.P · Module 7 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m7-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 7 · Error handling</span></div>
+  <h1>7.P Module 7 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 7: try/except/else/finally, raising and custom exceptions, chaining and notes, design choices such as EAFP and consistency, and the failure modes of API calls. Then a mini project that needs all of it: a resilient client that gets valid JSON from an LLM.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">3 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For every error in a problem, ask the three questions this module has been about. <strong>Who should handle it?</strong> The lowest level that can do something useful; everyone else lets it pass (7.3). <strong>What kind is it?</strong> Expected and recoverable (bad input, a missing optional value), transient (timeouts, rate limits, overloaded servers), permanent (a bad request, a wrong key), or a bug (7.4). <strong>What must survive?</strong> The original type and traceback (bare <code>raise</code>, <code>raise ... from</code>), the consistency of the data, and enough context to debug it later (7.2).</p>
+<p>The problems mix the lessons on purpose. The mini project at the end combines all of them in one client that real applications need.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-the-whole-statement" data-pid="m7-p-the-whole-statement" data-type="predict" data-level="easy" data-answer="[&#x27;parsed&#x27;, &quot;keys=[&#x27;a&#x27;, &#x27;b&#x27;]&quot;, &#x27;done&#x27;]
+[&#x27;JSONDecodeError&#x27;, &#x27;done&#x27;]">
+<header class="prob-head"><h3>1. The whole statement</h3></header>
+<div class="code"><pre><code class="py">import json
+
+def run(text):
+    out = []
+    try:
+        data = json.loads(text)
+        out.append(&quot;parsed&quot;)
+    except ValueError as e:
+        out.append(type(e).__name__)
+    else:
+        out.append(f&quot;keys={sorted(data)}&quot;)
+    finally:
+        out.append(&quot;done&quot;)
+    return out
+
+print(run(&#x27;{&quot;b&quot;: 1, &quot;a&quot;: 2}&#x27;))
+print(run(&quot;{bad&quot;))
+try:
+    run(&#x27;[1, 2]&#x27;)
+except TypeError as e:
+    print(&quot;caller:&quot;, type(e).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted</code> on a list of numbers works; on a dict it sorts the keys.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An error in <code>else</code> is not caught by the same statement's <code>except</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;parsed&#x27;, &quot;keys=[&#x27;a&#x27;, &#x27;b&#x27;]&quot;, &#x27;done&#x27;]
+[&#x27;JSONDecodeError&#x27;, &#x27;done&#x27;]</pre></div><p>For valid JSON the <code>try</code> succeeds, <code>else</code> lists the keys and <code>finally</code> adds "done". Invalid JSON raises <code>JSONDecodeError</code>, a <code>ValueError</code>, so the handler records its exact type, <code>else</code> is skipped and <code>finally</code> still runs. For <code>[1, 2]</code> the parse succeeds, and <code>sorted([1, 2])</code> also works, so no error happens: the result is returned, nothing reaches the caller's <code>except</code>, and nothing is printed for it.</p></div></details>
+</article>
+<article class="prob" id="p-parse-a-boolean-setting" data-pid="m7-p-parse-a-boolean-setting" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Parse a boolean setting</h3></header>
+<div class="prob-q"><p>Environment variables and config files hold booleans as text. Write <code>parse_bool(value)</code> accepting <code>true/false</code>, <code>yes/no</code>, <code>on/off</code> and <code>1/0</code> in any case and with surrounding spaces, and real <code>bool</code>s. Anything else raises <code>ValueError</code> with a message listing the accepted values and showing the bad one with <code>repr</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def parse_bool(value):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert [parse_bool(v) for v in ["true", " YES ", "On", "1", True]] == [True] * 5
+assert [parse_bool(v) for v in ["false", "no", "OFF", "0", False]] == [False] * 5
+for bad in ["maybe", "", "2", None]:
+    try:
+        parse_bool(bad)
+        assert False, bad
+    except ValueError as e:
+        assert repr(bad) in str(e) and "yes" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert [parse_bool(v) for v in [&quot;true&quot;, &quot; YES &quot;, &quot;On&quot;, &quot;1&quot;, True]] == [True] * 5
+assert [parse_bool(v) for v in [&quot;false&quot;, &quot;no&quot;, &quot;OFF&quot;, &quot;0&quot;, False]] == [False] * 5
+for bad in [&quot;maybe&quot;, &quot;&quot;, &quot;2&quot;, None]:
+    try:
+        parse_bool(bad)
+        assert False, bad
+    except ValueError as e:
+        assert repr(bad) in str(e) and &quot;yes&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle <code>bool</code> first, then <code>str(value).strip().lower()</code> and look it up in two sets.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">TRUE = {&quot;true&quot;, &quot;yes&quot;, &quot;on&quot;, &quot;1&quot;}
+FALSE = {&quot;false&quot;, &quot;no&quot;, &quot;off&quot;, &quot;0&quot;}
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    text = value.strip().lower() if isinstance(value, str) else None
+    if text in TRUE:
+        return True
+    if text in FALSE:
+        return False
+    accepted = &quot;, &quot;.join(sorted(TRUE | FALSE))
+    raise ValueError(f&quot;expected one of {accepted}, got {value!r}&quot;)</code></pre></div><p><code>bool("false")</code> is <code>True</code> (any non-empty string is truthy, 1.1), which is why configuration parsing needs an explicit function. Accepting a fixed vocabulary and rejecting everything else with a message that lists the options turns a silent misconfiguration into an error at start-up, where it is cheap to fix. <code>None</code> becomes a <code>ValueError</code> with the same message rather than an <code>AttributeError</code> from calling <code>.strip()</code> on it. Sorting the accepted values makes the message the same on every run, since sets of strings have no stable order (6.2).</p></div></details>
+</article>
+<article class="prob" id="p-an-except-clause-that-catches-less-than-" data-pid="m7-p-an-except-clause-that-catches-less-than-" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. An except clause that catches less than it says</h3></header>
+<div class="prob-q"><p><code>to_float(value)</code> should return <code>None</code> for values that are not numbers, both bad strings and wrong types. It still crashes on <code>None</code>. Fix the <code>except</code> clause.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def to_float(value):
+    try:
+        return float(value)
+    except ValueError or TypeError:
+        return None
+</textarea>
+<script type="text/plain" class="prob-tests">assert to_float("2.5") == 2.5 and to_float(3) == 3.0
+assert to_float("abc") is None
+assert to_float(None) is None and to_float([1]) is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert to_float(&quot;2.5&quot;) == 2.5 and to_float(3) == 3.0
+assert to_float(&quot;abc&quot;) is None
+assert to_float(None) is None and to_float([1]) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ValueError or TypeError</code> is an expression; evaluate it in your head.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def to_float(value):
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None</code></pre></div><p><code>except</code> takes an expression that evaluates to an exception class or a tuple of them. <code>ValueError or TypeError</code> is an <code>or</code> expression, which returns its first truthy operand (1.1), and a class is always truthy, so it evaluates to just <code>ValueError</code>: <code>TypeError</code> was never caught. A tuple lists several types. Linters flag this pattern, which looks right when read aloud and is silently wrong.</p></div></details>
+</article>
+<article class="prob" id="p-notes-causes-and-the-as-name" data-pid="m7-p-notes-causes-and-the-as-name" data-type="predict" data-level="medium" data-answer="4
+bad row {&#x27;n&#x27;: &#x27;x&#x27;} | [&#x27;original: ValueError&#x27;] | ValueError
+bad row {} | [&#x27;original: KeyError&#x27;] | KeyError
+False False">
+<header class="prob-head"><h3>4. Notes, causes and the as name</h3></header>
+<div class="code"><pre><code class="py">class ParseError(Exception):
+    pass
+
+def parse(row):
+    try:
+        return int(row[&quot;n&quot;])
+    except (KeyError, ValueError) as e:
+        err = ParseError(f&quot;bad row {row!r}&quot;)
+        err.add_note(f&quot;original: {type(e).__name__}&quot;)
+        raise err from e
+
+for row in [{&quot;n&quot;: &quot;4&quot;}, {&quot;n&quot;: &quot;x&quot;}, {}]:
+    try:
+        print(parse(row))
+    except ParseError as e:
+        print(e, &quot;|&quot;, e.__notes__, &quot;|&quot;, type(e.__cause__).__name__)
+print(&quot;e&quot; in dir(), &quot;err&quot; in dir())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each failure creates a new <code>ParseError</code> linked to the original with <code>from</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>4
+bad row {&#x27;n&#x27;: &#x27;x&#x27;} | [&#x27;original: ValueError&#x27;] | ValueError
+bad row {} | [&#x27;original: KeyError&#x27;] | KeyError
+False False</pre></div><p>The valid row returns 4. The other two raise a <code>ParseError</code> whose message shows the row, whose note names the original type, and whose <code>__cause__</code> is the original exception (a <code>ValueError</code> from <code>int</code>, a <code>KeyError</code> from the missing key). At module level after the loop, the <code>as e</code> name has been deleted by the last handler, and <code>err</code> was local to <code>parse</code>, so neither exists.</p></div></details>
+</article>
+<article class="prob" id="p-wrap-json-errors-with-the-line-number" data-pid="m7-p-wrap-json-errors-with-the-line-number" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Wrap JSON errors with the line number</h3></header>
+<div class="prob-q"><p>Define <code>RecordError(ValueError)</code> with a <code>lineno</code> attribute. Write a generator <code>records(lines)</code> that yields the parsed object of each non-blank line and, on invalid JSON, raises <code>RecordError(f"line {n}: {e.msg}")</code> with <code>lineno=n</code> (counting from 1), chained from the original error.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import json
+
+def records(lines):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">lines = ['{"id": 1}', "", '{"id": 2', '{"id": 3}']
+g = records(lines)
+assert next(g) == {"id": 1}
+try:
+    next(g)
+    assert False
+except RecordError as e:
+    assert e.lineno == 3 and str(e) == "line 3: Expecting ',' delimiter" and isinstance(e.__cause__, json.JSONDecodeError)
+assert issubclass(RecordError, ValueError)
+assert list(records(['{"a": 1}', "  ", '[2]'])) == [{"a": 1}, [2]]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">lines = [&#x27;{&quot;id&quot;: 1}&#x27;, &quot;&quot;, &#x27;{&quot;id&quot;: 2&#x27;, &#x27;{&quot;id&quot;: 3}&#x27;]
+g = records(lines)
+assert next(g) == {&quot;id&quot;: 1}
+try:
+    next(g)
+    assert False
+except RecordError as e:
+    assert e.lineno == 3 and str(e) == &quot;line 3: Expecting &#x27;,&#x27; delimiter&quot; and isinstance(e.__cause__, json.JSONDecodeError)
+assert issubclass(RecordError, ValueError)
+assert list(records([&#x27;{&quot;a&quot;: 1}&#x27;, &quot;  &quot;, &#x27;[2]&#x27;])) == [{&quot;a&quot;: 1}, [2]]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>class RecordError(ValueError):</code> with <code>__init__(self, message, lineno)</code> calling <code>super().__init__(message)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the generator: <code>for n, line in enumerate(lines, start=1)</code>, skip blank lines, put only <code>json.loads(line)</code> in the <code>try</code>, and <code>yield</code> the result after it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+class RecordError(ValueError):
+    def __init__(self, message, lineno):
+        super().__init__(message)
+        self.lineno = lineno
+
+
+def records(lines):
+    for n, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise RecordError(f&quot;line {n}: {e.msg}&quot;, lineno=n) from e
+        yield obj</code></pre></div><p>Inheriting from <code>ValueError</code> means existing code that catches <code>ValueError</code> keeps working, while new code can catch <code>RecordError</code> and read <code>e.lineno</code> instead of parsing the message. The parse is in the <code>try</code> and the <code>yield</code> outside it: if the <code>yield</code> were inside, an exception thrown into the generator at that point by its consumer could be caught by the wrong handler. <code>e.msg</code> is the <code>JSONDecodeError</code>'s message without position details, and <code>from e</code> keeps those details in <code>__cause__</code>. Because the generator is lazy (6.3), the error is raised when the bad line is reached, after the first record was already delivered.</p></div></details>
+</article>
+<article class="prob" id="p-a-retry-that-creates-duplicates" data-pid="m7-p-a-retry-that-creates-duplicates" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. A retry that creates duplicates</h3></header>
+<div class="prob-q"><p><code>create_ticket(api, payload, attempts)</code> calls <code>api(payload, idempotency_key)</code> and retries on <code>TimeoutError</code>. The API creates a ticket once per idempotency key, but customers get duplicate tickets after timeouts. Fix it so every attempt for one ticket uses the <strong>same</strong> key. (<code>new_key</code> is injected so the test can see the keys.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def create_ticket(api, payload, attempts, new_key):
+    for attempt in range(1, attempts + 1):
+        try:
+            return api(payload, new_key())
+        except TimeoutError:
+            if attempt == attempts:
+                raise
+</textarea>
+<script type="text/plain" class="prob-tests">import itertools
+counter = itertools.count(1)
+new_key = lambda: f"key-{next(counter)}"
+created, seen_keys = {}, []
+def api(payload, key):
+    seen_keys.append(key)
+    created.setdefault(key, payload)       # the server creates once per key
+    if len(seen_keys) < 3:
+        raise TimeoutError("response lost")   # the ticket WAS created, but the reply timed out
+    return key
+assert create_ticket(api, {"title": "refund"}, 5, new_key) == "key-1"
+assert seen_keys == ["key-1", "key-1", "key-1"] and len(created) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import itertools
+counter = itertools.count(1)
+new_key = lambda: f&quot;key-{next(counter)}&quot;
+created, seen_keys = {}, []
+def api(payload, key):
+    seen_keys.append(key)
+    created.setdefault(key, payload)       # the server creates once per key
+    if len(seen_keys) &lt; 3:
+        raise TimeoutError(&quot;response lost&quot;)   # the ticket WAS created, but the reply timed out
+    return key
+assert create_ticket(api, {&quot;title&quot;: &quot;refund&quot;}, 5, new_key) == &quot;key-1&quot;
+assert seen_keys == [&quot;key-1&quot;, &quot;key-1&quot;, &quot;key-1&quot;] and len(created) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Generate the key once, before the loop.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def create_ticket(api, payload, attempts, new_key):
+    key = new_key()
+    for attempt in range(1, attempts + 1):
+        try:
+            return api(payload, key)
+        except TimeoutError:
+            if attempt == attempts:
+                raise</code></pre></div><p>A timeout does not tell you whether the server did the work; here it did, every time, and only the replies were lost. With a new key per attempt, the server saw three different operations and created three tickets. The idempotency key identifies the <strong>logical operation</strong>, so it must be created once, before the first attempt, and reused for every retry; then the server can recognise a repeat and return the original result. Payment APIs (Stripe), and increasingly LLM batch and file APIs, support idempotency keys for exactly this reason.</p></div></details>
+</article>
+<article class="prob" id="p-attempt-every-cleanup-step" data-pid="m7-p-attempt-every-cleanup-step" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Attempt every cleanup step</h3></header>
+<div class="prob-q"><p>After a training run, several temporary files must be removed. Write <code>cleanup(paths, remove)</code> that calls <code>remove(path)</code> for <strong>every</strong> path, even after failures. <code>FileNotFoundError</code> is fine and ignored. Other <code>OSError</code>s are collected; at the end, if there were any, raise <code>ExceptionGroup("cleanup failed", errors)</code>, each error with a note naming its path. Return the number of files removed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def cleanup(paths, remove):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">removed = []
+def remove(path):
+    if path.startswith("gone"):
+        raise FileNotFoundError(path)
+    if path.startswith("locked"):
+        raise PermissionError(f"in use: {path}")
+    removed.append(path)
+
+assert cleanup(["a.tmp", "gone.tmp", "b.tmp"], remove) == 2 and removed == ["a.tmp", "b.tmp"]
+removed.clear()
+try:
+    cleanup(["locked1.ckpt", "c.tmp", "gone2", "locked2.ckpt"], remove)
+    assert False
+except ExceptionGroup as eg:
+    assert removed == ["c.tmp"]
+    assert [e.__notes__ for e in eg.exceptions] == [["path: locked1.ckpt"], ["path: locked2.ckpt"]]
+assert cleanup([], remove) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">removed = []
+def remove(path):
+    if path.startswith(&quot;gone&quot;):
+        raise FileNotFoundError(path)
+    if path.startswith(&quot;locked&quot;):
+        raise PermissionError(f&quot;in use: {path}&quot;)
+    removed.append(path)
+
+assert cleanup([&quot;a.tmp&quot;, &quot;gone.tmp&quot;, &quot;b.tmp&quot;], remove) == 2 and removed == [&quot;a.tmp&quot;, &quot;b.tmp&quot;]
+removed.clear()
+try:
+    cleanup([&quot;locked1.ckpt&quot;, &quot;c.tmp&quot;, &quot;gone2&quot;, &quot;locked2.ckpt&quot;], remove)
+    assert False
+except ExceptionGroup as eg:
+    assert removed == [&quot;c.tmp&quot;]
+    assert [e.__notes__ for e in eg.exceptions] == [[&quot;path: locked1.ckpt&quot;], [&quot;path: locked2.ckpt&quot;]]
+assert cleanup([], remove) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>FileNotFoundError</code> before <code>OSError</code> (it is a subclass). Collect the others with <code>e.add_note(...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def cleanup(paths, remove):
+    errors, count = [], 0
+    for path in paths:
+        try:
+            remove(path)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            e.add_note(f&quot;path: {path}&quot;)
+            errors.append(e)
+        else:
+            count += 1
+    if errors:
+        raise ExceptionGroup(&quot;cleanup failed&quot;, errors)
+    return count</code></pre></div><p>Cleanup is the one place where stopping at the first error is wrong: one locked file should not leave every other temporary file on disk. So each step is attempted, the failures are collected, and they are all reported together at the end, which is what exception groups are for (7.2). <code>FileNotFoundError</code> is caught first because it is an <code>OSError</code> too, and "already gone" is the desired end state. The notes record which path each error belongs to without changing the exception types, so a caller can still use <code>except* PermissionError</code>. Only <code>OSError</code>s are collected; anything else, such as a <code>TypeError</code> from a bad path, is a bug and stops the loop at once.</p></div></details>
+</article>
+<article class="prob" id="p-mostly-invalid-numbers-check-first-or-ca" data-pid="m7-p-mostly-invalid-numbers-check-first-or-ca" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Mostly invalid numbers: check first or catch</h3></header>
+<div class="prob-q"><p>Both convert 200,000 strings to integers, using <code>None</code> for invalid ones. 90% of the strings are invalid. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">values = [str(i) if i % 10 == 0 else f&quot;id-{i}&quot; for i in range(200_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = []
+for v in values:
+    try:
+        out.append(int(v))
+    except ValueError:
+        out.append(None)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = [int(v) if v.isdigit() else None for v in values]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does each version pay for an invalid string?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>361.41 ms</td></tr><tr><td>B</td><td>22.30 ms</td></tr></table></div><p>For each invalid string, version A starts converting, raises a <code>ValueError</code> (building the exception and its traceback), unwinds to the handler and clears it. Version B asks <code>isdigit</code>, a quick C-level scan, and skips the conversion entirely. When failures are the <strong>common</strong> case, look-before-you-leap is faster (7.3); when they are rare, the <code>try</code> version costs almost nothing. Note that <code>isdigit</code> is not a full validator: it rejects <code>"-5"</code> and <code>" 5"</code>, which <code>int</code> accepts, so the two versions only agree because the data here has no signs or spaces.</p></div></details>
+</article>
+<article class="prob" id="p-an-exception-crossing-three-functions" data-pid="m7-p-an-exception-crossing-three-functions" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. An exception crossing three functions</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">log = []
+
+def low(x):
+    try:
+        return 10 // x
+    finally:
+        log.append(&quot;low finally&quot;)
+
+def mid(x):
+    try:
+        return low(x) + 1
+    except TypeError:
+        log.append(&quot;mid TypeError&quot;)
+        return -1
+
+def top(x):
+    try:
+        return mid(x)
+    except ZeroDivisionError:
+        log.append(&quot;top ZeroDivision&quot;)
+        return 0
+    finally:
+        log.append(&quot;top finally&quot;)
+
+top(5)
+log.clear(); top(0)
+log.clear(); top(&quot;a&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>x = 5</td><td><input class="cell" data-a="[&#x27;low finally&#x27;, &#x27;top finally&#x27;]" data-s="[&#x27;low finally&#x27;, &#x27;top finally&#x27;]" aria-label="log at x = 5" autocomplete="off"></td></tr><tr><td>x = 0</td><td><input class="cell" data-a="[&#x27;low finally&#x27;, &#x27;top ZeroDivision&#x27;, &#x27;top finally&#x27;]" data-s="[&#x27;low finally&#x27;, &#x27;top ZeroDivision&#x27;, &#x27;top finally&#x27;]" aria-label="log at x = 0" autocomplete="off"></td></tr><tr><td>x = &#x27;a&#x27;</td><td><input class="cell" data-a="[&#x27;low finally&#x27;, &#x27;mid TypeError&#x27;, &#x27;top finally&#x27;]" data-s="[&#x27;low finally&#x27;, &#x27;mid TypeError&#x27;, &#x27;top finally&#x27;]" aria-label="log at x = &#x27;a&#x27;" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each <code>finally</code> runs as the exception passes through its function. The first matching handler up the stack handles it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>x = 5</td><td><code>[&#x27;low finally&#x27;, &#x27;top finally&#x27;]</code></td></tr><tr><td>x = 0</td><td><code>[&#x27;low finally&#x27;, &#x27;top ZeroDivision&#x27;, &#x27;top finally&#x27;]</code></td></tr><tr><td>x = &#x27;a&#x27;</td><td><code>[&#x27;low finally&#x27;, &#x27;mid TypeError&#x27;, &#x27;top finally&#x27;]</code></td></tr></table></div><p>With 5, nothing fails: both <code>finally</code> blocks run on the way out. With 0, <code>low</code> raises <code>ZeroDivisionError</code>; its <code>finally</code> runs as the exception leaves; <code>mid</code> only handles <code>TypeError</code>, so the exception continues to <code>top</code>, whose handler runs, then its <code>finally</code>. With <code>"a"</code>, <code>10 // "a"</code> raises <code>TypeError</code>; <code>low</code>'s <code>finally</code> runs, and <code>mid</code> handles it and returns normally, so <code>top</code> sees no exception and only its <code>finally</code> runs.</p></div></details>
+</article>
+<article class="prob" id="p-flatten-nested-try-blocks" data-pid="m7-p-flatten-nested-try-blocks" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Flatten nested try blocks</h3></header>
+<div class="prob-q"><p>Rewrite with a single <code>try</code> and one <code>except</code> per error type. Same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import json
+
+def load_prompt(path):
+    try:
+        f = open(path, encoding=&quot;utf-8&quot;)
+        try:
+            try:
+                data = json.load(f)
+                try:
+                    return data[&quot;template&quot;].strip()
+                except KeyError:
+                    return &quot;error: no template&quot;
+            except json.JSONDecodeError:
+                return &quot;error: invalid JSON&quot;
+        finally:
+            f.close()
+    except FileNotFoundError:
+        return &quot;error: missing file&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+def write(name, text):
+    p = os.path.join(d, name)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+    return p
+assert load_prompt(write("ok.json", '{"template": "  Answer: {q} "}')) == "Answer: {q}"
+assert load_prompt(write("nokey.json", '{"x": 1}')) == "error: no template"
+assert load_prompt(write("bad.json", "{oops")) == "error: invalid JSON"
+assert load_prompt(os.path.join(d, "missing.json")) == "error: missing file"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+def write(name, text):
+    p = os.path.join(d, name)
+    with open(p, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(text)
+    return p
+assert load_prompt(write(&quot;ok.json&quot;, &#x27;{&quot;template&quot;: &quot;  Answer: {q} &quot;}&#x27;)) == &quot;Answer: {q}&quot;
+assert load_prompt(write(&quot;nokey.json&quot;, &#x27;{&quot;x&quot;: 1}&#x27;)) == &quot;error: no template&quot;
+assert load_prompt(write(&quot;bad.json&quot;, &quot;{oops&quot;)) == &quot;error: invalid JSON&quot;
+assert load_prompt(os.path.join(d, &quot;missing.json&quot;)) == &quot;error: missing file&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>with open(...)</code> replaces the inner <code>try</code>/<code>finally</code>. The three handlers can all follow one <code>try</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def load_prompt(path):
+    try:
+        with open(path, encoding=&quot;utf-8&quot;) as f:
+            data = json.load(f)
+        return data[&quot;template&quot;].strip()
+    except FileNotFoundError:
+        return &quot;error: missing file&quot;
+    except json.JSONDecodeError:
+        return &quot;error: invalid JSON&quot;
+    except KeyError:
+        return &quot;error: no template&quot;</code></pre></div><p>The nesting existed for two reasons: closing the file (which <code>with</code> does, 10.2) and pairing each handler with its step. Since the three exception types cannot be confused with each other, one <code>try</code> with three handlers is equivalent and readable from top to bottom. Reading the template after the <code>with</code> block also closes the file as early as possible. If two steps could raise the same type for different reasons, separate <code>try</code> blocks would still be needed, which is the narrowness rule of 7.1.</p></div></details>
+</article>
+<article class="prob" id="p-errors-in-the-middle-of-a-stream" data-pid="m7-p-errors-in-the-middle-of-a-stream" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Errors in the middle of a stream</h3></header>
+<div class="prob-q"><p>Streaming APIs can report an error <strong>after</strong> sending part of the answer, as an event like <code>{"type": "error", "error": {"type": "overloaded_error", "message": "..."}}</code>. Define <code>StreamError(Exception)</code> with attributes <code>kind</code> and <code>partial</code> (the text received so far). Write a generator <code>stream_text(events)</code> that yields the <code>"text"</code> of each <code>{"type": "delta", "text": ...}</code> event, stops at <code>{"type": "stop"}</code>, ignores other event types, and on an error event raises <code>StreamError(message, kind, partial)</code>. If the events end without a stop event, raise <code>StreamError("stream ended early", "incomplete", partial)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def stream_text(events):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ok = [{"type": "ping"}, {"type": "delta", "text": "Refunds "}, {"type": "delta", "text": "take 5 days."}, {"type": "stop"}]
+assert "".join(stream_text(ok)) == "Refunds take 5 days."
+bad = [{"type": "delta", "text": "Refunds "}, {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}]
+got = []
+try:
+    for piece in stream_text(bad):
+        got.append(piece)
+    assert False
+except StreamError as e:
+    assert (str(e), e.kind, e.partial, got) == ("busy", "overloaded_error", "Refunds ", ["Refunds "])
+try:
+    list(stream_text([{"type": "delta", "text": "Hi"}]))
+    assert False
+except StreamError as e:
+    assert e.kind == "incomplete" and e.partial == "Hi"
+assert list(stream_text([{"type": "stop"}, {"type": "delta", "text": "late"}])) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ok = [{&quot;type&quot;: &quot;ping&quot;}, {&quot;type&quot;: &quot;delta&quot;, &quot;text&quot;: &quot;Refunds &quot;}, {&quot;type&quot;: &quot;delta&quot;, &quot;text&quot;: &quot;take 5 days.&quot;}, {&quot;type&quot;: &quot;stop&quot;}]
+assert &quot;&quot;.join(stream_text(ok)) == &quot;Refunds take 5 days.&quot;
+bad = [{&quot;type&quot;: &quot;delta&quot;, &quot;text&quot;: &quot;Refunds &quot;}, {&quot;type&quot;: &quot;error&quot;, &quot;error&quot;: {&quot;type&quot;: &quot;overloaded_error&quot;, &quot;message&quot;: &quot;busy&quot;}}]
+got = []
+try:
+    for piece in stream_text(bad):
+        got.append(piece)
+    assert False
+except StreamError as e:
+    assert (str(e), e.kind, e.partial, got) == (&quot;busy&quot;, &quot;overloaded_error&quot;, &quot;Refunds &quot;, [&quot;Refunds &quot;])
+try:
+    list(stream_text([{&quot;type&quot;: &quot;delta&quot;, &quot;text&quot;: &quot;Hi&quot;}]))
+    assert False
+except StreamError as e:
+    assert e.kind == &quot;incomplete&quot; and e.partial == &quot;Hi&quot;
+assert list(stream_text([{&quot;type&quot;: &quot;stop&quot;}, {&quot;type&quot;: &quot;delta&quot;, &quot;text&quot;: &quot;late&quot;}])) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the pieces in a list as you yield them; <code>"".join(parts)</code> is the partial text.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use the <code>for</code> loop's <code>else</code> (it runs when the events run out) or a flag for the missing stop event.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class StreamError(Exception):
+    def __init__(self, message, kind, partial):
+        super().__init__(message)
+        self.kind = kind
+        self.partial = partial
+
+
+def stream_text(events):
+    parts = []
+    for event in events:
+        kind = event.get(&quot;type&quot;)
+        if kind == &quot;delta&quot;:
+            parts.append(event[&quot;text&quot;])
+            yield event[&quot;text&quot;]
+        elif kind == &quot;stop&quot;:
+            return
+        elif kind == &quot;error&quot;:
+            err = event.get(&quot;error&quot;, {})
+            raise StreamError(err.get(&quot;message&quot;, &quot;stream error&quot;), err.get(&quot;type&quot;, &quot;unknown&quot;), &quot;&quot;.join(parts))
+    raise StreamError(&quot;stream ended early&quot;, &quot;incomplete&quot;, &quot;&quot;.join(parts))</code></pre></div><p>In a stream, the HTTP status was 200 long before the problem, so the error arrives as data and must be turned into an exception by your code. Carrying the partial text on the exception lets the caller choose: show what arrived with a warning, retry the whole request, or ask the model to continue from where it stopped. The user has already seen those words, so silently discarding them is rarely right. A stream that ends without its stop event is also an error, typically a dropped connection, and treating it as a complete answer would pass off a truncated reply as finished. The event names follow Anthropic's streaming format; OpenAI's streams differ in detail but need the same handling.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-agent-loop" data-pid="m7-p-read-the-code-an-agent-loop" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Read the code: an agent loop</h3></header>
+<div class="prob-q"><p><code>run_agent(model, tools, question, max_steps)</code> asks the model what to do; the model either answers or requests a tool call. Tool problems the model can fix (an unknown tool, wrong arguments, a <code>ToolError</code>) should be sent back to it as an error message; any other exception from a tool is a bug and must propagate. After <code>max_steps</code> model calls without an answer, raise <code>AgentError</code>. The current code can loop forever and feeds bugs to the model. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">class ToolError(Exception):
+    pass
+
+
+class AgentError(Exception):
+    pass
+
+
+def run_agent(model, tools, question, max_steps=5):
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]
+    while True:
+        reply = model(messages)
+        if reply[&quot;type&quot;] == &quot;answer&quot;:
+            return reply[&quot;text&quot;]
+        try:
+            result = tools[reply[&quot;tool&quot;]](**reply[&quot;args&quot;])
+            messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;content&quot;: str(result)})
+        except Exception as e:
+            messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;content&quot;: f&quot;error: {e}&quot;})
+</textarea>
+<script type="text/plain" class="prob-tests">def scripted(*replies):
+    seen = []
+    def model(messages):
+        seen.append(messages[-1]["content"])
+        return replies[len(seen) - 1]
+    return model, seen
+
+def search(query):
+    if not query:
+        raise ToolError("empty query")
+    return ["doc1"]
+
+def broken(x):
+    return x.missing_attribute
+
+tools = {"search": search, "broken": broken}
+model, seen = scripted({"type": "tool", "tool": "lookup", "args": {}},
+                       {"type": "tool", "tool": "search", "args": {"q": "x"}},
+                       {"type": "tool", "tool": "search", "args": {"query": ""}},
+                       {"type": "tool", "tool": "search", "args": {"query": "refund"}},
+                       {"type": "answer", "text": "5 days"})
+assert run_agent(model, tools, "refund time?") == "5 days"
+assert seen[1] == "error: unknown tool 'lookup'" and seen[2].startswith("error: bad arguments") and seen[3] == "error: empty query"
+assert seen[4] == "['doc1']"
+
+model, seen = scripted(*[{"type": "tool", "tool": "search", "args": {"query": "a"}}] * 10)
+try:
+    run_agent(model, tools, "loop", max_steps=3)
+    assert False
+except AgentError:
+    assert len(seen) == 3
+
+model, _ = scripted({"type": "tool", "tool": "broken", "args": {"x": 1}})
+try:
+    run_agent(model, tools, "bug")
+    assert False
+except AttributeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def scripted(*replies):
+    seen = []
+    def model(messages):
+        seen.append(messages[-1][&quot;content&quot;])
+        return replies[len(seen) - 1]
+    return model, seen
+
+def search(query):
+    if not query:
+        raise ToolError(&quot;empty query&quot;)
+    return [&quot;doc1&quot;]
+
+def broken(x):
+    return x.missing_attribute
+
+tools = {&quot;search&quot;: search, &quot;broken&quot;: broken}
+model, seen = scripted({&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;lookup&quot;, &quot;args&quot;: {}},
+                       {&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;x&quot;}},
+                       {&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;query&quot;: &quot;&quot;}},
+                       {&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;query&quot;: &quot;refund&quot;}},
+                       {&quot;type&quot;: &quot;answer&quot;, &quot;text&quot;: &quot;5 days&quot;})
+assert run_agent(model, tools, &quot;refund time?&quot;) == &quot;5 days&quot;
+assert seen[1] == &quot;error: unknown tool &#x27;lookup&#x27;&quot; and seen[2].startswith(&quot;error: bad arguments&quot;) and seen[3] == &quot;error: empty query&quot;
+assert seen[4] == &quot;[&#x27;doc1&#x27;]&quot;
+
+model, seen = scripted(*[{&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;query&quot;: &quot;a&quot;}}] * 10)
+try:
+    run_agent(model, tools, &quot;loop&quot;, max_steps=3)
+    assert False
+except AgentError:
+    assert len(seen) == 3
+
+model, _ = scripted({&quot;type&quot;: &quot;tool&quot;, &quot;tool&quot;: &quot;broken&quot;, &quot;args&quot;: {&quot;x&quot;: 1}})
+try:
+    run_agent(model, tools, &quot;bug&quot;)
+    assert False
+except AttributeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Replace <code>while True</code> with <code>for step in range(max_steps)</code> and raise <code>AgentError</code> after the loop.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>reply["tool"] in tools</code> before calling. Use <code>inspect.signature(fn).bind(**args)</code> to detect wrong arguments without calling (7.3).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch only <code>ToolError</code> around the actual call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+
+class ToolError(Exception):
+    pass
+
+
+class AgentError(Exception):
+    pass
+
+
+def _tool_message(tools, name, args):
+    fn = tools.get(name)
+    if fn is None:
+        return f&quot;error: unknown tool {name!r}&quot;
+    try:
+        inspect.signature(fn).bind(**args)
+    except TypeError as e:
+        return f&quot;error: bad arguments for {name!r}: {e}&quot;
+    try:
+        return str(fn(**args))
+    except ToolError as e:
+        return f&quot;error: {e}&quot;
+
+
+def run_agent(model, tools, question, max_steps=5):
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]
+    for _ in range(max_steps):
+        reply = model(messages)
+        if reply[&quot;type&quot;] == &quot;answer&quot;:
+            return reply[&quot;text&quot;]
+        messages = messages + [{&quot;role&quot;: &quot;tool&quot;, &quot;content&quot;: _tool_message(tools, reply[&quot;tool&quot;], reply[&quot;args&quot;])}]
+    raise AgentError(f&quot;no answer after {max_steps} steps&quot;)</code></pre></div><p>Three bugs. <strong>No step limit</strong>: a model that keeps calling tools would loop forever, costing money on every iteration; agent loops always need a maximum number of steps (and usually a token or time budget too), with a specific error when it is reached. <strong><code>except Exception</code></strong>: the <code>AttributeError</code> inside <code>broken</code> is a bug in your tool, and feeding it to the model as "error: 'int' object has no attribute..." hides it from you and confuses the model. <strong>Unhelpful messages</strong>: an unknown tool produced <code>error: 'lookup'</code> (the <code>str</code> of a <code>KeyError</code>), which the model cannot act on. The fix separates the three model-fixable cases, each with a clear message, from everything else, which propagates. The helper also keeps <code>run_agent</code> short, and building a new <code>messages</code> list each step avoids changing a list the model function might still hold (2.4).</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-test-error-handling-code" data-pid="m7-p-how-do-you-test-error-handling-code" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. How do you test error-handling code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>By making the failures happen on demand. Inject dependencies (the transport, <code>sleep</code>, <code>clock</code>, the random generator) so tests can pass fakes that raise specific exceptions on specific calls, return truncated or invalid output, or advance time instantly; then assert on behaviour: which exception reaches the caller (<code>pytest.raises(SomeError, match=...)</code>, 13.1), how many calls were made, which delays would have been waited, what was logged, and that data was left consistent. Test each class of failure separately: the expected ones (handled), the transient ones (retried, then raised), the permanent ones (not retried) and bugs (propagated). Test the boundaries too: zero attempts, deadlines exactly reached, empty batches. In larger systems, fault-injection tools and chaos testing deliberately break dependencies in staging, because fallbacks that are never exercised tend not to work.</p></div></details>
+</article>
+<article class="prob" id="p-what-makes-error-handling-for-llm-and-ot" data-pid="m7-p-what-makes-error-handling-for-llm-and-ot" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What makes error handling for LLM and other remote APIs different from error handling in local code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Local errors are mostly deterministic: the same input fails the same way, so they are bugs to fix. Remote calls add failures that depend on time and on systems you do not control: timeouts, dropped connections, rate limits and overload, which are transient and need retries with backoff, jitter and deadlines; and ambiguity, since after a timeout you do not know whether the work was done, which makes idempotency essential. LLMs add a further layer: a successful response can still be wrong for your purposes, truncated, refused, or not in the required format, so validation, repair loops and explicit checks of finish reasons are part of error handling. Costs and latency matter (every retry is paid for and slow), so budgets, circuit breakers and caching are part of the design. And observability becomes central: request ids, attempt counts, error types and latencies must be logged, because intermittent failures can only be diagnosed after the fact.</p></div></details>
+</article>
+<article class="prob" id="p-everything-at-once" data-pid="m7-p-everything-at-once" data-type="predict" data-level="hard" data-answer="[0, &#x27;f0&#x27;, &#x27;RetryableError&#x27;, &#x27;f1&#x27;, &#x27;lookup&#x27;, &#x27;f2&#x27;, 30, &#x27;f3&#x27;]
+RuntimeWarning True True">
+<header class="prob-head"><h3>15. Everything at once</h3></header>
+<div class="code"><pre><code class="py">import warnings
+
+class AppError(Exception): pass
+class RetryableError(AppError): pass
+
+def step(n):
+    if n == 1:
+        raise RetryableError(&quot;flaky&quot;)
+    if n == 2:
+        raise KeyError(&quot;bug&quot;)
+    return n * 10
+
+results = []
+for n in [0, 1, 2, 3]:
+    try:
+        results.append(step(n))
+    except AppError as e:
+        results.append(type(e).__name__)
+    except LookupError:
+        results.append(&quot;lookup&quot;)
+        continue
+    finally:
+        results.append(f&quot;f{n}&quot;)
+print(results)
+
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter(&quot;always&quot;)
+    warnings.warn(&quot;fallback used&quot;, RuntimeWarning)
+print(w[0].category.__name__, issubclass(RetryableError, Exception), isinstance(KeyError(), LookupError))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>finally</code> runs even when the handler uses <code>continue</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0, &#x27;f0&#x27;, &#x27;RetryableError&#x27;, &#x27;f1&#x27;, &#x27;lookup&#x27;, &#x27;f2&#x27;, 30, &#x27;f3&#x27;]
+RuntimeWarning True True</pre></div><p>For 0 and 3 the step succeeds and the result is appended, then the <code>finally</code> marker. For 1, the <code>RetryableError</code> is caught by the base-class handler, which appends the exact type name. For 2, the <code>KeyError</code> is a <code>LookupError</code>; its handler appends "lookup" and continues, but <code>finally</code> still runs first, so <code>f2</code> is recorded. The warning keeps its category, and both class checks are true.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a resilient JSON client</h2>
+<p>Your application needs structured answers from a model: a JSON object with specific keys. Two providers are available, a primary and a fallback. The client must retry transient failures with backoff, move on to the fallback when the primary keeps failing, repair invalid output by telling the model what was wrong, stop within a deadline, and raise clear, specific exceptions. All dependencies are injected so every behaviour can be tested instantly.</p>
+<article class="prob" id="p-resilient-client" data-pid="m7-p-resilient-client" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>16. Get valid JSON, reliably</h3></header>
+<div class="prob-q"><p>Implement <code>complete_json(prompt, providers, required, *, sleep, clock, rng, attempts=3, repairs=2, deadline=30.0, base=0.5)</code>.</p>
+<ul><li><code>providers</code> is a list of <code>(name, call)</code>; <code>call(messages)</code> returns reply text or raises. Try them in order.</li><li><strong>Transient errors</strong> (<code>TimeoutError</code>, <code>ConnectionError</code>, <code>RateLimitError</code>, <code>ServerError</code>) are retried on the same provider up to <code>attempts</code> calls in total, waiting <code>rng.uniform(0, base * 2 ** (n - 1))</code> before retry <code>n</code>, or the rate limit's <code>retry_after</code> if larger. Before any wait, if <code>clock() - start + wait &gt; deadline</code>, raise <code>DeadlineError</code> from the last error. When a provider's attempts are used up, move to the next provider (no wait). If all fail, raise <code>UnavailableError</code> from the last error.</li><li><strong><code>BadRequestError</code></strong> is permanent: re-raise it unchanged, immediately. Other exceptions propagate.</li><li><strong>Invalid output</strong> (not a JSON object, or missing a <code>required</code> key): append the reply as an assistant message and a user message <code>"Invalid reply: &lt;error&gt;. Reply with only a JSON object with keys: &lt;keys&gt;."</code>, and call the <strong>same</strong> provider again, up to <code>repairs</code> times; repair calls do not count as transient attempts. When repairs run out, raise <code>InvalidOutputError</code> from the last error.</li><li>Return <code>(data, info)</code> where <code>info</code> is <code>{"provider": name, "calls": total calls made, "repairs": repairs used}</code>.</li></ul>
+<p>The exception classes are defined for you; <code>LLMError</code> is the base of all of them. The caller's <code>messages</code> are never modified (the client builds them from <code>prompt</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">import json
+
+
+class LLMError(Exception):
+    pass
+
+
+class RateLimitError(LLMError):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ServerError(LLMError):
+    pass
+
+
+class BadRequestError(LLMError):
+    pass
+
+
+class UnavailableError(LLMError):
+    pass
+
+
+class DeadlineError(LLMError):
+    pass
+
+
+class InvalidOutputError(LLMError):
+    pass
+
+
+def complete_json(prompt, providers, required, *, sleep, clock, rng, attempts=3, repairs=2, deadline=30.0, base=0.5):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)
+now = [0.0]
+clock = lambda: now[0]
+waits = []
+def sleep(s):
+    waits.append(s)
+    now[0] += s
+
+def provider(*outcomes):
+    log = []
+    def call(messages):
+        log.append([m["content"] for m in messages])
+        out = outcomes[len(log) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return call, log
+
+def reset():
+    now[0] = 0.0
+    waits.clear()
+
+# 1. transient errors, then a repair, on the primary
+reset()
+a, a_log = provider(TimeoutError("t"), RateLimitError("429", retry_after=3.0), '{"label": "spam"}', '{"label": "spam", "score": 0.9}')
+data, info = complete_json("classify", [("a", a)], ["label", "score"], sleep=sleep, clock=clock, rng=top)
+assert data == {"label": "spam", "score": 0.9} and info == {"provider": "a", "calls": 4, "repairs": 1}
+assert waits == [0.5, 3.0]
+assert a_log[3][-1] == "Invalid reply: missing keys: score. Reply with only a JSON object with keys: label, score."
+assert a_log[3][0] == "classify" and a_log[3][1] == '{"label": "spam"}'
+
+# 2. the primary is down, the fallback answers
+reset()
+a, _ = provider(ServerError("500"), ConnectionError("c"), TimeoutError("t"))
+b, b_log = provider('{"label": "ham", "score": 0.2}')
+data, info = complete_json("x", [("a", a), ("b", b)], ["label", "score"], sleep=sleep, clock=clock, rng=top)
+assert info == {"provider": "b", "calls": 4, "repairs": 0} and waits == [0.5, 1.0] and b_log == [["x"]]
+
+# 3. everything down
+reset()
+a, _ = provider(TimeoutError("a1"), TimeoutError("a2"))
+b, _ = provider(TimeoutError("b1"), TimeoutError("b2"))
+try:
+    complete_json("x", [("a", a), ("b", b)], ["k"], sleep=sleep, clock=clock, rng=top, attempts=2)
+    assert False
+except UnavailableError as e:
+    assert str(e.__cause__) == "b2" and isinstance(e, LLMError)
+
+# 4. bad request is not retried, not failed over
+reset()
+a, a_log = provider(BadRequestError("400 too long"), "never")
+b, b_log = provider("never")
+try:
+    complete_json("x", [("a", a), ("b", b)], ["k"], sleep=sleep, clock=clock, rng=top)
+    assert False
+except BadRequestError as e:
+    assert str(e) == "400 too long" and len(a_log) == 1 and b_log == []
+
+# 5. the deadline stops the waits
+reset()
+a, a_log = provider(RateLimitError("429", retry_after=20.0), RateLimitError("429", retry_after=20.0), "never")
+try:
+    complete_json("x", [("a", a)], ["k"], sleep=sleep, clock=clock, rng=top, deadline=30.0)
+    assert False
+except DeadlineError as e:
+    assert waits == [20.0] and len(a_log) == 2 and isinstance(e.__cause__, RateLimitError)
+
+# 6. output that never becomes valid
+reset()
+a, a_log = provider("not json", "[1, 2]", "still not")
+try:
+    complete_json("x", [("a", a)], ["k"], sleep=sleep, clock=clock, rng=top, repairs=2)
+    assert False
+except InvalidOutputError as e:
+    assert len(a_log) == 3 and isinstance(e.__cause__, ValueError) and waits == []
+
+# 7. a bug propagates
+reset()
+a, _ = provider(KeyError("bug"))
+try:
+    complete_json("x", [("a", a)], ["k"], sleep=sleep, clock=clock, rng=top)
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)
+now = [0.0]
+clock = lambda: now[0]
+waits = []
+def sleep(s):
+    waits.append(s)
+    now[0] += s
+
+def provider(*outcomes):
+    log = []
+    def call(messages):
+        log.append([m[&quot;content&quot;] for m in messages])
+        out = outcomes[len(log) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return call, log
+
+def reset():
+    now[0] = 0.0
+    waits.clear()
+
+# 1. transient errors, then a repair, on the primary
+reset()
+a, a_log = provider(TimeoutError(&quot;t&quot;), RateLimitError(&quot;429&quot;, retry_after=3.0), &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.9}&#x27;)
+data, info = complete_json(&quot;classify&quot;, [(&quot;a&quot;, a)], [&quot;label&quot;, &quot;score&quot;], sleep=sleep, clock=clock, rng=top)
+assert data == {&quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.9} and info == {&quot;provider&quot;: &quot;a&quot;, &quot;calls&quot;: 4, &quot;repairs&quot;: 1}
+assert waits == [0.5, 3.0]
+assert a_log[3][-1] == &quot;Invalid reply: missing keys: score. Reply with only a JSON object with keys: label, score.&quot;
+assert a_log[3][0] == &quot;classify&quot; and a_log[3][1] == &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;
+
+# 2. the primary is down, the fallback answers
+reset()
+a, _ = provider(ServerError(&quot;500&quot;), ConnectionError(&quot;c&quot;), TimeoutError(&quot;t&quot;))
+b, b_log = provider(&#x27;{&quot;label&quot;: &quot;ham&quot;, &quot;score&quot;: 0.2}&#x27;)
+data, info = complete_json(&quot;x&quot;, [(&quot;a&quot;, a), (&quot;b&quot;, b)], [&quot;label&quot;, &quot;score&quot;], sleep=sleep, clock=clock, rng=top)
+assert info == {&quot;provider&quot;: &quot;b&quot;, &quot;calls&quot;: 4, &quot;repairs&quot;: 0} and waits == [0.5, 1.0] and b_log == [[&quot;x&quot;]]
+
+# 3. everything down
+reset()
+a, _ = provider(TimeoutError(&quot;a1&quot;), TimeoutError(&quot;a2&quot;))
+b, _ = provider(TimeoutError(&quot;b1&quot;), TimeoutError(&quot;b2&quot;))
+try:
+    complete_json(&quot;x&quot;, [(&quot;a&quot;, a), (&quot;b&quot;, b)], [&quot;k&quot;], sleep=sleep, clock=clock, rng=top, attempts=2)
+    assert False
+except UnavailableError as e:
+    assert str(e.__cause__) == &quot;b2&quot; and isinstance(e, LLMError)
+
+# 4. bad request is not retried, not failed over
+reset()
+a, a_log = provider(BadRequestError(&quot;400 too long&quot;), &quot;never&quot;)
+b, b_log = provider(&quot;never&quot;)
+try:
+    complete_json(&quot;x&quot;, [(&quot;a&quot;, a), (&quot;b&quot;, b)], [&quot;k&quot;], sleep=sleep, clock=clock, rng=top)
+    assert False
+except BadRequestError as e:
+    assert str(e) == &quot;400 too long&quot; and len(a_log) == 1 and b_log == []
+
+# 5. the deadline stops the waits
+reset()
+a, a_log = provider(RateLimitError(&quot;429&quot;, retry_after=20.0), RateLimitError(&quot;429&quot;, retry_after=20.0), &quot;never&quot;)
+try:
+    complete_json(&quot;x&quot;, [(&quot;a&quot;, a)], [&quot;k&quot;], sleep=sleep, clock=clock, rng=top, deadline=30.0)
+    assert False
+except DeadlineError as e:
+    assert waits == [20.0] and len(a_log) == 2 and isinstance(e.__cause__, RateLimitError)
+
+# 6. output that never becomes valid
+reset()
+a, a_log = provider(&quot;not json&quot;, &quot;[1, 2]&quot;, &quot;still not&quot;)
+try:
+    complete_json(&quot;x&quot;, [(&quot;a&quot;, a)], [&quot;k&quot;], sleep=sleep, clock=clock, rng=top, repairs=2)
+    assert False
+except InvalidOutputError as e:
+    assert len(a_log) == 3 and isinstance(e.__cause__, ValueError) and waits == []
+
+# 7. a bug propagates
+reset()
+a, _ = provider(KeyError(&quot;bug&quot;))
+try:
+    complete_json(&quot;x&quot;, [(&quot;a&quot;, a)], [&quot;k&quot;], sleep=sleep, clock=clock, rng=top)
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Split the work: a <code>_parse(reply, required)</code> that returns a dict or raises <code>ValueError</code>, and a loop per provider that counts transient attempts and repairs separately.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>messages</code> per provider, starting from <code>[{"role": "user", "content": prompt}]</code>, and extend it with <code>+</code> for repairs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each provider: <code>while True:</code> call; on a transient error, count an attempt, and either wait (after the deadline check) or break to the next provider; on success, parse, and on <code>ValueError</code> either repair (<code>continue</code>) or raise <code>InvalidOutputError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 4</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Track <code>calls</code> across providers, and the last transient error for the final <code>UnavailableError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+class LLMError(Exception):
+    pass
+
+
+class RateLimitError(LLMError):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class ServerError(LLMError):
+    pass
+
+
+class BadRequestError(LLMError):
+    pass
+
+
+class UnavailableError(LLMError):
+    pass
+
+
+class DeadlineError(LLMError):
+    pass
+
+
+class InvalidOutputError(LLMError):
+    pass
+
+
+TRANSIENT = (TimeoutError, ConnectionError, RateLimitError, ServerError)
+
+
+def _parse(reply, required):
+    data = json.loads(reply)
+    if not isinstance(data, dict):
+        raise ValueError(&quot;reply is not a JSON object&quot;)
+    missing = [k for k in required if k not in data]
+    if missing:
+        raise ValueError(f&quot;missing keys: {&#x27;, &#x27;.join(missing)}&quot;)
+    return data
+
+
+def complete_json(prompt, providers, required, *, sleep, clock, rng, attempts=3, repairs=2, deadline=30.0, base=0.5):
+    start = clock()
+    calls = 0
+    last_transient = None
+    for name, call in providers:
+        messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: prompt}]
+        failures = 0
+        repairs_used = 0
+        while True:
+            calls += 1
+            try:
+                reply = call(messages)
+            except TRANSIENT as e:
+                last_transient = e
+                failures += 1
+                if failures &gt;= attempts:
+                    break
+                wait = rng.uniform(0, base * 2 ** (failures - 1))
+                wait = max(wait, getattr(e, &quot;retry_after&quot;, None) or 0)
+                if clock() - start + wait &gt; deadline:
+                    raise DeadlineError(f&quot;deadline of {deadline}s would be exceeded&quot;) from e
+                sleep(wait)
+                continue
+            try:
+                data = _parse(reply, required)
+            except ValueError as e:
+                if repairs_used &gt;= repairs:
+                    raise InvalidOutputError(f&quot;invalid output from {name} after {repairs_used} repairs&quot;) from e
+                repairs_used += 1
+                messages = messages + [
+                    {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: reply},
+                    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Invalid reply: {e}. Reply with only a JSON object with keys: {&#x27;, &#x27;.join(required)}.&quot;},
+                ]
+                continue
+            return data, {&quot;provider&quot;: name, &quot;calls&quot;: calls, &quot;repairs&quot;: repairs_used}
+    raise UnavailableError(f&quot;all {len(providers)} providers failed&quot;) from last_transient</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>try / except / else (7.1):</strong> two separate <code>try</code> blocks keep the call and the parsing apart, so a transient network error and an invalid reply can never be confused, and <code>BadRequestError</code>, being neither transient nor a <code>ValueError</code>, propagates untouched, as does the <code>KeyError</code> bug.</li><li><strong>Custom exceptions and chaining (7.2):</strong> one <code>LLMError</code> base lets callers catch everything from the client, while <code>UnavailableError</code>, <code>DeadlineError</code> and <code>InvalidOutputError</code> tell them <strong>why</strong> it failed; each is raised <code>from</code> the last underlying error, so the details survive in <code>__cause__</code>.</li><li><strong>Design (7.3):</strong> the fallback provider is used only after transient failures, never for bad requests or bugs; <code>info</code> records which provider answered and how many repairs were needed, so degradation is measurable; and the conversation is rebuilt with <code>+</code>, never modifying shared state.</li><li><strong>API errors (7.4):</strong> exponential backoff with injected jitter, <code>Retry-After</code> taking precedence, a deadline checked before every wait, no wait before failing over, and a repair loop that shows the model its invalid reply and the exact error.</li></ul>
+<p>Injecting <code>sleep</code>, <code>clock</code> and <code>rng</code> is what made seven scenarios testable in milliseconds. In production you would pass <code>time.sleep</code>, <code>time.monotonic</code> and <code>random.Random()</code>, add logging of each attempt (7.4), and possibly a circuit breaker per provider (7.3). Module 8 turns the retry part into a reusable decorator.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Handle each error where something useful can be done; everywhere else, let it pass untouched.</li><li>Classify by reaction: expected, transient (retry with backoff, jitter and a deadline), permanent (raise), bug (propagate).</li><li>Keep the evidence: bare <code>raise</code>, <code>raise ... from</code>, notes, attributes on custom exceptions, and one log entry with the traceback.</li><li>Keep data consistent and operations safe to repeat: build new then swap, idempotency keys created once.</li><li>Inject time, randomness and transports so every failure path can be tested.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

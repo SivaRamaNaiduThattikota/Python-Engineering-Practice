@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7.1 · Exceptions and try / except</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m7-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 7 · Error handling</span></div>
+  <h1>7.1 Exceptions and try / except</h1>
+  <p>What happens when an error is raised, how it travels up the call stack, and how to read a traceback. <code>try</code>, <code>except</code>, <code>else</code> and <code>finally</code> step by step, the exception hierarchy, and catching narrowly so real bugs stay visible. Applied to parsing data rows, model replies and configuration files.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="travel">
+<h2><span class="n">1</span>What happens when an exception is raised</h2>
+<p>An <strong>exception</strong> is an object that describes an error. When Python hits a problem it cannot continue from, such as dividing by zero, a missing dict key or a string that is not a number, it <strong>raises</strong> an exception: it creates the exception object and stops running the current code immediately. No further line of that block runs. What happens next depends on whether anyone is ready to <strong>handle</strong> it.</p>
+<p>To understand where an exception goes, picture the <strong>call stack</strong>: the list of function calls that are currently running. If <code>main</code> calls <code>load</code>, which calls <code>parse</code>, all three are on the stack, each paused and waiting for the one it called to return. When <code>parse</code> raises, Python looks for a handler (a matching <code>except</code>) in <code>parse</code>. If there is none, <code>parse</code> is abandoned and the exception travels to <code>load</code>, at the line that called <code>parse</code>. If <code>load</code> has no handler either, it is abandoned too, and so on up the stack. This is called <strong>unwinding</strong>. If the exception reaches the top without being handled, the program stops and prints a <strong>traceback</strong>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">unwinding.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse(text):
+    print(&quot;  parse starts&quot;)
+    value = int(text)            # raises ValueError for &quot;abc&quot;
+    print(&quot;  parse done&quot;)        # never runs for bad input
+    return value
+
+def load(text):
+    print(&quot; load starts&quot;)
+    result = parse(text) * 2
+    print(&quot; load done&quot;)          # skipped too: the exception passed through load
+    return result
+
+def main():
+    try:
+        print(load(&quot;21&quot;))
+        print(load(&quot;abc&quot;))
+    except ValueError as e:
+        print(&quot;main handled:&quot;, e)
+
+main()</code></pre><div class="out"><span class="ol">Output</span><pre> load starts
+  parse starts
+  parse done
+ load done
+42
+ load starts
+  parse starts
+main handled: invalid literal for int() with base 10: &#x27;abc&#x27;</pre></div></div>
+<p>The second call shows the whole journey: <code>parse</code> stops at <code>int(text)</code>, <code>load</code> stops at the line that called <code>parse</code>, and the first matching handler, in <code>main</code>, receives the exception. Neither "done" line runs. Everything between the <code>raise</code> and the handler is skipped, which is the point: the code after a failed step usually cannot work, so Python does not try.</p>
+<p>A <strong>traceback</strong> is the record of that journey. It lists the calls from the <strong>oldest</strong> (the top of your program) to the <strong>most recent</strong> (where the error happened), hence its header "most recent call last", and the <strong>last line</strong> names the exception type and message. Read it from the bottom: first what went wrong, then where, then how the program got there. The <code>traceback</code> module can format the same report as a string, which is what logging uses (7.3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">traceback_parts.py</span><button class="copy">Copy</button></div><pre><code class="py">import traceback
+
+def parse(text):
+    return int(text)
+
+def load(text):
+    return parse(text) * 2
+
+try:
+    load(&quot;abc&quot;)
+except ValueError:
+    report = traceback.format_exc()
+lines = report.strip().splitlines()
+print(lines[0])
+print([l.split(&quot;, in &quot;)[-1] for l in lines if l.strip().startswith(&quot;File&quot;)])   # oldest call first
+print(lines[-1])</code></pre><div class="out"><span class="ol">Output</span><pre>Traceback (most recent call last):
+[&#x27;&lt;module&gt;&#x27;, &#x27;load&#x27;, &#x27;parse&#x27;]
+ValueError: invalid literal for int() with base 10: &#x27;abc&#x27;</pre></div></div>
+</section>
+<section class="sec" id="except">
+<h2><span class="n">2</span><code>try</code> and <code>except</code>: catching by type</h2>
+<p>A <code>try</code> block marks code whose exceptions you want to handle. After it come one or more <code>except</code> clauses, each naming the exception types it handles. When an exception is raised inside the <code>try</code> block, Python checks the <code>except</code> clauses <strong>from top to bottom</strong> and runs the <strong>first</strong> one whose type matches. "Matches" means <code>isinstance(exception, that_type)</code>: the exception is of that class or of a <strong>subclass</strong> of it. If none matches, the exception continues up the stack as if there were no <code>try</code> at all. If no exception happens, all the <code>except</code> clauses are skipped.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">except_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">def to_number(text):
+    try:
+        return float(text)
+    except ValueError as e:
+        print(&quot;  bad text:&quot;, e)
+    except TypeError as e:
+        print(&quot;  not a string:&quot;, e)
+    return None
+
+print(to_number(&quot;3.5&quot;), to_number(&quot;3,5&quot;), to_number(None))</code></pre><div class="out"><span class="ol">Output</span><pre>  bad text: could not convert string to float: &#x27;3,5&#x27;
+  not a string: float() argument must be a string or a real number, not &#x27;NoneType&#x27;
+3.5 None None</pre></div></div>
+<p><code>as e</code> binds the exception object to a name, so you can read its message with <code>str(e)</code> and its arguments with <code>e.args</code>. Several types can share one handler as a tuple, <code>except (ValueError, TypeError) as e:</code>. Because the first match wins, put <strong>specific</strong> types before <strong>general</strong> ones: an <code>except Exception</code> placed first would catch everything, and the specific clauses below it could never run (problem 3).</p>
+<p>One scope detail surprises people: at the end of the <code>except</code> block, Python <strong>deletes</strong> the name bound with <code>as</code>. The exception object refers to the whole traceback, which refers to every local variable of every frame involved, so keeping it alive would keep all of them alive. If you need the exception later, assign it to another name inside the block.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">except_name.py</span><button class="copy">Copy</button></div><pre><code class="py">try:
+    {}[&quot;model&quot;]
+except KeyError as e:
+    print(repr(e), e.args, str(e))
+    saved = e
+try:
+    print(e)
+except NameError as missing:
+    print(&quot;NameError:&quot;, missing)
+print(type(saved).__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>KeyError(&#x27;model&#x27;) (&#x27;model&#x27;,) &#x27;model&#x27;
+NameError: name &#x27;e&#x27; is not defined
+KeyError</pre></div></div>
+<p>Notice that <code>str(e)</code> for a <code>KeyError</code> is the key's <strong>repr</strong>, with quotes, which is why logs show <code>KeyError: 'model'</code>. Most other exceptions just hold their message.</p>
+</section>
+<section class="sec" id="elsefinally">
+<h2><span class="n">3</span><code>else</code> and <code>finally</code>: what runs when</h2>
+<p>A <code>try</code> statement can have two more clauses. <strong><code>else</code></strong> runs only if the <code>try</code> block finished <strong>without</strong> an exception. <strong><code>finally</code></strong> runs <strong>always</strong>, whether the block succeeded, raised an exception that was handled, raised one that was not handled, or left early with <code>return</code>, <code>break</code> or <code>continue</code>. The full order is: <code>try</code> block; then either the matching <code>except</code> (on error) or <code>else</code> (on success); then <code>finally</code>; then, if an exception is still unhandled, it continues up the stack.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">order.py</span><button class="copy">Copy</button></div><pre><code class="py">def attempt(text):
+    try:
+        print(&quot;  try&quot;)
+        n = int(text)
+    except ValueError:
+        print(&quot;  except&quot;)
+        return &quot;bad&quot;
+    else:
+        print(&quot;  else&quot;)
+        return n * 2
+    finally:
+        print(&quot;  finally&quot;)
+
+print(attempt(&quot;4&quot;))
+print(attempt(&quot;x&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>  try
+  else
+  finally
+8
+  try
+  except
+  finally
+bad</pre></div></div>
+<p><code>finally</code> ran in both cases, and it ran <strong>after</strong> the <code>return</code> statement was reached but <strong>before</strong> the function actually returned: the return value is set aside, <code>finally</code> runs, then the function returns. That is what makes <code>finally</code> the place for cleanup that must happen no matter what: closing a file or connection, releasing a lock, stopping a timer, deleting a temporary file. (A <code>with</code> block, 10.2, packages exactly this pattern, and is usually the better tool.)</p>
+<p><code>else</code> exists to keep the <code>try</code> block <strong>small</strong>. Code in the <code>try</code> block is covered by the <code>except</code> clauses, so if you put the follow-up work there too, an error in the follow-up could be caught by a handler meant for something else. Moving it to <code>else</code> means "only run this if the risky step worked, and do not catch its errors here".</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">return_in_finally.py</span><button class="copy">Copy</button></div><pre><code class="py">import warnings
+
+code = &#x27;&#x27;&#x27;
+def f():
+    try:
+        raise ValueError(&quot;lost&quot;)
+    finally:
+        return &quot;finally won&quot;
+&#x27;&#x27;&#x27;
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter(&quot;always&quot;)
+    namespace = {}
+    exec(compile(code.strip(), &quot;&lt;demo&gt;&quot;, &quot;exec&quot;), namespace)
+print(namespace[&quot;f&quot;](), [w.category.__name__ for w in caught])</code></pre><div class="out"><span class="ol">Output</span><pre>finally won [&#x27;SyntaxWarning&#x27;]</pre></div></div>
+<p>Never <code>return</code> (or <code>break</code> or <code>continue</code>) from inside <code>finally</code>. The <code>return</code> replaces whatever was happening, so an exception that was on its way up is silently <strong>discarded</strong>, as the example shows. Python 3.14 now warns about it with a <code>SyntaxWarning</code> when the code is compiled (PEP 765), but older versions accept it silently (problem 10).</p>
+</section>
+<section class="sec" id="hierarchy">
+<h2><span class="n">4</span>The exception hierarchy</h2>
+<p>Exception types are classes arranged in a tree, and that tree decides what each <code>except</code> clause catches. At the root is <code>BaseException</code>. Directly under it are a few special exceptions that are <strong>not errors</strong> in the usual sense: <code>KeyboardInterrupt</code> (the user pressed Ctrl+C), <code>SystemExit</code> (raised by <code>sys.exit()</code>), and <code>GeneratorExit</code> (used to close generators, 6.3). Everything that represents an actual error is under <code>Exception</code>. That is why <code>except Exception</code> is the widest handler you should normally write: it catches every error but still lets Ctrl+C and <code>sys.exit()</code> stop the program.</p>
+<div class="tbl"><table>
+      <tr><th>Exception</th><th>Parent</th><th>Typical cause</th></tr>
+      <tr><td><code>ValueError</code></td><td><code>Exception</code></td><td>right type, bad value: <code>int("abc")</code></td></tr>
+      <tr><td><code>TypeError</code></td><td><code>Exception</code></td><td>wrong type: <code>"a" + 1</code>, calling with wrong arguments</td></tr>
+      <tr><td><code>KeyError</code>, <code>IndexError</code></td><td><code>LookupError</code></td><td>missing dict key, list index out of range</td></tr>
+      <tr><td><code>ZeroDivisionError</code></td><td><code>ArithmeticError</code></td><td>dividing by zero</td></tr>
+      <tr><td><code>FileNotFoundError</code>, <code>PermissionError</code>, <code>TimeoutError</code></td><td><code>OSError</code></td><td>file system, network, operating system</td></tr>
+      <tr><td><code>json.JSONDecodeError</code>, <code>UnicodeDecodeError</code></td><td><code>ValueError</code></td><td>invalid JSON, bytes that are not valid in the encoding</td></tr>
+      <tr><td><code>AttributeError</code>, <code>NameError</code></td><td><code>Exception</code></td><td>usually a bug: a typo or a <code>None</code> where an object was expected</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hierarchy.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+for exc in [KeyError, json.JSONDecodeError, FileNotFoundError, KeyboardInterrupt]:
+    print(exc.__name__, &quot;-&gt;&quot;, [c.__name__ for c in exc.__mro__[1:-1]])
+
+try:
+    json.loads(&quot;{bad&quot;)
+except ValueError as e:
+    print(&quot;caught as ValueError:&quot;, type(e).__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>KeyError -&gt; [&#x27;LookupError&#x27;, &#x27;Exception&#x27;, &#x27;BaseException&#x27;]
+JSONDecodeError -&gt; [&#x27;ValueError&#x27;, &#x27;Exception&#x27;, &#x27;BaseException&#x27;]
+FileNotFoundError -&gt; [&#x27;OSError&#x27;, &#x27;Exception&#x27;, &#x27;BaseException&#x27;]
+KeyboardInterrupt -&gt; [&#x27;BaseException&#x27;]
+caught as ValueError: JSONDecodeError</pre></div></div>
+<p>The tree has practical consequences. <code>except ValueError</code> also catches <code>JSONDecodeError</code> and <code>UnicodeDecodeError</code>, so a handler written for "the number was invalid" may quietly swallow "the file was not valid JSON" too. <code>except LookupError</code> handles both missing keys and bad indexes. <code>except OSError</code> covers most input/output failures at once. And a <strong>bare</strong> <code>except:</code> (with no type) is the same as <code>except BaseException:</code>: it catches Ctrl+C and <code>sys.exit()</code> as well, which can make a program impossible to stop. Never write it; if you truly want "any error", write <code>except Exception</code> and log it.</p>
+</section>
+<section class="sec" id="narrow">
+<h2><span class="n">5</span>Catching narrowly</h2>
+<p>The hardest part of exception handling is not the syntax but deciding <strong>what not to catch</strong>. A handler is a promise: "if this goes wrong, I know what to do instead". Every exception you catch without being able to keep that promise turns a loud bug into a silent wrong result. Three rules follow from that:</p>
+<ul><li><strong>Catch the specific type</strong> you expect (<code>ValueError</code> for a bad number, <code>FileNotFoundError</code> for a missing file), not <code>Exception</code>.</li><li><strong>Keep the <code>try</code> block as small as possible</strong>: just the statement that can fail in the way you expect. Move the rest to <code>else</code> or after the statement.</li><li><strong>Only catch what you can handle</strong>: retry, use a default, skip and record, or add context and re-raise (7.2). If you cannot do any of these, let it propagate.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">narrow.py</span><button class="copy">Copy</button></div><pre><code class="py">rows = [{&quot;id&quot;: 1, &quot;price&quot;: &quot;9.5&quot;}, {&quot;id&quot;: 2, &quot;price&quot;: &quot;n/a&quot;}, {&quot;id&quot;: 3, &quot;prce&quot;: &quot;4&quot;}]
+
+def total_broad(rows):
+    total = 0.0
+    for row in rows:
+        try:
+            total += float(row[&quot;price&quot;])   # also hides the misspelled key
+        except Exception:
+            pass
+    return total
+
+def total_narrow(rows):
+    total, bad = 0.0, []
+    for row in rows:
+        raw = row.get(&quot;price&quot;)
+        if raw is None:
+            bad.append((row[&quot;id&quot;], &quot;missing price&quot;))
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            bad.append((row[&quot;id&quot;], f&quot;not a number: {raw!r}&quot;))
+        else:
+            total += value
+    return total, bad
+
+print(total_broad(rows))
+print(total_narrow(rows))</code></pre><div class="out"><span class="ol">Output</span><pre>9.5
+(9.5, [(2, &quot;not a number: &#x27;n/a&#x27;&quot;), (3, &#x27;missing price&#x27;)])</pre></div></div>
+<p>Both versions return <code>9.5</code>, but only the second one tells you <strong>why</strong> the other two rows were not counted, and only it distinguishes a bad value from a missing field. The broad handler would also have hidden a real bug, such as a <code>NameError</code> from a typo in the loop, by treating it like a bad price. There is one legitimate place for a broad <code>except Exception</code>: a <strong>boundary</strong> where one failure must not stop everything else, such as the loop over requests in a server or over records in a batch job. There, catch broadly, log the full traceback, record the failure, and move on to the next item (7.3, 7.4).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A <code>try</code>/<code>except</code> around one conversion is like <code>TRY_CAST(x AS FLOAT)</code> in SQL Server or <code>try ... otherwise</code> in Power Query: the bad value becomes <code>NULL</code> (or a default) instead of failing the whole query. Wrapping an entire query in an error handler that returns an empty table is the broad <code>except</code> equivalent, and just as risky: the report looks fine and is wrong.</p></div></div>
+</section>
+<section class="sec" id="cost">
+<h2><span class="n">6</span>What exceptions cost</h2>
+<p>Entering a <code>try</code> block is essentially free in modern Python (3.11 made the no-exception path "zero-cost"). <strong>Raising</strong> and catching an exception is not: Python creates the exception object, records the traceback and unwinds the stack, which is much slower than an <code>if</code> test. So exceptions are the right tool for <strong>exceptional</strong> cases, the ones that rarely happen, and a poor tool for normal control flow in a hot loop where the "error" happens most of the time (problem 8). For a dict where keys are often missing, <code>d.get(key, default)</code> is both clearer and faster than catching <code>KeyError</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">exception_cost.py</span><button class="copy">Copy</button></div><pre><code class="py">import timeit
+
+d = {&quot;a&quot;: 1}
+def with_get():
+    return d.get(&quot;zzz&quot;, 0)
+
+def with_except():
+    try:
+        return d[&quot;zzz&quot;]
+    except KeyError:
+        return 0
+
+t_get = timeit.timeit(with_get, number=200_000)
+t_exc = timeit.timeit(with_except, number=200_000)
+print(t_exc &gt; t_get)</code></pre><div class="out"><span class="ol">Output</span><pre>True</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-try-except-else-and-finally" data-pid="m7-1-try-except-else-and-finally" data-type="predict" data-level="easy" data-answer="ok 2.5
+finally 4
+2.5
+divide by zero
+finally 0
+None">
+<header class="prob-head"><h3>1. try, except, else and finally</h3></header>
+<div class="code"><pre><code class="py">def run(x):
+    try:
+        result = 10 / x
+    except ZeroDivisionError:
+        print(&quot;divide by zero&quot;)
+        result = None
+    else:
+        print(&quot;ok&quot;, result)
+    finally:
+        print(&quot;finally&quot;, x)
+    return result
+
+print(run(4))
+print(run(0))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>else</code> runs only when the <code>try</code> block raised nothing. <code>finally</code> always runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ok 2.5
+finally 4
+2.5
+divide by zero
+finally 0
+None</pre></div><p>For 4, the division succeeds, so <code>except</code> is skipped, <code>else</code> prints the result, <code>finally</code> prints, and the function returns 2.5. For 0, <code>ZeroDivisionError</code> is raised, its handler runs, <code>else</code> is skipped, <code>finally</code> still prints, and the function returns <code>None</code>. The <code>print</code> of the return value happens in the caller, after <code>finally</code>.</p></div></details>
+</article>
+<article class="prob" id="p-parse-an-integer-with-a-default" data-pid="m7-1-parse-an-integer-with-a-default" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Parse an integer with a default</h3></header>
+<div class="prob-q"><p>Write <code>to_int(value, default=None)</code> that converts strings such as <code>" 42 "</code> or <code>"-7"</code>, and numbers, to <code>int</code>, returning <code>default</code> when the value cannot be converted: text that is not an integer, <code>None</code>, or other types. Floats with a fractional part such as <code>3.5</code> count as invalid; <code>3.0</code> is fine. Do not use a bare <code>except</code> or <code>except Exception</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def to_int(value, default=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert to_int(" 42 ") == 42 and to_int("-7") == -7 and to_int(5) == 5
+assert to_int("4.0") is None and to_int("abc", 0) == 0 and to_int("", -1) == -1
+assert to_int(None, 0) == 0 and to_int([1], 0) == 0
+assert to_int(3.0) == 3 and to_int(3.5, "bad") == "bad"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert to_int(&quot; 42 &quot;) == 42 and to_int(&quot;-7&quot;) == -7 and to_int(5) == 5
+assert to_int(&quot;4.0&quot;) is None and to_int(&quot;abc&quot;, 0) == 0 and to_int(&quot;&quot;, -1) == -1
+assert to_int(None, 0) == 0 and to_int([1], 0) == 0
+assert to_int(3.0) == 3 and to_int(3.5, &quot;bad&quot;) == &quot;bad&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>int(" 42 ")</code> already ignores surrounding spaces. <code>int(None)</code> raises <code>TypeError</code>, <code>int("abc")</code> raises <code>ValueError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For floats, check <code>value.is_integer()</code> before converting, because <code>int(3.5)</code> silently truncates to 3.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def to_int(value, default=None):
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default</code></pre></div><p><code>int()</code> raises <code>ValueError</code> for text that is not an integer (including <code>"4.0"</code> and <code>""</code>) and <code>TypeError</code> for things that are not text or numbers (<code>None</code>, lists), so one handler with a tuple covers exactly the expected failures and nothing else. Floats need a check before the <code>try</code>, because <code>int(3.5)</code> does not fail: it silently truncates to <code>3</code>, which is the worst kind of conversion bug. Note that <code>bool</code> is a subclass of <code>int</code>, so <code>to_int(True)</code> returns <code>1</code>; whether that is acceptable depends on the data.</p></div></details>
+</article>
+<article class="prob" id="p-the-specific-handler-never-runs" data-pid="m7-1-the-specific-handler-never-runs" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. The specific handler never runs</h3></header>
+<div class="prob-q"><p><code>read_amount(text)</code> should return <code>("ok", value)</code>, <code>("bad number", text)</code> for text that is not a number, and <code>("error", type name)</code> for anything else. Bad numbers are reported as generic errors. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def read_amount(text):
+    try:
+        return (&quot;ok&quot;, float(text))
+    except Exception as e:
+        return (&quot;error&quot;, type(e).__name__)
+    except ValueError:
+        return (&quot;bad number&quot;, text)
+</textarea>
+<script type="text/plain" class="prob-tests">assert read_amount("9.5") == ("ok", 9.5)
+assert read_amount("9,5") == ("bad number", "9,5")
+assert read_amount(None) == ("error", "TypeError")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert read_amount(&quot;9.5&quot;) == (&quot;ok&quot;, 9.5)
+assert read_amount(&quot;9,5&quot;) == (&quot;bad number&quot;, &quot;9,5&quot;)
+assert read_amount(None) == (&quot;error&quot;, &quot;TypeError&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>except</code> clauses are checked from top to bottom, and <code>ValueError</code> is a subclass of <code>Exception</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def read_amount(text):
+    try:
+        return (&quot;ok&quot;, float(text))
+    except ValueError:
+        return (&quot;bad number&quot;, text)
+    except Exception as e:
+        return (&quot;error&quot;, type(e).__name__)</code></pre></div><p>Python runs the <strong>first</strong> matching clause. Every <code>ValueError</code> is an <code>Exception</code>, so the general clause matched first and the specific one was unreachable. Put specific types before general ones. Linters such as Ruff and Pylint warn about this ordering, which is a good reason to run one.</p></div></details>
+</article>
+<article class="prob" id="p-which-handler-catches-it" data-pid="m7-1-which-handler-catches-it" data-type="predict" data-level="easy" data-answer="lookup: KeyError lookup: IndexError
+value: JSONDecodeError value: UnicodeDecodeError
+os: FileNotFoundError value: ValueError">
+<header class="prob-head"><h3>4. Which handler catches it</h3></header>
+<div class="code"><pre><code class="py">import json
+
+def which(action):
+    try:
+        action()
+    except LookupError as e:
+        return &quot;lookup: &quot; + type(e).__name__
+    except ValueError as e:
+        return &quot;value: &quot; + type(e).__name__
+    except OSError as e:
+        return &quot;os: &quot; + type(e).__name__
+
+print(which(lambda: {}[&quot;k&quot;]), which(lambda: [][3]))
+print(which(lambda: json.loads(&quot;{&quot;)), which(lambda: b&quot;\xff&quot;.decode(&quot;utf-8&quot;)))
+print(which(lambda: open(&quot;/no/such/file.txt&quot;)), which(lambda: int(&quot;x&quot;)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>KeyError</code> and <code>IndexError</code> are <code>LookupError</code>s; <code>JSONDecodeError</code> and <code>UnicodeDecodeError</code> are <code>ValueError</code>s; <code>FileNotFoundError</code> is an <code>OSError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>lookup: KeyError lookup: IndexError
+value: JSONDecodeError value: UnicodeDecodeError
+os: FileNotFoundError value: ValueError</pre></div><p>Each <code>except</code> matches its class <strong>and all subclasses</strong>, so the handler tells you the family and <code>type(e).__name__</code> the exact class. The middle line is the surprising one: invalid JSON and invalid UTF-8 are both caught by <code>except ValueError</code>, so a handler written for "bad number" catches them too, which can hide the real problem.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-parse-rows-collect-the-failures" data-pid="m7-1-parse-rows-collect-the-failures" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Parse rows, collect the failures</h3></header>
+<div class="prob-q"><p>Write <code>parse_rows(rows)</code> for CSV-like rows (lists of strings) with the columns <code>id</code>, <code>name</code>, <code>score</code>. Return <code>(good, errors)</code>: <code>good</code> is a list of dicts with <code>id</code> as <code>int</code>, <code>name</code> stripped and <code>score</code> as <code>float</code>; <code>errors</code> is a list of <code>(row_number, message)</code> for rows that could not be parsed, numbered from 1. One bad row must not stop the others. Messages: <code>"expected 3 fields, got N"</code>, <code>"bad id: '...'"</code>, <code>"bad score: '...'"</code> (with the repr of the raw value).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def parse_rows(rows):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [["1", " Ana ", "0.9"], ["2", "Bo"], ["x", "Cy", "0.5"], ["4", "Dee", "high"], ["5", "Ed", " 0.75 "]]
+good, errors = parse_rows(rows)
+assert good == [{"id": 1, "name": "Ana", "score": 0.9}, {"id": 5, "name": "Ed", "score": 0.75}]
+assert errors == [(2, "expected 3 fields, got 2"), (3, "bad id: 'x'"), (4, "bad score: 'high'")]
+assert parse_rows([]) == ([], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [[&quot;1&quot;, &quot; Ana &quot;, &quot;0.9&quot;], [&quot;2&quot;, &quot;Bo&quot;], [&quot;x&quot;, &quot;Cy&quot;, &quot;0.5&quot;], [&quot;4&quot;, &quot;Dee&quot;, &quot;high&quot;], [&quot;5&quot;, &quot;Ed&quot;, &quot; 0.75 &quot;]]
+good, errors = parse_rows(rows)
+assert good == [{&quot;id&quot;: 1, &quot;name&quot;: &quot;Ana&quot;, &quot;score&quot;: 0.9}, {&quot;id&quot;: 5, &quot;name&quot;: &quot;Ed&quot;, &quot;score&quot;: 0.75}]
+assert errors == [(2, &quot;expected 3 fields, got 2&quot;), (3, &quot;bad id: &#x27;x&#x27;&quot;), (4, &quot;bad score: &#x27;high&#x27;&quot;)]
+assert parse_rows([]) == ([], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the field count with an <code>if</code> first; that is not an exceptional case worth an exception.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert <code>id</code> and <code>score</code> in separate <code>try</code> blocks, so each error message can name the field.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_rows(rows):
+    good, errors = [], []
+    for n, row in enumerate(rows, start=1):
+        if len(row) != 3:
+            errors.append((n, f&quot;expected 3 fields, got {len(row)}&quot;))
+            continue
+        raw_id, name, raw_score = row
+        try:
+            row_id = int(raw_id)
+        except ValueError:
+            errors.append((n, f&quot;bad id: {raw_id!r}&quot;))
+            continue
+        try:
+            score = float(raw_score)
+        except ValueError:
+            errors.append((n, f&quot;bad score: {raw_score!r}&quot;))
+            continue
+        good.append({&quot;id&quot;: row_id, &quot;name&quot;: name.strip(), &quot;score&quot;: score})
+    return good, errors</code></pre></div><p>Each <code>try</code> block holds exactly one conversion, so the handler knows which field failed and can say so. The field count is a normal condition to test with <code>if</code>, not to discover through an unpacking <code>ValueError</code>, which would also give a vague message. Collecting <code>(row, message)</code> pairs and continuing is how data loaders behave in practice: the caller decides whether 3 bad rows out of 5 is acceptable. <code>{raw!r}</code> shows the raw value with quotes, so an empty string or trailing spaces are visible in the message (5.3). <code>float(" 0.75 ")</code> accepts surrounding spaces, as <code>int</code> does.</p></div></details>
+</article>
+<article class="prob" id="p-a-handler-that-hides-a-bug" data-pid="m7-1-a-handler-that-hides-a-bug" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A handler that hides a bug</h3></header>
+<div class="prob-q"><p><code>enrich(records, prices)</code> adds a <code>"total"</code> to each record from its quantity and the product's price, using <code>None</code> when the product is unknown. It returns <code>None</code> totals for everything, because of a typo, and the broad handler hides it. Fix the typo and narrow the handler so that only a missing product is handled.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def enrich(records, prices):
+    out = []
+    for r in records:
+        try:
+            price = prices[r[&quot;product&quot;]]
+            total = round(price * r[&quot;qty&quot;], 2)
+            out.append({**r, &quot;total&quot;: totl})
+        except Exception:
+            out.append({**r, &quot;total&quot;: None})
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">prices = {"pen": 1.5, "book": 12.0}
+records = [{"product": "pen", "qty": 4}, {"product": "lamp", "qty": 1}, {"product": "book", "qty": 2}]
+assert enrich(records, prices) == [{"product": "pen", "qty": 4, "total": 6.0},
+                                   {"product": "lamp", "qty": 1, "total": None},
+                                   {"product": "book", "qty": 2, "total": 24.0}]
+assert enrich([], prices) == []
+try:
+    enrich([{"product": "pen"}], prices)
+    assert False, "a record without qty is a bug and should raise"
+except KeyError as e:
+    assert "qty" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">prices = {&quot;pen&quot;: 1.5, &quot;book&quot;: 12.0}
+records = [{&quot;product&quot;: &quot;pen&quot;, &quot;qty&quot;: 4}, {&quot;product&quot;: &quot;lamp&quot;, &quot;qty&quot;: 1}, {&quot;product&quot;: &quot;book&quot;, &quot;qty&quot;: 2}]
+assert enrich(records, prices) == [{&quot;product&quot;: &quot;pen&quot;, &quot;qty&quot;: 4, &quot;total&quot;: 6.0},
+                                   {&quot;product&quot;: &quot;lamp&quot;, &quot;qty&quot;: 1, &quot;total&quot;: None},
+                                   {&quot;product&quot;: &quot;book&quot;, &quot;qty&quot;: 2, &quot;total&quot;: 24.0}]
+assert enrich([], prices) == []
+try:
+    enrich([{&quot;product&quot;: &quot;pen&quot;}], prices)
+    assert False, &quot;a record without qty is a bug and should raise&quot;
+except KeyError as e:
+    assert &quot;qty&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>totl</code> raises <code>NameError</code>, which <code>except Exception</code> turned into a <code>None</code> total.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only the price lookup should be inside the <code>try</code>, and only <code>KeyError</code> caught. Use <code>else</code> for the rest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def enrich(records, prices):
+    out = []
+    for r in records:
+        try:
+            price = prices[r[&quot;product&quot;]]
+        except KeyError:
+            out.append({**r, &quot;total&quot;: None})
+        else:
+            out.append({**r, &quot;total&quot;: round(price * r[&quot;qty&quot;], 2)})
+    return out</code></pre></div><p>The broad handler turned a <code>NameError</code> (a typo, a bug) into the same result as "unknown product" (an expected case), so the function ran without complaint and produced only <code>None</code>s. With a narrow <code>try</code> around just the price lookup and <code>except KeyError</code>, the expected case is handled and anything else surfaces. Moving the calculation into <code>else</code> means a missing <code>qty</code>, which is a data bug, raises its own <code>KeyError</code> from outside the handler, as the second test requires; inside the <code>try</code>, it would have been mistaken for an unknown product.</p></div></details>
+</article>
+<article class="prob" id="p-parse-a-score-from-a-model-reply" data-pid="m7-1-parse-a-score-from-a-model-reply" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Parse a score from a model reply</h3></header>
+<div class="prob-q"><p>An LLM judge is asked to reply with a score like <code>Score: 7/10</code>. Write <code>parse_score(reply)</code> returning the score as an <code>int</code> from 1 to 10. Accept any case and spacing, and an optional <code>/10</code>. If there is no score, or it is out of range, raise <code>ValueError</code> with a message that includes the first 40 characters of the reply, so the failure can be logged and retried.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import re
+
+def parse_score(reply):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_score("Score: 7/10") == 7
+assert parse_score("The answer is good.\nscore : 10 / 10") == 10
+assert parse_score("SCORE:3") == 3
+for bad in ["Score: 11/10", "I would rate it highly", "Score: 0"]:
+    try:
+        parse_score(bad)
+        assert False, bad
+    except ValueError as e:
+        assert bad[:40] in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_score(&quot;Score: 7/10&quot;) == 7
+assert parse_score(&quot;The answer is good.\nscore : 10 / 10&quot;) == 10
+assert parse_score(&quot;SCORE:3&quot;) == 3
+for bad in [&quot;Score: 11/10&quot;, &quot;I would rate it highly&quot;, &quot;Score: 0&quot;]:
+    try:
+        parse_score(bad)
+        assert False, bad
+    except ValueError as e:
+        assert bad[:40] in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>re.search(r"score\s*:\s*(\d+)\s*(?:/\s*10)?", reply, re.IGNORECASE)</code> finds the number (5.5).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>raise ValueError(f"no score in reply: {reply[:40]!r}")</code> when there is no match; check the range separately.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+SCORE = re.compile(r&quot;score\s*:\s*(\d+)\s*(?:/\s*10)?&quot;, re.IGNORECASE)
+
+def parse_score(reply):
+    m = SCORE.search(reply)
+    if not m:
+        raise ValueError(f&quot;no score in reply: {reply[:40]!r}&quot;)
+    score = int(m.group(1))
+    if not 1 &lt;= score &lt;= 10:
+        raise ValueError(f&quot;score {score} out of range in reply: {reply[:40]!r}&quot;)
+    return score</code></pre></div><p>Raising instead of returning <code>None</code> forces the caller to decide what a bad reply means: retry the judge, skip the sample or fail the evaluation; a <code>None</code> would flow into an average and break it later, far from the cause. Including part of the reply in the message makes the log useful without dumping a huge text, and <code>!r</code> shows newlines and spaces. <code>ValueError</code> is the right type: the input is a string, as expected, but its value is not acceptable. Lesson 7.2 shows how to define a custom exception type for this, so callers can catch "bad model output" specifically.</p></div></details>
+</article>
+<article class="prob" id="p-missing-keys-catch-keyerror-or-use-get" data-pid="m7-1-missing-keys-catch-keyerror-or-use-get" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Missing keys: catch KeyError or use get</h3></header>
+<div class="prob-q"><p>Both look up 200,000 keys in a dict where 90% of them are missing, using 0 as the default. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">d = {f&quot;k{i}&quot;: i for i in range(1000)}
+keys = [f&quot;k{i}&quot; if i % 10 == 0 else f&quot;missing{i}&quot; for i in range(200_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">total = 0
+for k in keys:
+    try:
+        total += d[k]
+    except KeyError:
+        total += 0</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">total = 0
+for k in keys:
+    total += d.get(k, 0)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python do every time a <code>KeyError</code> is raised and caught?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>102.56 ms</td></tr><tr><td>B</td><td>51.44 ms</td></tr></table></div><p>Each miss in version A creates a <code>KeyError</code> object with a traceback, unwinds to the handler and clears the exception: far more work than the miss itself. <code>d.get</code> handles the missing key inside the dict lookup, with no exception at all. When misses are rare, the <code>try</code> version costs almost nothing, since entering a <code>try</code> block is free in Python 3.11+; the cost is in <strong>raising</strong>. So use exceptions for cases that are genuinely exceptional, and plain checks or <code>get</code> when "missing" is normal.</p></div></details>
+</article>
+<article class="prob" id="p-control-flow-through-finally" data-pid="m7-1-control-flow-through-finally" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Control flow through finally</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">log = []
+
+def step(x):
+    try:
+        log.append(&quot;try&quot;)
+        if x &lt; 0:
+            raise ValueError(&quot;negative&quot;)
+        log.append(&quot;body&quot;)
+    except ValueError:
+        log.append(&quot;except&quot;)
+    else:
+        log.append(&quot;else&quot;)
+    finally:
+        log.append(&quot;finally&quot;)
+
+step(1)
+log.clear(); step(-1)
+log.clear()
+try:
+    step(&quot;a&quot;)
+except TypeError:
+    log.append(&quot;caller&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>x = 1</td><td><input class="cell" data-a="[&#x27;try&#x27;, &#x27;body&#x27;, &#x27;else&#x27;, &#x27;finally&#x27;]" data-s="[&#x27;try&#x27;, &#x27;body&#x27;, &#x27;else&#x27;, &#x27;finally&#x27;]" aria-label="log at x = 1" autocomplete="off"></td></tr><tr><td>x = -1</td><td><input class="cell" data-a="[&#x27;try&#x27;, &#x27;except&#x27;, &#x27;finally&#x27;]" data-s="[&#x27;try&#x27;, &#x27;except&#x27;, &#x27;finally&#x27;]" aria-label="log at x = -1" autocomplete="off"></td></tr><tr><td>x = &#x27;a&#x27;</td><td><input class="cell" data-a="[&#x27;try&#x27;, &#x27;finally&#x27;, &#x27;caller&#x27;]" data-s="[&#x27;try&#x27;, &#x27;finally&#x27;, &#x27;caller&#x27;]" aria-label="log at x = &#x27;a&#x27;" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>"a" &lt; 0</code> raises <code>TypeError</code>, which the <code>except ValueError</code> does not match.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>x = 1</td><td><code>[&#x27;try&#x27;, &#x27;body&#x27;, &#x27;else&#x27;, &#x27;finally&#x27;]</code></td></tr><tr><td>x = -1</td><td><code>[&#x27;try&#x27;, &#x27;except&#x27;, &#x27;finally&#x27;]</code></td></tr><tr><td>x = &#x27;a&#x27;</td><td><code>[&#x27;try&#x27;, &#x27;finally&#x27;, &#x27;caller&#x27;]</code></td></tr></table></div><p>For 1, the block finishes, so <code>else</code> runs and then <code>finally</code>. For -1, the <code>raise</code> skips the rest of the block, the <code>ValueError</code> handler runs, <code>else</code> is skipped, <code>finally</code> runs. For <code>"a"</code>, comparing a string with 0 raises <code>TypeError</code>, which no clause in <code>step</code> handles: <code>finally</code> still runs on the way out, and then the exception reaches the caller's handler. That is the defining property of <code>finally</code>: it runs even while an exception is passing through.</p></div></details>
+</article>
+<article class="prob" id="p-an-error-that-disappears-in-finally" data-pid="m7-1-an-error-that-disappears-in-finally" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. An error that disappears in finally</h3></header>
+<div class="prob-q"><p><code>read_text(path)</code> should return a file's text and always close the file. When the file does not exist it returns <code>""</code> instead of raising <code>FileNotFoundError</code>. Fix it so the error reaches the caller and the file is still always closed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def read_text(path):
+    f = None
+    try:
+        f = open(path, encoding=&quot;utf-8&quot;)
+        return f.read()
+    finally:
+        if f is not None:
+            f.close()
+        return &quot;&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+p = os.path.join(tempfile.mkdtemp(), "notes.txt")
+with open(p, "w", encoding="utf-8") as out:
+    out.write("hello")
+assert read_text(p) == "hello"
+empty = os.path.join(os.path.dirname(p), "empty.txt")
+open(empty, "w").close()
+assert read_text(empty) == ""
+try:
+    read_text(p + ".missing")
+    assert False, "should raise"
+except FileNotFoundError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+p = os.path.join(tempfile.mkdtemp(), &quot;notes.txt&quot;)
+with open(p, &quot;w&quot;, encoding=&quot;utf-8&quot;) as out:
+    out.write(&quot;hello&quot;)
+assert read_text(p) == &quot;hello&quot;
+empty = os.path.join(os.path.dirname(p), &quot;empty.txt&quot;)
+open(empty, &quot;w&quot;).close()
+assert read_text(empty) == &quot;&quot;
+try:
+    read_text(p + &quot;.missing&quot;)
+    assert False, &quot;should raise&quot;
+except FileNotFoundError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>return</code> inside <code>finally</code> replaces the function's result <strong>and</strong> cancels any exception in flight.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def read_text(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return f.read()</code></pre></div><p>The <code>return ""</code> in <code>finally</code> ran in every case: it overrode the successful <code>return f.read()</code> (so even existing files gave <code>""</code>) and discarded the <code>FileNotFoundError</code>. Python 3.14 warns about this at compile time with a <code>SyntaxWarning</code>, but the code still runs. A <code>finally</code> block should only clean up. Here the cleanup is exactly what <code>with open(...)</code> does (10.2): the file is closed when the block ends, whether by <code>return</code> or by an exception, and the exception continues to the caller. If <code>open</code> itself fails, there is nothing to close.</p></div></details>
+</article>
+<article class="prob" id="p-duplicate-handlers-into-one" data-pid="m7-1-duplicate-handlers-into-one" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Duplicate handlers into one</h3></header>
+<div class="prob-q"><p>Remove the duplication: same behaviour, one handler. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import json
+
+def load_reply(raw):
+    try:
+        data = json.loads(raw)
+        return {&quot;label&quot;: data[&quot;label&quot;], &quot;confidence&quot;: float(data[&quot;confidence&quot;])}
+    except json.JSONDecodeError as e:
+        return {&quot;error&quot;: f&quot;invalid reply: {type(e).__name__}&quot;}
+    except KeyError as e:
+        return {&quot;error&quot;: f&quot;invalid reply: {type(e).__name__}&quot;}
+    except TypeError as e:
+        return {&quot;error&quot;: f&quot;invalid reply: {type(e).__name__}&quot;}
+    except ValueError as e:
+        return {&quot;error&quot;: f&quot;invalid reply: {type(e).__name__}&quot;}
+</textarea>
+<script type="text/plain" class="prob-tests">assert load_reply('{"label": "spam", "confidence": "0.9"}') == {"label": "spam", "confidence": 0.9}
+assert load_reply("{bad") == {"error": "invalid reply: JSONDecodeError"}
+assert load_reply('{"label": "spam"}') == {"error": "invalid reply: KeyError"}
+assert load_reply('["spam"]') == {"error": "invalid reply: TypeError"}
+assert load_reply('{"label": "x", "confidence": "high"}') == {"error": "invalid reply: ValueError"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert load_reply(&#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: &quot;0.9&quot;}&#x27;) == {&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9}
+assert load_reply(&quot;{bad&quot;) == {&quot;error&quot;: &quot;invalid reply: JSONDecodeError&quot;}
+assert load_reply(&#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;) == {&quot;error&quot;: &quot;invalid reply: KeyError&quot;}
+assert load_reply(&#x27;[&quot;spam&quot;]&#x27;) == {&quot;error&quot;: &quot;invalid reply: TypeError&quot;}
+assert load_reply(&#x27;{&quot;label&quot;: &quot;x&quot;, &quot;confidence&quot;: &quot;high&quot;}&#x27;) == {&quot;error&quot;: &quot;invalid reply: ValueError&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>JSONDecodeError</code> is already a <code>ValueError</code>, so a tuple of three types covers all four cases.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def load_reply(raw):
+    try:
+        data = json.loads(raw)
+        return {&quot;label&quot;: data[&quot;label&quot;], &quot;confidence&quot;: float(data[&quot;confidence&quot;])}
+    except (ValueError, KeyError, TypeError) as e:
+        return {&quot;error&quot;: f&quot;invalid reply: {type(e).__name__}&quot;}</code></pre></div><p>A tuple in <code>except</code> matches any of its types, and because <code>JSONDecodeError</code> is a subclass of <code>ValueError</code>, listing <code>ValueError</code> covers both the invalid JSON and the bad confidence. <code>type(e).__name__</code> still reports the exact class, so the messages are unchanged. The three types are exactly the ways a reply can be malformed here: not JSON, missing a key, or the wrong shape (indexing a list with a string raises <code>TypeError</code>). Anything else, like a <code>NameError</code>, is still not caught. Pydantic (11.4) turns this kind of hand-written validation into a model declaration.</p></div></details>
+</article>
+<article class="prob" id="p-the-exception-object-and-its-name" data-pid="m7-1-the-exception-object-and-its-name" data-type="predict" data-level="medium" data-answer="&#x27;b&#x27; (&#x27;b&#x27;,) KeyError(&#x27;b&#x27;)
+KeyError False
+ValueError invalid literal for int() with base 10: &#x27;4.2&#x27;
+True division by zero">
+<header class="prob-head"><h3>12. The exception object and its name</h3></header>
+<div class="code"><pre><code class="py">try:
+    {&quot;a&quot;: 1}[&quot;b&quot;]
+except KeyError as e:
+    print(str(e), e.args, repr(e))
+    err = e
+print(type(err).__name__, &quot;e&quot; in dir())
+try:
+    int(&quot;4.2&quot;)
+except (TypeError, ValueError) as e:
+    print(type(e).__name__, e.args[0])
+try:
+    1 / 0
+except ArithmeticError as e:
+    print(isinstance(e, ZeroDivisionError), e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The name bound with <code>as</code> is deleted at the end of the <code>except</code> block. A <code>KeyError</code>'s <code>str</code> is the repr of the key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>&#x27;b&#x27; (&#x27;b&#x27;,) KeyError(&#x27;b&#x27;)
+KeyError False
+ValueError invalid literal for int() with base 10: &#x27;4.2&#x27;
+True division by zero</pre></div><p><code>str(e)</code> of a <code>KeyError</code> shows the missing key with quotes, and <code>e.args</code> is the tuple of arguments the exception was created with. After the block, <code>e</code> no longer exists (Python deletes it to avoid keeping the traceback and all its frames alive), but <code>err</code> still holds the object. <code>int("4.2")</code> raises <code>ValueError</code> (the type is right, the value is not an integer literal), matched by the tuple. <code>ZeroDivisionError</code> is a subclass of <code>ArithmeticError</code>, so the general handler catches it and <code>isinstance</code> confirms the real class.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-retry-on-chosen-exceptions" data-pid="m7-1-retry-on-chosen-exceptions" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Retry on chosen exceptions</h3></header>
+<div class="prob-q"><p>Write <code>call_with_retry(fn, attempts, retry_on)</code> that calls <code>fn()</code> up to <code>attempts</code> times. If it raises an exception whose type is in the tuple <code>retry_on</code>, try again; if it raises anything else, let it propagate immediately. If every attempt fails, re-raise the <strong>last</strong> exception. Return <code>(result, tries)</code>, where <code>tries</code> is the number of calls made.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def call_with_retry(fn, attempts, retry_on):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def flaky(results):
+    it = iter(results)
+    def fn():
+        r = next(it)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return fn
+
+assert call_with_retry(flaky([TimeoutError("t1"), ConnectionError("c"), "ok"]), 5, (TimeoutError, ConnectionError)) == ("ok", 3)
+assert call_with_retry(flaky(["first"]), 3, (TimeoutError,)) == ("first", 1)
+try:
+    call_with_retry(flaky([TimeoutError("a"), TimeoutError("b"), TimeoutError("c")]), 3, (TimeoutError,))
+    assert False
+except TimeoutError as e:
+    assert str(e) == "c"
+try:
+    call_with_retry(flaky([TimeoutError("a"), KeyError("bug"), "never"]), 5, (TimeoutError,))
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def flaky(results):
+    it = iter(results)
+    def fn():
+        r = next(it)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    return fn
+
+assert call_with_retry(flaky([TimeoutError(&quot;t1&quot;), ConnectionError(&quot;c&quot;), &quot;ok&quot;]), 5, (TimeoutError, ConnectionError)) == (&quot;ok&quot;, 3)
+assert call_with_retry(flaky([&quot;first&quot;]), 3, (TimeoutError,)) == (&quot;first&quot;, 1)
+try:
+    call_with_retry(flaky([TimeoutError(&quot;a&quot;), TimeoutError(&quot;b&quot;), TimeoutError(&quot;c&quot;)]), 3, (TimeoutError,))
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;c&quot;
+try:
+    call_with_retry(flaky([TimeoutError(&quot;a&quot;), KeyError(&quot;bug&quot;), &quot;never&quot;]), 5, (TimeoutError,))
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop <code>for attempt in range(1, attempts + 1)</code>, <code>return fn(), attempt</code> inside <code>try</code>, and <code>except retry_on as e:</code> keeps the last error.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After the loop, <code>raise last_error</code>. A tuple of types is valid in <code>except</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def call_with_retry(fn, attempts, retry_on):
+    if attempts &lt; 1:
+        raise ValueError(&quot;attempts must be at least 1&quot;)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn(), attempt
+        except retry_on as e:
+            last_error = e
+    raise last_error</code></pre></div><p><code>except retry_on</code> accepts the tuple directly, so only the listed transient errors (timeouts, dropped connections) are retried; a <code>KeyError</code> is a bug, and retrying it would just repeat the bug and delay the report, so it propagates at once. The handler saves the exception to a second name because the <code>as</code> name is deleted when the block ends. Re-raising the last error keeps its original traceback, so the logs show where the final attempt failed. Real retry code adds waiting between attempts with exponential backoff and jitter, and respects the server's <code>Retry-After</code> header; lesson 8.3 turns this into a decorator.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-config-loader-that-hides" data-pid="m7-1-read-the-code-a-config-loader-that-hides" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a config loader that hides everything</h3></header>
+<div class="prob-q"><p>This loads an LLM app's settings from a JSON file over a set of defaults. A missing file should give the defaults; invalid JSON should raise <code>ValueError</code> naming the file; <code>max_tokens</code> must end up as an <code>int</code>, and a value that cannot be converted should raise <code>ValueError</code>. Right now it returns the defaults in every case. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+
+
+def load_settings(path, defaults):
+    try:
+        with open(path, encoding=&quot;utf-8&quot;) as f:
+            data = json.load(f)
+        settings = dict(defaults)
+        settings.update(data)
+        settings[&quot;max_tokens&quot;] = int(settings[&quot;max_token&quot;])
+        return settings
+    except:
+        return dict(defaults)
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+defaults = {"model": "small", "max_tokens": 256}
+
+def write(name, text):
+    p = os.path.join(d, name)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+    return p
+
+assert load_settings(os.path.join(d, "missing.json"), defaults) == defaults
+assert load_settings(write("ok.json", '{"max_tokens": "512"}'), defaults) == {"model": "small", "max_tokens": 512}
+bad = write("bad.json", '{"model": "large",}')
+try:
+    load_settings(bad, defaults)
+    assert False, "invalid JSON should raise"
+except ValueError as e:
+    assert "bad.json" in str(e)
+try:
+    load_settings(write("tok.json", '{"max_tokens": "lots"}'), defaults)
+    assert False, "bad max_tokens should raise"
+except ValueError as e:
+    assert "max_tokens" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+defaults = {&quot;model&quot;: &quot;small&quot;, &quot;max_tokens&quot;: 256}
+
+def write(name, text):
+    p = os.path.join(d, name)
+    with open(p, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(text)
+    return p
+
+assert load_settings(os.path.join(d, &quot;missing.json&quot;), defaults) == defaults
+assert load_settings(write(&quot;ok.json&quot;, &#x27;{&quot;max_tokens&quot;: &quot;512&quot;}&#x27;), defaults) == {&quot;model&quot;: &quot;small&quot;, &quot;max_tokens&quot;: 512}
+bad = write(&quot;bad.json&quot;, &#x27;{&quot;model&quot;: &quot;large&quot;,}&#x27;)
+try:
+    load_settings(bad, defaults)
+    assert False, &quot;invalid JSON should raise&quot;
+except ValueError as e:
+    assert &quot;bad.json&quot; in str(e)
+try:
+    load_settings(write(&quot;tok.json&quot;, &#x27;{&quot;max_tokens&quot;: &quot;lots&quot;}&#x27;), defaults)
+    assert False, &quot;bad max_tokens should raise&quot;
+except ValueError as e:
+    assert &quot;max_tokens&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The bare <code>except:</code> catches the <code>KeyError</code> from the <code>max_token</code> typo (and would catch Ctrl+C too).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle <code>FileNotFoundError</code> around <code>open</code> only, and turn <code>json.JSONDecodeError</code> into a <code>ValueError</code> that names the path.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert <code>max_tokens</code> outside those handlers, with its own <code>try</code> and a clear message.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+def load_settings(path, defaults):
+    try:
+        with open(path, encoding=&quot;utf-8&quot;) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return dict(defaults)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f&quot;{path}: invalid JSON at line {e.lineno}: {e.msg}&quot;)
+    settings = {**defaults, **data}
+    try:
+        settings[&quot;max_tokens&quot;] = int(settings[&quot;max_tokens&quot;])
+    except ValueError:
+        raise ValueError(f&quot;max_tokens must be an integer, got {settings[&#x27;max_tokens&#x27;]!r}&quot;)
+    return settings</code></pre></div><p>The bare <code>except:</code> turned every possible problem into "use the defaults": the <code>max_token</code> typo (a <code>KeyError</code> on every call, so the function <strong>never</strong> worked), invalid JSON, a bad value, and even Ctrl+C. A broken config file silently running the app with default settings is a classic production incident. The fix handles each case at its own step: only <code>FileNotFoundError</code> falls back to defaults, which is the one case the spec allows; a <code>JSONDecodeError</code> becomes a <code>ValueError</code> that names the file and the line (<code>e.lineno</code> and <code>e.msg</code> come from the JSON error), so the person who broke the file can find it; and the <code>int</code> conversion gets its own message. Raising a new exception inside <code>except</code> keeps the original attached as context; 7.2 shows how to make that link explicit with <code>raise ... from e</code>.</p></div></details>
+</article>
+<article class="prob" id="p-the-first-reply-that-parses" data-pid="m7-1-the-first-reply-that-parses" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. The first reply that parses</h3></header>
+<div class="prob-q"><p>When a model's output must follow a format, a common trick is to sample several replies and keep the first one that parses. Write <code>first_valid(replies, parse)</code> that calls <code>parse(reply)</code> on each reply in order and returns <code>(index, parsed)</code> for the first one that does not raise <code>ValueError</code>. If none parses, raise <code>ValueError</code> whose message lists every failure as <code>"#i: message"</code>, one per line. Other exception types must propagate unchanged. Stop at the first success; do not parse the rest.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def first_valid(replies, parse):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+calls = []
+def parse(r):
+    calls.append(r)
+    data = json.loads(r)
+    if "label" not in data:
+        raise ValueError("missing label")
+    return data["label"]
+
+assert first_valid(["not json", '{"x": 1}', '{"label": "spam"}', '{"label": "ham"}'], parse) == (2, "spam")
+assert len(calls) == 3
+try:
+    first_valid(["{", '{"x": 1}'], parse)
+    assert False
+except ValueError as e:
+    lines = str(e).splitlines()
+    assert lines[0].startswith("no valid reply") and lines[1].startswith("#0: ") and lines[2] == "#1: missing label"
+try:
+    first_valid(["5"], parse)
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+calls = []
+def parse(r):
+    calls.append(r)
+    data = json.loads(r)
+    if &quot;label&quot; not in data:
+        raise ValueError(&quot;missing label&quot;)
+    return data[&quot;label&quot;]
+
+assert first_valid([&quot;not json&quot;, &#x27;{&quot;x&quot;: 1}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;label&quot;: &quot;ham&quot;}&#x27;], parse) == (2, &quot;spam&quot;)
+assert len(calls) == 3
+try:
+    first_valid([&quot;{&quot;, &#x27;{&quot;x&quot;: 1}&#x27;], parse)
+    assert False
+except ValueError as e:
+    lines = str(e).splitlines()
+    assert lines[0].startswith(&quot;no valid reply&quot;) and lines[1].startswith(&quot;#0: &quot;) and lines[2] == &quot;#1: missing label&quot;
+try:
+    first_valid([&quot;5&quot;], parse)
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect failure messages in a list inside <code>except ValueError as e:</code>; <code>str(e)</code> is the message.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>json.loads</code> raises <code>JSONDecodeError</code>, a <code>ValueError</code>, so it is collected too. In the last test, <code>"label" not in 5</code> raises <code>TypeError</code>, which must not be collected.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def first_valid(replies, parse):
+    failures = []
+    for i, reply in enumerate(replies):
+        try:
+            return i, parse(reply)
+        except ValueError as e:
+            failures.append(f&quot;#{i}: {e}&quot;)
+    raise ValueError(&quot;no valid reply:\n&quot; + &quot;\n&quot;.join(failures))</code></pre></div><p>The loop returns as soon as one reply parses, so later replies cost nothing, which the <code>calls</code> test checks. Only <code>ValueError</code> (including <code>JSONDecodeError</code>) counts as "this reply is malformed"; anything else signals a bug in the parser or the data, and must not be hidden behind "try the next sample". In the last test, <code>json.loads("5")</code> returns the number 5, and <code>"label" not in 5</code> raises <code>TypeError</code> because an <code>int</code> cannot be searched: that is a gap in the parser (it should check that the JSON is an object), and it surfaces at once instead of being reported as "no valid reply". Joining the collected messages gives one readable error for the log, with the index of each sample. This is the shape of "sample n, take the first valid" and of repair loops that feed the error messages back to the model.</p></div></details>
+</article>
+<article class="prob" id="p-exceptions-inside-handlers" data-pid="m7-1-exceptions-inside-handlers" data-type="predict" data-level="hard" data-answer="ValueError | context: KeyError
+start 1
+cleanup 1
+start 0
+cleanup 0
+loop over">
+<header class="prob-head"><h3>16. Exceptions inside handlers</h3></header>
+<div class="code"><pre><code class="py">def risky():
+    try:
+        return {}[&quot;key&quot;]
+    except KeyError:
+        return int(&quot;not a number&quot;)
+
+try:
+    risky()
+except ValueError as e:
+    print(type(e).__name__, &quot;| context:&quot;, type(e.__context__).__name__)
+
+for n in [1, 0, 2]:
+    try:
+        print(&quot;start&quot;, n)
+        if n == 0:
+            break
+    finally:
+        print(&quot;cleanup&quot;, n)
+print(&quot;loop over&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception raised while handling another keeps the first one in <code>__context__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>break</code> inside <code>try</code> still runs <code>finally</code> before leaving the loop.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ValueError | context: KeyError
+start 1
+cleanup 1
+start 0
+cleanup 0
+loop over</pre></div><p>The handler for <code>KeyError</code> raised a new <code>ValueError</code>. Python attaches the exception that was being handled to the new one as <code>__context__</code>, which is why tracebacks then say "During handling of the above exception, another exception occurred". The caller catches the <code>ValueError</code> and can still see the original <code>KeyError</code>. In the loop, <code>break</code> leaves the loop from inside <code>try</code>, but <code>finally</code> runs first, so "cleanup 0" is printed before the loop ends; 2 is never reached.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-except-ex" data-pid="m7-1-what-is-the-difference-between-except-ex" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between <code>except Exception:</code> and a bare <code>except:</code>, and why does it matter?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A bare <code>except:</code> catches <code>BaseException</code>, the root of the hierarchy, so it also catches <code>KeyboardInterrupt</code> (Ctrl+C), <code>SystemExit</code> (<code>sys.exit()</code>) and <code>GeneratorExit</code>. Code with a bare <code>except</code> inside a loop can become impossible to stop with Ctrl+C, and it can swallow a deliberate exit. <code>except Exception:</code> catches all ordinary errors but lets those control-flow exceptions through. Even so, <code>except Exception</code> should be rare: it belongs at boundaries (a request handler, a batch loop, a worker), always with logging of the full traceback, never as <code>except Exception: pass</code>. Everywhere else, catch the specific types you can actually handle, so unexpected errors, which are usually bugs, stay visible.</p></div></details>
+</article>
+<article class="prob" id="p-what-are-else-and-finally-for-in-a-try-s" data-pid="m7-1-what-are-else-and-finally-for-in-a-try-s" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What are <code>else</code> and <code>finally</code> for in a <code>try</code> statement? Give a real use for each.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>else</code> runs only if the <code>try</code> block raised nothing. Its purpose is to keep the <code>try</code> block minimal: put only the risky statement in <code>try</code>, and the code that depends on its success in <code>else</code>, so errors in that follow-up code are not accidentally caught by handlers meant for the risky step. Example: <code>try: f = open(path)</code>, <code>except FileNotFoundError:</code> use defaults, <code>else:</code> parse the file. <code>finally</code> runs no matter what: success, a handled or unhandled exception, or an early <code>return</code> or <code>break</code>. It is for cleanup that must always happen: closing a connection, releasing a lock, removing a temporary file, recording a metric of how long a call took. Never <code>return</code> from <code>finally</code>, since that discards any exception in flight; and for resources, a <code>with</code> statement usually replaces <code>try</code>/<code>finally</code>.</p></div></details>
+</article>
+<article class="prob" id="p-you-run-a-batch-job-over-one-million-rec" data-pid="m7-1-you-run-a-batch-job-over-one-million-rec" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. You run a batch job over one million records and some records are bad. How do you design the error handling?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Decide per error type whether it is a <strong>record</strong> problem or a <strong>job</strong> problem. Record problems (a malformed line, a missing field, a value out of range) should not stop the job: catch the specific exceptions per record, write the record and the error to a dead-letter file or table with enough context to fix it (record id, line number, message), count them, and continue. Job problems (the database is down, credentials are wrong, a bug such as a <code>NameError</code>) should stop the job fast instead of failing a million times; transient ones (timeouts, rate limits) get retries with backoff first. Add an <strong>error budget</strong>: if more than, say, 1% of records fail, abort, since that usually means a systematic problem such as a schema change. Log a summary at the end (processed, succeeded, failed by error type), make the job resumable with checkpoints, and keep writes idempotent so a re-run does not duplicate data. Only the outermost loop uses a broad <code>except Exception</code>, and it logs the traceback for every record it catches.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A raised exception stops the current block and unwinds the call stack to the first matching <code>except</code>; unhandled, it prints a traceback (read it from the bottom).</li><li><code>except</code> clauses are tried top to bottom and match subclasses too: specific types first. The <code>as</code> name is deleted after the block.</li><li><code>else</code> runs on success (keep <code>try</code> small); <code>finally</code> always runs, even on <code>return</code> or <code>break</code>. Never <code>return</code> inside <code>finally</code>.</li><li>Errors live under <code>Exception</code>; <code>KeyboardInterrupt</code> and <code>SystemExit</code> do not. Never write a bare <code>except:</code>. <code>JSONDecodeError</code> is a <code>ValueError</code>.</li><li>Catch narrowly: the specific type, the smallest block, only what you can handle. Raising is expensive; use <code>get</code> and checks for normal cases.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

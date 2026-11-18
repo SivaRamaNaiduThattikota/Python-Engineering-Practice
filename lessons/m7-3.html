@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7.3 · Designing error handling</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m7-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 7 · Error handling</span></div>
+  <h1>7.3 Designing error handling</h1>
+  <p>The decisions behind good error handling: asking permission or forgiveness, where in a program to handle each error, why swallowed errors are the worst bugs, logging a traceback once, keeping data consistent when a step fails halfway, and degrading gracefully with fallbacks and warnings. Applied to agents, batch jobs and LLM features.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="eafp">
+<h2><span class="n">1</span>Asking permission or forgiveness</h2>
+<p>There are two styles of dealing with operations that may fail. <strong>LBYL</strong>, "look before you leap", checks every condition first: <code>if key in d: value = d[key]</code>. <strong>EAFP</strong>, "easier to ask forgiveness than permission", just does it and handles the failure: <code>try: value = d[key]</code> / <code>except KeyError: ...</code>. Python's culture leans towards EAFP, and there are good reasons, but neither is always right.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">eafp_lbyl.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+
+config = {&quot;model&quot;: &quot;small&quot;}
+
+# LBYL: check, then act
+if &quot;temperature&quot; in config:
+    t = config[&quot;temperature&quot;]
+else:
+    t = 0.7
+
+# EAFP: act, then handle failure
+try:
+    t2 = config[&quot;temperature&quot;]
+except KeyError:
+    t2 = 0.7
+
+t3 = config.get(&quot;temperature&quot;, 0.7)      # the best tool when it exists
+print(t, t2, t3)
+
+path = os.path.join(tempfile.mkdtemp(), &quot;cache.json&quot;)
+try:
+    with open(path, encoding=&quot;utf-8&quot;) as f:   # EAFP for files: no gap between check and use
+        data = f.read()
+except FileNotFoundError:
+    data = &quot;{}&quot;
+print(data)</code></pre><div class="out"><span class="ol">Output</span><pre>0.7 0.7 0.7
+{}</pre></div></div>
+<p>EAFP wins in three situations. <strong>Races:</strong> with files, network resources and anything shared, the world can change between the check and the action. <code>if os.path.exists(p): open(p)</code> can still fail if another process deletes the file in between, a class of bug called <strong>TOCTOU</strong> ("time of check to time of use"). Only the <code>try</code> version is correct. <strong>Duck typing:</strong> instead of checking <code>isinstance(x, list)</code>, just use <code>x</code> the way you need and handle the error, so tuples, generators and custom types work too. <strong>Many conditions:</strong> when validity depends on several things (the key exists, the value is a dict, it has the right field), one <code>try</code> around the access is clearer than a pyramid of <code>if</code>s (problem 10).</p>
+<p>LBYL wins in others. When failure is <strong>common</strong>, raising and catching costs far more than a test (7.1). When the failure would happen <strong>after side effects</strong>, for example halfway through writing a file or sending a batch, checking first avoids leaving things half done. And when the check is a <strong>built-in</strong>, such as <code>dict.get</code>, <code>getattr(obj, name, default)</code> or <code>str.isdigit</code>, it is both clear and fast. The best code often uses both: check what can be checked cheaply up front, and still handle the failures that only reality can reveal.</p>
+</section>
+<section class="sec" id="where">
+<h2><span class="n">2</span>Where to handle each error</h2>
+<p>Every exception is eventually handled somewhere, even if "somewhere" is the top level, where Python prints a traceback and stops. The design question is <strong>which layer</strong> should handle it. The rule of thumb: <strong>handle an error at the lowest level that knows what to do about it</strong>, and let it travel up until then. A function that parses a date does not know whether a bad date should skip the record, ask the user again or abort the import, so it should raise; the import loop knows, so it handles.</p>
+<p>In a typical application the layers look like this. The <strong>lowest layer</strong> (parsing, database or API access) raises specific errors and translates library exceptions into the application's own types (7.2). The <strong>middle layer</strong> (business logic) handles what it can (retry a transient failure, use a default) and lets the rest pass. The <strong>boundary</strong> (the HTTP handler, the CLI's <code>main</code>, the loop of a batch job or an agent) catches broadly, logs the traceback, and converts the error into a result for the outside world: an HTTP 400 or 500 response, an exit code, a failed-record entry, or an error message for the model.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">layers.py</span><button class="copy">Copy</button></div><pre><code class="py">class NotFoundError(Exception):
+    pass
+
+DB = {&quot;u1&quot;: {&quot;name&quot;: &quot;Ana&quot;, &quot;plan&quot;: &quot;pro&quot;}}
+
+def get_user(user_id):                       # lowest layer: raise specific errors
+    try:
+        return DB[user_id]
+    except KeyError:
+        raise NotFoundError(f&quot;no user {user_id!r}&quot;) from None
+
+def plan_limit(user_id):                     # middle layer: logic, no handling it cannot do
+    return {&quot;pro&quot;: 1000, &quot;free&quot;: 50}[get_user(user_id)[&quot;plan&quot;]]
+
+def handle_request(user_id):                 # boundary: turn errors into responses
+    try:
+        return 200, {&quot;limit&quot;: plan_limit(user_id)}
+    except NotFoundError as e:
+        return 404, {&quot;error&quot;: str(e)}
+    except Exception as e:
+        return 500, {&quot;error&quot;: &quot;internal error&quot;}   # and log the traceback (below)
+
+print(handle_request(&quot;u1&quot;), handle_request(&quot;u9&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>(200, {&#x27;limit&#x27;: 1000}) (404, {&#x27;error&#x27;: &quot;no user &#x27;u9&#x27;&quot;})</pre></div></div>
+<p>The middle function contains no <code>try</code> at all, and that is correct: it has nothing useful to do with a missing user. A common anti-pattern is the opposite, <code>try</code>/<code>except</code> in every function "to be safe", each one logging, wrapping or returning <code>None</code>. It makes the code longer, hides the real origin of errors and produces the same failure logged five times. <strong>Fail fast</strong> at the bottom, handle <strong>once</strong> at the right level.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A stored procedure that hits a constraint violation should not catch it and carry on; it raises, the transaction rolls back, and the application that called it decides whether to show "this email already exists". The same separation applies in Python: low layers report precisely, the layer that talks to the user decides what it means.</p></div></div>
+</section>
+<section class="sec" id="swallow">
+<h2><span class="n">3</span>Never swallow errors</h2>
+<p>The most damaging error-handling bug is the <strong>swallowed exception</strong>: <code>except Exception: pass</code>, or <code>except: return None</code>. The program keeps running, nothing is logged, and the output is quietly wrong, sometimes for months. A crash is visible and gets fixed; a swallowed error produces a dashboard that is 3% too low with no trace of why. If you genuinely want to ignore one specific, expected error, make it explicit and narrow, so a reader can see the decision. <code>contextlib.suppress</code> exists for exactly that (10.3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">suppress_vs_swallow.py</span><button class="copy">Copy</button></div><pre><code class="py">import contextlib, os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;lock.tmp&quot;)
+
+with contextlib.suppress(FileNotFoundError):   # &quot;it is fine if the file is already gone&quot;
+    os.remove(path)
+print(&quot;cleanup done, nothing to remove&quot;)
+
+def risky_average(values):
+    try:
+        return sum(values) / len(values)
+    except Exception:
+        return None                            # swallowed: callers cannot tell why
+
+print(risky_average([]), risky_average([&quot;3&quot;, &quot;4&quot;]), risky_average([3, 4]))</code></pre><div class="out"><span class="ol">Output</span><pre>cleanup done, nothing to remove
+None None 3.5</pre></div></div>
+<p><code>risky_average</code> returns <code>None</code> for an empty list (a normal edge case) and for strings (a bug in the caller) alike, and the <code>None</code> will cause a <code>TypeError</code> somewhere far away. Better: decide what the normal edge case should return, make that explicit (<code>if not values: return 0.0</code> or raise <code>ValueError("no values")</code>), and let the bug crash where it happens (problem 3).</p>
+<p>Returning <code>None</code> for failure has one more problem: callers forget to check it. When a function can fail in a way callers must handle, raising is usually safer than a special return value. When "no result" is a normal answer, such as a search with no match, <code>None</code> is fine, but document it, and use a type hint like <code>str | None</code> (11.1) so tools remind callers to check.</p>
+</section>
+<section class="sec" id="logging">
+<h2><span class="n">4</span>Logging an exception, once</h2>
+<p>When you handle an error at a boundary, record it with its <strong>traceback</strong>, not just its message. <code>str(e)</code> for a <code>KeyError</code> is only <code>'model'</code>, which tells you nothing about where it happened. The <code>logging</code> module (12.3) has <code>logger.exception(message)</code>, which logs at error level and automatically appends the full traceback of the exception being handled; outside an <code>except</code> block, pass <code>exc_info=True</code> or <code>exc_info=e</code>. Use it <strong>once</strong>, at the place that handles the error.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">log_exception.py</span><button class="copy">Copy</button></div><pre><code class="py">import io, logging
+
+stream = io.StringIO()
+logger = logging.getLogger(&quot;demo&quot;)
+logger.addHandler(logging.StreamHandler(stream))
+logger.propagate = False
+
+def load(cfg):
+    return cfg[&quot;model&quot;][&quot;name&quot;]
+
+try:
+    load({&quot;model&quot;: None})
+except Exception as e:
+    logger.error(&quot;load failed: %s&quot;, e)           # message only
+    logger.exception(&quot;load failed&quot;)               # message and traceback
+lines = stream.getvalue().splitlines()
+print(lines[0])
+print(lines[1], &quot;| has traceback:&quot;, any(l.startswith(&quot;Traceback&quot;) for l in lines[2:]), &quot;| last:&quot;, lines[-1])</code></pre><div class="out"><span class="ol">Output</span><pre>load failed: &#x27;NoneType&#x27; object is not subscriptable
+load failed | has traceback: True | last: TypeError: &#x27;NoneType&#x27; object is not subscriptable</pre></div></div>
+<p>The first line says only that <code>'NoneType' object is not subscriptable</code>; the second gives the traceback with the function and line. The opposite mistake is logging at <strong>every</strong> level: each function catches, logs and re-raises, so one failure produces five log entries with five partial tracebacks, and on-call engineers count five incidents. Either handle an error (and log it there) or let it pass untouched (problem 6). Adding context on the way up is better done with <code>add_note</code> or a translated exception (7.2) than with extra log lines.</p>
+</section>
+<section class="sec" id="consistency">
+<h2><span class="n">5</span>Leaving data consistent</h2>
+<p>An exception can interrupt a function <strong>halfway through</strong> a change: three of five orders applied, half of a file written, the cache updated but not the database. The caller then holds data in a state that no code path was designed for. The defence is to make changes <strong>all or nothing</strong>, using one of three patterns:</p>
+<ul><li><strong>Validate everything first, then change.</strong> Check every input before the first modification, so the change itself cannot fail halfway for a predictable reason (problem 7).</li><li><strong>Build new, then swap.</strong> Compute the complete new state in a separate object (a copy, a new list, a temporary file), and only when it is complete, replace the old one in a single step. If anything fails, the old state is untouched.</li><li><strong>Undo on failure.</strong> If changes must happen in place, record what was done and reverse it in an <code>except</code> block, then re-raise. Databases do this for you with transactions.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">all_or_nothing.py</span><button class="copy">Copy</button></div><pre><code class="py">def apply_discounts_in_place(prices, discounts):
+    for item, pct in discounts.items():
+        prices[item] = round(prices[item] * (1 - pct), 2)    # fails halfway on an unknown item
+
+def apply_discounts(prices, discounts):
+    new = dict(prices)                                    # build new...
+    for item, pct in discounts.items():
+        if item not in new:
+            raise KeyError(f&quot;unknown item {item!r}&quot;)
+        new[item] = round(new[item] * (1 - pct), 2)
+    return new                                            # ...the caller swaps
+
+prices = {&quot;pen&quot;: 2.0, &quot;book&quot;: 10.0}
+try:
+    apply_discounts_in_place(prices, {&quot;pen&quot;: 0.5, &quot;lamp&quot;: 0.1})
+except KeyError:
+    pass
+print(prices)                                             # half applied
+
+prices = {&quot;pen&quot;: 2.0, &quot;book&quot;: 10.0}
+try:
+    prices = apply_discounts(prices, {&quot;pen&quot;: 0.5, &quot;lamp&quot;: 0.1})
+except KeyError as e:
+    print(&quot;rejected:&quot;, e)
+print(prices)                                             # untouched</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;pen&#x27;: 1.0, &#x27;book&#x27;: 10.0}
+rejected: &quot;unknown item &#x27;lamp&#x27;&quot;
+{&#x27;pen&#x27;: 2.0, &#x27;book&#x27;: 10.0}</pre></div></div>
+<p>Files follow the same idea: write to a temporary file in the same directory, and when writing has fully succeeded, call <code>os.replace(tmp, final)</code>, which swaps the file into place in one step on every operating system. A crash during writing leaves the old file intact instead of a truncated one (problem 9). Model checkpoints, indexes and caches should always be saved this way.</p>
+</section>
+<section class="sec" id="degrade">
+<h2><span class="n">6</span>Fallbacks, degradation and warnings</h2>
+<p>Sometimes the right response to a failure is to <strong>continue with less</strong>: answer from a cache when the model API is down, switch to a smaller model when the large one times out, return keyword search results when the vector store is unreachable. This is <strong>graceful degradation</strong>, and it is a deliberate product decision, not a way to hide errors. Two rules keep it honest: degrade only on the specific failures you planned for (timeouts, rate limits, connection errors, not every exception), and <strong>record</strong> every degradation (a log entry, a metric, a flag in the response), so you know how often users get the reduced version (problem 5).</p>
+<p>For problems that are not errors but deserve attention, such as a deprecated option, a suspicious input that was accepted, or a fallback that was used, Python has the <strong><code>warnings</code></strong> module. <code>warnings.warn(message, category)</code> emits a warning without stopping the program; by default each distinct warning is shown once, and tests or applications can turn warnings into errors or collect them. Libraries use <code>DeprecationWarning</code> to announce changes before they break anyone.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">warnings_demo.py</span><button class="copy">Copy</button></div><pre><code class="py">import warnings
+
+def build_request(prompt, temperature=None, temp=None):
+    if temp is not None:
+        warnings.warn(&quot;&#x27;temp&#x27; is deprecated, use &#x27;temperature&#x27;&quot;, DeprecationWarning, stacklevel=2)
+        temperature = temp
+    if temperature is not None and temperature &gt; 1.5:
+        warnings.warn(f&quot;temperature {temperature} is unusually high&quot;, UserWarning, stacklevel=2)
+    return {&quot;prompt&quot;: prompt, &quot;temperature&quot;: temperature}
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter(&quot;always&quot;)
+    print(build_request(&quot;hi&quot;, temp=1.8))
+print([(w.category.__name__, str(w.message)) for w in caught])
+
+with warnings.catch_warnings():
+    warnings.simplefilter(&quot;error&quot;)             # strict mode, as in tests
+    try:
+        build_request(&quot;hi&quot;, temp=0.2)
+    except DeprecationWarning as e:
+        print(&quot;raised:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;prompt&#x27;: &#x27;hi&#x27;, &#x27;temperature&#x27;: 1.8}
+[(&#x27;DeprecationWarning&#x27;, &quot;&#x27;temp&#x27; is deprecated, use &#x27;temperature&#x27;&quot;), (&#x27;UserWarning&#x27;, &#x27;temperature 1.8 is unusually high&#x27;)]
+raised: &#x27;temp&#x27; is deprecated, use &#x27;temperature&#x27;</pre></div></div>
+<p><code>stacklevel=2</code> makes the warning point at the <strong>caller's</strong> line instead of the line inside the library, which is where the fix belongs. Turning warnings into errors in a test suite (pytest's <code>-W error</code>, 13.1) catches deprecated usage before an upgrade removes it.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-permission-and-forgiveness" data-pid="m7-3-permission-and-forgiveness" data-type="predict" data-level="easy" data-answer="0.7 True False
+missing &#x27;tpm&#x27;
+False True
+TypeError">
+<header class="prob-head"><h3>1. Permission and forgiveness</h3></header>
+<div class="code"><pre><code class="py">cfg = {&quot;model&quot;: &quot;small&quot;, &quot;limits&quot;: {&quot;rpm&quot;: 60}}
+print(cfg.get(&quot;temperature&quot;, 0.7), getattr(cfg, &quot;keys&quot;) is not None, hasattr(cfg, &quot;model&quot;))
+try:
+    rpm = cfg[&quot;limits&quot;][&quot;rpm&quot;]
+    tpm = cfg[&quot;limits&quot;][&quot;tpm&quot;]
+except KeyError as e:
+    print(&quot;missing&quot;, e)
+print(&quot;rpm&quot; in cfg, &quot;rpm&quot; in cfg[&quot;limits&quot;])
+try:
+    cfg[&quot;model&quot;][&quot;name&quot;]
+except TypeError as e:
+    print(type(e).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hasattr</code> looks for attributes, not dict keys. Indexing a string with a string raises <code>TypeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0.7 True False
+missing &#x27;tpm&#x27;
+False True
+TypeError</pre></div><p><code>get</code> returns the default for a missing key. <code>hasattr(cfg, "model")</code> is <code>False</code>: dict keys are not attributes, while <code>keys</code> is a method, so <code>getattr</code> finds it. Inside the <code>try</code>, <code>rpm</code> is read and the missing <code>tpm</code> raises <code>KeyError</code>, whose <code>str</code> is the quoted key. <code>in</code> checks only the top level of a dict. <code>cfg["model"]</code> is the string <code>"small"</code>, and indexing a string with a string is a <code>TypeError</code>, not a <code>KeyError</code>, which is why code that walks nested data must handle both.</p></div></details>
+</article>
+<article class="prob" id="p-get-a-nested-value-safely" data-pid="m7-3-get-a-nested-value-safely" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Get a nested value safely</h3></header>
+<div class="prob-q"><p>API responses are deeply nested. Write <code>dig(data, path, default=None)</code> where <code>path</code> is a dotted string such as <code>"choices.0.message.content"</code>: each part is a dict key, or a list index when the current value is a list. Return <code>default</code> if any step is missing or the structure does not fit. Use EAFP.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def dig(data, path, default=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">resp = {"choices": [{"message": {"content": "Hi", "role": "assistant"}}], "usage": {"total_tokens": 12}}
+assert dig(resp, "choices.0.message.content") == "Hi"
+assert dig(resp, "usage.total_tokens") == 12
+assert dig(resp, "choices.1.message", "none") == "none"
+assert dig(resp, "choices.x.message") is None
+assert dig(resp, "usage.total_tokens.value", 0) == 0
+assert dig(resp, "missing.deep.key", "d") == "d"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">resp = {&quot;choices&quot;: [{&quot;message&quot;: {&quot;content&quot;: &quot;Hi&quot;, &quot;role&quot;: &quot;assistant&quot;}}], &quot;usage&quot;: {&quot;total_tokens&quot;: 12}}
+assert dig(resp, &quot;choices.0.message.content&quot;) == &quot;Hi&quot;
+assert dig(resp, &quot;usage.total_tokens&quot;) == 12
+assert dig(resp, &quot;choices.1.message&quot;, &quot;none&quot;) == &quot;none&quot;
+assert dig(resp, &quot;choices.x.message&quot;) is None
+assert dig(resp, &quot;usage.total_tokens.value&quot;, 0) == 0
+assert dig(resp, &quot;missing.deep.key&quot;, &quot;d&quot;) == &quot;d&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each part: if the current value is a list, index it with <code>int(part)</code>; otherwise use <code>current[part]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>KeyError</code>, <code>IndexError</code>, <code>ValueError</code> (from <code>int</code>) and <code>TypeError</code> (indexing something that is not a container).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def dig(data, path, default=None):
+    current = data
+    try:
+        for part in path.split(&quot;.&quot;):
+            current = current[int(part)] if isinstance(current, list) else current[part]
+    except (KeyError, IndexError, ValueError, TypeError):
+        return default
+    return current</code></pre></div><p>One <code>try</code> around the whole walk replaces a check at every level for "is it a dict, does it have the key, is it a list, is the index in range". The four exception types are exactly the ways a path can fail to fit: missing key, index out of range, a non-numeric index for a list, and indexing something that is not a container (an <code>int</code> here). Anything else, such as a <code>NameError</code>, would still surface. This is how helpers like <code>jmespath</code> or <code>glom</code> behave, and it is convenient for optional fields; for fields that <strong>must</strong> exist, validate the response with a schema instead (11.4), so a missing field is an error, not a silent default.</p></div></details>
+</article>
+<article class="prob" id="p-a-function-that-hides-the-edge-case-and-" data-pid="m7-3-a-function-that-hides-the-edge-case-and-" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A function that hides the edge case and the bug</h3></header>
+<div class="prob-q"><p><code>mean_score(scores)</code> returns <code>None</code> for an empty list and for invalid input alike, and the <code>None</code> breaks reports later. Make an empty list return <code>0.0</code> (a decision of this team), and let invalid input raise where it happens.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def mean_score(scores):
+    try:
+        return sum(scores) / len(scores)
+    except Exception:
+        return None
+</textarea>
+<script type="text/plain" class="prob-tests">assert mean_score([0.5, 1.0]) == 0.75
+assert mean_score([]) == 0.0
+try:
+    mean_score(["0.5", "1.0"])
+    assert False, "strings should raise"
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert mean_score([0.5, 1.0]) == 0.75
+assert mean_score([]) == 0.0
+try:
+    mean_score([&quot;0.5&quot;, &quot;1.0&quot;])
+    assert False, &quot;strings should raise&quot;
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle the empty list explicitly with an <code>if</code>, and remove the <code>try</code> entirely.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def mean_score(scores):
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)</code></pre></div><p>The broad handler merged two different situations: an empty list, a normal edge case that deserves a defined answer, and a list of strings, a bug in the caller that deserves a crash at its source. Handling the edge case with an explicit <code>if</code> makes the decision visible in the code, and removing the <code>try</code> lets <code>sum</code> raise <code>TypeError</code> right where the bad data arrives. Note that <code>0.0</code> for "no scores" is a choice; for some reports <code>None</code> (with a type hint saying so) or an exception would be the right one, but it must be one decision, made on purpose.</p></div></details>
+</article>
+<article class="prob" id="p-message-versus-traceback-in-logs" data-pid="m7-3-message-versus-traceback-in-logs" data-type="predict" data-level="easy" data-answer="lookup failed: &#x27;b&#x27;
+2 2">
+<header class="prob-head"><h3>4. Message versus traceback in logs</h3></header>
+<div class="code"><pre><code class="py">import io, logging
+
+stream = io.StringIO()
+log = logging.getLogger(&quot;predict&quot;)
+log.addHandler(logging.StreamHandler(stream))
+log.propagate = False
+
+try:
+    {&quot;a&quot;: 1}[&quot;b&quot;]
+except KeyError as e:
+    log.error(&quot;lookup failed: %s&quot;, e)
+    log.exception(&quot;lookup failed&quot;)
+    log.error(&quot;with exc_info&quot;, exc_info=True)
+
+text = stream.getvalue()
+print(text.splitlines()[0])
+print(text.count(&quot;Traceback&quot;), text.count(&quot;KeyError: &#x27;b&#x27;&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>logger.exception</code> and <code>exc_info=True</code> add the traceback; a plain <code>error</code> with the message does not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>lookup failed: &#x27;b&#x27;
+2 2</pre></div><p>The first entry is just the message, with the quoted key from <code>str(e)</code>. <code>log.exception(...)</code> and <code>log.error(..., exc_info=True)</code> both append the full traceback, which ends with the line <code>KeyError: 'b'</code>. So the text contains two tracebacks, and that line appears twice. In real logs the traceback is what tells you which function and line failed.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-fall-back-and-say-so" data-pid="m7-3-fall-back-and-say-so" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Fall back, and say so</h3></header>
+<div class="prob-q"><p>Write <code>answer(question, primary, fallback, events)</code> that calls <code>primary(question)</code>. If it raises <code>TimeoutError</code> or <code>ConnectionError</code>, call <code>fallback(question)</code> instead and append <code>("fallback", type name, question)</code> to the <code>events</code> list. Return <code>(text, source)</code> with source <code>"primary"</code> or <code>"fallback"</code>. Any other exception from <code>primary</code>, and any exception from <code>fallback</code>, must propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def answer(question, primary, fallback, events):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def ok(q): return f"big model: {q}"
+def small(q): return f"small model: {q}"
+def slow(q): raise TimeoutError("30s")
+def buggy(q): raise KeyError("prompt")
+events = []
+assert answer("refund?", ok, small, events) == ("big model: refund?", "primary") and events == []
+assert answer("refund?", slow, small, events) == ("small model: refund?", "fallback")
+assert events == [("fallback", "TimeoutError", "refund?")]
+try:
+    answer("x", buggy, small, events)
+    assert False
+except KeyError:
+    pass
+try:
+    answer("x", slow, slow, [])
+    assert False
+except TimeoutError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def ok(q): return f&quot;big model: {q}&quot;
+def small(q): return f&quot;small model: {q}&quot;
+def slow(q): raise TimeoutError(&quot;30s&quot;)
+def buggy(q): raise KeyError(&quot;prompt&quot;)
+events = []
+assert answer(&quot;refund?&quot;, ok, small, events) == (&quot;big model: refund?&quot;, &quot;primary&quot;) and events == []
+assert answer(&quot;refund?&quot;, slow, small, events) == (&quot;small model: refund?&quot;, &quot;fallback&quot;)
+assert events == [(&quot;fallback&quot;, &quot;TimeoutError&quot;, &quot;refund?&quot;)]
+try:
+    answer(&quot;x&quot;, buggy, small, events)
+    assert False
+except KeyError:
+    pass
+try:
+    answer(&quot;x&quot;, slow, slow, [])
+    assert False
+except TimeoutError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>try</code> / <code>except (TimeoutError, ConnectionError) as e:</code> around the primary call only, and <code>else</code> for the primary result.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def answer(question, primary, fallback, events):
+    try:
+        text = primary(question)
+    except (TimeoutError, ConnectionError) as e:
+        events.append((&quot;fallback&quot;, type(e).__name__, question))
+        return fallback(question), &quot;fallback&quot;
+    else:
+        return text, &quot;primary&quot;</code></pre></div><p>Only the failures you planned for, slow or unreachable service, trigger the fallback; a <code>KeyError</code> is a bug, and answering with the small model would hide it. The fallback call sits inside the <code>except</code> block but is not itself protected, so if the fallback also fails, the caller sees that error (with the primary's error attached as context). The event record is what makes degradation measurable: a dashboard of fallback rate tells you when the "temporary" fallback has become the normal path. Returning the source lets the UI or the logs mark degraded answers.</p></div></details>
+</article>
+<article class="prob" id="p-one-failure-logged-three-times" data-pid="m7-3-one-failure-logged-three-times" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. One failure, logged three times</h3></header>
+<div class="prob-q"><p>Each layer of this request path catches, logs and re-raises, so every failure appears three times in the log. Change it so the failure is logged <strong>once</strong>, by <code>handle</code>, with the traceback marker, and <code>handle</code> still returns <code>(500, "internal error")</code>. The successful path must not log anything.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">log = []
+
+def fetch(doc_id):
+    try:
+        return {&quot;d1&quot;: &quot;Refunds take 5 days.&quot;}[doc_id]
+    except Exception as e:
+        log.append(f&quot;fetch failed: {e}&quot;)
+        raise
+
+def summarise(doc_id):
+    try:
+        return fetch(doc_id)[:12]
+    except Exception as e:
+        log.append(f&quot;summarise failed: {e}&quot;)
+        raise
+
+def handle(doc_id):
+    try:
+        return 200, summarise(doc_id)
+    except Exception as e:
+        log.append(f&quot;handle failed: {e}&quot;)
+        return 500, &quot;internal error&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import traceback
+assert handle("d1") == (200, "Refunds take") and log == []
+assert handle("d9") == (500, "internal error")
+assert len(log) == 1 and log[0].startswith("request failed") and "Traceback" in log[0] and "fetch" in log[0]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import traceback
+assert handle(&quot;d1&quot;) == (200, &quot;Refunds take&quot;) and log == []
+assert handle(&quot;d9&quot;) == (500, &quot;internal error&quot;)
+assert len(log) == 1 and log[0].startswith(&quot;request failed&quot;) and &quot;Traceback&quot; in log[0] and &quot;fetch&quot; in log[0]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Remove the handlers from <code>fetch</code> and <code>summarise</code>. In <code>handle</code>, log <code>traceback.format_exc()</code> together with a message.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import traceback
+
+log = []
+
+def fetch(doc_id):
+    return {&quot;d1&quot;: &quot;Refunds take 5 days.&quot;}[doc_id]
+
+def summarise(doc_id):
+    return fetch(doc_id)[:12]
+
+def handle(doc_id):
+    try:
+        return 200, summarise(doc_id)
+    except Exception:
+        log.append(&quot;request failed\n&quot; + traceback.format_exc())
+        return 500, &quot;internal error&quot;</code></pre></div><p>The lower functions had nothing to do with the error except log it, and each log line contained only <code>str(e)</code>, which for a <code>KeyError</code> is just <code>'d9'</code>. Removing those handlers lets the exception travel to the boundary untouched, where one entry with the full traceback shows the complete path (<code>handle</code>, <code>summarise</code>, <code>fetch</code>) and the exact line. In real code this is <code>logger.exception("request failed")</code>. One failure, one log entry, one alert.</p></div></details>
+</article>
+<article class="prob" id="p-all-orders-or-none" data-pid="m7-3-all-orders-or-none" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. All orders or none</h3></header>
+<div class="prob-q"><p>Write <code>apply_orders(stock, orders)</code> where <code>stock</code> maps item to quantity and <code>orders</code> is a list of <code>(item, qty)</code>. Return a <strong>new</strong> stock dict with all orders applied. If any order is for an unknown item, has a non-positive quantity, or would take an item's stock below zero (counting earlier orders in the same batch), raise <code>ValueError</code> describing the first problem, and leave <code>stock</code> unchanged.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def apply_orders(stock, orders):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">stock = {"pen": 5, "book": 2}
+assert apply_orders(stock, [("pen", 2), ("book", 1), ("pen", 3)]) == {"pen": 0, "book": 1}
+assert stock == {"pen": 5, "book": 2}
+for orders, word in [([("pen", 1), ("lamp", 1)], "lamp"), ([("pen", 0)], "quantity"), ([("book", 2), ("book", 1)], "book")]:
+    try:
+        apply_orders(stock, orders)
+        assert False, orders
+    except ValueError as e:
+        assert word in str(e)
+    assert stock == {"pen": 5, "book": 2}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">stock = {&quot;pen&quot;: 5, &quot;book&quot;: 2}
+assert apply_orders(stock, [(&quot;pen&quot;, 2), (&quot;book&quot;, 1), (&quot;pen&quot;, 3)]) == {&quot;pen&quot;: 0, &quot;book&quot;: 1}
+assert stock == {&quot;pen&quot;: 5, &quot;book&quot;: 2}
+for orders, word in [([(&quot;pen&quot;, 1), (&quot;lamp&quot;, 1)], &quot;lamp&quot;), ([(&quot;pen&quot;, 0)], &quot;quantity&quot;), ([(&quot;book&quot;, 2), (&quot;book&quot;, 1)], &quot;book&quot;)]:
+    try:
+        apply_orders(stock, orders)
+        assert False, orders
+    except ValueError as e:
+        assert word in str(e)
+    assert stock == {&quot;pen&quot;: 5, &quot;book&quot;: 2}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Work on <code>new = dict(stock)</code> and only return it at the end; the original is never touched.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check each order before applying it to <code>new</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def apply_orders(stock, orders):
+    new = dict(stock)
+    for item, qty in orders:
+        if item not in new:
+            raise ValueError(f&quot;unknown item {item!r}&quot;)
+        if qty &lt;= 0:
+            raise ValueError(f&quot;quantity must be positive, got {qty} for {item!r}&quot;)
+        if new[item] &lt; qty:
+            raise ValueError(f&quot;not enough {item!r}: {new[item]} left, {qty} ordered&quot;)
+        new[item] -= qty
+    return new</code></pre></div><p>Building a new dict means an exception at any order simply abandons the copy: the caller's <code>stock</code> was never modified, so there is nothing to undo. Checking against <code>new</code> rather than <code>stock</code> accounts for earlier orders in the same batch, which is why two book orders of 2 and 1 fail when only 2 books exist. The caller completes the change with <code>stock = apply_orders(stock, orders)</code>, a single step. This is the "build new, then swap" pattern; a database gives the same guarantee with a transaction.</p></div></details>
+</article>
+<article class="prob" id="p-a-change-interrupted-halfway" data-pid="m7-3-a-change-interrupted-halfway" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. A change interrupted halfway</h3></header>
+<div class="prob-q"><p>Fill in <code>state</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">state = {&quot;a&quot;: 1, &quot;b&quot;: 2}
+
+def bump_in_place(d, keys):
+    for k in keys:
+        d[k] += 10
+
+def bump_new(d, keys):
+    new = dict(d)
+    for k in keys:
+        new[k] += 10
+    return new
+
+try:
+    bump_in_place(state, [&quot;a&quot;, &quot;x&quot;, &quot;b&quot;])
+except KeyError:
+    pass
+try:
+    state = bump_new(state, [&quot;b&quot;, &quot;x&quot;])
+except KeyError:
+    pass
+state = bump_new(state, [&quot;b&quot;])</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>in place, failed on x</td><td><input class="cell" data-a="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}" data-s="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}" aria-label="state at in place, failed on x" autocomplete="off"></td></tr><tr><td>new copy, failed on x</td><td><input class="cell" data-a="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}" data-s="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}" aria-label="state at new copy, failed on x" autocomplete="off"></td></tr><tr><td>new copy, success</td><td><input class="cell" data-a="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 12}" data-s="{&#x27;a&#x27;: 11, &#x27;b&#x27;: 12}" aria-label="state at new copy, success" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The in-place version has already changed <code>a</code> when it reaches <code>x</code>. The copy version fails before <code>state</code> is reassigned.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>in place, failed on x</td><td><code>{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}</code></td></tr><tr><td>new copy, failed on x</td><td><code>{&#x27;a&#x27;: 11, &#x27;b&#x27;: 2}</code></td></tr><tr><td>new copy, success</td><td><code>{&#x27;a&#x27;: 11, &#x27;b&#x27;: 12}</code></td></tr></table></div><p>The in-place update changed <code>a</code> and then failed on <code>x</code>, so <code>b</code> was never updated: a half-applied change. The copying version also failed on <code>x</code>, but the exception happened before the assignment <code>state = ...</code> ran, so <code>state</code> still refers to the unchanged dict. The successful call swaps in the new dict in one assignment.</p></div></details>
+</article>
+<article class="prob" id="p-a-crash-that-leaves-half-a-file" data-pid="m7-3-a-crash-that-leaves-half-a-file" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. A crash that leaves half a file</h3></header>
+<div class="prob-q"><p><code>save_labels(path, labels)</code> writes one label per line. If a label is not a string, it crashes halfway and the existing file is left truncated. Make the write atomic: on failure the old file must be untouched and no temporary file left behind; on success the new content replaces it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def save_labels(path, labels):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        for label in labels:
+            f.write(label + &quot;\n&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, "labels.txt")
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+save_labels(p, ["spam", "ham"])
+assert read(p) == "spam\nham\n"
+try:
+    save_labels(p, ["phish", 42, "x"])
+    assert False
+except TypeError:
+    pass
+assert read(p) == "spam\nham\n"
+assert os.listdir(d) == ["labels.txt"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, &quot;labels.txt&quot;)
+def read(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return f.read()
+save_labels(p, [&quot;spam&quot;, &quot;ham&quot;])
+assert read(p) == &quot;spam\nham\n&quot;
+try:
+    save_labels(p, [&quot;phish&quot;, 42, &quot;x&quot;])
+    assert False
+except TypeError:
+    pass
+assert read(p) == &quot;spam\nham\n&quot;
+assert os.listdir(d) == [&quot;labels.txt&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write to <code>path + ".tmp"</code>, then <code>os.replace(tmp, path)</code> after the <code>with</code> block closes it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On any exception, remove the temporary file and re-raise.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+def save_labels(path, labels):
+    tmp = path + &quot;.tmp&quot;
+    try:
+        with open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+            for label in labels:
+                f.write(label + &quot;\n&quot;)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise</code></pre></div><p>Opening the real file with <code>"w"</code> truncates it immediately, so any crash afterwards loses the old content. Writing to a temporary file in the same directory and swapping it in with <code>os.replace</code> means the real file is only ever the complete old version or the complete new one; <code>os.replace</code> overwrites the target in one step on every platform. The cleanup handler catches <code>BaseException</code> deliberately, so even Ctrl+C removes the temporary file, and it always re-raises, so nothing is swallowed. The temporary file must be on the same file system as the target for the swap to be atomic, which is why it sits next to it.</p></div></details>
+</article>
+<article class="prob" id="p-a-pyramid-of-checks" data-pid="m7-3-a-pyramid-of-checks" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A pyramid of checks</h3></header>
+<div class="prob-q"><p>Rewrite with EAFP: one <code>try</code> and specific exceptions, same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def tool_name(response):
+    if isinstance(response, dict):
+        if &quot;choices&quot; in response:
+            choices = response[&quot;choices&quot;]
+            if isinstance(choices, list) and len(choices) &gt; 0:
+                message = choices[0].get(&quot;message&quot;) if isinstance(choices[0], dict) else None
+                if isinstance(message, dict) and &quot;tool_calls&quot; in message:
+                    calls = message[&quot;tool_calls&quot;]
+                    if isinstance(calls, list) and calls and isinstance(calls[0], dict):
+                        fn = calls[0].get(&quot;function&quot;)
+                        if isinstance(fn, dict) and &quot;name&quot; in fn:
+                            return fn[&quot;name&quot;]
+    return None
+</textarea>
+<script type="text/plain" class="prob-tests">ok = {"choices": [{"message": {"tool_calls": [{"function": {"name": "search"}}]}}]}
+assert tool_name(ok) == "search"
+assert tool_name({"choices": [{"message": {"content": "hi"}}]}) is None
+assert tool_name({"choices": []}) is None and tool_name("oops") is None and tool_name(None) is None
+assert tool_name({"choices": [{"message": {"tool_calls": []}}]}) is None
+assert tool_name({"choices": [{"message": {"tool_calls": [{"function": None}]}}]}) is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ok = {&quot;choices&quot;: [{&quot;message&quot;: {&quot;tool_calls&quot;: [{&quot;function&quot;: {&quot;name&quot;: &quot;search&quot;}}]}}]}
+assert tool_name(ok) == &quot;search&quot;
+assert tool_name({&quot;choices&quot;: [{&quot;message&quot;: {&quot;content&quot;: &quot;hi&quot;}}]}) is None
+assert tool_name({&quot;choices&quot;: []}) is None and tool_name(&quot;oops&quot;) is None and tool_name(None) is None
+assert tool_name({&quot;choices&quot;: [{&quot;message&quot;: {&quot;tool_calls&quot;: []}}]}) is None
+assert tool_name({&quot;choices&quot;: [{&quot;message&quot;: {&quot;tool_calls&quot;: [{&quot;function&quot;: None}]}}]}) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>return response["choices"][0]["message"]["tool_calls"][0]["function"]["name"]</code> inside <code>try</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Missing keys raise <code>KeyError</code>, empty lists <code>IndexError</code>, and <code>None</code> or strings in the way <code>TypeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def tool_name(response):
+    try:
+        return response[&quot;choices&quot;][0][&quot;message&quot;][&quot;tool_calls&quot;][0][&quot;function&quot;][&quot;name&quot;]
+    except (KeyError, IndexError, TypeError):
+        return None</code></pre></div><p>Every <code>isinstance</code>, <code>in</code> and <code>len</code> check in the pyramid guards against one of three failures, which Python reports anyway: a missing key (<code>KeyError</code>), an empty list (<code>IndexError</code>), or something in the path that is not a container, such as <code>None</code> or a string (<code>TypeError</code>). The EAFP version states the intent, "the name of the first tool call", in one line, and the handler lists the ways it can be absent. As with <code>dig</code>, this suits optional data; if a tool call is required, parse the response into a validated model instead (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-run-a-tool-and-report-errors-to-the-mode" data-pid="m7-3-run-a-tool-and-report-errors-to-the-mode" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Run a tool and report errors to the model</h3></header>
+<div class="prob-q"><p>An agent loop calls tools that the model chose. Write <code>run_tool(tools, name, args)</code> returning <code>{"result": ...}</code> on success. Errors the model can fix are returned, not raised: unknown tool <code>{"error": "unknown tool 'x'"}</code>; wrong arguments (a <code>TypeError</code> raised <strong>by the call itself</strong>) <code>{"error": "bad arguments for 'x': &lt;message&gt;"}</code>; a <code>ToolError</code> raised by the tool <code>{"error": "&lt;message&gt;"}</code>. Any other exception is a bug in the tool and must propagate. Define <code>ToolError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def run_tool(tools, name, args):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def search(query, k=3):
+    if not query.strip():
+        raise ToolError("query must not be empty")
+    return [f"doc{i}" for i in range(k)]
+
+def broken(x):
+    return x["field"]          # a bug when x is a string
+
+tools = {"search": search, "broken": broken}
+assert run_tool(tools, "search", {"query": "refund", "k": 2}) == {"result": ["doc0", "doc1"]}
+assert run_tool(tools, "fetch", {}) == {"error": "unknown tool 'fetch'"}
+assert run_tool(tools, "search", {"q": "x"})["error"].startswith("bad arguments for 'search':")
+assert run_tool(tools, "search", {"query": "  "}) == {"error": "query must not be empty"}
+try:
+    run_tool(tools, "broken", {"x": "text"})
+    assert False, "a bug inside a tool must propagate"
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def search(query, k=3):
+    if not query.strip():
+        raise ToolError(&quot;query must not be empty&quot;)
+    return [f&quot;doc{i}&quot; for i in range(k)]
+
+def broken(x):
+    return x[&quot;field&quot;]          # a bug when x is a string
+
+tools = {&quot;search&quot;: search, &quot;broken&quot;: broken}
+assert run_tool(tools, &quot;search&quot;, {&quot;query&quot;: &quot;refund&quot;, &quot;k&quot;: 2}) == {&quot;result&quot;: [&quot;doc0&quot;, &quot;doc1&quot;]}
+assert run_tool(tools, &quot;fetch&quot;, {}) == {&quot;error&quot;: &quot;unknown tool &#x27;fetch&#x27;&quot;}
+assert run_tool(tools, &quot;search&quot;, {&quot;q&quot;: &quot;x&quot;})[&quot;error&quot;].startswith(&quot;bad arguments for &#x27;search&#x27;:&quot;)
+assert run_tool(tools, &quot;search&quot;, {&quot;query&quot;: &quot;  &quot;}) == {&quot;error&quot;: &quot;query must not be empty&quot;}
+try:
+    run_tool(tools, &quot;broken&quot;, {&quot;x&quot;: &quot;text&quot;})
+    assert False, &quot;a bug inside a tool must propagate&quot;
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>inspect.signature(fn).bind(**args)</code> raises <code>TypeError</code> for wrong arguments <strong>without</strong> calling the function, which separates argument errors from <code>TypeError</code>s inside the tool.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look up the tool with <code>tools.get(name)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+
+class ToolError(Exception):
+    pass
+
+
+def run_tool(tools, name, args):
+    fn = tools.get(name)
+    if fn is None:
+        return {&quot;error&quot;: f&quot;unknown tool {name!r}&quot;}
+    try:
+        inspect.signature(fn).bind(**args)
+    except TypeError as e:
+        return {&quot;error&quot;: f&quot;bad arguments for {name!r}: {e}&quot;}
+    try:
+        return {&quot;result&quot;: fn(**args)}
+    except ToolError as e:
+        return {&quot;error&quot;: str(e)}</code></pre></div><p>The hard part is telling two <code>TypeError</code>s apart: "the model passed <code>q</code> instead of <code>query</code>" (fixable by the model) and "the tool's own code indexed a string" (a bug). Catching <code>TypeError</code> around <code>fn(**args)</code> would treat both the same. Binding the arguments to the function's signature first, without calling it, raises <code>TypeError</code> only for argument problems; after that, the real call runs outside that handler. Errors the model can act on are returned as data, so the agent can show them to the model and let it try again; bugs propagate so they get fixed rather than "explained" to the model. Lesson 8.4 uses <code>inspect.signature</code> to build tool schemas from functions.</p></div></details>
+</article>
+<article class="prob" id="p-suppress-and-warnings" data-pid="m7-3-suppress-and-warnings" data-type="predict" data-level="medium" data-answer="before
+continued
+ValueError handled inside
+[(&#x27;DeprecationWarning&#x27;, &#x27;old option&#x27;), (&#x27;UserWarning&#x27;, &#x27;odd input&#x27;)]">
+<header class="prob-head"><h3>12. suppress and warnings</h3></header>
+<div class="code"><pre><code class="py">import contextlib, warnings
+
+with contextlib.suppress(KeyError):
+    print(&quot;before&quot;)
+    {}[&quot;x&quot;]
+    print(&quot;after&quot;)
+print(&quot;continued&quot;)
+
+with contextlib.suppress(KeyError):
+    try:
+        int(&quot;x&quot;)
+    except ValueError:
+        print(&quot;ValueError handled inside&quot;)
+
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter(&quot;always&quot;)
+    warnings.warn(&quot;old option&quot;, DeprecationWarning)
+    warnings.warn(&quot;odd input&quot;)
+print([(x.category.__name__, str(x.message)) for x in w])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>suppress</code> ends its whole block at the first suppressed exception. A warning's default category is <code>UserWarning</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>before
+continued
+ValueError handled inside
+[(&#x27;DeprecationWarning&#x27;, &#x27;old option&#x27;), (&#x27;UserWarning&#x27;, &#x27;odd input&#x27;)]</pre></div><p><code>suppress(KeyError)</code> works like <code>try: ... except KeyError: pass</code> around the block: the <code>KeyError</code> ends the block, so "after" never prints, and execution continues after the <code>with</code>. The second block has its own handler for the <code>ValueError</code>, so <code>suppress</code> has nothing to do. <code>warnings.warn</code> without a category uses <code>UserWarning</code>; with <code>record=True</code> warnings are collected instead of printed, which is how tests check them.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-circuit-breaker" data-pid="m7-3-a-circuit-breaker" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A circuit breaker</h3></header>
+<div class="prob-q"><p>When a provider is down, calling it again and again wastes time and quota. Write <code>make_breaker(fn, max_failures, reset_after, clock)</code> returning a function <code>call(*args)</code>. It calls <code>fn(*args)</code> normally. After <code>max_failures</code> <strong>consecutive</strong> exceptions it opens: further calls raise <code>CircuitOpenError</code> immediately, without calling <code>fn</code>, until <code>reset_after</code> seconds have passed (measured with <code>clock()</code>). Then the next call is a trial: success closes the breaker and resets the count; failure opens it again for another <code>reset_after</code>. Exceptions from <code>fn</code> propagate unchanged. Define <code>CircuitOpenError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def make_breaker(fn, max_failures, reset_after, clock):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+clock = lambda: now[0]
+calls = []
+outcomes = []
+def provider(x):
+    calls.append(x)
+    if outcomes.pop(0):
+        return f"ok {x}"
+    raise ConnectionError("down")
+
+call = make_breaker(provider, max_failures=2, reset_after=10, clock=clock)
+outcomes[:] = [True, False, False]
+assert call(1) == "ok 1"
+for x in (2, 3):
+    try:
+        call(x)
+        assert False
+    except ConnectionError:
+        pass
+try:
+    call(4)
+    assert False
+except CircuitOpenError:
+    pass
+assert calls == [1, 2, 3]
+now[0] = 10.5
+outcomes[:] = [False]
+try:
+    call(5)
+except ConnectionError:
+    pass
+try:
+    call(6)
+    assert False
+except CircuitOpenError:
+    pass
+now[0] = 21.0
+outcomes[:] = [True, False, True]
+assert call(7) == "ok 7"
+try:
+    call(8)
+except ConnectionError:
+    pass
+assert call(9) == "ok 9" and calls == [1, 2, 3, 5, 7, 8, 9]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+clock = lambda: now[0]
+calls = []
+outcomes = []
+def provider(x):
+    calls.append(x)
+    if outcomes.pop(0):
+        return f&quot;ok {x}&quot;
+    raise ConnectionError(&quot;down&quot;)
+
+call = make_breaker(provider, max_failures=2, reset_after=10, clock=clock)
+outcomes[:] = [True, False, False]
+assert call(1) == &quot;ok 1&quot;
+for x in (2, 3):
+    try:
+        call(x)
+        assert False
+    except ConnectionError:
+        pass
+try:
+    call(4)
+    assert False
+except CircuitOpenError:
+    pass
+assert calls == [1, 2, 3]
+now[0] = 10.5
+outcomes[:] = [False]
+try:
+    call(5)
+except ConnectionError:
+    pass
+try:
+    call(6)
+    assert False
+except CircuitOpenError:
+    pass
+now[0] = 21.0
+outcomes[:] = [True, False, True]
+assert call(7) == &quot;ok 7&quot;
+try:
+    call(8)
+except ConnectionError:
+    pass
+assert call(9) == &quot;ok 9&quot; and calls == [1, 2, 3, 5, 7, 8, 9]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>failures</code> and <code>opened_at</code> in the enclosing function and update them with <code>nonlocal</code> (3.4).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Open means <code>opened_at is not None and clock() - opened_at &lt; reset_after</code>. After a trial failure, set <code>opened_at = clock()</code> again.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class CircuitOpenError(Exception):
+    pass
+
+
+def make_breaker(fn, max_failures, reset_after, clock):
+    failures = 0
+    opened_at = None
+
+    def call(*args):
+        nonlocal failures, opened_at
+        if opened_at is not None:
+            if clock() - opened_at &lt; reset_after:
+                raise CircuitOpenError(f&quot;circuit open for {reset_after - (clock() - opened_at):.1f}s more&quot;)
+            trial = True
+        else:
+            trial = False
+        try:
+            result = fn(*args)
+        except Exception:
+            failures += 1
+            if trial or failures &gt;= max_failures:
+                opened_at = clock()
+            raise
+        failures = 0
+        opened_at = None
+        return result
+
+    return call</code></pre></div><p>The breaker has three states. <strong>Closed</strong>: calls go through and failures are counted. <strong>Open</strong>: calls fail immediately with <code>CircuitOpenError</code>, protecting both your users (no waiting for a timeout) and the struggling provider (no extra load). <strong>Half-open</strong>: once the cool-down has passed, one trial call decides whether to close again or reopen. The state lives in the closure (3.4), updated with <code>nonlocal</code>; Module 9 would make it a class. Injecting <code>clock</code> instead of calling <code>time.time()</code> makes the behaviour testable without sleeping, a pattern you will use again in 13.2. The bare <code>raise</code> keeps <code>fn</code>'s exception unchanged, and a success at any time resets the consecutive count. Libraries such as <code>pybreaker</code> implement the same states, and LLM gateways use breakers per provider so traffic can fail over to another one.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-batch-job-that-hides-fat" data-pid="m7-3-read-the-code-a-batch-job-that-hides-fat" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a batch job that hides fatal errors</h3></header>
+<div class="prob-q"><p>This imports records: <code>transform</code> raises <code>ValueError</code> for bad records, and <code>save</code> writes a row (it may raise <code>PermissionError</code> if the store is read-only). Bad records should be skipped and their ids returned in <code>failed</code>; a <code>PermissionError</code> is fatal and must stop the job immediately, re-raised unchanged; any other exception is a bug and must propagate too. The current code keeps going after everything. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def transform(record):
+    if not record.get(&quot;email&quot;) or &quot;@&quot; not in record[&quot;email&quot;]:
+        raise ValueError(f&quot;bad email in record {record.get(&#x27;id&#x27;)}&quot;)
+    return {&quot;id&quot;: record[&quot;id&quot;], &quot;email&quot;: record[&quot;email&quot;].lower()}
+
+
+def run(records, save):
+    done = 0
+    failed = []
+    for record in records:
+        try:
+            row = transform(record)
+            save(row)
+            done += 1
+        except Exception as e:
+            failed.append(record.get(&quot;id&quot;))
+    return done, failed
+</textarea>
+<script type="text/plain" class="prob-tests">saved = []
+records = [{"id": 1, "email": "A@x.io"}, {"id": 2, "email": "nope"}, {"id": 3, "email": "c@x.io"}]
+assert run(records, saved.append) == (2, [2]) and saved == [{"id": 1, "email": "a@x.io"}, {"id": 3, "email": "c@x.io"}]
+assert run([], saved.append) == (0, [])
+
+attempts = []
+def read_only(row):
+    attempts.append(row["id"])
+    raise PermissionError("store is read-only")
+try:
+    run(records, read_only)
+    assert False, "PermissionError must stop the job"
+except PermissionError:
+    assert attempts == [1]
+
+try:
+    run([{"id": 9, "email": "z@x.io", "extra": 1}, {"email": "q@x.io"}], saved.append)
+    assert False, "a record without id is a bug here"
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">saved = []
+records = [{&quot;id&quot;: 1, &quot;email&quot;: &quot;A@x.io&quot;}, {&quot;id&quot;: 2, &quot;email&quot;: &quot;nope&quot;}, {&quot;id&quot;: 3, &quot;email&quot;: &quot;c@x.io&quot;}]
+assert run(records, saved.append) == (2, [2]) and saved == [{&quot;id&quot;: 1, &quot;email&quot;: &quot;a@x.io&quot;}, {&quot;id&quot;: 3, &quot;email&quot;: &quot;c@x.io&quot;}]
+assert run([], saved.append) == (0, [])
+
+attempts = []
+def read_only(row):
+    attempts.append(row[&quot;id&quot;])
+    raise PermissionError(&quot;store is read-only&quot;)
+try:
+    run(records, read_only)
+    assert False, &quot;PermissionError must stop the job&quot;
+except PermissionError:
+    assert attempts == [1]
+
+try:
+    run([{&quot;id&quot;: 9, &quot;email&quot;: &quot;z@x.io&quot;, &quot;extra&quot;: 1}, {&quot;email&quot;: &quot;q@x.io&quot;}], saved.append)
+    assert False, &quot;a record without id is a bug here&quot;
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only <code>transform</code>'s <code>ValueError</code> means "bad record". Put just that call in the <code>try</code>, and catch only <code>ValueError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>save</code> goes after the handler (in <code>else</code>), so its errors, fatal or not, propagate.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def transform(record):
+    if not record.get(&quot;email&quot;) or &quot;@&quot; not in record[&quot;email&quot;]:
+        raise ValueError(f&quot;bad email in record {record.get(&#x27;id&#x27;)}&quot;)
+    return {&quot;id&quot;: record[&quot;id&quot;], &quot;email&quot;: record[&quot;email&quot;].lower()}
+
+
+def run(records, save):
+    done = 0
+    failed = []
+    for record in records:
+        try:
+            row = transform(record)
+        except ValueError:
+            failed.append(record.get(&quot;id&quot;))
+        else:
+            save(row)
+            done += 1
+    return done, failed</code></pre></div><p>The single <code>except Exception</code> mixed three categories of failure. A <strong>bad record</strong> (<code>ValueError</code> from <code>transform</code>) is expected and should be recorded and skipped. A <strong>fatal environment problem</strong> (<code>PermissionError</code> from <code>save</code>) will happen for every remaining record, so continuing means a million identical failures, a run reported as "finished with 100% failed records" and possibly hours wasted; it must stop at the first occurrence. A <strong>bug</strong> (<code>KeyError</code> for a record without <code>id</code>, because <code>transform</code> assumes one) must surface. Narrowing the <code>try</code> to <code>transform</code> and the handler to <code>ValueError</code>, and moving <code>save</code> to <code>else</code>, gives each category the right behaviour without any extra code. In production, the fatal case would also be logged at the job's top level, and a large share of <code>ValueError</code>s would trigger an error-budget abort (next problem).</p></div></details>
+</article>
+<article class="prob" id="p-stop-when-too-many-items-fail" data-pid="m7-3-stop-when-too-many-items-fail" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. Stop when too many items fail</h3></header>
+<div class="prob-q"><p>Write <code>process(items, fn, max_error_rate, min_items)</code> that applies <code>fn</code> to each item, collecting results and skipping items for which <code>fn</code> raises <code>ValueError</code>. After each item, once at least <code>min_items</code> items have been processed, if the share of failures so far is <strong>greater than</strong> <code>max_error_rate</code>, stop and raise <code>RuntimeError</code> with a message giving the failure count and the number processed, chained from the last <code>ValueError</code>. Return <code>(results, failures)</code> where failures is a list of <code>(index, message)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def process(items, fn, max_error_rate, min_items):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def parse(x):
+    return float(x)
+results, failures = process(["1", "2", "x", "4", "5", "6"], parse, 0.2, 5)
+assert results == [1.0, 2.0, 4.0, 5.0, 6.0] and failures == [(2, "could not convert string to float: 'x'")]
+
+seen = []
+def tracked(x):
+    seen.append(x)
+    return parse(x)
+try:
+    process(["1", "a", "b", "4", "c", "6", "7", "8"], tracked, 0.25, 4)
+    assert False
+except RuntimeError as e:
+    assert "2 of 4" in str(e) and isinstance(e.__cause__, ValueError) and seen == ["1", "a", "b", "4"]
+assert process([], parse, 0.1, 3) == ([], [])
+try:
+    process(["1", None], parse, 0.9, 1)
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def parse(x):
+    return float(x)
+results, failures = process([&quot;1&quot;, &quot;2&quot;, &quot;x&quot;, &quot;4&quot;, &quot;5&quot;, &quot;6&quot;], parse, 0.2, 5)
+assert results == [1.0, 2.0, 4.0, 5.0, 6.0] and failures == [(2, &quot;could not convert string to float: &#x27;x&#x27;&quot;)]
+
+seen = []
+def tracked(x):
+    seen.append(x)
+    return parse(x)
+try:
+    process([&quot;1&quot;, &quot;a&quot;, &quot;b&quot;, &quot;4&quot;, &quot;c&quot;, &quot;6&quot;, &quot;7&quot;, &quot;8&quot;], tracked, 0.25, 4)
+    assert False
+except RuntimeError as e:
+    assert &quot;2 of 4&quot; in str(e) and isinstance(e.__cause__, ValueError) and seen == [&quot;1&quot;, &quot;a&quot;, &quot;b&quot;, &quot;4&quot;]
+assert process([], parse, 0.1, 3) == ([], [])
+try:
+    process([&quot;1&quot;, None], parse, 0.9, 1)
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the last <code>ValueError</code> in a variable; the <code>as</code> name is deleted after the block.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the rate after every item: <code>processed &gt;= min_items and len(failures) / processed &gt; max_error_rate</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def process(items, fn, max_error_rate, min_items):
+    results, failures = [], []
+    last_error = None
+    for i, item in enumerate(items):
+        try:
+            results.append(fn(item))
+        except ValueError as e:
+            failures.append((i, str(e)))
+            last_error = e
+        processed = i + 1
+        if processed &gt;= min_items and len(failures) / processed &gt; max_error_rate:
+            raise RuntimeError(
+                f&quot;error budget exceeded: {len(failures)} of {processed} items failed&quot;
+            ) from last_error
+    return results, failures</code></pre></div><p>Skipping bad items is right when they are rare; when they are common, something systematic has gone wrong (a schema change, a broken upstream export, a model that stopped following the format), and processing the rest only wastes time and produces a misleading result. An <strong>error budget</strong> distinguishes the two automatically. <code>min_items</code> avoids aborting on one bad item at the very start, when the rate is meaningless. The <code>RuntimeError</code> is chained from the last <code>ValueError</code>, so the traceback shows a concrete example of the failure. Only <code>ValueError</code> counts as a bad item; the <code>TypeError</code> from <code>None</code> is a bug and propagates immediately. Evaluation harnesses and labelling pipelines use exactly this rule.</p></div></details>
+</article>
+<article class="prob" id="p-which-exception-wins" data-pid="m7-3-which-exception-wins" data-type="predict" data-level="hard" data-answer="caller: raised in else
+RuntimeError | context: KeyError(&#x27;first&#x27;)
+finally runs
+TypeError &lt;- ValueError">
+<header class="prob-head"><h3>16. Which exception wins</h3></header>
+<div class="code"><pre><code class="py">def a():
+    try:
+        x = 1
+    except ValueError:
+        return &quot;except&quot;
+    else:
+        raise ValueError(&quot;raised in else&quot;)
+
+try:
+    a()
+except ValueError as e:
+    print(&quot;caller:&quot;, e)
+
+def b():
+    try:
+        raise KeyError(&quot;first&quot;)
+    finally:
+        raise RuntimeError(&quot;from finally&quot;)
+
+try:
+    b()
+except Exception as e:
+    print(type(e).__name__, &quot;| context:&quot;, repr(e.__context__))
+
+def c():
+    try:
+        raise ValueError(&quot;original&quot;)
+    except ValueError:
+        raise TypeError(&quot;in handler&quot;)
+    finally:
+        print(&quot;finally runs&quot;)
+
+try:
+    c()
+except Exception as e:
+    print(type(e).__name__, &quot;&lt;-&quot;, type(e.__context__).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception raised in <code>else</code> is not handled by the same statement's <code>except</code> clauses.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception raised in <code>finally</code> replaces the one in flight, which becomes its context.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>caller: raised in else
+RuntimeError | context: KeyError(&#x27;first&#x27;)
+finally runs
+TypeError &lt;- ValueError</pre></div><p>In <code>a</code>, the <code>ValueError</code> comes from <code>else</code>, which the <code>except ValueError</code> of the same <code>try</code> does not cover (that is the point of <code>else</code>), so it reaches the caller. In <code>b</code>, the <code>KeyError</code> was on its way out when <code>finally</code> raised a <code>RuntimeError</code>, which <strong>replaces</strong> it; the original survives only as <code>__context__</code>. That is why cleanup code in <code>finally</code> must not raise: it hides the real error. In <code>c</code>, the handler raises a new <code>TypeError</code>; <code>finally</code> still runs, then the <code>TypeError</code> propagates with the <code>ValueError</code> as its context.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-explain-eafp-and-lbyl-when-would-you-cho" data-pid="m7-3-explain-eafp-and-lbyl-when-would-you-cho" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Explain EAFP and LBYL. When would you choose each, and what is a TOCTOU bug?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>LBYL ("look before you leap") checks preconditions before acting: <code>if key in d</code>, <code>if os.path.exists(path)</code>. EAFP ("easier to ask forgiveness than permission") performs the operation and handles the exception if it fails. EAFP is idiomatic Python and is the only correct option when the condition can change between the check and the use: a file can be deleted after <code>exists()</code> returns <code>True</code>, which is a time-of-check-to-time-of-use (TOCTOU) race; it also supports duck typing and replaces deep nests of checks with one <code>try</code>. LBYL is better when failure is frequent (exceptions are expensive to raise), when a failure would leave partial side effects, and when a cheap built-in check exists (<code>dict.get</code>, <code>getattr</code> with a default). In practice, validate the inputs you can check up front and still handle the failures only reality can reveal.</p></div></details>
+</article>
+<article class="prob" id="p-in-a-layered-application-data-access-bus" data-pid="m7-3-in-a-layered-application-data-access-bus" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. In a layered application (data access, business logic, API), where should exceptions be caught?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Catch an exception at the lowest layer that can do something meaningful with it, and nowhere else. The data-access layer translates library errors (driver, HTTP client) into the application's own exception types with <code>raise ... from</code>, and handles only what it truly can, such as retrying a dropped connection. The business layer applies decisions (a default, a fallback, a retry policy) and otherwise lets errors propagate; most of its functions need no <code>try</code> at all. The API or CLI boundary catches everything left, maps known error types to responses (404 for not found, 400 for validation, 429 for rate limits), logs unexpected ones once with their traceback and returns a generic 500 without leaking internals. Anti-patterns are catching in every layer, logging at every level, and converting exceptions to <code>None</code> return values that callers forget to check.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-design-graceful-degradatio" data-pid="m7-3-how-would-you-design-graceful-degradatio" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you design graceful degradation for an LLM-powered feature?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Start from what the user should get when each dependency fails. Put strict timeouts on model calls, retry transient errors a limited number of times with backoff, and use a circuit breaker per provider so an outage fails fast instead of making every request wait. Define fallbacks in order of quality: another provider or a smaller model, a cached answer for repeated questions, a non-LLM result (keyword search results instead of a generated answer), and finally a clear message ("the assistant is unavailable, here are relevant articles"). Trigger fallbacks only on specific failures, never on bugs or validation errors, and record every degradation in logs and metrics with the reason, so fallback rate and latency are monitored and alerting fires when degraded mode becomes common. Mark degraded responses so the UI can show it and evaluations can exclude them. Test the failure paths deliberately, with fake clients that time out or return errors, because fallbacks that are never exercised tend to be broken when they are finally needed.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>EAFP (try, then handle) avoids races and pyramids of checks; LBYL (check first) suits common failures, side effects and cheap built-in checks like <code>get</code>.</li><li>Handle each error at the lowest layer that can act on it; translate at the bottom, decide in the middle, convert to responses at the boundary.</li><li>Never swallow: no <code>except: pass</code>, no <code>None</code> for errors callers will not check. Ignore specific errors explicitly with <code>contextlib.suppress</code>.</li><li>Log once, with the traceback (<code>logger.exception</code>), at the place that handles the error.</li><li>Keep data consistent: validate first, build new then swap (<code>os.replace</code> for files), or undo on failure. Degrade gracefully, and record it.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7.2 · Raising and custom exceptions</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m7-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 7 · Error handling</span></div>
+  <h1>7.2 Raising and custom exceptions</h1>
+  <p>How to raise well: choosing the type, writing messages people can act on, and re-raising without losing the original. Defining your own exception classes and hierarchies, chaining with <code>raise ... from</code>, adding notes, exception groups for several errors at once, and why <code>assert</code> is not validation. Applied to LLM client errors, configuration and data validation.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="raise">
+<h2><span class="n">1</span>Raising: the type, the message, and re-raising</h2>
+<p><code>raise SomeError("message")</code> creates an exception object and raises it. You can also write <code>raise SomeError</code> without parentheses; Python then creates the instance for you with no arguments. The two decisions that matter are <strong>which type</strong> and <strong>what message</strong>, because those are what the caller and the person reading the log will act on.</p>
+<div class="tbl"><table>
+      <tr><th>Raise</th><th>When</th><th>Example</th></tr>
+      <tr><td><code>TypeError</code></td><td>the argument has the wrong type</td><td>a list where a string is required</td></tr>
+      <tr><td><code>ValueError</code></td><td>right type, unacceptable value</td><td><code>temperature=5</code> when the range is 0 to 2</td></tr>
+      <tr><td><code>KeyError</code> / <code>LookupError</code></td><td>a lookup by key or name found nothing</td><td>an unknown model name in a registry</td></tr>
+      <tr><td><code>NotImplementedError</code></td><td>a method that a subclass must provide</td><td>a base provider class's <code>complete()</code></td></tr>
+      <tr><td><code>RuntimeError</code></td><td>the operation is not possible in the current state</td><td>calling <code>send()</code> on a closed client</td></tr>
+      <tr><td>your own class</td><td>an error callers will want to catch specifically</td><td><code>RateLimitError</code>, <code>InvalidOutputError</code></td></tr>
+    </table></div>
+<p>A good message answers three questions: <strong>what</strong> was wrong, <strong>which value</strong> caused it, and <strong>what was expected</strong>. <code>ValueError("bad value")</code> forces the reader to debug; <code>ValueError("temperature must be between 0 and 2, got 5.0")</code> tells them exactly what to change. Include the offending value with <code>!r</code> so strings show their quotes and invisible whitespace, and never include secrets (API keys, passwords, personal data) in messages, because messages end up in logs.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">raise_well.py</span><button class="copy">Copy</button></div><pre><code class="py">def set_temperature(t):
+    if isinstance(t, bool) or not isinstance(t, (int, float)):
+        raise TypeError(f&quot;temperature must be a number, got {type(t).__name__}&quot;)
+    if not 0 &lt;= t &lt;= 2:
+        raise ValueError(f&quot;temperature must be between 0 and 2, got {t!r}&quot;)
+    return float(t)
+
+for value in [0.7, 5, &quot;0.7&quot;, True]:
+    try:
+        print(set_temperature(value))
+    except (TypeError, ValueError) as e:
+        print(f&quot;{type(e).__name__}: {e}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>0.7
+ValueError: temperature must be between 0 and 2, got 5
+TypeError: temperature must be a number, got str
+TypeError: temperature must be a number, got bool</pre></div></div>
+<p><code>bool</code> is checked first because <code>True</code> is an instance of <code>int</code> (1.2) and would otherwise be accepted as <code>1.0</code>. Inside an <code>except</code> block, a bare <strong><code>raise</code></strong> (no argument) re-raises the exception being handled, <strong>unchanged</strong>: same type, same message, same traceback. Use it when you only want to do something on the way out, such as log, count or clean up, and then let the error continue. Writing <code>raise e</code> also works, but adds the current line to the traceback; <code>raise Exception(str(e))</code> is worse, because it replaces the type, so callers can no longer catch the specific error (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bare_raise.py</span><button class="copy">Copy</button></div><pre><code class="py">failures = []
+
+def parse(text):
+    try:
+        return int(text)
+    except ValueError:
+        failures.append(text)        # record it...
+        raise                        # ...and let the same exception continue
+
+try:
+    parse(&quot;4x&quot;)
+except ValueError as e:
+    print(type(e).__name__, &quot;|&quot;, e, &quot;|&quot;, failures)</code></pre><div class="out"><span class="ol">Output</span><pre>ValueError | invalid literal for int() with base 10: &#x27;4x&#x27; | [&#x27;4x&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="custom">
+<h2><span class="n">2</span>Defining your own exceptions</h2>
+<p>Built-in types describe <strong>what kind</strong> of problem happened; your own types describe <strong>which</strong> problem, in your domain's terms. That matters to callers: code that calls an LLM client wants to retry a rate limit, show a message for a bad request and alert someone for an authentication failure, and it can only tell them apart if they are different types. Defining one takes a single line, using the <code>class</code> statement, which Module 9 covers in full:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">custom_basic.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMError(Exception):
+    &quot;&quot;&quot;Base class for every error raised by our LLM client.&quot;&quot;&quot;
+
+class RateLimitError(LLMError):
+    pass
+
+class InvalidOutputError(LLMError):
+    pass
+
+print(RateLimitError.__mro__[1].__name__, issubclass(RateLimitError, Exception))
+try:
+    raise RateLimitError(&quot;429: slow down&quot;)
+except LLMError as e:                  # the base class catches every subclass
+    print(type(e).__name__, &quot;|&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>LLMError True
+RateLimitError | 429: slow down</pre></div></div>
+<p><code>class RateLimitError(LLMError):</code> creates a new type that <strong>inherits</strong> from <code>LLMError</code>, which inherits from <code>Exception</code>. The body can be just <code>pass</code> or a docstring: everything an exception needs (storing the message, printing it) is inherited. Because of the hierarchy, <code>except RateLimitError</code> catches only rate limits, while <code>except LLMError</code> catches every error from your client, and nothing from elsewhere. The usual design is <strong>one base class per library or component</strong>, with a few subclasses for the cases callers handle differently. Inherit from <code>Exception</code> (never <code>BaseException</code>), and name classes with an <code>Error</code> suffix.</p>
+<p>Exceptions can carry <strong>data</strong> as well as a message, which makes them much more useful to handlers: a rate limit can say how long to wait, an invalid output can carry the raw text. Add an <code>__init__</code> method that stores the extra values as attributes and passes the message on to the parent class with <code>super().__init__(message)</code> (Module 9 explains <code>__init__</code> and <code>super</code> in depth; here the pattern is all you need).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">custom_data.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMError(Exception):
+    pass
+
+class RateLimitError(LLMError):
+    def __init__(self, message, retry_after):
+        super().__init__(message)          # the message works as usual
+        self.retry_after = retry_after     # extra data for handlers
+
+class InvalidOutputError(LLMError):
+    def __init__(self, message, raw):
+        super().__init__(message)
+        self.raw = raw
+
+try:
+    raise RateLimitError(&quot;rate limited by provider&quot;, retry_after=2.5)
+except RateLimitError as e:
+    print(e, &quot;| wait&quot;, e.retry_after, &quot;s |&quot;, e.args)
+
+err = InvalidOutputError(&quot;reply is not JSON&quot;, raw=&quot;Sure! {label: spam}&quot;)
+print(repr(err), &quot;|&quot;, err.raw)</code></pre><div class="out"><span class="ol">Output</span><pre>rate limited by provider | wait 2.5 s | (&#x27;rate limited by provider&#x27;,)
+InvalidOutputError(&#x27;reply is not JSON&#x27;) | Sure! {label: spam}</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>Database drivers work exactly this way. <code>psycopg</code> raises <code>UniqueViolation</code>, a subclass of <code>IntegrityError</code>, a subclass of its base <code>Error</code>, and each carries the SQLSTATE code and details. Code catches <code>UniqueViolation</code> to handle a duplicate insert, and the base class to log anything else from the database. Your own hierarchy gives your callers the same choice.</p></div></div>
+</section>
+<section class="sec" id="chain">
+<h2><span class="n">3</span>Chaining: <code>raise ... from</code></h2>
+<p>Often the right response to a low-level error is to raise a <strong>higher-level</strong> one that means something to your caller: a <code>JSONDecodeError</code> while reading the settings file becomes a <code>ConfigError("settings.json is not valid JSON")</code>. The danger is losing the original, which holds the precise detail (line, column, the bad character). Python has three behaviours for an exception raised while handling another:</p>
+<ul><li><strong>Implicit chaining:</strong> a plain <code>raise NewError(...)</code> inside <code>except</code> stores the original in <code>new.__context__</code>. The traceback shows both, separated by "During handling of the above exception, another exception occurred", which reads like a second bug happened in the handler.</li><li><strong>Explicit chaining:</strong> <code>raise NewError(...) from original</code> stores it in <code>new.__cause__</code>. The traceback shows both with "The above exception was the direct cause of the following exception": this one is deliberate translation. Use it whenever you convert an error.</li><li><strong>Suppressed:</strong> <code>raise NewError(...) from None</code> hides the original from the traceback. Use it only when the original is noise, for example a <code>KeyError</code> from an internal lookup that you replace with a clear "unknown model" message.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">chaining.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, traceback
+
+class ConfigError(Exception):
+    pass
+
+def load(text, style):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        if style == &quot;implicit&quot;:
+            raise ConfigError(&quot;settings are not valid JSON&quot;)
+        if style == &quot;from&quot;:
+            raise ConfigError(&quot;settings are not valid JSON&quot;) from e
+        raise ConfigError(&quot;settings are not valid JSON&quot;) from None
+
+for style in [&quot;implicit&quot;, &quot;from&quot;, &quot;none&quot;]:
+    try:
+        load(&quot;{bad&quot;, style)
+    except ConfigError as err:
+        text = traceback.format_exc()
+        print(style, type(err.__cause__).__name__, type(err.__context__).__name__, err.__suppress_context__,
+              &quot;direct cause&quot; in text, &quot;During handling&quot; in text)</code></pre><div class="out"><span class="ol">Output</span><pre>implicit NoneType JSONDecodeError False False True
+from JSONDecodeError JSONDecodeError True True False
+none NoneType JSONDecodeError True False False</pre></div></div>
+<p>Read the output column by column: with <code>from e</code>, <code>__cause__</code> is set and the traceback says "direct cause"; implicit chaining sets only <code>__context__</code>; <code>from None</code> sets <code>__suppress_context__</code>, so the original is still stored in <code>__context__</code> (for debuggers) but not printed. Handlers can use <code>err.__cause__</code> to get at the original details (problem 6).</p>
+</section>
+<section class="sec" id="notes">
+<h2><span class="n">4</span>Adding context with notes</h2>
+<p>Sometimes you do not want a new type at all, only more <strong>context</strong>: the error is a perfectly good <code>ValueError</code>, but the log should also say which file and which line was being processed. Since Python 3.11, any exception has an <code>add_note(text)</code> method. Notes are stored in <code>e.__notes__</code> and printed under the message in the traceback. The pattern is: catch, add a note, re-raise with a bare <code>raise</code>, so the type and traceback stay exactly as they were.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">notes.py</span><button class="copy">Copy</button></div><pre><code class="py">import traceback
+
+def parse_line(line):
+    name, score = line.split(&quot;,&quot;)
+    return name, float(score)
+
+def parse_file(lines, filename):
+    out = []
+    for n, line in enumerate(lines, start=1):
+        try:
+            out.append(parse_line(line))
+        except ValueError as e:
+            e.add_note(f&quot;in {filename}, line {n}: {line!r}&quot;)
+            raise
+    return out
+
+try:
+    parse_file([&quot;ana,0.9&quot;, &quot;bo,high&quot;], &quot;scores.csv&quot;)
+except ValueError as e:
+    print(type(e).__name__, &quot;|&quot;, e, &quot;|&quot;, e.__notes__)
+    print(traceback.format_exc().strip().splitlines()[-1])</code></pre><div class="out"><span class="ol">Output</span><pre>ValueError | could not convert string to float: &#x27;high&#x27; | [&quot;in scores.csv, line 2: &#x27;bo,high&#x27;&quot;]
+in scores.csv, line 2: &#x27;bo,high&#x27;</pre></div></div>
+<p>The caller still catches a <code>ValueError</code>, nothing about the error's type changed, but whoever reads the traceback sees the file and line immediately. Notes are ideal in loops and pipelines, where the low-level code that fails does not know where its input came from, and the code that knows does not want to change the exception type.</p>
+</section>
+<section class="sec" id="groups">
+<h2><span class="n">5</span>Several errors at once: exception groups</h2>
+<p>Normally one exception stops everything. Two situations need to report <strong>several</strong> at once: concurrent tasks that fail independently (Module 14's <code>asyncio.TaskGroup</code> raises them together), and validation, where telling the user about all five problems in their request is better than revealing them one at a time. Python 3.11 added <strong><code>ExceptionGroup(message, [exceptions])</code></strong> for this, and the <strong><code>except*</code></strong> clause to handle it: each <code>except* SomeType</code> clause receives a group containing only the exceptions of that type, and the others continue to the next clause.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">exception_groups.py</span><button class="copy">Copy</button></div><pre><code class="py">def validate(request):
+    errors = []
+    if not request.get(&quot;prompt&quot;):
+        errors.append(ValueError(&quot;prompt is required&quot;))
+    if not 0 &lt;= request.get(&quot;temperature&quot;, 0) &lt;= 2:
+        errors.append(ValueError(&quot;temperature must be between 0 and 2&quot;))
+    if not isinstance(request.get(&quot;max_tokens&quot;, 1), int):
+        errors.append(TypeError(&quot;max_tokens must be an int&quot;))
+    if errors:
+        raise ExceptionGroup(&quot;invalid request&quot;, errors)
+
+try:
+    validate({&quot;prompt&quot;: &quot;&quot;, &quot;temperature&quot;: 3, &quot;max_tokens&quot;: &quot;512&quot;})
+except* ValueError as group:
+    print(&quot;values:&quot;, [str(e) for e in group.exceptions])
+except* TypeError as group:
+    print(&quot;types:&quot;, [str(e) for e in group.exceptions])</code></pre><div class="out"><span class="ol">Output</span><pre>values: [&#x27;prompt is required&#x27;, &#x27;temperature must be between 0 and 2&#x27;]
+types: [&#x27;max_tokens must be an int&#x27;]</pre></div></div>
+<p>Both handlers ran, each with its own part of the group, which a normal <code>except</code> cannot do. A plain <code>except ExceptionGroup as eg:</code> also works and gives you the whole group in <code>eg.exceptions</code>. Libraries such as Pydantic collect all validation errors in a similar spirit, in their own <code>ValidationError</code> type (11.4). Use groups when callers genuinely benefit from several errors; for a single failure, raise a single exception.</p>
+</section>
+<section class="sec" id="assert">
+<h2><span class="n">6</span><code>assert</code> is not validation</h2>
+<p><code>assert condition, "message"</code> raises <code>AssertionError</code> when the condition is false. It is meant for <strong>internal invariants</strong>: things that can only be false if <strong>your own code</strong> has a bug, such as "this list is sorted here" or "the shapes match after my reshape". It is not a way to check <strong>input</strong>, for two reasons. Python removes every <code>assert</code> when it runs with the <code>-O</code> (optimise) flag, which some deployments use, so the check silently disappears. And <code>AssertionError</code> tells the caller nothing about what kind of problem it was; a <code>ValueError</code> or <code>TypeError</code> says "your argument is wrong", which is what input validation means (problem 9).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">assert_vs_raise.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+
+def cosine(a, b):
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.shape != b.shape:                       # input validation: raise
+        raise ValueError(f&quot;shapes differ: {a.shape} vs {b.shape}&quot;)
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    if norm == 0:
+        raise ValueError(&quot;cosine is undefined for a zero vector&quot;)
+    result = float(a @ b / norm)
+    assert -1.0001 &lt;= result &lt;= 1.0001, result   # invariant: can only fail if the maths above is wrong
+    return round(result, 4)
+
+print(cosine([1, 0], [1, 1]))
+try:
+    cosine([1, 2, 3], [1, 2])
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>0.7071
+ValueError: shapes differ: (3,) vs (2,)</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-raising-and-re-raising" data-pid="m7-2-raising-and-re-raising" data-type="predict" data-level="easy" data-answer="ValueError() ()
+logging &#x27;model&#x27;
+caller got KeyError (&#x27;model&#x27;,)
+(&#x27;bad&#x27;, 42)">
+<header class="prob-head"><h3>1. Raising and re-raising</h3></header>
+<div class="code"><pre><code class="py">try:
+    raise ValueError
+except ValueError as e:
+    print(repr(e), e.args)
+
+def inner():
+    raise KeyError(&quot;model&quot;)
+
+def outer():
+    try:
+        inner()
+    except KeyError as e:
+        print(&quot;logging&quot;, e)
+        raise
+
+try:
+    outer()
+except KeyError as e:
+    print(&quot;caller got&quot;, type(e).__name__, e.args)
+print(str(ValueError(&quot;bad&quot;, 42)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>raise ValueError</code> creates an instance with no arguments. A bare <code>raise</code> re-raises the same exception object.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ValueError() ()
+logging &#x27;model&#x27;
+caller got KeyError (&#x27;model&#x27;,)
+(&#x27;bad&#x27;, 42)</pre></div><p>Raising the class creates an instance with empty <code>args</code>. <code>outer</code> logs and re-raises the <strong>same</strong> <code>KeyError</code>, so the caller receives it unchanged, with the original <code>args</code>. An exception created with several arguments prints them as a tuple, which is why messages should be one formatted string.</p></div></details>
+</article>
+<article class="prob" id="p-validate-generation-settings" data-pid="m7-2-validate-generation-settings" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Validate generation settings</h3></header>
+<div class="prob-q"><p>Write <code>check_settings(temperature, max_tokens)</code> that returns <code>(float(temperature), max_tokens)</code> when valid, and raises: <code>TypeError</code> if <code>temperature</code> is not an <code>int</code> or <code>float</code> (booleans are not numbers here) or <code>max_tokens</code> is not an <code>int</code> (booleans neither); <code>ValueError</code> if <code>temperature</code> is outside 0 to 2 or <code>max_tokens</code> is not positive. Messages must name the setting and show the bad value with <code>repr</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def check_settings(temperature, max_tokens):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert check_settings(0.7, 256) == (0.7, 256) and check_settings(0, 1) == (0.0, 1)
+cases = [(("0.7", 256), TypeError, "'0.7'"), ((True, 256), TypeError, "True"), ((3, 256), ValueError, "3"),
+         ((0.5, 0), ValueError, "0"), ((0.5, 2.5), TypeError, "2.5"), ((0.5, False), TypeError, "False")]
+for args, kind, shown in cases:
+    try:
+        check_settings(*args)
+        assert False, args
+    except kind as e:
+        assert shown in str(e) and ("temperature" in str(e) or "max_tokens" in str(e)), str(e)
+assert check_settings(2, 10_000) == (2.0, 10_000)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert check_settings(0.7, 256) == (0.7, 256) and check_settings(0, 1) == (0.0, 1)
+cases = [((&quot;0.7&quot;, 256), TypeError, &quot;&#x27;0.7&#x27;&quot;), ((True, 256), TypeError, &quot;True&quot;), ((3, 256), ValueError, &quot;3&quot;),
+         ((0.5, 0), ValueError, &quot;0&quot;), ((0.5, 2.5), TypeError, &quot;2.5&quot;), ((0.5, False), TypeError, &quot;False&quot;)]
+for args, kind, shown in cases:
+    try:
+        check_settings(*args)
+        assert False, args
+    except kind as e:
+        assert shown in str(e) and (&quot;temperature&quot; in str(e) or &quot;max_tokens&quot; in str(e)), str(e)
+assert check_settings(2, 10_000) == (2.0, 10_000)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Test <code>isinstance(x, bool)</code> first: <code>True</code> is an <code>int</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Raise <code>TypeError</code> for wrong types before checking ranges, so <code>"0.7" &lt; 0</code> is never evaluated.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def check_settings(temperature, max_tokens):
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        raise TypeError(f&quot;temperature must be a number, got {temperature!r}&quot;)
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+        raise TypeError(f&quot;max_tokens must be an int, got {max_tokens!r}&quot;)
+    if not 0 &lt;= temperature &lt;= 2:
+        raise ValueError(f&quot;temperature must be between 0 and 2, got {temperature!r}&quot;)
+    if max_tokens &lt;= 0:
+        raise ValueError(f&quot;max_tokens must be positive, got {max_tokens!r}&quot;)
+    return float(temperature), max_tokens</code></pre></div><p>Type checks come first because comparing a string with a number would raise its own, less helpful, <code>TypeError</code>. The split between the two exception types follows their meaning: a string or a boolean is the wrong <strong>kind</strong> of value (<code>TypeError</code>), 3 is the right kind with an unacceptable <strong>value</strong> (<code>ValueError</code>). Each message names the setting and shows the value with <code>repr</code>, so <code>'0.7'</code> (a string) is distinguishable from <code>0.7</code>. This is what API servers do when they return a 400 response with a message per field; Pydantic (11.4) generates such checks from type annotations.</p></div></details>
+</article>
+<article class="prob" id="p-a-re-raise-that-loses-the-error-type" data-pid="m7-2-a-re-raise-that-loses-the-error-type" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A re-raise that loses the error type</h3></header>
+<div class="prob-q"><p><code>load_number(text)</code> logs failures and re-raises them. Callers catch <code>ValueError</code> for bad input, but they receive a plain <code>Exception</code> and crash. Fix the re-raise so callers get the original exception.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">log = []
+
+def load_number(text):
+    try:
+        return float(text)
+    except (ValueError, TypeError) as e:
+        log.append(f&quot;failed on {text!r}&quot;)
+        raise Exception(str(e))
+</textarea>
+<script type="text/plain" class="prob-tests">assert load_number("2.5") == 2.5
+try:
+    load_number("abc")
+    assert False
+except ValueError as e:
+    assert "abc" in str(e)
+try:
+    load_number(None)
+    assert False
+except TypeError:
+    pass
+assert log == ["failed on 'abc'", "failed on None"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert load_number(&quot;2.5&quot;) == 2.5
+try:
+    load_number(&quot;abc&quot;)
+    assert False
+except ValueError as e:
+    assert &quot;abc&quot; in str(e)
+try:
+    load_number(None)
+    assert False
+except TypeError:
+    pass
+assert log == [&quot;failed on &#x27;abc&#x27;&quot;, &quot;failed on None&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A bare <code>raise</code> inside <code>except</code> re-raises the exception being handled, with its type and traceback.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">log = []
+
+def load_number(text):
+    try:
+        return float(text)
+    except (ValueError, TypeError):
+        log.append(f&quot;failed on {text!r}&quot;)
+        raise</code></pre></div><p><code>raise Exception(str(e))</code> threw away the exception's <strong>type</strong>, so <code>except ValueError</code> in the caller no longer matched, and the traceback now starts at the re-raise instead of at <code>float</code>. A bare <code>raise</code> re-raises the original object unchanged. The rule: when you only want to observe an exception (log it, count it), re-raise it as it is; when you want to change its meaning, raise a specific new type <strong>from</strong> it (below).</p></div></details>
+</article>
+<article class="prob" id="p-catching-by-base-class" data-pid="m7-2-catching-by-base-class" data-type="predict" data-level="easy" data-answer="config app key
+True True
+True &#x27;model&#x27;">
+<header class="prob-head"><h3>4. Catching by base class</h3></header>
+<div class="code"><pre><code class="py">class AppError(Exception): pass
+class ConfigError(AppError): pass
+class MissingKeyError(ConfigError, KeyError): pass
+
+def check(exc):
+    try:
+        raise exc
+    except ConfigError:
+        return &quot;config&quot;
+    except AppError:
+        return &quot;app&quot;
+    except KeyError:
+        return &quot;key&quot;
+
+print(check(MissingKeyError(&quot;model&quot;)), check(AppError()), check(KeyError(&quot;x&quot;)))
+print(issubclass(MissingKeyError, KeyError), isinstance(ConfigError(), AppError))
+print(check(MissingKeyError) == &quot;config&quot;, str(MissingKeyError(&quot;model&quot;)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A class can inherit from two exception types; it then matches handlers for either.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>str</code> of a <code>KeyError</code> subclass shows the repr of its argument.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>config app key
+True True
+True &#x27;model&#x27;</pre></div><p><code>MissingKeyError</code> is both a <code>ConfigError</code> (so the first handler matches) and a <code>KeyError</code> (so code that expects a dict-like <code>KeyError</code> can catch it too); inheriting from a built-in type like this lets a custom error fit existing handlers. A plain <code>AppError</code> falls through to the second handler. Raising the class itself works, as Python instantiates it. Because <code>MissingKeyError</code> inherits <code>KeyError</code>'s string behaviour, its message is shown with quotes.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-map-http-errors-to-client-exceptions" data-pid="m7-2-map-http-errors-to-client-exceptions" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Map HTTP errors to client exceptions</h3></header>
+<div class="prob-q"><p>Define <code>LLMError(Exception)</code> and three subclasses: <code>AuthError</code>, <code>RateLimitError</code> (with an attribute <code>retry_after</code>, a float in seconds) and <code>BadRequestError</code>. Then write <code>raise_for_status(status, body, headers)</code> that does nothing for a 2xx status and otherwise raises: 401 or 403 <code>AuthError</code>; 429 <code>RateLimitError</code> with <code>retry_after</code> from the <code>retry-after</code> header (default 1.0); other 4xx <code>BadRequestError</code>; 5xx <code>LLMError</code>. Every message starts with the status code and includes <code>body[:100]</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class LLMError(Exception):
+    pass
+
+
+def raise_for_status(status, body, headers):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert raise_for_status(200, "ok", {}) is None
+cases = [(401, AuthError), (403, AuthError), (400, BadRequestError), (404, BadRequestError), (503, LLMError)]
+for status, kind in cases:
+    try:
+        raise_for_status(status, "error body " * 30, {})
+        assert False, status
+    except kind as e:
+        assert str(e).startswith(str(status)) and type(e) is kind
+try:
+    raise_for_status(429, "slow down", {"retry-after": "2.5"})
+except RateLimitError as e:
+    assert e.retry_after == 2.5 and "slow down" in str(e) and isinstance(e, LLMError)
+try:
+    raise_for_status(429, "", {})
+except RateLimitError as e:
+    assert e.retry_after == 1.0
+assert issubclass(AuthError, LLMError) and issubclass(BadRequestError, LLMError)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert raise_for_status(200, &quot;ok&quot;, {}) is None
+cases = [(401, AuthError), (403, AuthError), (400, BadRequestError), (404, BadRequestError), (503, LLMError)]
+for status, kind in cases:
+    try:
+        raise_for_status(status, &quot;error body &quot; * 30, {})
+        assert False, status
+    except kind as e:
+        assert str(e).startswith(str(status)) and type(e) is kind
+try:
+    raise_for_status(429, &quot;slow down&quot;, {&quot;retry-after&quot;: &quot;2.5&quot;})
+except RateLimitError as e:
+    assert e.retry_after == 2.5 and &quot;slow down&quot; in str(e) and isinstance(e, LLMError)
+try:
+    raise_for_status(429, &quot;&quot;, {})
+except RateLimitError as e:
+    assert e.retry_after == 1.0
+assert issubclass(AuthError, LLMError) and issubclass(BadRequestError, LLMError)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>class RateLimitError(LLMError):</code> with an <code>__init__(self, message, retry_after)</code> that calls <code>super().__init__(message)</code> and stores <code>self.retry_after</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Order the checks: 2xx return, 401/403, 429, other 4xx, then the rest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMError(Exception):
+    pass
+
+
+class AuthError(LLMError):
+    pass
+
+
+class BadRequestError(LLMError):
+    pass
+
+
+class RateLimitError(LLMError):
+    def __init__(self, message, retry_after):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def raise_for_status(status, body, headers):
+    if 200 &lt;= status &lt; 300:
+        return
+    message = f&quot;{status}: {body[:100]}&quot;
+    if status in (401, 403):
+        raise AuthError(message)
+    if status == 429:
+        raise RateLimitError(message, retry_after=float(headers.get(&quot;retry-after&quot;, 1.0)))
+    if 400 &lt;= status &lt; 500:
+        raise BadRequestError(message)
+    raise LLMError(message)</code></pre></div><p>Each subclass corresponds to a different <strong>reaction</strong>: authentication errors need a human (a wrong or expired key), rate limits need waiting, bad requests need the request fixed, and server errors are often worth a retry. That is the test for whether an error deserves its own class. Putting <code>retry_after</code> on the exception gives the retry code exactly what it needs without parsing the message. All of them inherit from <code>LLMError</code>, so a caller who does not care about the details can catch the base class. Official SDKs (OpenAI's, Anthropic's) have almost this hierarchy: <code>AuthenticationError</code>, <code>RateLimitError</code>, <code>BadRequestError</code>, <code>InternalServerError</code>, all under one <code>APIError</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-translated-error-that-loses-its-cause" data-pid="m7-2-a-translated-error-that-loses-its-cause" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A translated error that loses its cause</h3></header>
+<div class="prob-q"><p><code>read_config(text)</code> converts JSON errors into <code>ConfigError</code>. The support tooling reads <code>err.__cause__</code> to show the line and column of the JSON problem, but it is always <code>None</code>. Fix the raise so the cause is recorded.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import json
+
+class ConfigError(Exception):
+    pass
+
+def read_config(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ConfigError(f&quot;invalid config: {e.msg}&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">assert read_config('{"model": "small"}') == {"model": "small"}
+assert read_config("[]") == []
+try:
+    read_config('{"model": "small",\n "retries": }')
+    assert False
+except ConfigError as err:
+    cause = err.__cause__
+    assert isinstance(cause, json.JSONDecodeError) and (cause.lineno, cause.colno) == (2, 13)
+    assert "invalid config" in str(err)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert read_config(&#x27;{&quot;model&quot;: &quot;small&quot;}&#x27;) == {&quot;model&quot;: &quot;small&quot;}
+assert read_config(&quot;[]&quot;) == []
+try:
+    read_config(&#x27;{&quot;model&quot;: &quot;small&quot;,\n &quot;retries&quot;: }&#x27;)
+    assert False
+except ConfigError as err:
+    cause = err.__cause__
+    assert isinstance(cause, json.JSONDecodeError) and (cause.lineno, cause.colno) == (2, 13)
+    assert &quot;invalid config&quot; in str(err)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>raise NewError(...) from original</code> sets <code>__cause__</code>. Without <code>from</code>, only <code>__context__</code> is set.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+class ConfigError(Exception):
+    pass
+
+def read_config(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ConfigError(f&quot;invalid config: {e.msg}&quot;) from e</code></pre></div><p>Raising inside <code>except</code> without <code>from</code> chains implicitly: the original is in <code>__context__</code>, and the traceback suggests a second bug occurred while handling the first. <code>from e</code> marks the translation as deliberate and stores the original in <code>__cause__</code>, where tools and handlers look for the root problem; here it carries the exact line and column. Translating low-level errors into your own types, always with <code>from</code>, lets callers catch <code>ConfigError</code> without knowing that JSON is involved, while keeping every detail for debugging.</p></div></details>
+</article>
+<article class="prob" id="p-add-the-line-number-and-re-raise" data-pid="m7-2-add-the-line-number-and-re-raise" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Add the line number and re-raise</h3></header>
+<div class="prob-q"><p>Write <code>parse_lines(lines)</code> that parses lines of <code>name,score</code> into <code>(name, float(score))</code> tuples. If any line fails with <code>ValueError</code> (wrong number of fields or a bad score), add the note <code>"line N: &lt;repr of the line&gt;"</code> (N from 1) to the exception and re-raise it <strong>unchanged</strong>: same type, same message.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def parse_lines(lines):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_lines(["ana,0.9", "bo, 0.5"]) == [("ana", 0.9), ("bo", 0.5)]
+try:
+    parse_lines(["ana,0.9", "bo,high", "cy,1"])
+    assert False
+except ValueError as e:
+    assert "could not convert" in str(e) and e.__notes__ == ["line 2: 'bo,high'"]
+try:
+    parse_lines(["just-a-name"])
+    assert False
+except ValueError as e:
+    assert e.__notes__ == ["line 1: 'just-a-name'"] and "unpack" in str(e)
+assert parse_lines([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_lines([&quot;ana,0.9&quot;, &quot;bo, 0.5&quot;]) == [(&quot;ana&quot;, 0.9), (&quot;bo&quot;, 0.5)]
+try:
+    parse_lines([&quot;ana,0.9&quot;, &quot;bo,high&quot;, &quot;cy,1&quot;])
+    assert False
+except ValueError as e:
+    assert &quot;could not convert&quot; in str(e) and e.__notes__ == [&quot;line 2: &#x27;bo,high&#x27;&quot;]
+try:
+    parse_lines([&quot;just-a-name&quot;])
+    assert False
+except ValueError as e:
+    assert e.__notes__ == [&quot;line 1: &#x27;just-a-name&#x27;&quot;] and &quot;unpack&quot; in str(e)
+assert parse_lines([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>name, score = line.split(",")</code> raises <code>ValueError</code> for the wrong number of fields; <code>float</code> raises it for a bad score.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>except ValueError as e:</code> call <code>e.add_note(...)</code>, then a bare <code>raise</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_lines(lines):
+    out = []
+    for n, line in enumerate(lines, start=1):
+        try:
+            name, score = line.split(&quot;,&quot;)
+            out.append((name.strip(), float(score)))
+        except ValueError as e:
+            e.add_note(f&quot;line {n}: {line!r}&quot;)
+            raise
+    return out</code></pre></div><p>Both failure modes are <code>ValueError</code>s, from unpacking and from <code>float</code>, and both keep their own precise message; the note adds the location, which the low-level code could not know. Because the type is unchanged, callers that already catch <code>ValueError</code> keep working, and the traceback still points at the line that failed. Notes appear under the message when the traceback is printed, so logs show "line 2: 'bo,high'" without any extra logging code.</p></div></details>
+</article>
+<article class="prob" id="p-cause-context-and-suppression" data-pid="m7-2-cause-context-and-suppression" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Cause, context and suppression</h3></header>
+<div class="prob-q"><p>Fill in <code>cause</code>, <code>context</code> and <code>hidden</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">def make(style):
+    try:
+        {}[&quot;k&quot;]
+    except KeyError as e:
+        if style == &quot;plain&quot;:
+            raise ValueError(&quot;plain&quot;)
+        if style == &quot;from&quot;:
+            raise ValueError(&quot;from&quot;) from e
+        raise ValueError(&quot;none&quot;) from None
+
+def info(style):
+    try:
+        make(style)
+    except ValueError as err:
+        return (type(err.__cause__).__name__, type(err.__context__).__name__, err.__suppress_context__)
+
+cause, context, hidden = info(&quot;plain&quot;)
+cause, context, hidden = info(&quot;from&quot;)
+cause, context, hidden = info(&quot;none&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>cause</code></th><th><code>context</code></th><th><code>hidden</code></th></tr><tr><td>plain raise</td><td><input class="cell" data-a="&#x27;NoneType&#x27;" data-s="NoneType" aria-label="cause at plain raise" autocomplete="off"></td><td><input class="cell" data-a="&#x27;KeyError&#x27;" data-s="KeyError" aria-label="context at plain raise" autocomplete="off"></td><td><input class="cell" data-a="False" data-s="False" aria-label="hidden at plain raise" autocomplete="off"></td></tr><tr><td>raise from e</td><td><input class="cell" data-a="&#x27;KeyError&#x27;" data-s="KeyError" aria-label="cause at raise from e" autocomplete="off"></td><td><input class="cell" data-a="&#x27;KeyError&#x27;" data-s="KeyError" aria-label="context at raise from e" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="hidden at raise from e" autocomplete="off"></td></tr><tr><td>raise from None</td><td><input class="cell" data-a="&#x27;NoneType&#x27;" data-s="NoneType" aria-label="cause at raise from None" autocomplete="off"></td><td><input class="cell" data-a="&#x27;KeyError&#x27;" data-s="KeyError" aria-label="context at raise from None" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="hidden at raise from None" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>type(None).__name__</code> is <code>"NoneType"</code>. <code>from</code> sets <code>__cause__</code> and also suppresses the context display.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>cause</code></th><th><code>context</code></th><th><code>hidden</code></th></tr><tr><td>plain raise</td><td><code>&#x27;NoneType&#x27;</code></td><td><code>&#x27;KeyError&#x27;</code></td><td><code>False</code></td></tr><tr><td>raise from e</td><td><code>&#x27;KeyError&#x27;</code></td><td><code>&#x27;KeyError&#x27;</code></td><td><code>True</code></td></tr><tr><td>raise from None</td><td><code>&#x27;NoneType&#x27;</code></td><td><code>&#x27;KeyError&#x27;</code></td><td><code>True</code></td></tr></table></div><p>A plain raise inside <code>except</code> sets only <code>__context__</code>. <code>from e</code> sets <code>__cause__</code> to <code>e</code> (and <code>__context__</code> is still the same <code>KeyError</code>), and <code>__suppress_context__</code> becomes <code>True</code> so the traceback shows the "direct cause" message instead of "during handling". <code>from None</code> sets no cause but also suppresses the context, so nothing of the original is printed, though it is still stored in <code>__context__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-validation-that-disappears-with-o" data-pid="m7-2-validation-that-disappears-with-o" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. Validation that disappears with -O</h3></header>
+<div class="prob-q"><p><code>normalise(vectors)</code> scales each embedding to unit length. It validates its input with <code>assert</code>, which is removed when Python runs with <code>-O</code>, and raises <code>AssertionError</code>, which callers do not expect. Replace the asserts with proper exceptions: <code>ValueError</code> for an empty list, vectors of different lengths, or a zero vector.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import math
+
+def normalise(vectors):
+    assert vectors, &quot;no vectors&quot;
+    dim = len(vectors[0])
+    out = []
+    for v in vectors:
+        assert len(v) == dim, &quot;length mismatch&quot;
+        norm = math.sqrt(sum(x * x for x in v))
+        assert norm &gt; 0, &quot;zero vector&quot;
+        out.append([round(x / norm, 4) for x in v])
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">assert normalise([[3, 4], [0, 2]]) == [[0.6, 0.8], [0.0, 1.0]]
+for bad, word in [([], "empty"), ([[1, 2], [1, 2, 3]], "length"), ([[0, 0]], "zero")]:
+    try:
+        normalise(bad)
+        assert False, bad
+    except ValueError as e:
+        assert word in str(e), str(e)
+assert normalise([[1]]) == [[1.0]]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert normalise([[3, 4], [0, 2]]) == [[0.6, 0.8], [0.0, 1.0]]
+for bad, word in [([], &quot;empty&quot;), ([[1, 2], [1, 2, 3]], &quot;length&quot;), ([[0, 0]], &quot;zero&quot;)]:
+    try:
+        normalise(bad)
+        assert False, bad
+    except ValueError as e:
+        assert word in str(e), str(e)
+assert normalise([[1]]) == [[1.0]]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>if ...: raise ValueError(...)</code> for each check, with a message containing the word the test looks for and the details.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+def normalise(vectors):
+    if not vectors:
+        raise ValueError(&quot;cannot normalise an empty list of vectors&quot;)
+    dim = len(vectors[0])
+    out = []
+    for i, v in enumerate(vectors):
+        if len(v) != dim:
+            raise ValueError(f&quot;vector {i} has length {len(v)}, expected {dim}&quot;)
+        norm = math.sqrt(sum(x * x for x in v))
+        if norm == 0:
+            raise ValueError(f&quot;vector {i} is a zero vector and has no direction&quot;)
+        out.append([round(x / norm, 4) for x in v])
+    return out</code></pre></div><p><code>assert</code> documents what <strong>your code</strong> guarantees; it is not for checking what <strong>callers</strong> pass in. With <code>python -O</code> every <code>assert</code> is stripped, so the bad input would flow on and fail later with a confusing <code>ZeroDivisionError</code> or an <code>IndexError</code>. <code>ValueError</code> is the expected type for unacceptable input, and the new messages say which vector failed and why, which <code>AssertionError("length mismatch")</code> did not. The test words (<code>empty</code>, <code>length</code>, <code>zero</code>) stand in for what a user would need to find in the message.</p></div></details>
+</article>
+<article class="prob" id="p-error-codes-to-exceptions" data-pid="m7-2-error-codes-to-exceptions" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Error codes to exceptions</h3></header>
+<div class="prob-q"><p>The helpers return <code>(None, error)</code> tuples that every caller must check. Make the helpers raise <code>ValueError</code> instead, and let <code>import_user</code> catch it once. <code>import_user</code>'s results must stay the same. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def parse_age(raw):
+    if not raw.strip().isdigit():
+        return None, f&quot;age is not a number: {raw!r}&quot;
+    age = int(raw)
+    if age &gt; 130:
+        return None, f&quot;age out of range: {age}&quot;
+    return age, None
+
+def parse_email(raw):
+    email = raw.strip().lower()
+    if email.count(&quot;@&quot;) != 1:
+        return None, f&quot;invalid email: {raw!r}&quot;
+    return email, None
+
+def import_user(row):
+    age, err = parse_age(row[&quot;age&quot;])
+    if err:
+        return {&quot;ok&quot;: False, &quot;error&quot;: err}
+    email, err = parse_email(row[&quot;email&quot;])
+    if err:
+        return {&quot;ok&quot;: False, &quot;error&quot;: err}
+    return {&quot;ok&quot;: True, &quot;user&quot;: {&quot;age&quot;: age, &quot;email&quot;: email}}
+</textarea>
+<script type="text/plain" class="prob-tests">assert import_user({"age": " 34", "email": "Ana@Example.com "}) == {"ok": True, "user": {"age": 34, "email": "ana@example.com"}}
+assert import_user({"age": "x", "email": "a@b.c"}) == {"ok": False, "error": "age is not a number: 'x'"}
+assert import_user({"age": "200", "email": "a@b.c"}) == {"ok": False, "error": "age out of range: 200"}
+assert import_user({"age": "1", "email": "nope"}) == {"ok": False, "error": "invalid email: 'nope'"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert import_user({&quot;age&quot;: &quot; 34&quot;, &quot;email&quot;: &quot;Ana@Example.com &quot;}) == {&quot;ok&quot;: True, &quot;user&quot;: {&quot;age&quot;: 34, &quot;email&quot;: &quot;ana@example.com&quot;}}
+assert import_user({&quot;age&quot;: &quot;x&quot;, &quot;email&quot;: &quot;a@b.c&quot;}) == {&quot;ok&quot;: False, &quot;error&quot;: &quot;age is not a number: &#x27;x&#x27;&quot;}
+assert import_user({&quot;age&quot;: &quot;200&quot;, &quot;email&quot;: &quot;a@b.c&quot;}) == {&quot;ok&quot;: False, &quot;error&quot;: &quot;age out of range: 200&quot;}
+assert import_user({&quot;age&quot;: &quot;1&quot;, &quot;email&quot;: &quot;nope&quot;}) == {&quot;ok&quot;: False, &quot;error&quot;: &quot;invalid email: &#x27;nope&#x27;&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each helper returns just the value or raises <code>ValueError(message)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>import_user</code> wraps both calls in one <code>try</code> and returns the error dict with <code>str(e)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_age(raw):
+    if not raw.strip().isdigit():
+        raise ValueError(f&quot;age is not a number: {raw!r}&quot;)
+    age = int(raw)
+    if age &gt; 130:
+        raise ValueError(f&quot;age out of range: {age}&quot;)
+    return age
+
+def parse_email(raw):
+    email = raw.strip().lower()
+    if email.count(&quot;@&quot;) != 1:
+        raise ValueError(f&quot;invalid email: {raw!r}&quot;)
+    return email
+
+def import_user(row):
+    try:
+        user = {&quot;age&quot;: parse_age(row[&quot;age&quot;]), &quot;email&quot;: parse_email(row[&quot;email&quot;])}
+    except ValueError as e:
+        return {&quot;ok&quot;: False, &quot;error&quot;: str(e)}
+    return {&quot;ok&quot;: True, &quot;user&quot;: user}</code></pre></div><p>With error codes, every call site needs an <code>if err:</code> check, and forgetting one lets a <code>None</code> slip into the data. With exceptions, the helpers return plain values and the failure path is handled in one place, at the level that knows what to do with it (here: turn it into a result dict). The helpers also become easier to reuse, since callers that want a crash on bad data get one for free. Error codes still have their place at <strong>boundaries</strong> where exceptions cannot cross, such as an API response, which is exactly what <code>import_user</code> returns.</p></div></details>
+</article>
+<article class="prob" id="p-collect-every-validation-error" data-pid="m7-2-collect-every-validation-error" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Collect every validation error</h3></header>
+<div class="prob-q"><p>Write <code>validate_request(req)</code> for a chat request dict. Collect <strong>all</strong> problems and, if there are any, raise <code>ExceptionGroup("invalid request", errors)</code>: <code>ValueError("messages must be a non-empty list")</code> if <code>messages</code> is missing, not a list or empty; for each message <code>i</code> without a <code>role</code> in <code>{"system", "user", "assistant"}</code>, <code>ValueError(f"message {i}: bad role {role!r}")</code>; <code>TypeError("temperature must be a number")</code> if <code>temperature</code> is present and not an <code>int</code>/<code>float</code> (not <code>bool</code>). Return <code>True</code> if valid.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def validate_request(req):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">good = {"messages": [{"role": "system", "content": "x"}, {"role": "user", "content": "y"}], "temperature": 0.3}
+assert validate_request(good) is True
+assert validate_request({"messages": [{"role": "user"}]}) is True
+bad = {"messages": [{"role": "user"}, {"role": "bot"}, {}], "temperature": "hot"}
+try:
+    validate_request(bad)
+    assert False
+except ExceptionGroup as eg:
+    assert [str(e) for e in eg.exceptions] == ["message 1: bad role 'bot'", "message 2: bad role None",
+                                               "temperature must be a number"]
+    values, types = eg.split(ValueError)
+    assert len(values.exceptions) == 2 and len(types.exceptions) == 1
+try:
+    validate_request({"messages": []})
+    assert False
+except ExceptionGroup as eg:
+    assert [type(e) for e in eg.exceptions] == [ValueError]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">good = {&quot;messages&quot;: [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;x&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;y&quot;}], &quot;temperature&quot;: 0.3}
+assert validate_request(good) is True
+assert validate_request({&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;}]}) is True
+bad = {&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;}, {&quot;role&quot;: &quot;bot&quot;}, {}], &quot;temperature&quot;: &quot;hot&quot;}
+try:
+    validate_request(bad)
+    assert False
+except ExceptionGroup as eg:
+    assert [str(e) for e in eg.exceptions] == [&quot;message 1: bad role &#x27;bot&#x27;&quot;, &quot;message 2: bad role None&quot;,
+                                               &quot;temperature must be a number&quot;]
+    values, types = eg.split(ValueError)
+    assert len(values.exceptions) == 2 and len(types.exceptions) == 1
+try:
+    validate_request({&quot;messages&quot;: []})
+    assert False
+except ExceptionGroup as eg:
+    assert [type(e) for e in eg.exceptions] == [ValueError]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Append exceptions to a list instead of raising them. <code>msg.get("role")</code> gives <code>None</code> for a missing role.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only check the messages one by one if <code>messages</code> is a non-empty list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">ROLES = {&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;}
+
+def validate_request(req):
+    errors = []
+    messages = req.get(&quot;messages&quot;)
+    if not isinstance(messages, list) or not messages:
+        errors.append(ValueError(&quot;messages must be a non-empty list&quot;))
+    else:
+        for i, msg in enumerate(messages):
+            role = msg.get(&quot;role&quot;)
+            if role not in ROLES:
+                errors.append(ValueError(f&quot;message {i}: bad role {role!r}&quot;))
+    if &quot;temperature&quot; in req:
+        t = req[&quot;temperature&quot;]
+        if isinstance(t, bool) or not isinstance(t, (int, float)):
+            errors.append(TypeError(&quot;temperature must be a number&quot;))
+    if errors:
+        raise ExceptionGroup(&quot;invalid request&quot;, errors)
+    return True</code></pre></div><p>Creating exceptions without raising them is perfectly fine: they are ordinary objects until <code>raise</code>. Collecting them gives the user every problem in one round trip, which matters for API clients and form-like inputs. <code>eg.split(ValueError)</code> (used in the test) divides a group by type, the same thing <code>except*</code> does behind the scenes. The <code>else</code> branch avoids validating individual messages when the list itself is unusable, so the errors stay meaningful. In practice, Pydantic does this collection for you and reports each field's problem with its location (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-messages-notes-and-suppressed-context" data-pid="m7-2-messages-notes-and-suppressed-context" data-type="predict" data-level="medium" data-answer="not JSON (&#x27;not JSON&#x27;,) {label: x}
+[&quot;LookupError: unknown model &#x27;gpt-x&#x27;&quot;, &#x27;known models: small, large&#x27;] False">
+<header class="prob-head"><h3>12. Messages, notes and suppressed context</h3></header>
+<div class="code"><pre><code class="py">import traceback
+
+class InvalidOutputError(Exception):
+    def __init__(self, message, raw):
+        super().__init__(message)
+        self.raw = raw
+
+e = InvalidOutputError(&quot;not JSON&quot;, raw=&quot;{label: x}&quot;)
+print(str(e), e.args, e.raw)
+
+try:
+    try:
+        {}[&quot;model&quot;]
+    except KeyError:
+        raise LookupError(&quot;unknown model &#x27;gpt-x&#x27;&quot;) from None
+except LookupError as err:
+    err.add_note(&quot;known models: small, large&quot;)
+    lines = traceback.format_exc().strip().splitlines()
+    print(lines[-2:], &quot;KeyError&quot; in &quot;&quot;.join(lines))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only the message passed to <code>super().__init__</code> is in <code>args</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from None</code> hides the original from the printed traceback.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>not JSON (&#x27;not JSON&#x27;,) {label: x}
+[&quot;LookupError: unknown model &#x27;gpt-x&#x27;&quot;, &#x27;known models: small, large&#x27;] False</pre></div><p>The extra attribute <code>raw</code> is stored separately; <code>args</code> and <code>str</code> come from the message passed to the parent class. In the second part, <code>from None</code> suppresses the <code>KeyError</code>, so the printed traceback mentions only the <code>LookupError</code>, and the note appears as the last line, under the message. That is the clean way to replace an internal error with a user-facing one.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-translate-library-errors-at-the-boundary" data-pid="m7-2-translate-library-errors-at-the-boundary" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Translate library errors at the boundary</h3></header>
+<div class="prob-q"><p>Your code wraps a third-party provider SDK, and you want callers to see only your own exceptions. Write <code>translate(fn, mapping)</code> that calls <code>fn()</code> and returns its result. If it raises an exception that is an instance of a key in <code>mapping</code> (a dict from SDK exception class to your exception class, checked <strong>in order</strong>, so put subclasses first), raise the mapped exception with the message <code>f"{type(e).__name__}: {e}"</code>, chained <strong>from</strong> the original. Other exceptions propagate unchanged.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def translate(fn, mapping):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">class SDKError(Exception): pass
+class SDKRateLimit(SDKError): pass
+class AppError(Exception): pass
+class AppRateLimit(AppError): pass
+
+mapping = {SDKRateLimit: AppRateLimit, SDKError: AppError}
+
+def raiser(exc):
+    def fn():
+        raise exc
+    return fn
+
+assert translate(lambda: 42, mapping) == 42
+assert translate(lambda: "ok", {}) == "ok"
+try:
+    translate(raiser(SDKRateLimit("429")), mapping)
+    assert False
+except AppRateLimit as e:
+    assert str(e) == "SDKRateLimit: 429" and isinstance(e.__cause__, SDKRateLimit)
+try:
+    translate(raiser(SDKError("boom")), mapping)
+    assert False
+except AppError as e:
+    assert type(e) is AppError and type(e.__cause__) is SDKError
+try:
+    translate(raiser(ZeroDivisionError("bug")), mapping)
+    assert False
+except ZeroDivisionError as e:
+    assert e.__cause__ is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class SDKError(Exception): pass
+class SDKRateLimit(SDKError): pass
+class AppError(Exception): pass
+class AppRateLimit(AppError): pass
+
+mapping = {SDKRateLimit: AppRateLimit, SDKError: AppError}
+
+def raiser(exc):
+    def fn():
+        raise exc
+    return fn
+
+assert translate(lambda: 42, mapping) == 42
+assert translate(lambda: &quot;ok&quot;, {}) == &quot;ok&quot;
+try:
+    translate(raiser(SDKRateLimit(&quot;429&quot;)), mapping)
+    assert False
+except AppRateLimit as e:
+    assert str(e) == &quot;SDKRateLimit: 429&quot; and isinstance(e.__cause__, SDKRateLimit)
+try:
+    translate(raiser(SDKError(&quot;boom&quot;)), mapping)
+    assert False
+except AppError as e:
+    assert type(e) is AppError and type(e.__cause__) is SDKError
+try:
+    translate(raiser(ZeroDivisionError(&quot;bug&quot;)), mapping)
+    assert False
+except ZeroDivisionError as e:
+    assert e.__cause__ is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>Exception as e</code>, loop over <code>mapping.items()</code>, and <code>raise target(...) from e</code> on the first <code>isinstance</code> match.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If nothing matches, a bare <code>raise</code> re-raises the original unchanged.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def translate(fn, mapping):
+    try:
+        return fn()
+    except Exception as e:
+        for source, target in mapping.items():
+            if isinstance(e, source):
+                raise target(f&quot;{type(e).__name__}: {e}&quot;) from e
+        raise</code></pre></div><p>Catching <code>Exception</code> is acceptable here because the handler does not swallow anything: it either translates or re-raises the original with a bare <code>raise</code>, so a bug like <code>ZeroDivisionError</code> still surfaces with its own traceback. Dicts keep insertion order, which makes "subclasses first" a reliable rule: <code>SDKRateLimit</code> must be checked before its parent <code>SDKError</code>, or every rate limit would become a generic <code>AppError</code>. <code>from e</code> keeps the SDK's exception, with its status code and response details, available in <code>__cause__</code>. This boundary pattern is what keeps an application independent of any one provider: the rest of the code catches <code>AppRateLimit</code>, whichever SDK is behind it.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-client-that-retries-the-" data-pid="m7-2-read-the-code-a-client-that-retries-the-" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a client that retries the wrong errors</h3></header>
+<div class="prob-q"><p><code>send(request, transport, attempts)</code> calls <code>transport(request)</code> and should retry <strong>only</strong> <code>RateLimited</code>, up to <code>attempts</code> calls in total, re-raising the last <code>RateLimited</code> unchanged if all fail. <code>BadRequest</code> and any other error must propagate immediately, unchanged, after one call. The current code retries everything and replaces the error with a plain <code>Exception</code>. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class ProviderError(Exception):
+    pass
+
+
+class RateLimited(ProviderError):
+    pass
+
+
+class BadRequest(ProviderError):
+    pass
+
+
+def send(request, transport, attempts=3):
+    for attempt in range(attempts):
+        try:
+            return transport(request)
+        except Exception as e:
+            if attempt == attempts - 1:
+                raise Exception(f&quot;request failed after {attempts} attempts: {e}&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">def scripted(*outcomes):
+    calls = []
+    def transport(req):
+        calls.append(req)
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return transport, calls
+
+t, calls = scripted(RateLimited("429 a"), "done")
+assert send("r", t) == "done" and len(calls) == 2
+t, calls = scripted("first try")
+assert send("r", t, attempts=1) == "first try" and len(calls) == 1
+t, calls = scripted(RateLimited("a"), RateLimited("b"), RateLimited("c"))
+try:
+    send("r", t, attempts=3)
+    assert False
+except RateLimited as e:
+    assert str(e) == "c" and len(calls) == 3
+for err in [BadRequest("400: bad"), KeyError("bug")]:
+    t, calls = scripted(err, "never")
+    try:
+        send("r", t)
+        assert False
+    except type(err) as e:
+        assert e is err and len(calls) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def scripted(*outcomes):
+    calls = []
+    def transport(req):
+        calls.append(req)
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return transport, calls
+
+t, calls = scripted(RateLimited(&quot;429 a&quot;), &quot;done&quot;)
+assert send(&quot;r&quot;, t) == &quot;done&quot; and len(calls) == 2
+t, calls = scripted(&quot;first try&quot;)
+assert send(&quot;r&quot;, t, attempts=1) == &quot;first try&quot; and len(calls) == 1
+t, calls = scripted(RateLimited(&quot;a&quot;), RateLimited(&quot;b&quot;), RateLimited(&quot;c&quot;))
+try:
+    send(&quot;r&quot;, t, attempts=3)
+    assert False
+except RateLimited as e:
+    assert str(e) == &quot;c&quot; and len(calls) == 3
+for err in [BadRequest(&quot;400: bad&quot;), KeyError(&quot;bug&quot;)]:
+    t, calls = scripted(err, &quot;never&quot;)
+    try:
+        send(&quot;r&quot;, t)
+        assert False
+    except type(err) as e:
+        assert e is err and len(calls) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch only <code>RateLimited</code>. Everything else then propagates on its own, unchanged, after one call.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On the last attempt, a bare <code>raise</code> re-raises the final <code>RateLimited</code> itself.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ProviderError(Exception):
+    pass
+
+
+class RateLimited(ProviderError):
+    pass
+
+
+class BadRequest(ProviderError):
+    pass
+
+
+def send(request, transport, attempts=3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return transport(request)
+        except RateLimited:
+            if attempt == attempts:
+                raise</code></pre></div><p>Three bugs. <code>except Exception</code> retried a <code>BadRequest</code> (which will fail identically every time, wasting calls and money) and even a <code>KeyError</code> from a bug. The final <code>raise Exception(...)</code> replaced the specific type, so callers could no longer catch <code>RateLimited</code> or <code>BadRequest</code>, and the message became the only trace of what happened. Catching only <code>RateLimited</code> fixes both: every other exception leaves the function untouched on the first call. The bare <code>raise</code> on the last attempt re-raises the actual <code>RateLimited</code> object, so its <code>retry_after</code> or other details survive. Retries also need waiting between attempts (exponential backoff), which 7.4 and 8.3 add.</p></div></details>
+</article>
+<article class="prob" id="p-walk-an-exception-chain" data-pid="m7-2-walk-an-exception-chain" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. Walk an exception chain</h3></header>
+<div class="prob-q"><p>Error reports often show the full chain of causes. Write <code>chain(exc)</code> returning a list of <code>"Type: message"</code> strings, starting with <code>exc</code> and following each exception's link to the one before it: <code>__cause__</code> if it is set, otherwise <code>__context__</code>, unless <code>__suppress_context__</code> is true (then stop). Guard against cycles.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def chain(exc):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+
+def build(style):
+    try:
+        try:
+            json.loads("{bad")
+        except ValueError as e:
+            raise KeyError("model") from e
+    except KeyError as k:
+        if style == "context":
+            raise RuntimeError("load failed")
+        raise RuntimeError("load failed") from None
+
+try:
+    build("context")
+except RuntimeError as e:
+    out = chain(e)
+assert out[0] == "RuntimeError: load failed" and out[1] == "KeyError: 'model'" and out[2].startswith("JSONDecodeError: Expecting")
+assert len(out) == 3
+try:
+    build("none")
+except RuntimeError as e:
+    assert chain(e) == ["RuntimeError: load failed"]
+assert chain(ValueError("solo")) == ["ValueError: solo"]
+a, b = ValueError("a"), ValueError("b")
+a.__context__, b.__context__ = b, a
+assert chain(a) == ["ValueError: a", "ValueError: b"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+
+def build(style):
+    try:
+        try:
+            json.loads(&quot;{bad&quot;)
+        except ValueError as e:
+            raise KeyError(&quot;model&quot;) from e
+    except KeyError as k:
+        if style == &quot;context&quot;:
+            raise RuntimeError(&quot;load failed&quot;)
+        raise RuntimeError(&quot;load failed&quot;) from None
+
+try:
+    build(&quot;context&quot;)
+except RuntimeError as e:
+    out = chain(e)
+assert out[0] == &quot;RuntimeError: load failed&quot; and out[1] == &quot;KeyError: &#x27;model&#x27;&quot; and out[2].startswith(&quot;JSONDecodeError: Expecting&quot;)
+assert len(out) == 3
+try:
+    build(&quot;none&quot;)
+except RuntimeError as e:
+    assert chain(e) == [&quot;RuntimeError: load failed&quot;]
+assert chain(ValueError(&quot;solo&quot;)) == [&quot;ValueError: solo&quot;]
+a, b = ValueError(&quot;a&quot;), ValueError(&quot;b&quot;)
+a.__context__, b.__context__ = b, a
+assert chain(a) == [&quot;ValueError: a&quot;, &quot;ValueError: b&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop while <code>exc is not None</code>; keep a set of <code>id(exc)</code> already seen to stop on cycles.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Next link: <code>exc.__cause__</code> if it is not <code>None</code>, else <code>None</code> if <code>exc.__suppress_context__</code>, else <code>exc.__context__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def chain(exc):
+    out, seen = [], set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        out.append(f&quot;{type(exc).__name__}: {exc}&quot;)
+        if exc.__cause__ is not None:
+            exc = exc.__cause__
+        elif exc.__suppress_context__:
+            exc = None
+        else:
+            exc = exc.__context__
+    return out</code></pre></div><p>These are exactly the rules the traceback printer uses: an explicit cause wins, <code>from None</code> stops the chain, and otherwise the implicit context is followed. Each link is an exception object you can inspect, which is how error trackers such as Sentry show the whole story of a failure. The cycle guard matters because nothing forbids two exceptions from pointing at each other, and the standard library's printer has the same protection. <code>id()</code> is safe here because all the objects in the chain are alive at the same time (2.1). Note that the <code>KeyError</code>'s message keeps its quotes, as <code>str</code> of a <code>KeyError</code> always does.</p></div></details>
+</article>
+<article class="prob" id="p-except-splits-a-group" data-pid="m7-2-except-splits-a-group" data-type="predict" data-level="hard" data-answer="values: [&#x27;bad row 3&#x27;, &#x27;bad row 9&#x27;]
+other: 2 ExceptionGroup
+handled values only
+left over: [&#x27;TimeoutError&#x27;, &#x27;ExceptionGroup&#x27;]">
+<header class="prob-head"><h3>16. except* splits a group</h3></header>
+<div class="code"><pre><code class="py">def fail_many():
+    raise ExceptionGroup(&quot;batch&quot;, [
+        ValueError(&quot;bad row 3&quot;),
+        TimeoutError(&quot;embedding call&quot;),
+        ValueError(&quot;bad row 9&quot;),
+        ExceptionGroup(&quot;nested&quot;, [KeyError(&quot;id&quot;)]),
+    ])
+
+try:
+    fail_many()
+except* ValueError as g:
+    print(&quot;values:&quot;, [str(e) for e in g.exceptions])
+except* (TimeoutError, KeyError) as g:
+    print(&quot;other:&quot;, len(g.exceptions), type(g.exceptions[-1]).__name__)
+
+try:
+    try:
+        fail_many()
+    except* ValueError:
+        print(&quot;handled values only&quot;)
+except ExceptionGroup as rest:
+    print(&quot;left over:&quot;, [type(e).__name__ for e in rest.exceptions])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>except*</code> keeps the group's nesting: the matching part of a nested group stays nested.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Exceptions not matched by any <code>except*</code> clause are re-raised as a new group.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>values: [&#x27;bad row 3&#x27;, &#x27;bad row 9&#x27;]
+other: 2 ExceptionGroup
+handled values only
+left over: [&#x27;TimeoutError&#x27;, &#x27;ExceptionGroup&#x27;]</pre></div><p>The first <code>except*</code> receives a group of the two <code>ValueError</code>s. The second receives everything matching its tuple: the <code>TimeoutError</code> at the top level and the nested group containing the <code>KeyError</code>, kept as a nested group, which is why its last item is an <code>ExceptionGroup</code>. In the second block only <code>ValueError</code>s are handled, so the rest is re-raised automatically as a group of what was left, still including the nested group. This automatic re-raise is the key difference from <code>except</code>: unhandled parts of a group can never be silently dropped.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-when-should-you-define-a-custom-exceptio" data-pid="m7-2-when-should-you-define-a-custom-exceptio" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When should you define a custom exception, and how would you design the exception hierarchy for a library?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Define a custom exception when callers need to <strong>react differently</strong> to a failure than to other failures: retry a rate limit, re-authenticate on an auth error, report bad input to the user. If no caller would ever catch it specifically, a built-in type with a good message is enough. For a library, create one base class (<code>class MyLibError(Exception)</code>) so users can catch everything from your library in one clause, and a small number of subclasses for the distinct reactions; inherit from a built-in as well when it fits existing expectations (a "not found" error can also subclass <code>LookupError</code>). Put useful data on the exception as attributes (status code, retry delay, the invalid value) instead of making users parse the message. Translate errors from your dependencies into your own types at the boundary, with <code>raise ... from e</code>, and document which exceptions each public function raises.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-the-difference-between-raise-x-f" data-pid="m7-2-what-is-the-difference-between-raise-x-f" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What is the difference between <code>raise X from e</code>, raising inside <code>except</code> without <code>from</code>, and <code>raise X from None</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>All three happen while another exception <code>e</code> is being handled. Without <code>from</code>, Python sets <code>X.__context__ = e</code> (implicit chaining), and the traceback shows both with "During handling of the above exception, another exception occurred", which suggests the handler itself failed by accident. With <code>from e</code>, Python sets <code>X.__cause__ = e</code> and the traceback says "The above exception was the direct cause of the following exception": a deliberate translation, the right choice when you convert a low-level error into a meaningful one. With <code>from None</code>, the context is still stored but <code>__suppress_context__</code> is set, so only <code>X</code> is printed; use it when the original is an implementation detail that would only confuse the reader, such as a <code>KeyError</code> from an internal dict lookup replaced by "unknown model".</p></div></details>
+</article>
+<article class="prob" id="p-how-should-a-client-library-for-an-llm-a" data-pid="m7-2-how-should-a-client-library-for-an-llm-a" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How should a client library for an LLM API expose errors to its users?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>With a small, documented hierarchy under one base class, organised by what the user should do: authentication and permission errors (fix the key, no retry), bad requests including validation and context-length errors (fix the request, no retry), rate limits (wait, with the delay as an attribute from the <code>Retry-After</code> header), timeouts and connection errors (safe to retry with backoff), and server errors (often retryable). Each exception should carry structured data: HTTP status, provider error code, request id for support tickets, and the response body where safe, without leaking the API key. Low-level network exceptions are translated with <code>from e</code> so their details remain available. The library can retry transient errors itself, with a configurable maximum and exponential backoff with jitter, and should raise the final error, not swallow it. Streaming responses need the same treatment for errors that arrive mid-stream. The OpenAI and Anthropic Python SDKs follow exactly this design, which is why <code>except anthropic.RateLimitError</code> works the way users expect.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Pick the type by meaning (<code>TypeError</code> wrong kind, <code>ValueError</code> bad value, your own class for errors callers handle specially), and write messages with what, which value and what was expected.</li><li>A bare <code>raise</code> re-raises unchanged; never replace a specific error with a plain <code>Exception</code>.</li><li>Custom exceptions: one base class per component, subclasses per reaction, data as attributes via <code>super().__init__(message)</code>.</li><li>Translate with <code>raise New(...) from e</code>; <code>from None</code> hides internal noise; <code>add_note</code> adds context without changing the type.</li><li><code>ExceptionGroup</code> and <code>except*</code> report several errors at once. <code>assert</code> checks your own invariants, never input.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

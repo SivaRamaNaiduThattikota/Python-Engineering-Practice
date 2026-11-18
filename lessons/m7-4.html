@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7.4 · Errors in LLM and API code</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m7-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 7 · Error handling</span></div>
+  <h1>7.4 Errors in LLM and API code</h1>
+  <p>Calls to models and APIs fail in ways local code does not: timeouts, rate limits, overloaded servers, truncated or refused answers, output that does not parse, and batches where some items fail. How to tell transient from permanent errors, retry with backoff and jitter within a deadline, repair invalid output, and handle partial failures, with everything testable through injected clocks and fakes.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="modes">
+<h2><span class="n">1</span>How remote calls fail</h2>
+<p>A call to a model API crosses the network to a service you do not control, so it can fail in many more ways than a local function. It helps to sort failures by <strong>what you should do about them</strong>, because that, not the exception's name, decides the handling code.</p>
+<div class="tbl"><table>
+      <tr><th>Failure</th><th>Typical signal</th><th>Retry?</th><th>What to do</th></tr>
+      <tr><td>Connection failed, reset</td><td><code>ConnectionError</code></td><td>yes</td><td>retry with backoff</td></tr>
+      <tr><td>Timed out</td><td><code>TimeoutError</code>, SDK timeout</td><td>yes, carefully</td><td>retry; the request may have been processed</td></tr>
+      <tr><td>Rate limited</td><td>HTTP 429, <code>Retry-After</code> header</td><td>yes</td><td>wait at least the given time; slow down</td></tr>
+      <tr><td>Server error, overloaded</td><td>HTTP 500, 502, 503, 529</td><td>yes</td><td>retry with backoff; fail over to another provider</td></tr>
+      <tr><td>Bad request</td><td>HTTP 400, 404, 422</td><td>no</td><td>fix the request (a bug, or too many tokens)</td></tr>
+      <tr><td>Auth or permission</td><td>HTTP 401, 403</td><td>no</td><td>fix the key or account; alert someone</td></tr>
+      <tr><td>Truncated answer</td><td><code>finish_reason == "length"</code></td><td>maybe</td><td>raise the token limit, or continue the answer</td></tr>
+      <tr><td>Refused or filtered</td><td>a refusal, <code>content_filter</code></td><td>no</td><td>handle as a product case, not an error to retry</td></tr>
+      <tr><td>Output does not parse</td><td>your <code>ValueError</code></td><td>yes, with feedback</td><td>ask again with the error (repair)</td></tr>
+    </table></div>
+<p>Three of these deserve emphasis. A <strong>timeout</strong> does not mean the request failed on the server: the model may have finished and billed you, and only the answer was lost. Retrying is usually fine for reading or generating, but not for operations with side effects such as "send this email" unless they are <strong>idempotent</strong> (below). A <strong>rate limit</strong> is the provider telling you how to behave, often with the exact wait in the <code>Retry-After</code> header; ignoring it gets you limited for longer. And the two "successful" failures, truncated and refused answers, arrive with HTTP 200, so no exception is raised unless your code checks <code>finish_reason</code> or the content and raises one itself (problem 12).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">transient.py</span><button class="copy">Copy</button></div><pre><code class="py">class APIError(Exception):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504, 529}
+
+def is_transient(exc):
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    if isinstance(exc, APIError):
+        return exc.status in TRANSIENT_STATUS
+    return False
+
+for e in [TimeoutError(), APIError(&quot;overloaded&quot;, 529), APIError(&quot;bad&quot;, 400), APIError(&quot;key&quot;, 401), ValueError(&quot;parse&quot;)]:
+    print(type(e).__name__, getattr(e, &quot;status&quot;, &quot;-&quot;), is_transient(e))</code></pre><div class="out"><span class="ol">Output</span><pre>TimeoutError - True
+APIError 529 True
+APIError 400 False
+APIError 401 False
+ValueError - False</pre></div></div>
+</section>
+<section class="sec" id="backoff">
+<h2><span class="n">2</span>Retrying: exponential backoff and jitter</h2>
+<p>Retrying immediately after a transient failure usually fails again: the server is still overloaded, the rate limit window has not passed. <strong>Exponential backoff</strong> waits longer after each failure, typically doubling from a base delay up to a cap: with a base of 1 second and a cap of 30, the waits are 1, 2, 4, 8, 16, 30, 30... seconds. The total wait grows quickly, so a few attempts cover a long outage without hammering the service.</p>
+<p>Backoff alone has a flaw. When a provider has a hiccup, thousands of clients fail at the same moment, and with identical backoff they all retry at exactly 1 s, then exactly 2 s later, in synchronised waves that knock the service over again: the <strong>thundering herd</strong>. <strong>Jitter</strong> fixes it by randomising each delay. The widely used "full jitter" scheme picks a random delay between 0 and the exponential value, which spreads retries evenly over the window. If the server sends <code>Retry-After</code>, wait at least that long.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">backoff_schedule.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+
+def delays(attempts, base, cap, rng=None):
+    out = []
+    for attempt in range(attempts):
+        ceiling = min(cap, base * 2 ** attempt)
+        out.append(round(rng.uniform(0, ceiling), 2) if rng else ceiling)
+    return out
+
+print(delays(7, base=1, cap=30))
+print(delays(7, base=1, cap=30, rng=random.Random(42)))
+print(sum(delays(7, base=1, cap=30)))</code></pre><div class="out"><span class="ol">Output</span><pre>[1, 2, 4, 8, 16, 30, 30]
+[0.64, 0.05, 1.1, 1.79, 11.78, 20.3, 26.77]
+91</pre></div></div>
+<p>Note the seeded <code>random.Random(42)</code>: passing the random generator in (instead of calling <code>random.uniform</code> directly) makes the function reproducible in tests, the same idea as injecting the clock in 7.3's circuit breaker. Real code also injects <code>sleep</code>, so tests can run a full retry sequence instantly and check the delays that <strong>would</strong> have been waited (problem 5).</p>
+<p><strong>Idempotency</strong> decides whether a retry is safe. Reading, embedding and generating text are idempotent in effect: doing them twice just costs twice. Creating something (a payment, a ticket, a message to a user) is not: a timeout followed by a retry can create it twice. APIs solve this with <strong>idempotency keys</strong>: the client generates a unique id per logical operation and sends it with every attempt, and the server performs the operation only once per key. Generate the key once, before the first attempt, never inside the retry loop.</p>
+</section>
+<section class="sec" id="deadline">
+<h2><span class="n">3</span>Timeouts and deadlines</h2>
+<p>Every network call needs a <strong>timeout</strong>: without one, a stuck connection can block a worker forever. SDKs accept a timeout per request (the OpenAI and Anthropic clients default to 10 minutes, far too long for an interactive feature), and many distinguish a <strong>connect</strong> timeout (how long to wait to establish the connection, usually a few seconds) from a <strong>read</strong> timeout (how long to wait for the response, which for long generations can legitimately be a minute).</p>
+<p>Retries multiply waiting: three attempts with a 30 s timeout and backoff can keep a user waiting two minutes. So the policy that matters to callers is a <strong>deadline</strong>: a total time budget for the whole operation, including all attempts and waits. Before each wait, check whether waiting and trying again could still finish before the deadline; if not, give up now and raise the last error, instead of sleeping only to fail anyway (problem 6). Pass the remaining time as the timeout of the next attempt, so a single slow attempt cannot overrun the budget either.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">deadline.py</span><button class="copy">Copy</button></div><pre><code class="py">def plan(deadline, delays, attempt_time):
+    # simulate: each attempt takes attempt_time seconds and fails
+    now, timeline = 0.0, []
+    for delay in delays:
+        now += attempt_time
+        timeline.append(f&quot;fail@{now:g}&quot;)
+        if now + delay + attempt_time &gt; deadline:
+            timeline.append(&quot;give up&quot;)
+            return timeline
+        now += delay
+    return timeline
+
+print(plan(deadline=10, delays=[1, 2, 4, 8], attempt_time=1.5))
+print(plan(deadline=30, delays=[1, 2, 4, 8], attempt_time=1.5))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;fail@1.5&#x27;, &#x27;fail@4&#x27;, &#x27;fail@7.5&#x27;, &#x27;give up&#x27;]
+[&#x27;fail@1.5&#x27;, &#x27;fail@4&#x27;, &#x27;fail@7.5&#x27;, &#x27;fail@13&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="output">
+<h2><span class="n">4</span>When the answer itself is wrong</h2>
+<p>Many failures arrive as a successful response. Check the <strong>finish reason</strong> first: <code>"stop"</code> (or <code>"end_turn"</code>) means the model finished normally; <code>"length"</code> (or <code>"max_tokens"</code>) means it was cut off at the token limit, so JSON will be incomplete and a summary will end mid-sentence; <code>"content_filter"</code> or a refusal means the provider or model declined. Treat a truncated answer as an error, not as data: raise a specific exception so the caller can raise the limit or ask the model to continue.</p>
+<p>Then validate the content. When output must follow a format (JSON with certain fields, one of a few labels), parse it and raise <code>ValueError</code> (or your own <code>InvalidOutputError</code>) when it does not fit. Unlike most errors, this one can often be fixed by the model itself: a <strong>repair loop</strong> sends the conversation back with the invalid reply and a short message describing the problem ("Your reply was not valid JSON: Expecting ',' delimiter at line 3. Reply with JSON only."), and asks again, for a limited number of attempts (problem 7). Structured output features (JSON mode, tool calling with a schema) reduce how often this is needed, but do not remove the need to validate.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">finish_reason.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+class TruncatedError(Exception):
+    pass
+
+class RefusalError(Exception):
+    pass
+
+def content_of(response):
+    choice = response[&quot;choices&quot;][0]
+    reason = choice[&quot;finish_reason&quot;]
+    if reason == &quot;length&quot;:
+        raise TruncatedError(&quot;answer cut off at the token limit&quot;)
+    if reason == &quot;content_filter&quot;:
+        raise RefusalError(&quot;answer blocked by the content filter&quot;)
+    return choice[&quot;message&quot;][&quot;content&quot;]
+
+responses = [
+    {&quot;choices&quot;: [{&quot;finish_reason&quot;: &quot;stop&quot;, &quot;message&quot;: {&quot;content&quot;: &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;}}]},
+    {&quot;choices&quot;: [{&quot;finish_reason&quot;: &quot;length&quot;, &quot;message&quot;: {&quot;content&quot;: &#x27;{&quot;label&quot;: &quot;sp&#x27;}}]},
+    {&quot;choices&quot;: [{&quot;finish_reason&quot;: &quot;content_filter&quot;, &quot;message&quot;: {&quot;content&quot;: &quot;&quot;}}]},
+]
+for r in responses:
+    try:
+        print(json.loads(content_of(r)))
+    except (TruncatedError, RefusalError) as e:
+        print(type(e).__name__, &quot;-&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;label&#x27;: &#x27;spam&#x27;}
+TruncatedError - answer cut off at the token limit
+RefusalError - answer blocked by the content filter</pre></div></div>
+</section>
+<section class="sec" id="batches">
+<h2><span class="n">5</span>Partial failures in batches</h2>
+<p>When you process many items (embed 10,000 chunks, classify a dataset, call a tool for each search result), some will fail while others succeed. The rule is to <strong>keep every success</strong>, record every failure with its item and reason, and decide separately what to do with the failures: retry the transient ones in a later round (with backoff between rounds), report the permanent ones, and abort only if the failure rate shows a systemic problem (the error budget of 7.3).</p>
+<p>Batch APIs add a twist: one call sends many items, and a single bad item (an empty string, a text over the token limit) can make the <strong>whole call</strong> fail with a 400. Retrying the batch is pointless. The usual remedy is to split: retry the batch in halves, or item by item, which isolates the bad items and saves the good ones (problem 9). Keep results keyed by item id, not by position, so retries and reordering cannot misalign them.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">split_batch.py</span><button class="copy">Copy</button></div><pre><code class="py">def embed_batch(texts):
+    if any(not t.strip() for t in texts):
+        raise ValueError(&quot;400: input contains an empty string&quot;)
+    return [[len(t)] for t in texts]
+
+def embed_all(items):
+    vectors, failed = {}, {}
+    try:
+        for (item_id, _), vec in zip(items, embed_batch([t for _, t in items]), strict=True):
+            vectors[item_id] = vec
+    except ValueError:
+        for item_id, text in items:              # isolate the bad items
+            try:
+                vectors[item_id] = embed_batch([text])[0]
+            except ValueError as e:
+                failed[item_id] = str(e)
+    return vectors, failed
+
+print(embed_all([(&quot;a&quot;, &quot;refund&quot;), (&quot;b&quot;, &quot;reset&quot;)]))
+print(embed_all([(&quot;a&quot;, &quot;refund&quot;), (&quot;b&quot;, &quot;  &quot;), (&quot;c&quot;, &quot;invoice&quot;)]))</code></pre><div class="out"><span class="ol">Output</span><pre>({&#x27;a&#x27;: [6], &#x27;b&#x27;: [5]}, {})
+({&#x27;a&#x27;: [6], &#x27;c&#x27;: [7]}, {&#x27;b&#x27;: &#x27;400: input contains an empty string&#x27;})</pre></div></div>
+</section>
+<section class="sec" id="observe">
+<h2><span class="n">6</span>Errors you can debug later</h2>
+<p>API failures are often intermittent, so you debug them from logs long after they happened. For every failed call, record the <strong>error type</strong> and status, the provider's <strong>request id</strong> (support teams need it), the <strong>attempt number</strong>, the <strong>latency</strong>, the model name, and token counts if available. Do <strong>not</strong> log API keys, and be careful with prompts and outputs, which may contain personal data: log their length or a hash, or redact them (5.5), unless you have a policy that allows storing them.</p>
+<p>Keep two messages apart: the <strong>internal</strong> one, with every detail, goes to logs; the <strong>user-facing</strong> one says what happened in plain words and what the user can do ("The assistant is busy, please try again in a minute"), never a traceback or a provider's raw error. And count failures by type in metrics, so a rising rate limit or timeout rate is visible on a dashboard before users complain.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">structured_log.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, time
+
+def log_failure(log, *, exc, attempt, started, model, request_id=None, prompt=&quot;&quot;):
+    log.append(json.dumps({
+        &quot;event&quot;: &quot;llm_call_failed&quot;,
+        &quot;error&quot;: type(exc).__name__,
+        &quot;status&quot;: getattr(exc, &quot;status&quot;, None),
+        &quot;attempt&quot;: attempt,
+        &quot;latency_ms&quot;: round((time.perf_counter() - started) * 1000),
+        &quot;model&quot;: model,
+        &quot;request_id&quot;: request_id,
+        &quot;prompt_chars&quot;: len(prompt),            # size, not content
+    }))
+
+log = []
+start = time.perf_counter()
+log_failure(log, exc=TimeoutError(&quot;read timed out&quot;), attempt=2, started=start, model=&quot;small&quot;,
+            request_id=&quot;req_123&quot;, prompt=&quot;My card number is 4111 1111 1111 1111&quot;)
+entry = json.loads(log[0])
+print(sorted(entry), entry[&quot;prompt_chars&quot;], &quot;4111&quot; in log[0])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;attempt&#x27;, &#x27;error&#x27;, &#x27;event&#x27;, &#x27;latency_ms&#x27;, &#x27;model&#x27;, &#x27;prompt_chars&#x27;, &#x27;request_id&#x27;, &#x27;status&#x27;] 37 False</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-transient-or-permanent" data-pid="m7-4-transient-or-permanent" data-type="predict" data-level="easy" data-answer="[&#x27;retry&#x27;, &#x27;retry&#x27;, &#x27;fix request&#x27;, &#x27;alert&#x27;]
+retry bug retry HTTP 404">
+<header class="prob-head"><h3>1. Transient or permanent</h3></header>
+<div class="code"><pre><code class="py">class APIError(Exception):
+    def __init__(self, status):
+        super().__init__(f&quot;HTTP {status}&quot;)
+        self.status = status
+
+def action(exc):
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return &quot;retry&quot;
+    if isinstance(exc, APIError):
+        if exc.status == 429 or exc.status &gt;= 500:
+            return &quot;retry&quot;
+        if exc.status in (401, 403):
+            return &quot;alert&quot;
+        return &quot;fix request&quot;
+    return &quot;bug&quot;
+
+print([action(e) for e in [ConnectionResetError(), APIError(503), APIError(400), APIError(403)]])
+print(action(APIError(429)), action(KeyError(&quot;x&quot;)), action(TimeoutError()), str(APIError(404)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ConnectionResetError</code> is a subclass of <code>ConnectionError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;retry&#x27;, &#x27;retry&#x27;, &#x27;fix request&#x27;, &#x27;alert&#x27;]
+retry bug retry HTTP 404</pre></div><p><code>ConnectionResetError</code> is a <code>ConnectionError</code>, so it is retried. A 503 is a server error, retried; a 400 needs the request fixed; a 403 is a permissions problem a human must look at. Rate limits are retried. A <code>KeyError</code> is not an API failure at all, so it is classified as a bug and should propagate. Classifying by <strong>reaction</strong> keeps the retry code simple: it asks one question, "is this worth retrying?".</p></div></details>
+</article>
+<article class="prob" id="p-a-backoff-schedule" data-pid="m7-4-a-backoff-schedule" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. A backoff schedule</h3></header>
+<div class="prob-q"><p>Write <code>backoff(attempts, base, cap)</code> returning the list of waits before each retry: <code>base</code>, <code>2 * base</code>, <code>4 * base</code>, ... (<code>attempts</code> values), each capped at <code>cap</code>. Raise <code>ValueError</code> if <code>base</code> or <code>cap</code> is not positive or <code>attempts</code> is negative.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def backoff(attempts, base, cap):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert backoff(5, 1, 30) == [1, 2, 4, 8, 16]
+assert backoff(7, 0.5, 4) == [0.5, 1.0, 2.0, 4, 4, 4, 4]
+assert backoff(0, 1, 10) == []
+for bad in [(3, 0, 10), (3, 1, -1), (-1, 1, 10)]:
+    try:
+        backoff(*bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert backoff(5, 1, 30) == [1, 2, 4, 8, 16]
+assert backoff(7, 0.5, 4) == [0.5, 1.0, 2.0, 4, 4, 4, 4]
+assert backoff(0, 1, 10) == []
+for bad in [(3, 0, 10), (3, 1, -1), (-1, 1, 10)]:
+    try:
+        backoff(*bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>min(cap, base * 2 ** i)</code> for <code>i</code> in <code>range(attempts)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def backoff(attempts, base, cap):
+    if base &lt;= 0 or cap &lt;= 0 or attempts &lt; 0:
+        raise ValueError(&quot;base and cap must be positive, attempts non-negative&quot;)
+    return [min(cap, base * 2 ** i) for i in range(attempts)]</code></pre></div><p>The doubling comes from <code>2 ** i</code>, and the cap keeps late waits bounded, which is why the second schedule flattens at 4. Note the mix of <code>1.0</code> and <code>4</code>: <code>min</code> returns whichever argument is smaller, unchanged, so the result is the float product or the integer cap; equality still works because <code>4 == 4.0</code>. Production code adds jitter on top of this ceiling (problem 5), and validates its configuration up front so a zero base does not turn into a tight retry loop.</p></div></details>
+</article>
+<article class="prob" id="p-retries-that-stop-one-attempt-early" data-pid="m7-4-retries-that-stop-one-attempt-early" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Retries that stop one attempt early</h3></header>
+<div class="prob-q"><p><code>call(fn, max_retries)</code> should make <strong>one first attempt plus up to <code>max_retries</code> retries</strong> when <code>fn</code> raises <code>TimeoutError</code>, and re-raise the last timeout if all fail. It gives up one attempt too early, and with <code>max_retries=0</code> it never calls <code>fn</code> at all. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def call(fn, max_retries):
+    last = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except TimeoutError as e:
+            last = e
+    raise last
+</textarea>
+<script type="text/plain" class="prob-tests">def flaky(fail_times):
+    state = {"n": 0}
+    def fn():
+        state["n"] += 1
+        if state["n"] <= fail_times:
+            raise TimeoutError(f"t{state['n']}")
+        return state["n"]
+    return fn, state
+
+fn, state = flaky(2)
+assert call(fn, max_retries=2) == 3 and state["n"] == 3
+fn, state = flaky(0)
+assert call(fn, max_retries=0) == 1
+fn, state = flaky(5)
+try:
+    call(fn, max_retries=1)
+    assert False
+except TimeoutError as e:
+    assert str(e) == "t2" and state["n"] == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def flaky(fail_times):
+    state = {&quot;n&quot;: 0}
+    def fn():
+        state[&quot;n&quot;] += 1
+        if state[&quot;n&quot;] &lt;= fail_times:
+            raise TimeoutError(f&quot;t{state[&#x27;n&#x27;]}&quot;)
+        return state[&quot;n&quot;]
+    return fn, state
+
+fn, state = flaky(2)
+assert call(fn, max_retries=2) == 3 and state[&quot;n&quot;] == 3
+fn, state = flaky(0)
+assert call(fn, max_retries=0) == 1
+fn, state = flaky(5)
+try:
+    call(fn, max_retries=1)
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;t2&quot; and state[&quot;n&quot;] == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The number of attempts is <code>max_retries + 1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def call(fn, max_retries):
+    last = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except TimeoutError as e:
+            last = e
+    raise last</code></pre></div><p>"Retries" counts the attempts <strong>after</strong> the first, so the loop must run <code>max_retries + 1</code> times. With <code>range(max_retries)</code>, <code>max_retries=0</code> meant zero attempts, and the final <code>raise last</code> then raised <code>None</code>, which is itself a <code>TypeError: exceptions must derive from BaseException</code>, a confusing error that hides the real problem. Naming parameters precisely (<code>max_attempts</code> versus <code>max_retries</code>) prevents this whole class of bug; SDKs use <code>max_retries</code> meaning retries after the first call.</p></div></details>
+</article>
+<article class="prob" id="p-reading-retry-after" data-pid="m7-4-reading-retry-after" data-type="predict" data-level="easy" data-answer="2.0 1.0 1.0
+0.0 60.0 0.5">
+<header class="prob-head"><h3>4. Reading Retry-After</h3></header>
+<div class="code"><pre><code class="py">def wait_for(headers, default=1.0, cap=60.0):
+    raw = headers.get(&quot;retry-after&quot;)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, 0.0), cap)
+
+print(wait_for({&quot;retry-after&quot;: &quot;2&quot;}), wait_for({}), wait_for({&quot;retry-after&quot;: &quot;soon&quot;}))
+print(wait_for({&quot;retry-after&quot;: &quot;-5&quot;}), wait_for({&quot;retry-after&quot;: &quot;3600&quot;}), wait_for({&quot;retry-after&quot;: &quot; 0.5 &quot;}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>float(None)</code> raises <code>TypeError</code>; <code>float("soon")</code> raises <code>ValueError</code>; <code>float(" 0.5 ")</code> accepts spaces.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2.0 1.0 1.0
+0.0 60.0 0.5</pre></div><p>A missing header gives <code>None</code>, and <code>float(None)</code> raises <code>TypeError</code>; a non-numeric value raises <code>ValueError</code>; both fall back to the default. The clamping keeps a negative value from becoming a negative sleep (which raises <code>ValueError</code> in <code>time.sleep</code>) and a huge value from blocking a worker for an hour. Real headers can also be an HTTP date, which this simple reader treats as invalid and replaces with the default; <code>email.utils.parsedate_to_datetime</code> can parse that form.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-retry-with-full-jitter-and-retry-after" data-pid="m7-4-retry-with-full-jitter-and-retry-after" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Retry with full jitter and Retry-After</h3></header>
+<div class="prob-q"><p>Write <code>retry(fn, max_attempts, sleep, rng, base=1.0, cap=30.0)</code> that calls <code>fn()</code> and retries on <code>TimeoutError</code>, <code>ConnectionError</code> and <code>RateLimitError</code> (defined for you, with a <code>retry_after</code> attribute that may be <code>None</code>). Before retry number <code>n</code> (from 1), wait <code>rng.uniform(0, min(cap, base * 2 ** (n - 1)))</code>, or the rate limit's <code>retry_after</code> if that is larger, by calling <code>sleep(seconds)</code>. Re-raise the last error when attempts run out; let other exceptions propagate. Return the result.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class RateLimitError(Exception):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry(fn, max_attempts, sleep, rng, base=1.0, cap=30.0):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)          # always the ceiling, to make delays predictable
+
+def scripted(*outcomes):
+    it = iter(outcomes)
+    def fn():
+        out = next(it)
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return fn
+
+waits = []
+assert retry(scripted(TimeoutError(), ConnectionError(), "ok"), 5, waits.append, top) == "ok"
+assert waits == [1.0, 2.0]
+waits = []
+assert retry(scripted(RateLimitError("429", retry_after=7.5), "ok"), 3, waits.append, top) == "ok" and waits == [7.5]
+waits = []
+try:
+    retry(scripted(TimeoutError("a"), TimeoutError("b"), TimeoutError("c")), 3, waits.append, top, base=10, cap=15)
+    assert False
+except TimeoutError as e:
+    assert str(e) == "c" and waits == [10, 15]
+waits = []
+try:
+    retry(scripted(KeyError("bug"), "never"), 3, waits.append, top)
+    assert False
+except KeyError:
+    assert waits == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)          # always the ceiling, to make delays predictable
+
+def scripted(*outcomes):
+    it = iter(outcomes)
+    def fn():
+        out = next(it)
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return fn
+
+waits = []
+assert retry(scripted(TimeoutError(), ConnectionError(), &quot;ok&quot;), 5, waits.append, top) == &quot;ok&quot;
+assert waits == [1.0, 2.0]
+waits = []
+assert retry(scripted(RateLimitError(&quot;429&quot;, retry_after=7.5), &quot;ok&quot;), 3, waits.append, top) == &quot;ok&quot; and waits == [7.5]
+waits = []
+try:
+    retry(scripted(TimeoutError(&quot;a&quot;), TimeoutError(&quot;b&quot;), TimeoutError(&quot;c&quot;)), 3, waits.append, top, base=10, cap=15)
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;c&quot; and waits == [10, 15]
+waits = []
+try:
+    retry(scripted(KeyError(&quot;bug&quot;), &quot;never&quot;), 3, waits.append, top)
+    assert False
+except KeyError:
+    assert waits == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop <code>for attempt in range(1, max_attempts + 1)</code>; on a retryable error, if <code>attempt == max_attempts</code> re-raise, else compute the delay and <code>sleep(delay)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>getattr(e, "retry_after", None) or 0</code> gives the server's wait for any of the three types.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class RateLimitError(Exception):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+RETRYABLE = (TimeoutError, ConnectionError, RateLimitError)
+
+
+def retry(fn, max_attempts, sleep, rng, base=1.0, cap=30.0):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except RETRYABLE as e:
+            if attempt == max_attempts:
+                raise
+            delay = rng.uniform(0, min(cap, base * 2 ** (attempt - 1)))
+            server_wait = getattr(e, &quot;retry_after&quot;, None) or 0
+            sleep(max(delay, server_wait))</code></pre></div><p>Injecting <code>sleep</code> and <code>rng</code> is what makes this testable: the test passes <code>waits.append</code> as <code>sleep</code>, so the whole retry sequence runs instantly and the delays can be checked, and an <code>rng</code> whose <code>uniform</code> always returns the upper bound turns the random jitter into predictable numbers. In production you pass <code>time.sleep</code> and <code>random.Random()</code>. The server's <code>Retry-After</code> wins when it is longer than our own backoff, because the provider knows its rate-limit window. A bare <code>raise</code> on the last attempt preserves the final error. No wait happens after the last failure, since there is no next attempt to wait for. The <code>tenacity</code> library offers all of this as configurable decorators (8.3).</p></div></details>
+</article>
+<article class="prob" id="p-retries-that-ignore-the-deadline" data-pid="m7-4-retries-that-ignore-the-deadline" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Retries that ignore the deadline</h3></header>
+<div class="prob-q"><p><code>call_within(fn, deadline, delays, clock, sleep)</code> retries <code>fn</code> on <code>TimeoutError</code>, waiting <code>delays[i]</code> before retry <code>i + 1</code>. It must never <strong>start</strong> a wait that would end after <code>deadline</code> seconds from the start (measured with <code>clock()</code>): in that case it re-raises the last timeout immediately. It currently sleeps through every delay regardless. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def call_within(fn, deadline, delays, clock, sleep):
+    start = clock()
+    for delay in delays:
+        try:
+            return fn()
+        except TimeoutError:
+            sleep(delay)
+    return fn()
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+clock = lambda: now[0]
+def sleep(s):
+    now[0] += s
+def always_slow():
+    now[0] += 2.0                   # each attempt takes 2 seconds and times out
+    raise TimeoutError(f"at {now[0]}")
+
+try:
+    call_within(always_slow, 10, [1, 2, 4, 8], clock, sleep)
+    assert False
+except TimeoutError as e:
+    assert str(e) == "at 9.0" and now[0] == 9.0
+now[0] = 0.0
+results = iter([TimeoutError("x"), "ok"])
+def second_works():
+    r = next(results)
+    if isinstance(r, Exception):
+        raise r
+    return r
+assert call_within(second_works, 10, [1, 2], clock, sleep) == "ok" and now[0] == 1.0
+now[0] = 0.0
+assert call_within(lambda: "first", 5, [1], clock, sleep) == "first" and now[0] == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+clock = lambda: now[0]
+def sleep(s):
+    now[0] += s
+def always_slow():
+    now[0] += 2.0                   # each attempt takes 2 seconds and times out
+    raise TimeoutError(f&quot;at {now[0]}&quot;)
+
+try:
+    call_within(always_slow, 10, [1, 2, 4, 8], clock, sleep)
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;at 9.0&quot; and now[0] == 9.0
+now[0] = 0.0
+results = iter([TimeoutError(&quot;x&quot;), &quot;ok&quot;])
+def second_works():
+    r = next(results)
+    if isinstance(r, Exception):
+        raise r
+    return r
+assert call_within(second_works, 10, [1, 2], clock, sleep) == &quot;ok&quot; and now[0] == 1.0
+now[0] = 0.0
+assert call_within(lambda: &quot;first&quot;, 5, [1], clock, sleep) == &quot;first&quot; and now[0] == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Before sleeping, compute <code>elapsed = clock() - start</code>; if <code>elapsed + delay &gt; deadline</code>, re-raise with a bare <code>raise</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the final attempt after the loop: once the delays are used up, one more try is allowed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def call_within(fn, deadline, delays, clock, sleep):
+    start = clock()
+    for delay in delays:
+        try:
+            return fn()
+        except TimeoutError:
+            if clock() - start + delay &gt; deadline:
+                raise
+            sleep(delay)
+    return fn()</code></pre></div><p>Trace the first test. Attempt 1 fails at 2 s; a 1 s wait would end at 3, within the 10 s deadline, so it waits. Attempt 2 fails at 5 s; 5 + 2 = 7 still fits, so it waits again. Attempt 3 fails at 9 s, and a 4 s wait would end at 13, past the deadline, so it gives up immediately and re-raises the timeout from 9 s, instead of sleeping and trying again. The original slept through every delay and only stopped after the fifth attempt, at 25 s, two and a half times the budget. The check uses the clock <strong>at the moment of failure</strong>, because attempts take variable time. A complete version would also pass the remaining time, <code>deadline - (clock() - start)</code>, as the timeout of each attempt, so that one slow attempt cannot overrun the budget on its own.</p></div></details>
+</article>
+<article class="prob" id="p-repair-invalid-output" data-pid="m7-4-repair-invalid-output" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Repair invalid output</h3></header>
+<div class="prob-q"><p>Write <code>ask_json(ask, messages, required, max_attempts)</code>. <code>ask(messages)</code> returns the model's reply text. Parse the reply as a JSON object that must contain every key in <code>required</code>. If parsing or the check fails, append the reply as an assistant message and a user message <code>"Your reply was invalid: &lt;error&gt;. Reply with only a JSON object with keys: &lt;keys&gt;."</code> (keys comma-separated, in the given order), then ask again. Return <code>(data, attempts)</code>. After <code>max_attempts</code> failures, raise <code>ValueError("no valid JSON after N attempts")</code> chained from the last error. Do not modify the caller's <code>messages</code> list.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import json
+
+def ask_json(ask, messages, required, max_attempts):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">replies = iter(['Sure! {"label": spam}', '{"label": "spam"}', '{"label": "spam", "confidence": 0.9}'])
+seen = []
+def ask(msgs):
+    seen.append([m["content"] for m in msgs])
+    return next(replies)
+
+original = [{"role": "user", "content": "Classify: win a prize"}]
+data, attempts = ask_json(ask, original, ["label", "confidence"], 4)
+assert data == {"label": "spam", "confidence": 0.9} and attempts == 3
+assert original == [{"role": "user", "content": "Classify: win a prize"}]
+assert seen[1][1] == 'Sure! {"label": spam}' and seen[1][2].startswith("Your reply was invalid: ")
+assert seen[2][-1] == "Your reply was invalid: missing keys: confidence. Reply with only a JSON object with keys: label, confidence."
+
+try:
+    ask_json(lambda m: "nope", original, ["label"], 2)
+    assert False
+except ValueError as e:
+    assert str(e) == "no valid JSON after 2 attempts" and isinstance(e.__cause__, ValueError)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">replies = iter([&#x27;Sure! {&quot;label&quot;: spam}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9}&#x27;])
+seen = []
+def ask(msgs):
+    seen.append([m[&quot;content&quot;] for m in msgs])
+    return next(replies)
+
+original = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Classify: win a prize&quot;}]
+data, attempts = ask_json(ask, original, [&quot;label&quot;, &quot;confidence&quot;], 4)
+assert data == {&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9} and attempts == 3
+assert original == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Classify: win a prize&quot;}]
+assert seen[1][1] == &#x27;Sure! {&quot;label&quot;: spam}&#x27; and seen[1][2].startswith(&quot;Your reply was invalid: &quot;)
+assert seen[2][-1] == &quot;Your reply was invalid: missing keys: confidence. Reply with only a JSON object with keys: label, confidence.&quot;
+
+try:
+    ask_json(lambda m: &quot;nope&quot;, original, [&quot;label&quot;], 2)
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;no valid JSON after 2 attempts&quot; and isinstance(e.__cause__, ValueError)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Copy first: <code>history = list(messages)</code>. Parse with <code>json.loads</code>, check <code>isinstance(data, dict)</code>, and compute missing keys.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Raise <code>ValueError(f"missing keys: ...")</code> inside the <code>try</code> so one handler covers parse and check errors.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def ask_json(ask, messages, required, max_attempts):
+    history = list(messages)
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        reply = ask(history)
+        try:
+            data = json.loads(reply)
+            if not isinstance(data, dict):
+                raise ValueError(&quot;reply is not a JSON object&quot;)
+            missing = [k for k in required if k not in data]
+            if missing:
+                raise ValueError(f&quot;missing keys: {&#x27;, &#x27;.join(missing)}&quot;)
+            return data, attempt
+        except ValueError as e:
+            last_error = e
+            history = history + [
+                {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: reply},
+                {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Your reply was invalid: {e}. Reply with only a JSON object with keys: {&#x27;, &#x27;.join(required)}.&quot;},
+            ]
+    raise ValueError(f&quot;no valid JSON after {max_attempts} attempts&quot;) from last_error</code></pre></div><p>Showing the model its own invalid reply and the precise error ("Expecting value", "missing keys: confidence") usually fixes the output on the next try, which is far more effective than asking the identical question again. <code>json.JSONDecodeError</code> is a <code>ValueError</code>, so parse errors and the hand-written checks share one handler. The history is copied and extended with <code>+</code>, so the caller's list is never modified and a retry from outside starts clean (2.4). The final error is chained from the last specific failure, so logs show why the model kept failing. Libraries such as Instructor implement this loop on top of Pydantic validation errors (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-a-retry-schedule-step-by-step" data-pid="m7-4-a-retry-schedule-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. A retry schedule step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>delay</code> and <code>total</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">def ceiling(attempt, base=0.5, cap=4.0):
+    return min(cap, base * 2 ** (attempt - 1))
+
+total = 0.0
+delay = ceiling(1)
+total += delay
+delay = ceiling(2)
+total += delay
+delay = max(ceiling(3), 5.0)
+total += delay
+delay = ceiling(6)
+total += delay</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>delay</code></th><th><code>total</code></th></tr><tr><td>before retry 1</td><td><input class="cell" data-a="0.5" data-s="0.5" aria-label="delay at before retry 1" autocomplete="off"></td><td><input class="cell" data-a="0.5" data-s="0.5" aria-label="total at before retry 1" autocomplete="off"></td></tr><tr><td>before retry 2</td><td><input class="cell" data-a="1.0" data-s="1.0" aria-label="delay at before retry 2" autocomplete="off"></td><td><input class="cell" data-a="1.5" data-s="1.5" aria-label="total at before retry 2" autocomplete="off"></td></tr><tr><td>retry 3, Retry-After 5</td><td><input class="cell" data-a="5.0" data-s="5.0" aria-label="delay at retry 3, Retry-After 5" autocomplete="off"></td><td><input class="cell" data-a="6.5" data-s="6.5" aria-label="total at retry 3, Retry-After 5" autocomplete="off"></td></tr><tr><td>before retry 6</td><td><input class="cell" data-a="4.0" data-s="4.0" aria-label="delay at before retry 6" autocomplete="off"></td><td><input class="cell" data-a="10.5" data-s="10.5" aria-label="total at before retry 6" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The ceiling doubles from 0.5 and stops at 4.0. A larger Retry-After replaces the computed wait.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>delay</code></th><th><code>total</code></th></tr><tr><td>before retry 1</td><td><code>0.5</code></td><td><code>0.5</code></td></tr><tr><td>before retry 2</td><td><code>1.0</code></td><td><code>1.5</code></td></tr><tr><td>retry 3, Retry-After 5</td><td><code>5.0</code></td><td><code>6.5</code></td></tr><tr><td>before retry 6</td><td><code>4.0</code></td><td><code>10.5</code></td></tr></table></div><p>The waits are 0.5 and 1.0 for the first two retries. For the third, the computed ceiling is 2.0, but the server asked for 5 seconds, which wins. By retry 6 the doubling (0.5 x 32 = 16) has passed the cap, so the wait is 4.0. The running total shows how quickly backoff adds up, which is why a deadline (problem 6) is needed alongside it.</p></div></details>
+</article>
+<article class="prob" id="p-one-bad-text-fails-the-whole-batch" data-pid="m7-4-one-bad-text-fails-the-whole-batch" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. One bad text fails the whole batch</h3></header>
+<div class="prob-q"><p><code>embed_documents(docs, embed_batch)</code> sends all texts in one call. When the API rejects the batch with <code>BadInputError</code> because of one bad text, nothing is returned. Make it isolate the failures: on <code>BadInputError</code>, embed each text on its own, keep the successes, and report the failed ids with the error message. Other errors must propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">class BadInputError(Exception):
+    pass
+
+
+def embed_documents(docs, embed_batch):
+    texts = [d[&quot;text&quot;] for d in docs]
+    vectors = embed_batch(texts)
+    return {d[&quot;id&quot;]: v for d, v in zip(docs, vectors)}, {}
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def embed_batch(texts):
+    calls.append(len(texts))
+    for t in texts:
+        if not t.strip():
+            raise BadInputError("empty input")
+        if len(t) > 20:
+            raise BadInputError("input too long")
+    return [[len(t)] for t in texts]
+
+docs = [{"id": "a", "text": "refund"}, {"id": "b", "text": " "}, {"id": "c", "text": "x" * 30}, {"id": "d", "text": "reset"}]
+vectors, failed = embed_documents(docs, embed_batch)
+assert vectors == {"a": [6], "d": [5]} and failed == {"b": "empty input", "c": "input too long"}
+assert calls == [4, 1, 1, 1, 1]
+calls.clear()
+assert embed_documents(docs[:1], embed_batch) == ({"a": [6]}, {}) and calls == [1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def embed_batch(texts):
+    calls.append(len(texts))
+    for t in texts:
+        if not t.strip():
+            raise BadInputError(&quot;empty input&quot;)
+        if len(t) &gt; 20:
+            raise BadInputError(&quot;input too long&quot;)
+    return [[len(t)] for t in texts]
+
+docs = [{&quot;id&quot;: &quot;a&quot;, &quot;text&quot;: &quot;refund&quot;}, {&quot;id&quot;: &quot;b&quot;, &quot;text&quot;: &quot; &quot;}, {&quot;id&quot;: &quot;c&quot;, &quot;text&quot;: &quot;x&quot; * 30}, {&quot;id&quot;: &quot;d&quot;, &quot;text&quot;: &quot;reset&quot;}]
+vectors, failed = embed_documents(docs, embed_batch)
+assert vectors == {&quot;a&quot;: [6], &quot;d&quot;: [5]} and failed == {&quot;b&quot;: &quot;empty input&quot;, &quot;c&quot;: &quot;input too long&quot;}
+assert calls == [4, 1, 1, 1, 1]
+calls.clear()
+assert embed_documents(docs[:1], embed_batch) == ({&quot;a&quot;: [6]}, {}) and calls == [1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Try the whole batch first. In <code>except BadInputError:</code>, loop over the documents and call <code>embed_batch([text])</code> for each in its own <code>try</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class BadInputError(Exception):
+    pass
+
+
+def embed_documents(docs, embed_batch):
+    try:
+        vectors = embed_batch([d[&quot;text&quot;] for d in docs])
+    except BadInputError:
+        pass
+    else:
+        return {d[&quot;id&quot;]: v for d, v in zip(docs, vectors, strict=True)}, {}
+    good, failed = {}, {}
+    for d in docs:
+        try:
+            good[d[&quot;id&quot;]] = embed_batch([d[&quot;text&quot;]])[0]
+        except BadInputError as e:
+            failed[d[&quot;id&quot;]] = str(e)
+    return good, failed</code></pre></div><p>Batch calls are cheaper and faster, so the batch is tried first; only when it is rejected does the function pay for one call per item, which pinpoints exactly which inputs are bad and saves the rest. Results are keyed by document id, so nothing can be misaligned, and <code>zip(..., strict=True)</code> checks that the API returned one vector per text. For large batches, splitting in halves recursively finds the bad items with far fewer calls than going one by one. Better still, validate cheaply before sending (empty strings, length limits), which is the LBYL half of 7.3: check what you can, and handle what you cannot predict.</p></div></details>
+</article>
+<article class="prob" id="p-classify-errors-for-the-retry-policy" data-pid="m7-4-classify-errors-for-the-retry-policy" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Classify errors for the retry policy</h3></header>
+<div class="prob-q"><p>Write <code>policy(exc)</code> returning one of <code>"retry"</code>, <code>"shrink"</code>, <code>"alert"</code> or <code>"raise"</code>, for an <code>APIError(message, status)</code> (defined for you) or any other exception: timeouts and connection errors, and API statuses 408, 409, 429 and 5xx, <code>"retry"</code>; a 400 whose message mentions the context length (<code>"context_length"</code> or <code>"maximum context"</code>, any case) <code>"shrink"</code> (the caller should shorten the prompt); 401 and 403 <code>"alert"</code>; anything else <code>"raise"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class APIError(Exception):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
+def policy(exc):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert [policy(e) for e in [TimeoutError(), ConnectionResetError(), APIError("busy", 529), APIError("x", 409)]] == ["retry"] * 4
+assert policy(APIError("This model's maximum context length is 8192 tokens", 400)) == "shrink"
+assert policy(APIError("error code: context_length_exceeded", 400)) == "shrink"
+assert policy(APIError("invalid parameter: temperature", 400)) == "raise"
+assert policy(APIError("bad key", 401)) == "alert" and policy(APIError("forbidden", 403)) == "alert"
+assert policy(KeyError("bug")) == "raise" and policy(APIError("not found", 404)) == "raise"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert [policy(e) for e in [TimeoutError(), ConnectionResetError(), APIError(&quot;busy&quot;, 529), APIError(&quot;x&quot;, 409)]] == [&quot;retry&quot;] * 4
+assert policy(APIError(&quot;This model&#x27;s maximum context length is 8192 tokens&quot;, 400)) == &quot;shrink&quot;
+assert policy(APIError(&quot;error code: context_length_exceeded&quot;, 400)) == &quot;shrink&quot;
+assert policy(APIError(&quot;invalid parameter: temperature&quot;, 400)) == &quot;raise&quot;
+assert policy(APIError(&quot;bad key&quot;, 401)) == &quot;alert&quot; and policy(APIError(&quot;forbidden&quot;, 403)) == &quot;alert&quot;
+assert policy(KeyError(&quot;bug&quot;)) == &quot;raise&quot; and policy(APIError(&quot;not found&quot;, 404)) == &quot;raise&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the built-in types first, then <code>isinstance(exc, APIError)</code> and its <code>status</code>. Lower-case the message once for the context check.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class APIError(Exception):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
+RETRY_STATUS = {408, 409, 429}
+CONTEXT_HINTS = (&quot;context_length&quot;, &quot;maximum context&quot;)
+
+
+def policy(exc):
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return &quot;retry&quot;
+    if not isinstance(exc, APIError):
+        return &quot;raise&quot;
+    if exc.status in RETRY_STATUS or exc.status &gt;= 500:
+        return &quot;retry&quot;
+    if exc.status == 400 and any(h in str(exc).lower() for h in CONTEXT_HINTS):
+        return &quot;shrink&quot;
+    if exc.status in (401, 403):
+        return &quot;alert&quot;
+    return &quot;raise&quot;</code></pre></div><p>Putting the classification in one function keeps every retry loop, fallback and alert consistent, and makes the policy easy to test exhaustively. The context-length case shows why status codes alone are not enough: it is a 400, like any invalid request, but it has a specific remedy (trim the conversation, drop retrieved chunks, or summarise history), so it gets its own action. Matching on message text is fragile, which is why the check uses a few known phrasings and the SDKs increasingly expose error codes (<code>context_length_exceeded</code>) as attributes; prefer those when available. 409 (conflict) is included because some APIs use it for transient concurrency conflicts.</p></div></details>
+</article>
+<article class="prob" id="p-copy-pasted-provider-fallbacks" data-pid="m7-4-copy-pasted-provider-fallbacks" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Copy-pasted provider fallbacks</h3></header>
+<div class="prob-q"><p>Remove the duplication with a loop over providers. Same results and same <code>tried</code> list. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def complete(prompt, providers, tried):
+    try:
+        tried.append(&quot;primary&quot;)
+        return providers[&quot;primary&quot;](prompt)
+    except (TimeoutError, ConnectionError):
+        pass
+    try:
+        tried.append(&quot;secondary&quot;)
+        return providers[&quot;secondary&quot;](prompt)
+    except (TimeoutError, ConnectionError):
+        pass
+    try:
+        tried.append(&quot;local&quot;)
+        return providers[&quot;local&quot;](prompt)
+    except (TimeoutError, ConnectionError) as e:
+        raise RuntimeError(&quot;all providers failed&quot;) from e
+</textarea>
+<script type="text/plain" class="prob-tests">def up(name):
+    return lambda p: f"{name}: {p}"
+def down(p):
+    raise TimeoutError("slow")
+tried = []
+assert complete("hi", {"primary": down, "secondary": up("b"), "local": up("c")}, tried) == "b: hi" and tried == ["primary", "secondary"]
+tried = []
+try:
+    complete("hi", {"primary": down, "secondary": down, "local": down}, tried)
+    assert False
+except RuntimeError as e:
+    assert isinstance(e.__cause__, TimeoutError) and tried == ["primary", "secondary", "local"]
+tried = []
+assert complete("hi", {"primary": up("a"), "secondary": down, "local": down}, tried) == "a: hi" and tried == ["primary"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def up(name):
+    return lambda p: f&quot;{name}: {p}&quot;
+def down(p):
+    raise TimeoutError(&quot;slow&quot;)
+tried = []
+assert complete(&quot;hi&quot;, {&quot;primary&quot;: down, &quot;secondary&quot;: up(&quot;b&quot;), &quot;local&quot;: up(&quot;c&quot;)}, tried) == &quot;b: hi&quot; and tried == [&quot;primary&quot;, &quot;secondary&quot;]
+tried = []
+try:
+    complete(&quot;hi&quot;, {&quot;primary&quot;: down, &quot;secondary&quot;: down, &quot;local&quot;: down}, tried)
+    assert False
+except RuntimeError as e:
+    assert isinstance(e.__cause__, TimeoutError) and tried == [&quot;primary&quot;, &quot;secondary&quot;, &quot;local&quot;]
+tried = []
+assert complete(&quot;hi&quot;, {&quot;primary&quot;: up(&quot;a&quot;), &quot;secondary&quot;: down, &quot;local&quot;: down}, tried) == &quot;a: hi&quot; and tried == [&quot;primary&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop over <code>("primary", "secondary", "local")</code>, keep the last error, and raise after the loop.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">ORDER = (&quot;primary&quot;, &quot;secondary&quot;, &quot;local&quot;)
+
+def complete(prompt, providers, tried):
+    last_error = None
+    for name in ORDER:
+        tried.append(name)
+        try:
+            return providers[name](prompt)
+        except (TimeoutError, ConnectionError) as e:
+            last_error = e
+    raise RuntimeError(&quot;all providers failed&quot;) from last_error</code></pre></div><p>The three blocks differed only in the provider name, so a loop over an ordered tuple expresses the policy directly: "try each in order, move on only on transient failures". Adding a fourth provider is now one word. The last error is kept in a separate variable because the <code>as</code> name is deleted after each handler, and it becomes the cause of the final <code>RuntimeError</code>. Bugs (any other exception) still propagate from the first provider that has them. LLM gateways such as LiteLLM implement the same ordered fallback, usually combined with a circuit breaker per provider (7.3).</p></div></details>
+</article>
+<article class="prob" id="p-handling-finish-reasons" data-pid="m7-4-handling-finish-reasons" data-type="predict" data-level="medium" data-answer="Done.
+The refund policy says [truncated]
+call search
+unexpected finish_reason &#x27;content_filter&#x27;
+unexpected finish_reason None">
+<header class="prob-head"><h3>12. Handling finish reasons</h3></header>
+<div class="code"><pre><code class="py">def handle(choice):
+    reason = choice.get(&quot;finish_reason&quot;)
+    if reason in (&quot;stop&quot;, &quot;end_turn&quot;):
+        return choice[&quot;text&quot;]
+    if reason in (&quot;length&quot;, &quot;max_tokens&quot;):
+        return choice[&quot;text&quot;] + &quot; [truncated]&quot;
+    if reason == &quot;tool_calls&quot;:
+        return &quot;call &quot; + choice[&quot;tool&quot;]
+    raise ValueError(f&quot;unexpected finish_reason {reason!r}&quot;)
+
+print(handle({&quot;finish_reason&quot;: &quot;stop&quot;, &quot;text&quot;: &quot;Done.&quot;}))
+print(handle({&quot;finish_reason&quot;: &quot;max_tokens&quot;, &quot;text&quot;: &quot;The refund policy says&quot;}))
+print(handle({&quot;finish_reason&quot;: &quot;tool_calls&quot;, &quot;text&quot;: &quot;&quot;, &quot;tool&quot;: &quot;search&quot;}))
+for c in [{&quot;finish_reason&quot;: &quot;content_filter&quot;, &quot;text&quot;: &quot;&quot;}, {&quot;text&quot;: &quot;?&quot;}]:
+    try:
+        handle(c)
+    except ValueError as e:
+        print(e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Different providers name the same finish reasons differently. Unknown values should fail loudly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Done.
+The refund policy says [truncated]
+call search
+unexpected finish_reason &#x27;content_filter&#x27;
+unexpected finish_reason None</pre></div><p>Normal completions return the text. A truncated one is marked here (real code would raise or continue the answer, but must never pass it off as complete). A tool call is a request to run a tool, not an answer. The last branch matters most: an unknown reason, or a missing one, raises instead of being treated as success, so a new provider behaviour or a filtered answer is noticed instead of silently returning an empty string.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-retry-failures-in-rounds" data-pid="m7-4-retry-failures-in-rounds" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Retry failures in rounds</h3></header>
+<div class="prob-q"><p>Write <code>run_batch(items, call, max_rounds, on_round=None)</code> for a dict of <code>id -&gt; input</code>. Round 1 calls <code>call(input)</code> for every item. Items that raise <code>TimeoutError</code> are retried in the next round, up to <code>max_rounds</code> rounds; items that raise <code>ValueError</code> fail permanently at once. Before each round after the first, call <code>on_round(round_number, pending_ids)</code> if given (where backoff would go). Return <code>(results, failures)</code>: results maps id to output; failures maps id to the exception type name (<code>"TimeoutError"</code> for items still timing out after the last round). Other exceptions propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def run_batch(items, call, max_rounds, on_round=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">attempts = {}
+plan = {"a": ["ok"], "b": ["timeout", "ok"], "c": ["bad"], "d": ["timeout", "timeout", "timeout"], "e": ["timeout", "timeout", "ok"]}
+def call(x):
+    attempts[x] = attempts.get(x, 0) + 1
+    step = plan[x][attempts[x] - 1]
+    if step == "timeout":
+        raise TimeoutError(x)
+    if step == "bad":
+        raise ValueError(x)
+    return x.upper()
+
+rounds = []
+results, failures = run_batch({k: k for k in plan}, call, 3, lambda n, ids: rounds.append((n, ids)))
+assert results == {"a": "A", "b": "B", "e": "E"} and failures == {"c": "ValueError", "d": "TimeoutError"}
+assert rounds == [(2, ["b", "d", "e"]), (3, ["d", "e"])]
+assert attempts == {"a": 1, "b": 2, "c": 1, "d": 3, "e": 3}
+assert run_batch({}, call, 3) == ({}, {})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">attempts = {}
+plan = {&quot;a&quot;: [&quot;ok&quot;], &quot;b&quot;: [&quot;timeout&quot;, &quot;ok&quot;], &quot;c&quot;: [&quot;bad&quot;], &quot;d&quot;: [&quot;timeout&quot;, &quot;timeout&quot;, &quot;timeout&quot;], &quot;e&quot;: [&quot;timeout&quot;, &quot;timeout&quot;, &quot;ok&quot;]}
+def call(x):
+    attempts[x] = attempts.get(x, 0) + 1
+    step = plan[x][attempts[x] - 1]
+    if step == &quot;timeout&quot;:
+        raise TimeoutError(x)
+    if step == &quot;bad&quot;:
+        raise ValueError(x)
+    return x.upper()
+
+rounds = []
+results, failures = run_batch({k: k for k in plan}, call, 3, lambda n, ids: rounds.append((n, ids)))
+assert results == {&quot;a&quot;: &quot;A&quot;, &quot;b&quot;: &quot;B&quot;, &quot;e&quot;: &quot;E&quot;} and failures == {&quot;c&quot;: &quot;ValueError&quot;, &quot;d&quot;: &quot;TimeoutError&quot;}
+assert rounds == [(2, [&quot;b&quot;, &quot;d&quot;, &quot;e&quot;]), (3, [&quot;d&quot;, &quot;e&quot;])]
+assert attempts == {&quot;a&quot;: 1, &quot;b&quot;: 2, &quot;c&quot;: 1, &quot;d&quot;: 3, &quot;e&quot;: 3}
+assert run_batch({}, call, 3) == ({}, {})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>pending</code> as a list of ids. Each round builds the next <code>pending</code> from the items that timed out.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After the last round, everything still pending is a <code>TimeoutError</code> failure.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def run_batch(items, call, max_rounds, on_round=None):
+    results, failures = {}, {}
+    pending = list(items)
+    for round_number in range(1, max_rounds + 1):
+        if not pending:
+            break
+        if round_number &gt; 1 and on_round is not None:
+            on_round(round_number, list(pending))
+        still_pending = []
+        for item_id in pending:
+            try:
+                results[item_id] = call(items[item_id])
+            except TimeoutError:
+                still_pending.append(item_id)
+            except ValueError as e:
+                failures[item_id] = type(e).__name__
+        pending = still_pending
+    for item_id in pending:
+        failures[item_id] = &quot;TimeoutError&quot;
+    return results, failures</code></pre></div><p>Retrying in <strong>rounds</strong> instead of retrying each item immediately has two advantages for batch work: one slow item does not hold up the rest, and the wait between rounds (via <code>on_round</code>, where a real job sleeps with backoff) gives an overloaded service time to recover before the stragglers are retried together. Permanent failures are recorded on first sight and never retried. Iterating over ids in insertion order keeps rounds deterministic, which the <code>rounds</code> check depends on. Every item ends up in exactly one of the two dicts, which is the property a batch report needs: processed = succeeded + failed.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-llm-client-wrapper" data-pid="m7-4-read-the-code-an-llm-client-wrapper" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: an LLM client wrapper</h3></header>
+<div class="prob-q"><p>This wrapper is used across a codebase. It is supposed to: pass a <code>timeout</code> to the transport, retry only <code>TimeoutError</code> and <code>ConnectionError</code> with exponential backoff (<code>base * 2 ** (attempt - 1)</code> seconds before retry <code>attempt</code>), raise <code>LLMCallError</code> from the last error when attempts run out, never include the API key in error messages, and let other exceptions propagate. Read it, find the bugs and fix them. (<code>sleep</code> and <code>transport</code> are injected.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class LLMCallError(Exception):
+    pass
+
+
+def complete(prompt, transport, api_key, sleep, attempts=3, base=0.5, timeout=20):
+    for attempt in range(1, attempts + 1):
+        try:
+            return transport(prompt, api_key=api_key)
+        except Exception as e:
+            sleep(1)
+            error = e
+    return &quot;&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">def make(*outcomes):
+    calls = []
+    def transport(prompt, api_key, timeout=None):
+        calls.append(timeout)
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return transport, calls
+
+waits = []
+t, calls = make(TimeoutError("t"), ConnectionError("c"), "answer")
+assert complete("hi", t, "sk-secret", waits.append) == "answer"
+assert calls == [20, 20, 20] and waits == [0.5, 1.0]
+
+waits = []
+t, calls = make(TimeoutError("a"), TimeoutError("b"), TimeoutError("c"))
+try:
+    complete("hi", t, "sk-secret", waits.append, attempts=3)
+    assert False
+except LLMCallError as e:
+    assert isinstance(e.__cause__, TimeoutError) and "sk-secret" not in str(e) and waits == [0.5, 1.0]
+
+waits = []
+t, calls = make(ValueError("bad prompt for key sk-secret"), "never")
+try:
+    complete("hi", t, "sk-secret", waits.append)
+    assert False
+except ValueError:
+    assert waits == [] and len(calls) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def make(*outcomes):
+    calls = []
+    def transport(prompt, api_key, timeout=None):
+        calls.append(timeout)
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, Exception):
+            raise out
+        return out
+    return transport, calls
+
+waits = []
+t, calls = make(TimeoutError(&quot;t&quot;), ConnectionError(&quot;c&quot;), &quot;answer&quot;)
+assert complete(&quot;hi&quot;, t, &quot;sk-secret&quot;, waits.append) == &quot;answer&quot;
+assert calls == [20, 20, 20] and waits == [0.5, 1.0]
+
+waits = []
+t, calls = make(TimeoutError(&quot;a&quot;), TimeoutError(&quot;b&quot;), TimeoutError(&quot;c&quot;))
+try:
+    complete(&quot;hi&quot;, t, &quot;sk-secret&quot;, waits.append, attempts=3)
+    assert False
+except LLMCallError as e:
+    assert isinstance(e.__cause__, TimeoutError) and &quot;sk-secret&quot; not in str(e) and waits == [0.5, 1.0]
+
+waits = []
+t, calls = make(ValueError(&quot;bad prompt for key sk-secret&quot;), &quot;never&quot;)
+try:
+    complete(&quot;hi&quot;, t, &quot;sk-secret&quot;, waits.append)
+    assert False
+except ValueError:
+    assert waits == [] and len(calls) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Three bugs: <code>except Exception</code> with a fixed <code>sleep(1)</code>, no <code>timeout=</code> passed, and <code>return ""</code> instead of raising.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Do not sleep after the last attempt. Build the final message from the attempt count and the error type, not from <code>str(e)</code>, which could echo the key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMCallError(Exception):
+    pass
+
+
+def complete(prompt, transport, api_key, sleep, attempts=3, base=0.5, timeout=20):
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return transport(prompt, api_key=api_key, timeout=timeout)
+        except (TimeoutError, ConnectionError) as e:
+            last_error = e
+            if attempt &lt; attempts:
+                sleep(base * 2 ** (attempt - 1))
+    raise LLMCallError(f&quot;LLM call failed after {attempts} attempts ({type(last_error).__name__})&quot;) from last_error</code></pre></div><p>Five problems, each a real incident waiting to happen. <strong>No timeout</strong> reached the transport, so a hung connection would hang the caller for the SDK's default (minutes). <strong><code>except Exception</code></strong> retried a <code>ValueError</code> describing a bad prompt three times, and would retry bugs too. <strong>A fixed <code>sleep(1)</code></strong> ignored the backoff policy, and also slept after the final attempt for nothing. <strong><code>return ""</code></strong> turned a total failure into an empty answer that the rest of the system would treat as the model's reply, the worst kind of swallowed error. And the final error message must not be built from <code>str(e)</code>, because exception messages from HTTP layers can include request details such as headers or URLs with keys; the fixed message names only the attempt count and error type, while the full original stays available as <code>__cause__</code> for internal logs, which should themselves be scrubbed. The <code>ValueError</code> now propagates after one call, untouched.</p></div></details>
+</article>
+<article class="prob" id="p-a-token-bucket-rate-limiter" data-pid="m7-4-a-token-bucket-rate-limiter" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. A token bucket rate limiter</h3></header>
+<div class="prob-q"><p>To avoid 429s, throttle on the client side. Write <code>make_limiter(rate, burst, clock)</code> returning <code>acquire(cost=1)</code>. The bucket holds up to <code>burst</code> tokens, starts full, and refills continuously at <code>rate</code> tokens per second (using <code>clock()</code>). <code>acquire</code> takes <code>cost</code> tokens and returns <code>0.0</code> if they were available; otherwise it returns the number of seconds until enough tokens will exist, <strong>without</strong> taking any. Raise <code>ValueError</code> if <code>cost</code> exceeds <code>burst</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def make_limiter(rate, burst, clock):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+acquire = make_limiter(rate=2.0, burst=4, clock=lambda: now[0])
+assert [acquire() for _ in range(4)] == [0.0, 0.0, 0.0, 0.0]
+assert acquire() == 0.5
+now[0] = 0.5
+assert acquire() == 0.0 and acquire() == 0.5
+now[0] = 10.0
+assert acquire(4) == 0.0 and acquire(3) == 1.5
+now[0] = 11.5
+assert acquire(3) == 0.0
+try:
+    acquire(5)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+acquire = make_limiter(rate=2.0, burst=4, clock=lambda: now[0])
+assert [acquire() for _ in range(4)] == [0.0, 0.0, 0.0, 0.0]
+assert acquire() == 0.5
+now[0] = 0.5
+assert acquire() == 0.0 and acquire() == 0.5
+now[0] = 10.0
+assert acquire(4) == 0.0 and acquire(3) == 1.5
+now[0] = 11.5
+assert acquire(3) == 0.0
+try:
+    acquire(5)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>tokens</code> and <code>last</code> in the closure. On each call, add <code>(clock() - last) * rate</code> tokens, capped at <code>burst</code>, then update <code>last</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If <code>tokens &gt;= cost</code>, subtract and return 0.0; otherwise return <code>(cost - tokens) / rate</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_limiter(rate, burst, clock):
+    tokens = float(burst)
+    last = clock()
+
+    def acquire(cost=1):
+        nonlocal tokens, last
+        if cost &gt; burst:
+            raise ValueError(f&quot;cost {cost} exceeds burst size {burst}&quot;)
+        now = clock()
+        tokens = min(burst, tokens + (now - last) * rate)
+        last = now
+        if tokens &gt;= cost:
+            tokens -= cost
+            return 0.0
+        return (cost - tokens) / rate
+
+    return acquire</code></pre></div><p>A token bucket allows short bursts (up to <code>burst</code> requests at once) while enforcing an average rate, which matches how providers express limits (requests or tokens per minute). Refilling lazily from the elapsed time, instead of with a timer, keeps it simple and exact. Returning the wait instead of sleeping keeps the limiter testable and lets the caller decide: sleep that long, or reject the request. Not taking tokens on a failed attempt is important; otherwise waiting callers would push each other further back. <code>cost</code> lets you meter tokens rather than requests: pass the estimated prompt tokens to respect a tokens-per-minute limit. In async code (14.5) the same bucket guards concurrent tasks with a lock.</p></div></details>
+</article>
+<article class="prob" id="p-retry-loops-and-exception-links" data-pid="m7-4-retry-loops-and-exception-links" data-type="predict" data-level="hard" data-answer="ok on 1
+gave up | t1 | None | None
+gave up inside | None | t1">
+<header class="prob-head"><h3>16. Retry loops and exception links</h3></header>
+<div class="code"><pre><code class="py">def attempt(n, fails):
+    last = None
+    for i in range(n):
+        try:
+            if i &lt; fails:
+                raise TimeoutError(f&quot;t{i}&quot;)
+            return f&quot;ok on {i}&quot;
+        except TimeoutError as e:
+            last = e
+    else:
+        raise RuntimeError(&quot;gave up&quot;) from last
+
+print(attempt(3, 1))
+try:
+    attempt(2, 5)
+except RuntimeError as e:
+    print(e, &quot;|&quot;, e.__cause__, &quot;|&quot;, e.__context__, &quot;|&quot;, e.__cause__.__context__)
+
+def inside(n):
+    for i in range(n):
+        try:
+            raise TimeoutError(f&quot;t{i}&quot;)
+        except TimeoutError:
+            if i == n - 1:
+                raise RuntimeError(&quot;gave up inside&quot;)
+
+try:
+    inside(2)
+except RuntimeError as e:
+    print(e, &quot;|&quot;, e.__cause__, &quot;|&quot;, e.__context__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>else</code> of a <code>for</code> loop runs when the loop ends without <code>break</code> or <code>return</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__context__</code> is set only for exceptions raised while another is being handled.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ok on 1
+gave up | t1 | None | None
+gave up inside | None | t1</pre></div><p><code>attempt(3, 1)</code> fails once and returns on the second iteration. In <code>attempt(2, 5)</code>, both iterations fail, the loop finishes, and its <code>else</code> raises the <code>RuntimeError</code> <strong>outside</strong> any <code>except</code> block: so <code>__context__</code> is <code>None</code>, and the link exists only because of <code>from last</code>. Each <code>TimeoutError</code> was raised in a fresh iteration, after the previous handler had finished, so they are not chained to each other either. In <code>inside</code>, the <code>RuntimeError</code> is raised <strong>inside</strong> the handler, so Python links the last <code>TimeoutError</code> as context automatically, while <code>__cause__</code> stays <code>None</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-which-errors-from-an-llm-api-should-you-" data-pid="m7-4-which-errors-from-an-llm-api-should-you-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Which errors from an LLM API should you retry, and how?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Retry transient failures: connection errors, timeouts, 429 rate limits, and server errors (500, 502, 503, 504 and overloaded responses such as 529). Do not retry 400-level errors other than 408, 409 and 429, because the same request will fail again: bad parameters, too many tokens (shorten the input instead), authentication and permission errors (alert instead). Retry with exponential backoff and jitter, honour <code>Retry-After</code> when the server sends it, cap the number of attempts, and wrap it all in an overall deadline so callers are not kept waiting longer than the feature can afford. Only retry operations that are safe to repeat, or use idempotency keys for ones that are not, because a timeout can happen after the server has done the work. Log each attempt with its error type and request id, and track retry and failure rates in metrics.</p></div></details>
+</article>
+<article class="prob" id="p-why-add-jitter-to-retry-delays" data-pid="m7-4-why-add-jitter-to-retry-delays" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why add jitter to retry delays?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Because failures are correlated. When a service hiccups, many clients fail at the same moment; with plain exponential backoff, they all wait exactly the same delays and retry in synchronised waves, each wave hitting the recovering service with the full load at once (the thundering herd problem). Jitter randomises each client's delay, typically choosing uniformly between zero and the exponential ceiling ("full jitter"), which spreads the retries evenly over time and lets the service recover. It also prevents accidental synchronisation of periodic jobs. AWS's architecture guidance on backoff and jitter showed that full jitter completes the work with far fewer total calls than backoff without jitter.</p></div></details>
+</article>
+<article class="prob" id="p-a-nightly-job-sends-50-000-documents-to-" data-pid="m7-4-a-nightly-job-sends-50-000-documents-to-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. A nightly job sends 50,000 documents to an LLM for classification, and about 2% fail in different ways. How would you make it robust?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Classify the failures first, because each kind needs different handling. Transient errors (timeouts, rate limits, 5xx) get retries with backoff, ideally in rounds so stragglers do not block the batch, under a client-side rate limiter sized to the provider's limits, and with a circuit breaker so an outage pauses the job instead of burning through every document. Invalid output gets a repair attempt (send the error back to the model), then is recorded as failed. Truncated answers raise the token limit or shorten the input; context-length errors trim the document. Permanent failures (bad input) go to a dead-letter table with the document id, error type and request id. The job keeps every success, writes results idempotently keyed by document id with the model and prompt version, checkpoints progress so a crash resumes instead of restarting, and stops early if the failure rate exceeds an error budget, which signals a systemic issue. At the end it reports counts by outcome and error type, and a separate step reprocesses the dead-letter items after a fix. Finally, it samples outputs for quality evaluation, since a "successful" classification can still be wrong.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Sort failures by reaction: retry transient ones (timeouts, connection errors, 429, 5xx), fix bad requests, alert on auth errors, handle truncation and refusals explicitly.</li><li>Retry with exponential backoff, jitter and <code>Retry-After</code>, a capped number of attempts and an overall deadline; inject <code>sleep</code>, <code>clock</code> and <code>rng</code> to test it.</li><li>Retries are only safe for idempotent operations; use idempotency keys for the rest.</li><li>Check <code>finish_reason</code>, validate output, and repair by sending the error back to the model a limited number of times.</li><li>In batches, keep every success, isolate bad items, retry stragglers in rounds, and log type, status, request id and latency, never keys or raw personal data.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
