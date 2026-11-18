@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-5", num="4.5", title="Dicts: the basics",
@@ -39,6 +40,15 @@ section("what", "What a dict is",
 )
 
 section("reading", "Reading values safely",
+    fig(flowchart({
+        "must": ("ask", 0, 0, "must the key|exist?"),
+        "idx": ("step", 1, 0, "d[k]|(KeyError if missing)"),
+        "store": ("ask", 0, 1, "store a default|when missing?"),
+        "set": ("step", 1, 1, "d.setdefault(k, v)|or a defaultdict"),
+        "get": ("good", 0, 2, "d.get(k, default)|(dict unchanged)"),
+    }, [("must", "idx", "yes"), ("must", "store", "no"), ("store", "set", "yes"), ("store", "get", "no")], cell=(250, 84),
+        label="choosing how to read from a dict"),
+        "Pick the reading style that states your intent: a missing key is either a bug, a value to create, or a case with a fallback."),
     p("""There are four ways to read, and choosing well is most of writing robust dict code:"""),
     html("""<div class="tbl"><table>
       <tr><th>Expression</th><th>Missing key</th><th>Use when</th></tr>

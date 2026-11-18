@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-3", num="4.3", title="Tuples and unpacking",
@@ -45,6 +46,8 @@ section("what", "What a tuple is, and what makes one",
 )
 
 section("unpack", "Packing and unpacking, step by step",
+    fig(chain(["a, b = b, a", "right side first:|the tuple (b, a)", "then unpacked into|a and b", ("swapped, no|temporary name", "good")]),
+        "The right-hand side is evaluated completely before any name is assigned, which is why the swap works."),
     p("""**Unpacking** assigns the items of any iterable to several names: `x, y = point`. Step by step, Python evaluates the
     whole right-hand side first, then checks that it yields exactly as many items as there are names, then assigns them
     from left to right. Too many or too few items raise `ValueError` with a message that says which."""),
@@ -76,6 +79,12 @@ section("unpack", "Packing and unpacking, step by step",
 )
 
 section("star", "Star unpacking",
+    fig(table(["pattern = [1, 2, 3, 4]", "names get"], [
+        ["first, *rest", "first = 1, rest = [2, 3, 4]"],
+        ["*init, last", "init = [1, 2, 3], last = 4"],
+        ["a, *_, z", "a = 1, z = 4"],
+    ], label="star unpacking"),
+        "A starred name collects whatever the other names do not take, always as a list."),
     p("""A starred name on the left collects **all the leftover items into a list**. It can appear at the start, the end or
     the middle, but only once, because otherwise the split would be ambiguous. If nothing is left over it is an empty list,
     never `None`, and it is always a **list**, even when the right side is a tuple or a string."""),
@@ -135,6 +144,9 @@ section("named", "Named tuples: records without a class",
 )
 
 section("keys", "Tuples as keys",
+    fig(refs(["(2025, 'eu')", "(2025, 'us')", "('ana', 'ml')"], ["sales total 120", "sales total 95", "team record"], [(0, 0), (1, 1), (2, 2)],
+        title_names="tuple keys", title_objects="values", label="tuples as composite dict keys"),
+        "Tuples of immutable values are hashable, so they make natural composite keys, like a multi-column primary key."),
     p("""A tuple is **hashable when all its items are hashable**, so it can be a dict key or a set member. That makes tuples
     the natural **composite key**: "one entry per user per day" is a dict keyed by `(user_id, day)`, exactly like a
     composite primary key in SQL. Tuples also compare **lexicographically**: first items first, and only if they are equal,

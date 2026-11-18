@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-p", num="4.P", title="Module 4 practice set and mini project",
@@ -9,6 +10,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(4, "a retrieval evaluation report"), "Module 4 at a glance: the four built-in collections and their tools, building up to an evaluation report."),
     p("""For each problem, first decide **which structure** fits the operations it needs: positions and order (list,
     4.1), sorted order and range questions (4.2), fixed records and composite keys (tuple, 4.3), membership and set algebra
     (set, 4.4), lookup by key (dict, 4.5), or counting and grouping (4.6). Choosing the structure is usually most of the
@@ -274,6 +276,8 @@ requests = [f"tool_{i % 600}" for i in range(50_000)]""",
 )
 
 section("project", "Mini project: a retrieval evaluation report",
+    fig(chain(["queries and|retrieved ids", "relevant ids as sets", "precision@k, recall@k,|reciprocal rank", ("report dict", "good")]),
+        "The evaluation report: sets for relevance checks, dicts for grouping, sorted lists for ranks."),
     p("""You are comparing retrieval settings for a RAG system. For each test query you have the documents a human marked as
     relevant and the ranked list the system returned. Build the evaluation report. Every rule in the spec maps to a tool from
     this module, and the tests check each one."""),

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-1", num="4.1", title="Lists: indexing, slicing and methods",
@@ -35,6 +36,7 @@ ARRAY_FIG = """
 </svg>"""
 
 section("model", "What a list is in memory",
+    fig(stage_map(4, "a retrieval evaluation report"), "Module 4 at a glance: the four built-in collections and their tools, building up to an evaluation report."),
     p("""In CPython, a list is a **dynamic array of references**: the list object stores its length, how much room it has,
     and a pointer to one contiguous block of slots. Each slot holds a **reference** to an item stored somewhere else
     (2.1), which is why one list can hold a string, a float and a dict side by side, and why copying a list copies the
@@ -65,6 +67,11 @@ section("model", "What a list is in memory",
 )
 
 section("indexing", "Indexing, step by step",
+    fig(table(["item", "'a'", "'b'", "'c'", "'d'", "'e'"], [
+        ["index", "0", "1", "2", "3", "4"],
+        ["negative index", "-5", "-4", "-3", "-2", "-1"],
+    ], hl={(1, 5)}, label="positive and negative indexes of a five-item list"),
+        "Every item has two indexes: counting from 0 at the front and from -1 at the back, so `xs[-1]` is always the last item."),
     p("""Valid indexes for a list of length `n` run from `0` to `n - 1`. A **negative** index counts from the end: Python
     converts `xs[-k]` to `xs[n - k]`, so `-1` is the last item and `-n` the first. Anything outside `-n .. n - 1` raises
     `IndexError`."""),
@@ -89,6 +96,15 @@ section("indexing", "Indexing, step by step",
 )
 
 section("slicing", "Slicing rules",
+    fig(table(["slice of ['a', 'b', 'c', 'd', 'e']", "result"], [
+        ["xs[1:3]", "['b', 'c']"],
+        ["xs[:2]", "['a', 'b']"],
+        ["xs[-2:]", "['d', 'e']"],
+        ["xs[::2]", "['a', 'c', 'e']"],
+        ["xs[::-1]", "['e', 'd', 'c', 'b', 'a']"],
+        ["xs[10:20]", "[]  (no error)"],
+    ], label="slices and their results"),
+        "A slice includes its start, stops before its end, and never raises: indexes past the end simply give fewer items."),
     p("""`xs[start:stop:step]` builds a **new list** (a shallow copy, 2.3) with the items from `start` **up to but not
     including** `stop`, taking every `step`-th one. Each part is optional, and the rules for filling them in are what you
     need to predict any slice:"""),
@@ -142,6 +158,15 @@ section("assign", "Slice assignment and `del`",
 )
 
 section("methods", "Methods: which change the list, and what they cost",
+    fig(table(["operation", "changes the list?", "returns", "cost"], [
+        ["append(x)", "yes", "None", "O(1)"],
+        ["pop()", "yes", "the item", "O(1)"],
+        ["insert(0, x), pop(0)", "yes", "None, item", "O(n)"],
+        ["sort()", "yes", "None", "O(n log n)"],
+        ["sorted(xs)", "no", "a new list", "O(n log n)"],
+        ["x in xs, xs.index(x)", "no", "bool, int", "O(n)"],
+    ], hl={(2, 3), (5, 3)}, label="list methods, whether they change the list, and their cost"),
+        "Methods that change the list return `None`; the highlighted ones are O(n) and become slow inside loops."),
     html("""<div class="tbl"><table>
       <tr><th>Method</th><th>Changes the list?</th><th>Returns</th><th>Cost</th></tr>
       <tr><td><code>append(x)</code></td><td>yes</td><td><code>None</code></td><td>O(1) amortized</td></tr>

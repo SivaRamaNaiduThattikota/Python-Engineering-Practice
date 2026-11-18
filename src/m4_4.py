@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-4", num="4.4", title="Sets and hashing",
@@ -58,6 +59,8 @@ section("hashing", "How a set finds an item without searching",
 )
 
 section("membership", "Membership at scale: when to convert",
+    fig(chain(["many lookups|against a list", "convert once:|set(items)", ("each lookup O(1)|on average", "good")]),
+        "When a list is searched many times, building a set once is the standard speed-up."),
     p("""The most common speed-up in data code is replacing a list membership test inside a loop with a set. Checking
     100,000 ids against a list of 100,000 known ids is 100,000 × O(n) = billions of comparisons; against a set it is
     100,000 × O(1). Building the set costs one pass, O(n), so it pays off as soon as you test membership more than a few
@@ -85,6 +88,13 @@ section("membership", "Membership at scale: when to convert",
 )
 
 section("algebra", "Set algebra",
+    fig(table(["a = {1, 2, 3}, b = {2, 3, 4}", "result", "SQL idea"], [
+        ["a | b", "{1, 2, 3, 4}", "UNION"],
+        ["a & b", "{2, 3}", "INTERSECT"],
+        ["a - b", "{1}", "EXCEPT"],
+        ["a ^ b", "{1, 4}", "in exactly one"],
+    ], label="set operations"),
+        "Set algebra answers overlap questions in one expression, each in time proportional to the set sizes."),
     p("""Sets support the operations of the SQL set operators, each building a **new** set:"""),
     html("""<div class="tbl"><table>
       <tr><th>Operation</th><th>Operator</th><th>Method</th><th>SQL</th><th>Meaning</th></tr>

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-6", num="4.6", title="Dict tools: counting and grouping",
@@ -16,6 +17,8 @@ term("LRU cache", "A fixed-size cache that, when full, evicts the Least Recently
 term("Reciprocal rank fusion", "Combining several ranked lists by adding `1 / (k + rank)` for each item: a standard way to merge keyword and vector search results.")
 
 section("counter", "Counting with `Counter`",
+    fig(table(["Counter('banana')", "count"], [["a", "3"], ["n", "2"], ["b", "1"]], hl={(0, 1)}, label="counts of each letter"),
+        "A `Counter` is a dict from item to count; `most_common` returns the largest counts first."),
     p("""`Counter(iterable)` counts how many times each hashable item appears. It is a dict subclass, so everything from 4.5
     works, with a few changes that make counting painless. Step by step: building it walks the iterable once (in C, which is
     fast) and adds 1 for each item. Reading a **missing** item returns `0` instead of raising, and does not insert it.
@@ -82,6 +85,17 @@ section("defaultdict", "`defaultdict`: values created on first access",
 )
 
 section("choose", "`get`, `setdefault`, `defaultdict` or `Counter`?",
+    fig(flowchart({
+        "count": ("ask", 0, 0, "counting things?"),
+        "c": ("good", 1, 0, "Counter"),
+        "group": ("ask", 0, 1, "collecting groups|of items?"),
+        "dd": ("good", 1, 1, "defaultdict(list)"),
+        "once": ("ask", 0, 2, "one lookup with|a fallback?"),
+        "get": ("good", 1, 2, "d.get(k, default)"),
+        "sd": ("step", 0, 3, "d.setdefault(k, v)"),
+    }, [("count", "c", "yes"), ("count", "group", "no"), ("group", "dd", "yes"), ("group", "once", "no"), ("once", "get", "yes"), ("once", "sd", "no")],
+        cell=(230, 80), label="choosing a dict tool"),
+        "Which dict tool to reach for: the question decides it, not habit."),
     html("""<div class="tbl"><table>
       <tr><th>Tool</th><th>Best for</th><th>Watch out for</th></tr>
       <tr><td><code>d.get(k, 0) + 1</code></td><td>an occasional count in a plain dict</td><td>verbose when repeated everywhere</td></tr>
@@ -96,6 +110,8 @@ section("choose", "`get`, `setdefault`, `defaultdict` or `Counter`?",
 )
 
 section("groupby", "GROUP BY patterns",
+    fig(chain(["rows", "key = row['dept']", "groups[key].append(row)", ("dict: dept -> rows", "good")]),
+        "The Python version of SQL's GROUP BY: one pass, one dict of lists, then aggregate each list."),
     p("""Most "per something" questions in data code are a group-by: a key that decides the group, and something computed
     per group. Built on a dict, every variant is one pass over the data, O(n):"""),
     p("""- **Collect members:** `defaultdict(list)`, appending each item under its key.

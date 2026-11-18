@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m4-2", num="4.2", title="Lists: sorting, searching and cost",
@@ -16,6 +17,12 @@ term("bisect", "The standard-library module for binary search on sorted lists: `
 term("Top-k", "The k largest (or smallest) items. `heapq.nlargest(k, xs)` finds them in O(n log k) without sorting everything.")
 
 section("sort", "`sort`, `sorted` and stability",
+    fig(table(["step", "rows (name, dept)"], [
+        ["input", "(Bo, ops) (Ana, ml) (Cy, ops) (Di, ml)"],
+        ["sort by name", "(Ana, ml) (Bo, ops) (Cy, ops) (Di, ml)"],
+        ["then sort by dept", "(Ana, ml) (Di, ml) (Bo, ops) (Cy, ops)"],
+    ], label="a stable sort keeps earlier order among equal keys"),
+        "Python's sort is stable: after sorting by department, people inside each department are still in name order from the first sort."),
     p("""`xs.sort()` sorts the list **in place** and returns `None`; `sorted(iterable)` builds a **new** list from any
     iterable (2.2). Both take `key=` (3.5) and `reverse=True`. Both are **stable**: items whose keys are equal keep the
     order they had before the sort. Stability is what lets you sort by several rules in separate passes, least important
@@ -76,6 +83,15 @@ section("timsort", "How the sort behaves on real data",
 )
 
 section("search", "Searching: linear scans and binary search",
+    fig(flowchart({
+        "once": ("ask", 0, 0, "searching|only once?"),
+        "scan": ("step", 1, 0, "linear scan: x in xs|O(n)"),
+        "sorted": ("ask", 0, 1, "is the data|sorted?"),
+        "bis": ("good", 1, 1, "bisect: O(log n)"),
+        "hash": ("good", 0, 2, "build a set or dict once,|then O(1) lookups"),
+    }, [("once", "scan", "yes"), ("once", "sorted", "no"), ("sorted", "bis", "yes"), ("sorted", "hash", "no")], cell=(250, 84),
+        label="choosing how to search"),
+        "Choosing a search: one lookup is a scan; many lookups pay for sorting once (bisect) or for building a set or dict."),
     p("""`x in xs`, `xs.index(x)` and `xs.count(x)` scan from the front: O(n). If you search a list many times, either put
     the values in a `set` or `dict` (O(1) per lookup, 4.4) or, when you need **order-based** questions ("where would this
     value go?", "how many values are below 0.5?", "all events between two times"), keep the list **sorted** and use
@@ -104,6 +120,8 @@ section("search", "Searching: linear scans and binary search",
 )
 
 section("topk", "Top-k without sorting everything",
+    fig(chain(["n scored items", "heapq.nlargest(k, ...)", "keeps only k items|in a heap", ("top k in O(n log k)", "good")]),
+        "Top-k without sorting everything: the heap never holds more than k items."),
     p("""To get the 10 best of a million scores, sorting all of them is O(n log n) work to keep 10 items. `heapq.nlargest(k,
     xs)` walks the data once while keeping only the best `k` in a small heap, about O(n log k) time and O(k) memory, and it
     works on any iterable, including a generator that never fits in memory (Module 6). `heapq.nsmallest` is the mirror. For
