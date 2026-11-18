@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16.2 · Hashing patterns</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m16-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 16 · Algorithms for interviews</span></div>
+  <h1>16.2 Hashing patterns</h1>
+  <p>A large share of interview problems, and of real data code, is solved by one idea: trade memory for time with a dict or a set. Counting, complement lookups (two-sum), grouping by a canonical key, sliding windows, prefix sums, LRU caches and near-duplicate detection, each with its complexity and its traps, including the hash and equality contract that every key must follow.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="idea">
+<h2><span class="n">1</span>The core idea: remember what you have seen</h2>
+<p>Brute force often compares every element with every other, O(n^2). Hashing replaces the inner loop with a <strong>lookup</strong>: as you pass over the data once, store what you need in a dict or a set, and for each new element ask the table an O(1) question ("have I seen this?", "how many times?", "where was its complement?"). The result is O(n) time for O(n) extra memory, the trade behind most "optimise this" interview answers. The questions decide the structure: a <strong>set</strong> for presence, a <strong>dict</strong> from key to count, index, or list of items, <code>collections.Counter</code> for counts, <code>defaultdict(list)</code> for groups.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hash_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter, defaultdict
+
+words = &quot;the refund the policy refund window the&quot;.split()
+counts = Counter(words)
+print(counts.most_common(2), counts[&quot;missing&quot;], sum(counts.values()))
+
+def two_sum(nums, target):
+    seen = {}
+    for i, x in enumerate(nums):
+        if target - x in seen:
+            return seen[target - x], i
+        seen[x] = i
+    return None
+
+print(two_sum([3, 8, 11, 4, 7], 15), two_sum([1, 2], 9))
+
+groups = defaultdict(list)
+for w in [&quot;listen&quot;, &quot;silent&quot;, &quot;enlist&quot;, &quot;google&quot;, &quot;gogole&quot;, &quot;cat&quot;]:
+    groups[&quot;&quot;.join(sorted(w))].append(w)
+print(list(groups.values()))</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;the&#x27;, 3), (&#x27;refund&#x27;, 2)] 0 7
+(2, 3) None
+[[&#x27;listen&#x27;, &#x27;silent&#x27;, &#x27;enlist&#x27;], [&#x27;google&#x27;, &#x27;gogole&#x27;], [&#x27;cat&#x27;]]</pre></div></div>
+<p><code>two_sum</code> stores each value's index and, for every new value, looks up the <strong>complement</strong> it needs; one pass, O(n), instead of checking all pairs. Grouping uses a <strong>canonical key</strong>, a representation that is equal for items that belong together (the sorted letters of an anagram); the same trick normalises emails, case-folds titles or hashes document contents (12.1).</p>
+</section>
+<section class="sec" id="windows">
+<h2><span class="n">2</span>Sliding windows</h2>
+<p>Many problems ask about <strong>contiguous</strong> ranges: the best sum of k consecutive values, the longest substring without repeated characters, the shortest span containing every keyword, requests in the last 60 seconds. Recomputing each window from scratch is O(n * k); a <strong>sliding window</strong> keeps a summary of the current range (a sum, a Counter, a set, a deque of timestamps) and updates it as one element enters at the right and, when needed, others leave at the left. Each element enters and leaves once, so the total is O(n). Fixed-size windows move both ends together; variable-size windows grow the right end and shrink the left end while a condition is violated (problems 5 and 13).</p>
+</section>
+<section class="sec" id="prefix">
+<h2><span class="n">3</span>Prefix sums and hash maps</h2>
+<p>The sum of <code>values[i:j]</code> equals <code>prefix[j] - prefix[i]</code>, where <code>prefix[k]</code> is the sum of the first k values, so after one O(n) pass any range sum costs O(1). Combined with a dict this answers counting questions: the number of subarrays summing to k is the number of pairs of prefix sums that differ by k, so as you compute each prefix sum <code>p</code>, add how many earlier prefix sums equal <code>p - k</code> (problem 7). Seeding the dict with <code>{0: 1}</code>, the empty prefix, is what lets subarrays that start at index 0 count.</p>
+</section>
+<section class="sec" id="contract">
+<h2><span class="n">4</span>The hash and equality contract</h2>
+<p>Dicts and sets rely on one rule: <strong>objects that are equal must have equal hashes</strong>. Python's built-ins follow it (so <code>1</code>, <code>1.0</code> and <code>True</code> are the same key), and <code>@dataclass(frozen=True)</code> generates matching <code>__eq__</code> and <code>__hash__</code> (11.3). A class that defines <code>__eq__</code> without <code>__hash__</code> becomes unhashable, which is the safe default; a hand-written <code>__hash__</code> that disagrees with <code>__eq__</code> makes "equal" objects land in different buckets, so sets keep duplicates and lookups miss. And a key must not <strong>change</strong> while it is in a table: mutating an object used as a key changes its hash, and the table can no longer find it, which is why lists and dicts are unhashable and tuples of immutable values are the standard composite key.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-counter-and-defaultdict" data-pid="m16-2-counter-and-defaultdict" data-type="predict" data-level="easy" data-answer="[(&#x27;i&#x27;, 4), (&#x27;s&#x27;, 4), (&#x27;p&#x27;, 2)] 0 4
+Counter({&#x27;c&#x27;: 5, &#x27;a&#x27;: 4, &#x27;b&#x27;: 3}) Counter({&#x27;a&#x27;: 2}) Counter({&#x27;a&#x27;: 1, &#x27;b&#x27;: 1}) Counter({&#x27;c&#x27;: 5, &#x27;a&#x27;: 3, &#x27;b&#x27;: 2})
+{&#x27;d1&#x27;: [&#x27;billing&#x27;, &#x27;eu&#x27;], &#x27;d2&#x27;: [&#x27;eu&#x27;]} False [] True">
+<header class="prob-head"><h3>1. Counter and defaultdict</h3></header>
+<div class="code"><pre><code class="py">from collections import Counter, defaultdict
+
+c = Counter(&quot;mississippi&quot;)
+print(c.most_common(3), c[&quot;z&quot;], len(c))
+d = Counter(a=3, b=1)
+e = Counter(a=1, b=2, c=5)
+print(d + e, d - e, d &amp; e, d | e)
+tags = defaultdict(list)
+for doc, tag in [(&quot;d1&quot;, &quot;billing&quot;), (&quot;d2&quot;, &quot;eu&quot;), (&quot;d1&quot;, &quot;eu&quot;)]:
+    tags[doc].append(tag)
+print(dict(tags), &quot;d3&quot; in tags, tags[&quot;d3&quot;], &quot;d3&quot; in tags)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>most_common</code> orders by count, keeping first-seen order for ties. Subtraction drops counts that are zero or negative. A <code>defaultdict</code> creates the default on read.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[(&#x27;i&#x27;, 4), (&#x27;s&#x27;, 4), (&#x27;p&#x27;, 2)] 0 4
+Counter({&#x27;c&#x27;: 5, &#x27;a&#x27;: 4, &#x27;b&#x27;: 3}) Counter({&#x27;a&#x27;: 2}) Counter({&#x27;a&#x27;: 1, &#x27;b&#x27;: 1}) Counter({&#x27;c&#x27;: 5, &#x27;a&#x27;: 3, &#x27;b&#x27;: 2})
+{&#x27;d1&#x27;: [&#x27;billing&#x27;, &#x27;eu&#x27;], &#x27;d2&#x27;: [&#x27;eu&#x27;]} False [] True</pre></div><p><code>i</code> and <code>s</code> both appear four times and <code>i</code> was seen first, so it comes first; a missing key counts as 0 without being stored. Counter arithmetic is per key: <code>+</code> adds, <code>-</code> subtracts and drops results that are not positive, <code>&amp;</code> takes minimums and <code>|</code> maximums. A <code>defaultdict</code> creates a value whenever a missing key is <strong>read</strong>, so merely looking at <code>tags["d3"]</code> adds an empty list, a common source of phantom keys; use <code>in</code> or <code>.get</code> to check without creating.</p></div></details>
+</article>
+<article class="prob" id="p-two-sum-and-all-pairs" data-pid="m16-2-two-sum-and-all-pairs" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Two sum, and all pairs</h3></header>
+<div class="prob-q"><p>Write <code>two_sum(nums, target)</code> returning the indices <code>(i, j)</code> with <code>i &lt; j</code> of the first pair (smallest <code>j</code>, then smallest <code>i</code>) whose values sum to <code>target</code>, or <code>None</code>, in O(n). Then write <code>count_pairs(nums, target)</code> returning how many index pairs <code>i &lt; j</code> sum to <code>target</code>, also in O(n).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def two_sum(nums, target):
+    pass
+
+def count_pairs(nums, target):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert two_sum([3, 8, 11, 4, 7], 15) == (2, 3) and two_sum([2, 7, 11, 15], 9) == (0, 1)
+assert two_sum([3, 3], 6) == (0, 1) and two_sum([1, 2, 3], 7) is None and two_sum([5, 1, 5], 10) == (0, 2)
+assert count_pairs([1, 5, 7, -1, 5], 6) == 3 and count_pairs([2, 2, 2, 2], 4) == 6 and count_pairs([], 1) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert two_sum([3, 8, 11, 4, 7], 15) == (2, 3) and two_sum([2, 7, 11, 15], 9) == (0, 1)
+assert two_sum([3, 3], 6) == (0, 1) and two_sum([1, 2, 3], 7) is None and two_sum([5, 1, 5], 10) == (0, 2)
+assert count_pairs([1, 5, 7, -1, 5], 6) == 3 and count_pairs([2, 2, 2, 2], 4) == 6 and count_pairs([], 1) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the <strong>first</strong> index of each value (<code>setdefault</code>), and check for the complement before storing the current value, so an element is not paired with itself.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For counting, keep a <code>Counter</code> of values seen so far and add <code>seen[target - x]</code> at each step.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+
+def two_sum(nums, target):
+    first = {}
+    for j, x in enumerate(nums):
+        if target - x in first:
+            return first[target - x], j
+        first.setdefault(x, j)
+    return None
+
+
+def count_pairs(nums, target):
+    seen, total = Counter(), 0
+    for x in nums:
+        total += seen[target - x]
+        seen[x] += 1
+    return total</code></pre></div><p>Checking the complement <strong>before</strong> inserting the current value is what keeps an element from pairing with itself (<code>[3]</code> with target 6) while still pairing two equal values at different positions (<code>[3, 3]</code>). Scanning left to right returns the pair with the smallest second index, and keeping the first index of each value makes the first index as small as possible. Counting pairs generalises the lookup: each new value pairs with every earlier occurrence of its complement, so four 2s give 0 + 1 + 2 + 3 = 6 pairs, all in one pass instead of the O(n^2) double loop.</p></div></details>
+</article>
+<article class="prob" id="p-grouping-by-an-unhashable-key" data-pid="m16-2-grouping-by-an-unhashable-key" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Grouping by an unhashable key</h3></header>
+<div class="prob-q"><p><code>group_anagrams</code> crashes with <code>TypeError: unhashable type: 'list'</code> because it uses <code>sorted(word)</code> (a list) as a dict key. Fix it with a hashable canonical key, and make grouping ignore case, keeping each group's words in input order and the groups in order of first appearance.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def group_anagrams(words):
+    groups = {}
+    for w in words:
+        key = sorted(w)
+        groups.setdefault(key, []).append(w)
+    return list(groups.values())
+</textarea>
+<script type="text/plain" class="prob-tests">assert group_anagrams(["Listen", "silent", "enlist", "google", "gogole", "cat", "act"]) == [["Listen", "silent", "enlist"], ["google", "gogole"], ["cat", "act"]]
+assert group_anagrams([]) == [] and group_anagrams(["a", "A"]) == [["a", "A"]]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert group_anagrams([&quot;Listen&quot;, &quot;silent&quot;, &quot;enlist&quot;, &quot;google&quot;, &quot;gogole&quot;, &quot;cat&quot;, &quot;act&quot;]) == [[&quot;Listen&quot;, &quot;silent&quot;, &quot;enlist&quot;], [&quot;google&quot;, &quot;gogole&quot;], [&quot;cat&quot;, &quot;act&quot;]]
+assert group_anagrams([]) == [] and group_anagrams([&quot;a&quot;, &quot;A&quot;]) == [[&quot;a&quot;, &quot;A&quot;]]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>"".join(sorted(w.lower()))</code> (or <code>tuple(sorted(...))</code>) is hashable and equal for anagrams.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def group_anagrams(words):
+    groups = {}
+    for w in words:
+        key = &quot;&quot;.join(sorted(w.lower()))
+        groups.setdefault(key, []).append(w)
+    return list(groups.values())</code></pre></div><p>Dict keys must be hashable, and lists are not, because they can change after insertion, which would break the table. A string or a tuple built from the sorted letters is immutable and equal for exactly the anagrams, so it works as the canonical key; lower-casing first makes the key ignore case while the stored words keep their original form. Sorting each word costs O(L log L), so the whole grouping is O(n L log L); a <code>Counter</code> of letters as a frozenset of items, or a 26-count tuple, gives O(n L) for long words.</p></div></details>
+</article>
+<article class="prob" id="p-a-fixed-size-sliding-window" data-pid="m16-2-a-fixed-size-sliding-window" data-type="predict" data-level="easy" data-answer="[500, 470, 500, 600, 580] 600 3
+True [1170] []">
+<header class="prob-head"><h3>4. A fixed-size sliding window</h3></header>
+<div class="code"><pre><code class="py">def window_sums(values, k):
+    if k &gt; len(values):
+        return []
+    total = sum(values[:k])
+    sums = [total]
+    for i in range(k, len(values)):
+        total += values[i] - values[i - k]
+        sums.append(total)
+    return sums
+
+latency = [120, 80, 300, 90, 110, 400, 70]
+sums = window_sums(latency, 3)
+print(sums, max(sums), sums.index(max(sums)))
+print(window_sums(latency, 1) == latency, window_sums(latency, 7), window_sums(latency, 8))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each step adds the element entering on the right and subtracts the one leaving on the left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[500, 470, 500, 600, 580] 600 3
+True [1170] []</pre></div><p>The first window's sum is computed once; then each step adds the new element and subtracts the one that left, so all windows cost O(n) instead of O(n * k). The slowest stretch of three consecutive requests is the window starting at index 3, <code>90 + 110 + 400 = 600</code>, which <code>max</code> and <code>index</code> find. A window of 1 reproduces the data, a window of the full length has one sum, and a window longer than the data has none.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-longest-substring-without-repeats" data-pid="m16-2-longest-substring-without-repeats" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Longest substring without repeats</h3></header>
+<div class="prob-q"><p>Write <code>longest_unique(s)</code> returning <code>(length, start)</code> of the longest substring with no repeated character (the leftmost one if several have the same length), in O(n), using a dict from character to its last index and a moving left edge.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def longest_unique(s):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert longest_unique("abcabcbb") == (3, 0) and longest_unique("bbbbb") == (1, 0) and longest_unique("pwwkew") == (3, 2)
+assert longest_unique("") == (0, 0) and longest_unique("abba") == (2, 0) and longest_unique("dvdf") == (3, 1)
+assert longest_unique("refund policy") == (13, 0) and longest_unique("tokens to tokenize") == (8, 9)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert longest_unique(&quot;abcabcbb&quot;) == (3, 0) and longest_unique(&quot;bbbbb&quot;) == (1, 0) and longest_unique(&quot;pwwkew&quot;) == (3, 2)
+assert longest_unique(&quot;&quot;) == (0, 0) and longest_unique(&quot;abba&quot;) == (2, 0) and longest_unique(&quot;dvdf&quot;) == (3, 1)
+assert longest_unique(&quot;refund policy&quot;) == (13, 0) and longest_unique(&quot;tokens to tokenize&quot;) == (8, 9)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When <code>ch</code> was last seen at an index <code>&gt;= left</code>, move <code>left</code> to that index + 1; never move <code>left</code> backwards (the <code>abba</code> case).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Update the best when <code>i - left + 1</code> is strictly greater than the current best length.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def longest_unique(s):
+    last = {}
+    left = best_len = best_start = 0
+    for i, ch in enumerate(s):
+        if ch in last and last[ch] &gt;= left:
+            left = last[ch] + 1
+        last[ch] = i
+        if i - left + 1 &gt; best_len:
+            best_len, best_start = i - left + 1, left
+    return best_len, best_start</code></pre></div><p>The window <code>[left, i]</code> always holds distinct characters: when the new character already occurs inside it, the left edge jumps just past that earlier occurrence, so each index is passed by both edges at most once, O(n). Storing the <strong>last</strong> index of each character lets the jump happen in O(1) instead of shrinking step by step. The <code>last[ch] &gt;= left</code> test matters for <code>"abba"</code>: when the second <code>a</code> arrives, its earlier occurrence is already outside the window, and jumping back to it would grow the window wrongly. The same skeleton handles "longest run of tokens without a repeated n-gram" or "longest session without a duplicate event".</p></div></details>
+</article>
+<article class="prob" id="p-a-sliding-window-rate-limiter" data-pid="m16-2-a-sliding-window-rate-limiter" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. A sliding-window rate limiter</h3></header>
+<div class="prob-q"><p>Write a class <code>SlidingWindowLimiter(limit, window)</code> with <code>allow(user, t)</code> returning <code>True</code> if <code>user</code> has made fewer than <code>limit</code> allowed requests in the half-open interval <code>(t - window, t]</code> (and recording this one), else <code>False</code> (not recorded). Timestamps for each user arrive in non-decreasing order. Use a dict from user to a <code>deque</code> of timestamps, dropping old ones from the left.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from collections import defaultdict, deque
+
+class SlidingWindowLimiter:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">lim = SlidingWindowLimiter(limit=3, window=60)
+got = [lim.allow("ana", t) for t in (0, 10, 20, 30, 59, 60, 61)]
+assert got == [True, True, True, False, False, True, False]
+assert [lim.allow("bo", t) for t in (5, 5, 5, 5)] == [True, True, True, False]
+assert lim.allow("ana", 70) is True and lim.allow("ana", 71) is False and len(lim.history["ana"]) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">lim = SlidingWindowLimiter(limit=3, window=60)
+got = [lim.allow(&quot;ana&quot;, t) for t in (0, 10, 20, 30, 59, 60, 61)]
+assert got == [True, True, True, False, False, True, False]
+assert [lim.allow(&quot;bo&quot;, t) for t in (5, 5, 5, 5)] == [True, True, True, False]
+assert lim.allow(&quot;ana&quot;, 70) is True and lim.allow(&quot;ana&quot;, 71) is False and len(lim.history[&quot;ana&quot;]) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On each call, pop timestamps <code>&lt;= t - window</code> from the left of the user's deque; then allow if its length is below <code>limit</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict, deque
+
+
+class SlidingWindowLimiter:
+    def __init__(self, limit, window):
+        self.limit, self.window = limit, window
+        self.history = defaultdict(deque)
+
+    def allow(self, user, t):
+        q = self.history[user]
+        while q and q[0] &lt;= t - self.window:
+            q.popleft()
+        if len(q) &lt; self.limit:
+            q.append(t)
+            return True
+        return False</code></pre></div><p>A per-user deque is a sliding window over time: new requests enter on the right, and requests older than the window leave on the left, each exactly once, so every call is amortised O(1) and memory is bounded by <code>limit</code> per user. The half-open interval decides the boundary: at <code>t = 60</code>, the request from <code>t = 0</code> has just left the window, so a new one is allowed, but at <code>t = 61</code> the requests from 10, 20 and 60 are all still inside it, so the next one is refused. Rejected requests are not recorded, so a client hammering the API does not lock itself out for longer. This is the "sliding log" limiter; the token bucket of 14.2 uses O(1) memory per user at the cost of allowing bursts, and production systems keep such state in Redis to share it across servers.</p></div></details>
+</article>
+<article class="prob" id="p-prefix-sums-that-forget-the-empty-prefix" data-pid="m16-2-prefix-sums-that-forget-the-empty-prefix" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Prefix sums that forget the empty prefix</h3></header>
+<div class="prob-q"><p><code>count_subarrays(values, k)</code> should count contiguous subarrays summing to <code>k</code> in O(n) with prefix sums and a dict of how often each prefix sum occurred. It misses every subarray that starts at index 0. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def count_subarrays(values, k):
+    seen = {}
+    prefix = total = 0
+    for v in values:
+        prefix += v
+        total += seen.get(prefix - k, 0)
+        seen[prefix] = seen.get(prefix, 0) + 1
+    return total
+</textarea>
+<script type="text/plain" class="prob-tests">assert count_subarrays([1, 1, 1], 2) == 2
+assert count_subarrays([3, 4, 7, 2, -3, 1, 4, 2], 7) == 4
+assert count_subarrays([0, 0, 0], 0) == 6 and count_subarrays([], 3) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert count_subarrays([1, 1, 1], 2) == 2
+assert count_subarrays([3, 4, 7, 2, -3, 1, 4, 2], 7) == 4
+assert count_subarrays([0, 0, 0], 0) == 6 and count_subarrays([], 3) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Before the loop, record that the empty prefix (sum 0) has been seen once: <code>seen = {0: 1}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def count_subarrays(values, k):
+    seen = {0: 1}
+    prefix = total = 0
+    for v in values:
+        prefix += v
+        total += seen.get(prefix - k, 0)
+        seen[prefix] = seen.get(prefix, 0) + 1
+    return total</code></pre></div><p>A subarray <code>values[i:j]</code> sums to <code>k</code> exactly when <code>prefix[j] - prefix[i] == k</code>, so at each position the number of good subarrays ending there is the number of earlier prefixes equal to <code>prefix - k</code>. The prefix before any element is 0, and subarrays starting at index 0 need it: without <code>{0: 1}</code>, <code>[3, 4]</code> (sum 7, starting at 0) was never counted. With negative numbers a sliding window does not work (sums are not monotonic), which is exactly when the prefix-sum dict is the tool. The zeros case shows it counts all six subarrays of <code>[0, 0, 0]</code>.</p></div></details>
+</article>
+<article class="prob" id="p-counting-words-a-manual-dict-or-counter" data-pid="m16-2-counting-words-a-manual-dict-or-counter" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Counting words: a manual dict or Counter</h3></header>
+<div class="prob-q"><p>Both count 200,000 words. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from collections import Counter
+rng = random.Random(0)
+vocab = [f&quot;w{i}&quot; for i in range(2_000)]
+words = [rng.choice(vocab) for _ in range(200_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">counts = {}
+for w in words:
+    counts[w] = counts.get(w, 0) + 1</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">counts = Counter(words)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Where does each version's loop run?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>32.84 ms</td></tr><tr><td>B</td><td>22.36 ms</td></tr></table></div><p>Both are O(n), but <code>Counter(iterable)</code> counts with a helper implemented in C, so the per-word work avoids the interpreter's overhead of a Python loop, a method call (<code>get</code>) and a store. Complexity tells you how cost grows; constant factors decide how fast it is at a given size, and in Python, moving loops into built-ins (<code>Counter</code>, <code>sum</code>, <code>sorted</code>, <code>str.join</code>, <code>set</code> operations) is the main lever for those constants.</p></div></details>
+</article>
+<article class="prob" id="p-at-most-k-distinct-in-a-window" data-pid="m16-2-at-most-k-distinct-in-a-window" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. At most k distinct in a window</h3></header>
+<div class="prob-q"><p>Fill in <code>best</code> after each marked line: the length of the longest substring with at most <code>k</code> distinct characters.</p></div>
+<div class="code"><pre><code class="py">from collections import Counter
+
+def longest_k_distinct(s, k):
+    counts, left, best = Counter(), 0, 0
+    for right, ch in enumerate(s):
+        counts[ch] += 1
+        while len(counts) &gt; k:
+            counts[s[left]] -= 1
+            if counts[s[left]] == 0:
+                del counts[s[left]]
+            left += 1
+        best = max(best, right - left + 1)
+    return best
+
+best = longest_k_distinct(&quot;eceba&quot;, 2)
+best = longest_k_distinct(&quot;aaabbbccc&quot;, 1)
+best = longest_k_distinct(&quot;aaabbbccc&quot;, 2)
+best = longest_k_distinct(&quot;abc&quot;, 0)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>best</code></th></tr><tr><td>eceba, k=2</td><td><input class="cell" data-a="3" data-s="3" aria-label="best at eceba, k=2" autocomplete="off"></td></tr><tr><td>runs, k=1</td><td><input class="cell" data-a="3" data-s="3" aria-label="best at runs, k=1" autocomplete="off"></td></tr><tr><td>runs, k=2</td><td><input class="cell" data-a="6" data-s="6" aria-label="best at runs, k=2" autocomplete="off"></td></tr><tr><td>k=0</td><td><input class="cell" data-a="0" data-s="0" aria-label="best at k=0" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The window grows to the right and shrinks from the left while it holds more than k distinct characters; deleting zero counts keeps <code>len(counts)</code> honest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>best</code></th></tr><tr><td>eceba, k=2</td><td><code>3</code></td></tr><tr><td>runs, k=1</td><td><code>3</code></td></tr><tr><td>runs, k=2</td><td><code>6</code></td></tr><tr><td>k=0</td><td><code>0</code></td></tr></table></div><p>For <code>eceba</code> with two distinct letters, <code>ece</code> is the longest window. Runs of one letter give 3 for k=1, and two adjacent runs give 6 for k=2. With k=0, every character forces the window to shrink to empty, so the answer is 0. Deleting a key when its count reaches zero is essential: a <code>Counter</code> keeps zero entries otherwise, and <code>len(counts)</code> would overstate the number of distinct letters in the window.</p></div></details>
+</article>
+<article class="prob" id="p-near-duplicate-documents-with-shingles" data-pid="m16-2-near-duplicate-documents-with-shingles" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. Near-duplicate documents with shingles</h3></header>
+<div class="prob-q"><p>Write <code>shingles(text, n=3)</code> returning the set of word n-grams (tuples of <code>n</code> consecutive lower-cased words; a text with fewer words gives one tuple of all its words, or an empty set when empty), <code>jaccard(a, b)</code> (size of intersection over size of union, 0.0 if both empty), and <code>near_duplicates(docs, threshold=0.5, n=3)</code> returning sorted <code>(id1, id2, similarity)</code> pairs (id1 &lt; id2, similarity rounded to 3) at or above the threshold. Avoid comparing every pair: build an inverted index from shingle to doc ids and compare only documents that share at least one shingle.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from collections import defaultdict
+from itertools import combinations
+
+def shingles(text, n=3):
+    pass
+
+def jaccard(a, b):
+    pass
+
+def near_duplicates(docs, threshold=0.5, n=3):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">docs = {
+    "faq-1": "Refunds take five business days after we receive the item",
+    "faq-2": "refunds take five business days after we receive your item",
+    "faq-3": "Shipping is free for orders over fifty euros",
+    "faq-4": "shipping is free for all orders over fifty euros",
+    "faq-5": "Contact support",
+}
+assert shingles("A b c d") == {("a", "b", "c"), ("b", "c", "d")} and shingles("hi there") == {("hi", "there")} and shingles("") == set()
+assert jaccard({1, 2, 3}, {2, 3, 4}) == 0.5 and jaccard(set(), set()) == 0.0
+assert near_duplicates(docs, threshold=0.5) == [("faq-1", "faq-2", 0.6)]
+assert near_duplicates(docs, threshold=0.3) == [("faq-1", "faq-2", 0.6), ("faq-3", "faq-4", 0.444)]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = {
+    &quot;faq-1&quot;: &quot;Refunds take five business days after we receive the item&quot;,
+    &quot;faq-2&quot;: &quot;refunds take five business days after we receive your item&quot;,
+    &quot;faq-3&quot;: &quot;Shipping is free for orders over fifty euros&quot;,
+    &quot;faq-4&quot;: &quot;shipping is free for all orders over fifty euros&quot;,
+    &quot;faq-5&quot;: &quot;Contact support&quot;,
+}
+assert shingles(&quot;A b c d&quot;) == {(&quot;a&quot;, &quot;b&quot;, &quot;c&quot;), (&quot;b&quot;, &quot;c&quot;, &quot;d&quot;)} and shingles(&quot;hi there&quot;) == {(&quot;hi&quot;, &quot;there&quot;)} and shingles(&quot;&quot;) == set()
+assert jaccard({1, 2, 3}, {2, 3, 4}) == 0.5 and jaccard(set(), set()) == 0.0
+assert near_duplicates(docs, threshold=0.5) == [(&quot;faq-1&quot;, &quot;faq-2&quot;, 0.6)]
+assert near_duplicates(docs, threshold=0.3) == [(&quot;faq-1&quot;, &quot;faq-2&quot;, 0.6), (&quot;faq-3&quot;, &quot;faq-4&quot;, 0.444)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inverted index: <code>for doc_id, sh in sets.items(): for s in sh: index[s].add(doc_id)</code>; candidate pairs come from <code>combinations(sorted(ids), 2)</code> for each shingle's ids.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect candidate pairs in a set first, so each pair is scored once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+from itertools import combinations
+
+
+def shingles(text, n=3):
+    words = text.lower().split()
+    if not words:
+        return set()
+    if len(words) &lt; n:
+        return {tuple(words)}
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def jaccard(a, b):
+    union = a | b
+    return len(a &amp; b) / len(union) if union else 0.0
+
+
+def near_duplicates(docs, threshold=0.5, n=3):
+    sets = {doc_id: shingles(text, n) for doc_id, text in docs.items()}
+    index = defaultdict(set)
+    for doc_id, sh in sets.items():
+        for s in sh:
+            index[s].add(doc_id)
+    candidates = set()
+    for ids in index.values():
+        candidates.update(combinations(sorted(ids), 2))
+    out = []
+    for a, b in sorted(candidates):
+        sim = jaccard(sets[a], sets[b])
+        if sim &gt;= threshold:
+            out.append((a, b, round(sim, 3)))
+    return out</code></pre></div><p>Near-duplicates (the same FAQ answer pasted twice with one word changed) waste index space and make retrieval return the same content several times. Word shingles turn each document into a set, and Jaccard similarity measures overlap. Comparing all pairs is O(n^2); an <strong>inverted index</strong> from shingle to documents means only documents that share at least one shingle are ever compared, which for real corpora is a tiny fraction of the pairs. At web scale, <strong>MinHash</strong> with locality-sensitive hashing replaces exact sets with short signatures, but the structure (hash features, index them, compare candidates) is the same.</p></div></details>
+</article>
+<article class="prob" id="p-hashes-equality-and-keys" data-pid="m16-2-hashes-equality-and-keys" data-type="predict" data-level="medium" data-answer="1 {1: &#x27;bool&#x27;}
+2 1
+TypeError: cannot use &#x27;NoHash&#x27; as a set element (unhashable type: &#x27;NoHash&#x27;)
+TypeError: cannot use &#x27;list&#x27; as a dict key (unhashable type: &#x27;list&#x27;)
+tuple key True">
+<header class="prob-head"><h3>11. Hashes, equality and keys</h3></header>
+<div class="code"><pre><code class="py">from dataclasses import dataclass
+
+print(len({1, 1.0, True}), {1: &quot;int&quot;, 1.0: &quot;float&quot;, True: &quot;bool&quot;})
+
+class BadKey:
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        return self.v == other.v
+    def __hash__(self):
+        return id(self)
+
+@dataclass(frozen=True)
+class GoodKey:
+    v: str
+
+print(len({BadKey(&quot;a&quot;), BadKey(&quot;a&quot;)}), len({GoodKey(&quot;a&quot;), GoodKey(&quot;a&quot;)}))
+
+class NoHash:
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        return self.v == other.v
+
+try:
+    {NoHash(1)}
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+key = [1, 2]
+try:
+    {key: &quot;x&quot;}
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print({(1, 2): &quot;tuple key&quot;}[(1, 2)], hash((1, 2)) == hash((1, 2)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Equal objects must have equal hashes. <code>1 == 1.0 == True</code>. Defining <code>__eq__</code> without <code>__hash__</code> makes instances unhashable.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 {1: &#x27;bool&#x27;}
+2 1
+TypeError: cannot use &#x27;NoHash&#x27; as a set element (unhashable type: &#x27;NoHash&#x27;)
+TypeError: cannot use &#x27;list&#x27; as a dict key (unhashable type: &#x27;list&#x27;)
+tuple key True</pre></div><p><code>1</code>, <code>1.0</code> and <code>True</code> are equal and hash alike, so they are one key: the first insertion fixes the key object and later ones overwrite the value. <code>BadKey</code> breaks the contract (equal objects, different hashes), so the set keeps two "equal" members; the frozen dataclass generates a hash from its fields and dedupes correctly. A class that defines only <code>__eq__</code> gets <code>__hash__ = None</code> and cannot be used as a key at all, the safe default. Lists are unhashable because they are mutable, and tuples of hashable values are the standard composite key.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-an-lru-cache-for-completions" data-pid="m16-2-an-lru-cache-for-completions" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. An LRU cache for completions</h3></header>
+<div class="prob-q"><p>Write <code>LRUCache(capacity)</code> with <code>get(key)</code> (the value, or <code>None</code>; a hit makes the key most recently used) and <code>put(key, value)</code> (insert or update, making it most recent; when over capacity, evict the <strong>least</strong> recently used), both O(1), using <code>collections.OrderedDict</code>. Track <code>hits</code>, <code>misses</code> and <code>evictions</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">from collections import OrderedDict
+
+class LRUCache:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">c = LRUCache(2)
+c.put("q1", "a1")
+c.put("q2", "a2")
+assert c.get("q1") == "a1"
+c.put("q3", "a3")
+assert c.get("q2") is None and c.get("q3") == "a3" and c.get("q1") == "a1"
+c.put("q1", "a1-new")
+c.put("q4", "a4")
+assert list(c.data) == ["q1", "q4"] and c.get("q1") == "a1-new"
+assert (c.hits, c.misses, c.evictions) == (4, 1, 2)
+try:
+    LRUCache(0)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c = LRUCache(2)
+c.put(&quot;q1&quot;, &quot;a1&quot;)
+c.put(&quot;q2&quot;, &quot;a2&quot;)
+assert c.get(&quot;q1&quot;) == &quot;a1&quot;
+c.put(&quot;q3&quot;, &quot;a3&quot;)
+assert c.get(&quot;q2&quot;) is None and c.get(&quot;q3&quot;) == &quot;a3&quot; and c.get(&quot;q1&quot;) == &quot;a1&quot;
+c.put(&quot;q1&quot;, &quot;a1-new&quot;)
+c.put(&quot;q4&quot;, &quot;a4&quot;)
+assert list(c.data) == [&quot;q1&quot;, &quot;q4&quot;] and c.get(&quot;q1&quot;) == &quot;a1-new&quot;
+assert (c.hits, c.misses, c.evictions) == (4, 1, 2)
+try:
+    LRUCache(0)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>OrderedDict.move_to_end(key)</code> marks a key as most recent; <code>popitem(last=False)</code> removes the oldest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import OrderedDict
+
+
+class LRUCache:
+    def __init__(self, capacity):
+        if capacity &lt; 1:
+            raise ValueError(&quot;capacity must be at least 1&quot;)
+        self.capacity = capacity
+        self.data = OrderedDict()
+        self.hits = self.misses = self.evictions = 0
+
+    def get(self, key):
+        if key not in self.data:
+            self.misses += 1
+            return None
+        self.data.move_to_end(key)
+        self.hits += 1
+        return self.data[key]
+
+    def put(self, key, value):
+        if key in self.data:
+            self.data.move_to_end(key)
+        self.data[key] = value
+        if len(self.data) &gt; self.capacity:
+            self.data.popitem(last=False)
+            self.evictions += 1</code></pre></div><p>An LRU cache needs two O(1) operations: find a key, and know which key was used least recently. An <code>OrderedDict</code> provides both, a hash table for lookups plus a linked order that <code>move_to_end</code> updates in O(1), so the oldest entry is always at the front for <code>popitem(last=False)</code>. Caching LLM completions or embeddings by a hash of the prompt and parameters saves money on repeated questions, and the hit, miss and eviction counters tell you whether the capacity is right. <code>functools.lru_cache</code> is the decorator version (8.4); a hand-written class is needed when keys must be computed from arguments or the cache must be shared and inspected.</p></div></details>
+</article>
+<article class="prob" id="p-minimum-window-containing-all-keywords" data-pid="m16-2-minimum-window-containing-all-keywords" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Minimum window containing all keywords</h3></header>
+<div class="prob-q"><p>Write <code>min_window(tokens, required)</code> returning <code>(start, end)</code> of the <strong>shortest</strong> contiguous slice <code>tokens[start:end]</code> that contains every token in the <code>required</code> list <strong>with multiplicity</strong> (a keyword listed twice must appear twice), the leftmost on ties, or <code>None</code>. Use a sliding window with a <code>Counter</code> of what is still missing, in O(n).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from collections import Counter
+
+def min_window(tokens, required):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">text = "the refund policy says a refund is issued within five days of the return".split()
+assert min_window(text, ["refund", "days"]) == (5, 11) and text[5:11] == ["refund", "is", "issued", "within", "five", "days"]
+assert min_window(text, ["refund", "refund"]) == (1, 6)
+assert min_window(text, ["refund", "warranty"]) is None and min_window(text, []) == (0, 0)
+assert min_window(list("ADOBECODEBANC"), list("ABC")) == (9, 13)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = &quot;the refund policy says a refund is issued within five days of the return&quot;.split()
+assert min_window(text, [&quot;refund&quot;, &quot;days&quot;]) == (5, 11) and text[5:11] == [&quot;refund&quot;, &quot;is&quot;, &quot;issued&quot;, &quot;within&quot;, &quot;five&quot;, &quot;days&quot;]
+assert min_window(text, [&quot;refund&quot;, &quot;refund&quot;]) == (1, 6)
+assert min_window(text, [&quot;refund&quot;, &quot;warranty&quot;]) is None and min_window(text, []) == (0, 0)
+assert min_window(list(&quot;ADOBECODEBANC&quot;), list(&quot;ABC&quot;)) == (9, 13)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>need = Counter(required)</code> and <code>missing = len(required)</code>. Moving <code>right</code>: if <code>need[tok] &gt; 0</code>, decrement <code>missing</code>; then decrement <code>need[tok]</code> (it may go negative for surplus).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>While <code>missing == 0</code>, record the window if shorter, then move <code>left</code>: increment <code>need[tokens[left]]</code>, and if it becomes positive, increment <code>missing</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+
+def min_window(tokens, required):
+    if not required:
+        return (0, 0)
+    need = Counter(required)
+    missing = len(required)
+    best = None
+    left = 0
+    for right, tok in enumerate(tokens):
+        if need[tok] &gt; 0:
+            missing -= 1
+        need[tok] -= 1
+        while missing == 0:
+            if best is None or right + 1 - left &lt; best[1] - best[0]:
+                best = (left, right + 1)
+            need[tokens[left]] += 1
+            if need[tokens[left]] &gt; 0:
+                missing += 1
+            left += 1
+    return best</code></pre></div><p>The window expands to the right until it contains everything required, then shrinks from the left as long as it still does, recording each valid window; every token enters and leaves once, so the whole search is O(n). The <code>need</code> counter goes negative for surplus tokens, which is what lets the window shrink past an extra <code>refund</code> without losing validity, and <code>missing</code> counts how many required tokens are still absent, so validity is checked in O(1) instead of comparing counters. In search and RAG this finds the tightest passage containing all query keywords, a good snippet to show or to feed a model.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-top-k-frequent-terms" data-pid="m16-2-read-the-code-top-k-frequent-terms" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: top-k frequent terms</h3></header>
+<div class="prob-q"><p><code>top_terms(docs, k)</code> returns the <code>k</code> most frequent words across documents, ignoring a stop-word list, ties broken alphabetically. It counts by calling <code>list.count</code> for every distinct word (quadratic), keeps stop words in a list, breaks ties in reverse alphabetical order, and treats <code>Refund</code> and <code>refund</code> as different words. Fix it with a set of stop words, a <code>Counter</code>, lower-casing, and a sort key <code>(-count, word)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">STOP = [&quot;the&quot;, &quot;a&quot;, &quot;of&quot;, &quot;to&quot;, &quot;is&quot;, &quot;and&quot;]
+
+
+def top_terms(docs, k):
+    words = []
+    for doc in docs:
+        for w in doc.split():
+            w = w.strip(&quot;.,!?&quot;)
+            if w not in STOP:
+                words.append(w)
+    counts = [(words.count(w), w) for w in set(words)]
+    counts.sort(reverse=True)
+    return [w for _, w in counts[:k]]
+</textarea>
+<script type="text/plain" class="prob-tests">docs = ["The refund is processed.", "Refund and return the item!", "A return label is attached.", "Shipping of the item"]
+assert top_terms(docs, 3) == ["item", "refund", "return"]
+assert top_terms(docs, 1) == ["item"] and top_terms([], 2) == []
+big = ["alpha beta gamma " * 50] * 2_000
+assert top_terms(big, 2) == ["alpha", "beta"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [&quot;The refund is processed.&quot;, &quot;Refund and return the item!&quot;, &quot;A return label is attached.&quot;, &quot;Shipping of the item&quot;]
+assert top_terms(docs, 3) == [&quot;item&quot;, &quot;refund&quot;, &quot;return&quot;]
+assert top_terms(docs, 1) == [&quot;item&quot;] and top_terms([], 2) == []
+big = [&quot;alpha beta gamma &quot; * 50] * 2_000
+assert top_terms(big, 2) == [&quot;alpha&quot;, &quot;beta&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>STOP = frozenset({...})</code>; <code>counts = Counter(w.strip(".,!?").lower() for doc in docs for w in doc.split())</code>, then drop stop words and empty strings.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:k]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+STOP = frozenset({&quot;the&quot;, &quot;a&quot;, &quot;of&quot;, &quot;to&quot;, &quot;is&quot;, &quot;and&quot;})
+
+
+def top_terms(docs, k):
+    counts = Counter()
+    for doc in docs:
+        for w in doc.split():
+            w = w.strip(&quot;.,!?&quot;).lower()
+            if w and w not in STOP:
+                counts[w] += 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [w for w, _ in ranked[:k]]</code></pre></div><p><code>words.count(w)</code> scans the whole word list once per distinct word, O(n * u), which for the 300,000-word test is billions of steps; a <code>Counter</code> counts in one pass. Membership in a list of stop words is a scan too, a <code>frozenset</code> makes it O(1). Sorting tuples <code>(count, word)</code> in reverse also reverses the tie-break (<code>return</code> before <code>refund</code>); the key <code>(-count, word)</code> sorts counts descending and words ascending explicitly. And <code>Refund</code> versus <code>refund</code> split one term's count in two, so normalising case belongs before counting. For a huge vocabulary with a small <code>k</code>, <code>heapq.nsmallest(k, counts.items(), key=...)</code> avoids sorting everything.</p></div></details>
+</article>
+<article class="prob" id="p-grouping-and-counting-idioms" data-pid="m16-2-grouping-and-counting-idioms" data-type="predict" data-level="hard" data-answer="{&#x27;ana&#x27;: {&#x27;login&#x27;: 1, &#x27;ask&#x27;: 2}, &#x27;bo&#x27;: {&#x27;ask&#x27;: 1, &#x27;logout&#x27;: 1}}
+[(&#x27;ana&#x27;, 1), (&#x27;bo&#x27;, 1), (&#x27;ana&#x27;, 2), (&#x27;bo&#x27;, 1)]
+[(&#x27;ana&#x27;, 3), (&#x27;bo&#x27;, 2)]
+[(&#x27;ask&#x27;, 3), (&#x27;login&#x27;, 1), (&#x27;logout&#x27;, 1)] 5 [&#x27;ask&#x27;, &#x27;ask&#x27;, &#x27;ask&#x27;]
+{&#x27;ana&#x27;: 0, &#x27;bo&#x27;: 1}">
+<header class="prob-head"><h3>15. Grouping and counting idioms</h3></header>
+<div class="code"><pre><code class="py">from collections import Counter, defaultdict
+from itertools import groupby
+
+events = [(&quot;ana&quot;, &quot;login&quot;), (&quot;bo&quot;, &quot;ask&quot;), (&quot;ana&quot;, &quot;ask&quot;), (&quot;ana&quot;, &quot;ask&quot;), (&quot;bo&quot;, &quot;logout&quot;)]
+by_user = defaultdict(Counter)
+for user, action in events:
+    by_user[user][action] += 1
+print({u: dict(c) for u, c in by_user.items()})
+print([(k, len(list(g))) for k, g in groupby(events, key=lambda e: e[0])])
+print([(k, len(list(g))) for k, g in groupby(sorted(events), key=lambda e: e[0])])
+totals = Counter(action for _, action in events)
+print(totals.most_common(), totals.total(), sorted(totals.elements())[:3])
+first_seen = {}
+for i, (user, _) in enumerate(events):
+    first_seen.setdefault(user, i)
+print(first_seen)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>groupby</code> groups <strong>consecutive</strong> equal keys only, so unsorted input gives repeated groups. <code>setdefault</code> only sets a key the first time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;ana&#x27;: {&#x27;login&#x27;: 1, &#x27;ask&#x27;: 2}, &#x27;bo&#x27;: {&#x27;ask&#x27;: 1, &#x27;logout&#x27;: 1}}
+[(&#x27;ana&#x27;, 1), (&#x27;bo&#x27;, 1), (&#x27;ana&#x27;, 2), (&#x27;bo&#x27;, 1)]
+[(&#x27;ana&#x27;, 3), (&#x27;bo&#x27;, 2)]
+[(&#x27;ask&#x27;, 3), (&#x27;login&#x27;, 1), (&#x27;logout&#x27;, 1)] 5 [&#x27;ask&#x27;, &#x27;ask&#x27;, &#x27;ask&#x27;]
+{&#x27;ana&#x27;: 0, &#x27;bo&#x27;: 1}</pre></div><p>A <code>defaultdict(Counter)</code> builds a nested count per user in one pass. <code>itertools.groupby</code> is not a hash-based group-by: it groups <strong>runs</strong> of equal keys, so on unsorted events <code>ana</code> appears twice; sorting first (O(n log n)) or using a dict (O(n)) gives one group per user. <code>Counter.total()</code> sums the counts and <code>elements()</code> repeats each key by its count. <code>setdefault</code> records the first index for each user and ignores later ones, the hash-based way to remember first occurrences.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-when-would-you-reach-for-a-hash-map-in-a" data-pid="m16-2-when-would-you-reach-for-a-hash-map-in-a" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. When would you reach for a hash map in an interview problem, and what does it cost?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Whenever the brute-force solution has an inner loop that <strong>searches</strong> for something: a complement (two-sum), a previous occurrence (first repeat, longest substring without repeats), a count (frequencies, anagrams, majority element), a group (group by canonical key), or a previous state (prefix sums for subarray sums, visited states in a search). Replacing that search with an O(1) average dict or set lookup usually turns O(n^2) into O(n). The costs: O(n) extra memory, keys must be hashable and must follow the hash and equality contract, iteration order is insertion order (dicts) or arbitrary (sets), and the worst case degrades with many collisions. If the data is sorted or can be sorted, two pointers or binary search (16.3) may give the same speed with O(1) extra memory; mention the trade-off.</p></div></details>
+</article>
+<article class="prob" id="p-explain-the-sliding-window-technique-and" data-pid="m16-2-explain-the-sliding-window-technique-and" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Explain the sliding window technique and when it applies.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A sliding window maintains a summary of a contiguous range <code>[left, right]</code> of a sequence and updates it incrementally: extend <code>right</code> one element at a time, and move <code>left</code> forward when the window becomes invalid (variable-size windows) or to keep a fixed size, updating the summary (a sum, a <code>Counter</code>, a set, a deque) by adding the entering element and removing the leaving one. Each element enters and leaves once, so the total is O(n) instead of O(n * k) or O(n^2). It applies to problems about <strong>contiguous</strong> subarrays or substrings where validity changes monotonically as the window grows or shrinks: longest substring with at most k distinct characters, smallest window containing all keywords, maximum sum of k consecutive values, rate limits over the last T seconds, moving averages of metrics. It does <strong>not</strong> apply when validity is not monotonic, for example subarray sums with negative numbers, where prefix sums with a hash map are used instead.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-deduplicate-a-corpus-of-50" data-pid="m16-2-how-would-you-deduplicate-a-corpus-of-50" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How would you deduplicate a corpus of 50 million documents, including near-duplicates?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>In two stages. <strong>Exact duplicates</strong>: normalise each document (Unicode normalisation, whitespace, case where appropriate, boilerplate removal), hash it (SHA-256 or a 64-bit hash such as xxHash), and keep one document per hash; this is a streaming, hash-set operation, partitioned by hash prefix across workers if it does not fit on one machine. <strong>Near duplicates</strong>: represent each document by its set of shingles (word or character n-grams), compute a <strong>MinHash</strong> signature (say 128 hashes), whose agreement rate estimates Jaccard similarity, and use <strong>locality-sensitive hashing</strong> (split signatures into bands; documents sharing a band bucket become candidates), so only candidate pairs are compared instead of all pairs; then confirm candidates above a threshold and cluster them with union-find, keeping one representative per cluster (by quality or recency). Tools such as <code>datasketch</code> or distributed implementations in Spark do this at scale. Embedding-based similarity catches paraphrases too, at a higher cost (approximate nearest-neighbour search). Report how many documents each stage removed, and spot-check samples, because thresholds trade lost content against redundancy.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Replace an inner search loop with a dict or set lookup: counting, complements, groups and seen-before checks become O(n) for O(n) memory.</li><li>Group with a canonical, hashable key (sorted letters, normalised text, a content hash); use tuples or frozen dataclasses as composite keys.</li><li>Sliding windows update a running summary as elements enter and leave, O(n) for contiguous-range questions when validity is monotonic.</li><li>Prefix sums plus a dict count subarrays with a given sum, including negative values; seed with <code>{0: 1}</code>.</li><li>Respect the contract: equal keys must hash equally and must not change while stored; <code>OrderedDict</code> gives O(1) LRU caches.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

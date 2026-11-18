@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16.1 · Big-O in practice</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m16-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 16 · Algorithms for interviews</span></div>
+  <h1>16.1 Big-O in practice</h1>
+  <p>Interviews ask for the complexity of every solution, and production code dies from the accidental quadratic loop nobody noticed on ten test rows. What Big-O measures and what it ignores, the common growth classes, how to measure growth instead of guessing, the real cost of Python's built-ins (lists, dicts, sets, deques, heaps, sorting, strings), amortised costs, and the hidden costs that turn linear code quadratic.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 8 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What Big-O measures</h2>
+<p>Big-O answers one question: <strong>when the input doubles, what happens to the cost?</strong> An algorithm is <strong>O(n)</strong> if its work grows proportionally to n (double the input, double the time), <strong>O(n^2)</strong> if it grows with the square (double the input, four times the time), <strong>O(log n)</strong> if each doubling adds only a constant amount of work, and <strong>O(1)</strong> if the work does not depend on n at all. Constant factors and smaller terms are dropped, so <code>3n + 100</code> is O(n) and <code>n^2/2 + n</code> is O(n^2): at large sizes the dominant term decides everything. Usually we mean the <strong>worst case</strong> (or the average case, explicitly, for hash tables), and we can state the <strong>space</strong> complexity, the extra memory used, the same way.</p>
+<p>The classes, from fast to slow, and what they look like in code: <strong>O(1)</strong> a dict lookup or <code>list.append</code>; <strong>O(log n)</strong> binary search, repeatedly halving (16.3); <strong>O(n)</strong> one pass over the data; <strong>O(n log n)</strong> sorting, or n heap operations; <strong>O(n^2)</strong> a loop over the data inside another loop over the data (all pairs); <strong>O(2^n)</strong> trying every subset (16.5 rescues many of these). At n = 1,000,000, an O(n log n) algorithm does about 20 million steps (fractions of a second in C, seconds in Python), while O(n^2) does a trillion (days). That gap, not the constant factors, is why complexity matters.</p>
+</section>
+<section class="sec" id="measure">
+<h2><span class="n">2</span>Measuring instead of guessing</h2>
+<p>Complexity is a prediction; check it. The <strong>doubling experiment</strong> runs the code at sizes n, 2n, 4n and compares times: a ratio near 2 suggests O(n), near 4 O(n^2), slightly above 2 O(n log n), near 1 O(1) or O(log n). On a log-log plot of time against size, the slope is the exponent (problem 2). Use <code>timeit</code> (or <code>time.perf_counter</code> around enough repetitions) for small code, and <strong><code>cProfile</code></strong> to find where a real program spends its time (<code>python -m cProfile -s cumulative script.py</code>); most slow programs have one hot spot, and it is rarely where you guessed. Counting operations, for example comparisons, gives exact, noise-free numbers, which is what several problems here do.</p>
+</section>
+<section class="sec" id="builtins">
+<h2><span class="n">3</span>The cost of Python's built-ins</h2>
+<p><strong>Lists</strong> are dynamic arrays: indexing, <code>len</code>, <code>append</code> and <code>pop()</code> from the end are O(1) (append is <strong>amortised</strong> O(1): occasionally the list grows its storage by a proportion and copies everything, but that cost averages out over many appends); <code>insert(0, x)</code>, <code>pop(0)</code> and <code>del items[i]</code> shift every later element, O(n); <code>x in items</code>, <code>items.index(x)</code> and <code>items.count(x)</code> scan, O(n); slicing copies, O(k) for k elements; <code>sort</code> is O(n log n) (Timsort, which is O(n) on already-sorted runs). <strong>dicts and sets</strong> are hash tables: lookup, insert and delete are O(1) on average (O(n) in a pathological worst case with many hash collisions), so membership tests against a set are the standard fix for an O(n) <code>in</code> inside a loop.</p>
+<p><strong><code>collections.deque</code></strong> gives O(1) appends and pops at <strong>both</strong> ends (use it for queues, 16.4's BFS), but O(n) indexing in the middle. <strong><code>heapq</code></strong> keeps a list as a binary heap: <code>heappush</code> and <code>heappop</code> are O(log n), <code>heapq.nlargest(k, items)</code> is O(n log k). <strong><code>bisect</code></strong> finds positions in a sorted list in O(log n), but <code>insort</code> still pays O(n) to shift elements. <strong>Strings</strong> are immutable, so building one by <code>+=</code> in a loop can copy the whole string each time (CPython sometimes optimises this, but do not rely on it); collect parts in a list and <code>"".join(parts)</code> once, O(total length).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">builtin_costs.py</span><button class="copy">Copy</button></div><pre><code class="py">import timeit
+
+setup = &quot;n = 20_000; items = list(range(n)); as_set = set(items); queries = list(range(0, 2 * n, 7))&quot;
+t_list = min(timeit.repeat(&quot;sum(q in items for q in queries[:300])&quot;, setup, number=1, repeat=3))
+t_set = min(timeit.repeat(&quot;sum(q in as_set for q in queries[:300])&quot;, setup, number=1, repeat=3))
+print(f&quot;list membership is about {t_list / t_set:.0f}x slower than set membership for 300 queries&quot;)
+
+def grow(n):
+    items = []
+    for i in range(n):
+        items.insert(0, i)
+
+def grow_end(n):
+    items = []
+    for i in range(n):
+        items.append(i)
+
+for n in (2_000, 4_000, 8_000):
+    a = min(timeit.repeat(lambda: grow(n), number=1, repeat=3))
+    b = min(timeit.repeat(lambda: grow_end(n), number=1, repeat=3))
+    print(n, &quot;insert(0) / append time ratio:&quot;, round(a / b))</code></pre><div class="out"><span class="ol">Output</span><pre>list membership is about 85x slower than set membership for 300 queries
+2000 insert(0) / append time ratio: 6
+4000 insert(0) / append time ratio: 10
+8000 insert(0) / append time ratio: 15</pre></div></div>
+<p>The ratios grow with n, which is the signature of an O(n) operation repeated n times (O(n^2) in total) against an O(1) one; the exact numbers vary by machine, but the trend does not. This is why "use the right container" is often the whole optimisation.</p>
+</section>
+<section class="sec" id="hidden">
+<h2><span class="n">4</span>Hidden quadratic costs</h2>
+<p>Most real performance bugs are an O(n) operation hiding inside a loop: <code>if x not in seen_list</code> (use a set), <code>queue.pop(0)</code> (use a deque), <code>sorted(...)</code> or <code>max(...)</code> recomputed every iteration (compute once, or maintain a heap), <code>result = result + [x]</code> or string <code>+=</code> (append, then join), <code>list.index</code> to find each item's position (build a dict from item to index once), slicing in recursion (pass indices instead), and calling <code>len()</code> on a generator by first converting it to a list each time. The code looks linear and passes every test on ten rows; on a million rows it never finishes. When reviewing code, look for these patterns first.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-counting-steps" data-pid="m16-1-counting-steps" data-type="predict" data-level="easy" data-answer="8 8 28 3 24
+16 16 120 4 64
+1024 1024 523776 10 10240">
+<header class="prob-head"><h3>1. Counting steps</h3></header>
+<div class="code"><pre><code class="py">def single(n):
+    steps = 0
+    for i in range(n):
+        steps += 1
+    return steps
+
+def nested(n):
+    steps = 0
+    for i in range(n):
+        for j in range(i):
+            steps += 1
+    return steps
+
+def halving(n):
+    steps = 0
+    while n &gt; 1:
+        n //= 2
+        steps += 1
+    return steps
+
+def log_linear(n):
+    steps = 0
+    for i in range(n):
+        k = n
+        while k &gt; 1:
+            k //= 2
+            steps += 1
+    return steps
+
+for n in (8, 16, 1024):
+    print(n, single(n), nested(n), halving(n), log_linear(n))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Doubling n: a linear count doubles, the triangle <code>n(n-1)/2</code> roughly quadruples, the halving count grows by one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>8 8 28 3 24
+16 16 120 4 64
+1024 1024 523776 10 10240</pre></div><p>The single loop is O(n). The nested loop over <code>j &lt; i</code> runs <code>n(n - 1) / 2</code> times, which is O(n^2): constant factors do not change the class, and doubling n roughly quadruples it. Repeated halving is O(log n): each doubling of n adds one step, and 1024 needs only 10. Running a halving loop once per element is O(n log n), the cost of a good sort. These four shapes cover most code you will analyse.</p></div></details>
+</article>
+<article class="prob" id="p-estimate-the-exponent-from-measurements" data-pid="m16-1-estimate-the-exponent-from-measurements" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Estimate the exponent from measurements</h3></header>
+<div class="prob-q"><p>Write <code>growth_exponent(sizes, costs)</code> estimating <code>k</code> in <code>cost ~ c * n**k</code> as the least-squares slope of <code>log(cost)</code> against <code>log(n)</code>, rounded to 2 decimals, and <code>classify(sizes, costs)</code> returning <code>"O(1)"</code>, <code>"O(n)"</code>, <code>"O(n log n)"</code> or <code>"O(n^2)"</code> for slopes below 0.5, below 1.08, below 1.6, and otherwise, respectively. Raise <code>ValueError</code> for fewer than two points.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import math
+
+def growth_exponent(sizes, costs):
+    pass
+
+def classify(sizes, costs):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import math
+ns = [1_000, 2_000, 4_000, 8_000, 16_000]
+assert growth_exponent(ns, [3 * n for n in ns]) == 1.0 and classify(ns, [3 * n for n in ns]) == "O(n)"
+assert growth_exponent(ns, [n * n / 2 for n in ns]) == 2.0 and classify(ns, [n * n for n in ns]) == "O(n^2)"
+assert classify(ns, [n * math.log2(n) for n in ns]) == "O(n log n)" and classify(ns, [7.0] * 5) == "O(1)"
+assert classify(ns, [1.0, 2.1, 3.9, 8.2, 15.8]) == "O(n)"
+try:
+    growth_exponent([10], [1.0])
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math
+ns = [1_000, 2_000, 4_000, 8_000, 16_000]
+assert growth_exponent(ns, [3 * n for n in ns]) == 1.0 and classify(ns, [3 * n for n in ns]) == &quot;O(n)&quot;
+assert growth_exponent(ns, [n * n / 2 for n in ns]) == 2.0 and classify(ns, [n * n for n in ns]) == &quot;O(n^2)&quot;
+assert classify(ns, [n * math.log2(n) for n in ns]) == &quot;O(n log n)&quot; and classify(ns, [7.0] * 5) == &quot;O(1)&quot;
+assert classify(ns, [1.0, 2.1, 3.9, 8.2, 15.8]) == &quot;O(n)&quot;
+try:
+    growth_exponent([10], [1.0])
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With <code>x = log(n)</code> and <code>y = log(cost)</code>, the slope is <code>sum((x - mx) * (y - my)) / sum((x - mx) ** 2)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+
+def growth_exponent(sizes, costs):
+    if len(sizes) &lt; 2 or len(sizes) != len(costs):
+        raise ValueError(&quot;need at least two (size, cost) pairs&quot;)
+    xs = [math.log(n) for n in sizes]
+    ys = [math.log(c) for c in costs]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+    return round(slope, 2)
+
+
+def classify(sizes, costs):
+    k = growth_exponent(sizes, costs)
+    if k &lt; 0.5:
+        return &quot;O(1)&quot;
+    if k &lt; 1.08:
+        return &quot;O(n)&quot;
+    if k &lt; 1.6:
+        return &quot;O(n log n)&quot;
+    return &quot;O(n^2)&quot;</code></pre></div><p>Taking logarithms turns <code>cost = c * n**k</code> into a straight line, <code>log(cost) = log(c) + k * log(n)</code>, so the exponent is the slope, and constants such as the 3 in <code>3n</code> vanish into the intercept, exactly as Big-O ignores them. A least-squares fit over several sizes tolerates measurement noise (the noisy timings still classify as linear). <code>n log n</code> has a slope slightly above 1 (about 1.12 for sizes between 1,000 and 16,000, since the slope of <code>log(n log n)</code> is <code>1 + 1 / ln n</code>), which is why the thresholds are heuristic and the linear one sits close to 1; in practice this is how you confirm, with a handful of timings, whether an optimisation changed the complexity or only the constant.</p></div></details>
+</article>
+<article class="prob" id="p-removing-duplicates-while-iterating" data-pid="m16-1-removing-duplicates-while-iterating" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Removing duplicates while iterating</h3></header>
+<div class="prob-q"><p><code>dedupe(items)</code> should keep the first occurrence of each item, in order. It removes items from the list it is iterating over, which skips elements, and its <code>in</code> check on a list makes it quadratic. Fix it with a set of seen items (or <code>dict.fromkeys</code>), so it is correct and O(n).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def dedupe(items):
+    result = list(items)
+    for x in result:
+        if result.count(x) &gt; 1:
+            result.remove(x)
+    return result
+</textarea>
+<script type="text/plain" class="prob-tests">assert dedupe(["a", "b", "a", "c", "b", "a"]) == ["a", "b", "c"]
+assert dedupe([3, 3, 3, 3]) == [3] and dedupe([]) == []
+big = list(range(50_000)) * 2
+assert dedupe(big) == list(range(50_000))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert dedupe([&quot;a&quot;, &quot;b&quot;, &quot;a&quot;, &quot;c&quot;, &quot;b&quot;, &quot;a&quot;]) == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+assert dedupe([3, 3, 3, 3]) == [3] and dedupe([]) == []
+big = list(range(50_000)) * 2
+assert dedupe(big) == list(range(50_000))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>list(dict.fromkeys(items))</code> keeps first occurrences in order in one pass; or loop with a <code>seen</code> set.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def dedupe(items):
+    seen = set()
+    result = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            result.append(x)
+    return result</code></pre></div><p>Removing from a list while iterating over it shifts the remaining elements left, so the loop skips the element after each removal, and <code>remove</code> deletes the <strong>first</strong> occurrence, not the current one, which breaks the "keep the first" order. Performance was just as bad: <code>count</code> and <code>remove</code> each scan the list, so the whole function was O(n^2), minutes for the 100,000-item test. A set answers "seen before?" in O(1) on average, making one pass enough. <code>dict.fromkeys</code> does the same in one line because dicts keep insertion order and ignore repeated keys.</p></div></details>
+</article>
+<article class="prob" id="p-membership-tests-list-or-set" data-pid="m16-1-membership-tests-list-or-set" data-type="choose" data-level="easy" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>4. Membership tests: list or set</h3></header>
+<div class="prob-q"><p>Both count how many of 2,000 query ids appear among 10,000 known ids. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">known = list(range(0, 20_000, 2))
+known_set = set(known)
+queries = list(range(0, 4_000, 2))</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">hits = sum(1 for q in queries if q in known)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">hits = sum(1 for q in queries if q in known_set)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many elements does each <code>in</code> look at, for a list and for a set?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>32.33 ms</td></tr><tr><td>B</td><td>275.30 µs</td></tr></table></div><p><code>q in known</code> scans the list until it finds <code>q</code> (or reaches the end), so 2,000 queries cost up to 2,000 x 10,000 comparisons: O(n * m). A set hashes <code>q</code> and checks one bucket, O(1) on average, so the whole count is O(m) after building the set once in O(n). Converting a lookup list to a set is the single most common Python performance fix, as long as the elements are hashable and you only need membership, not order or duplicates.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-how-lists-grow" data-pid="m16-1-how-lists-grow" data-type="predict" data-level="medium" data-answer="[5, 9, 17, 25, 33]
+5 resizes for 40 appends
+84 element copies in total">
+<header class="prob-head"><h3>5. How lists grow</h3></header>
+<div class="code"><pre><code class="py">import sys
+
+items, sizes = [], []
+for i in range(40):
+    items.append(i)
+    sizes.append(sys.getsizeof(items))
+changes = [i + 1 for i in range(1, 40) if sizes[i] != sizes[i - 1]]
+print(changes)
+print(len(changes), &quot;resizes for 40 appends&quot;)
+copies = sum(n - 1 for n in changes)
+print(copies, &quot;element copies in total&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A list over-allocates when it grows, so most appends fit in spare capacity; the lengths printed are those at which a new, larger block was needed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[5, 9, 17, 25, 33]
+5 resizes for 40 appends
+84 element copies in total</pre></div><p><code>sys.getsizeof</code> changes only when the list allocates a new block, and the printed lengths are those appends: only five resizes in forty appends. CPython grows the capacity by about an eighth of the current size plus a constant, so for large lists the gaps keep widening, the number of resizes grows only logarithmically, and the elements copied during resizes add up to a small multiple of n (84 copies for 40 appends here). Spread over all appends, each costs O(1) on average: <strong>amortised</strong> constant time. The exact sizes differ between platforms (this site runs a 32-bit build), but the pattern is the same.</p></div></details>
+</article>
+<article class="prob" id="p-capacity-planning-for-vector-search" data-pid="m16-1-capacity-planning-for-vector-search" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>6. Capacity planning for vector search</h3></header>
+<div class="prob-q"><p>Write <code>brute_force_cost(n_vectors, dim, queries_per_second, flops_per_second=2e10, bytes_per_value=4)</code> returning a dict with <code>memory_gb</code> (vector storage, rounded to 2), <code>flops_per_query</code> (a dot product per stored vector costs <code>2 * dim</code> floating-point operations), <code>max_qps</code> (how many queries per second the given compute allows, rounded down to an int), and <code>fits</code> (whether <code>max_qps &gt;= queries_per_second</code>). Exact brute-force search is O(n * d) per query.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def brute_force_cost(n_vectors, dim, queries_per_second, flops_per_second=2e10, bytes_per_value=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">small = brute_force_cost(100_000, 768, queries_per_second=50)
+assert small == {"memory_gb": 0.31, "flops_per_query": 153_600_000, "max_qps": 130, "fits": True}
+big = brute_force_cost(50_000_000, 1536, queries_per_second=20)
+assert big["memory_gb"] == 307.2 and big["max_qps"] == 0 and big["fits"] is False
+assert brute_force_cost(1_000, 384, 10, bytes_per_value=2)["memory_gb"] == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">small = brute_force_cost(100_000, 768, queries_per_second=50)
+assert small == {&quot;memory_gb&quot;: 0.31, &quot;flops_per_query&quot;: 153_600_000, &quot;max_qps&quot;: 130, &quot;fits&quot;: True}
+big = brute_force_cost(50_000_000, 1536, queries_per_second=20)
+assert big[&quot;memory_gb&quot;] == 307.2 and big[&quot;max_qps&quot;] == 0 and big[&quot;fits&quot;] is False
+assert brute_force_cost(1_000, 384, 10, bytes_per_value=2)[&quot;memory_gb&quot;] == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Memory: <code>n * dim * bytes_per_value / 1e9</code>. FLOPs per query: <code>2 * dim * n</code>. Max QPS: <code>int(flops_per_second // flops_per_query)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def brute_force_cost(n_vectors, dim, queries_per_second, flops_per_second=2e10, bytes_per_value=4):
+    memory_gb = round(n_vectors * dim * bytes_per_value / 1e9, 2)
+    flops = 2 * dim * n_vectors
+    max_qps = int(flops_per_second // flops)
+    return {&quot;memory_gb&quot;: memory_gb, &quot;flops_per_query&quot;: flops, &quot;max_qps&quot;: max_qps, &quot;fits&quot;: max_qps &gt;= queries_per_second}</code></pre></div><p>Complexity analysis turns into a capacity plan: exact nearest-neighbour search compares the query with every stored vector, O(n * d) per query, so the cost grows linearly with the corpus. A hundred thousand 768-dimensional embeddings take 0.3 GB and comfortably serve 50 queries per second on one machine, which is why small RAG systems often need no vector database at all; fifty million 1536-dimensional embeddings need 300 GB and cannot sustain even one query per second by brute force. That is what approximate indexes (HNSW graphs, IVF partitions, product quantisation) are for: they trade a little recall for sub-linear query time, and lower precision (<code>bytes_per_value=2</code> or 1) trades accuracy for memory.</p></div></details>
+</article>
+<article class="prob" id="p-a-queue-list-pop-0-or-deque-popleft" data-pid="m16-1-a-queue-list-pop-0-or-deque-popleft" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A queue: list.pop(0) or deque.popleft()</h3></header>
+<div class="prob-q"><p>Both drain a queue of 30,000 items from the front. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+items = list(range(30_000))</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">q = list(items)
+while q:
+    q.pop(0)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">q = deque(items)
+while q:
+    q.popleft()</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What happens to the remaining elements of a list when the first one is removed?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>547.86 ms</td></tr><tr><td>B</td><td>2.60 ms</td></tr></table></div><p>Removing the first element of a list shifts every remaining element one position to the left, an O(n) operation, so draining n items costs O(n^2) in total. A deque is built from blocks linked at both ends, so <code>popleft</code> is O(1) and draining is O(n). Queues appear everywhere (BFS in 16.4, job queues, sliding windows in 16.2), and <code>list.pop(0)</code> in a loop is one of the classic hidden quadratics.</p></div></details>
+</article>
+<article class="prob" id="p-comparisons-counted" data-pid="m16-1-comparisons-counted" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Comparisons, counted</h3></header>
+<div class="prob-q"><p>Fill in <code>calls</code> after each marked line. <code>Key</code> counts every equality comparison and every hash.</p></div>
+<div class="code"><pre><code class="py">class Key:
+    eq = 0
+    hashes = 0
+    def __init__(self, v):
+        self.v = v
+    def __eq__(self, other):
+        Key.eq += 1
+        return self.v == other.v
+    def __hash__(self):
+        Key.hashes += 1
+        return hash(self.v)
+
+def reset():
+    Key.eq = Key.hashes = 0
+
+items = [Key(i) for i in range(100)]
+lookup = set(items)
+target = Key(99)
+reset()
+found = target in items
+calls = (Key.eq, Key.hashes)
+reset()
+found = Key(-1) in items
+calls = (Key.eq, Key.hashes)
+reset()
+found = target in lookup
+calls = (Key.eq, Key.hashes)
+reset()
+found = Key(-1) in lookup
+calls = (Key.eq, Key.hashes)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>calls</code></th></tr><tr><td>list membership, last item</td><td><input class="cell" data-a="(100, 0)" data-s="(100, 0)" aria-label="calls at list membership, last item" autocomplete="off"></td></tr><tr><td>list membership, missing</td><td><input class="cell" data-a="(100, 0)" data-s="(100, 0)" aria-label="calls at list membership, missing" autocomplete="off"></td></tr><tr><td>set membership</td><td><input class="cell" data-a="(1, 1)" data-s="(1, 1)" aria-label="calls at set membership" autocomplete="off"></td></tr><tr><td>set miss</td><td><input class="cell" data-a="(0, 1)" data-s="(0, 1)" aria-label="calls at set miss" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A list compares the target with elements one by one; a set hashes the target once and compares only with candidates in the same bucket.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>x in list</code> first checks identity, then equality; <code>target</code> is a different object from the 99 stored, so equality is needed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>calls</code></th></tr><tr><td>list membership, last item</td><td><code>(100, 0)</code></td></tr><tr><td>list membership, missing</td><td><code>(100, 0)</code></td></tr><tr><td>set membership</td><td><code>(1, 1)</code></td></tr><tr><td>set miss</td><td><code>(0, 1)</code></td></tr></table></div><p>A list search compares the target with each element in turn: finding the last of 100 items takes 100 comparisons, and a missing item compares with all 100, no hashing involved. A set hashes the target once and then compares it only with the element stored under that hash, so a hit costs one hash and one comparison, and a miss usually only the hash. That is O(n) against O(1), visible in exact counts rather than noisy timings, and it is how you can verify the complexity of your own data structures.</p></div></details>
+</article>
+<article class="prob" id="p-running-median-with-two-heaps" data-pid="m16-1-running-median-with-two-heaps" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. Running median with two heaps</h3></header>
+<div class="prob-q"><p>Write <code>running_medians(values)</code> returning the median after each value arrives (the middle value, or the mean of the two middle values for an even count), in O(log n) per value. Keep a max-heap of the lower half (store negatives with <code>heapq</code>) and a min-heap of the upper half, with sizes differing by at most one.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import heapq
+
+def running_medians(values):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert running_medians([5, 15, 1, 3]) == [5, 10.0, 5, 4.0]
+assert running_medians([2, 2, 2]) == [2, 2.0, 2] and running_medians([]) == []
+import random
+rng = random.Random(0)
+data = [rng.randint(0, 1000) for _ in range(2_000)]
+def slow(values):
+    out = []
+    for i in range(1, len(values) + 1):
+        s = sorted(values[:i])
+        m = len(s) // 2
+        out.append(s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2)
+    return out
+assert running_medians(data[:300]) == slow(data[:300])
+assert len(running_medians(data)) == 2_000</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert running_medians([5, 15, 1, 3]) == [5, 10.0, 5, 4.0]
+assert running_medians([2, 2, 2]) == [2, 2.0, 2] and running_medians([]) == []
+import random
+rng = random.Random(0)
+data = [rng.randint(0, 1000) for _ in range(2_000)]
+def slow(values):
+    out = []
+    for i in range(1, len(values) + 1):
+        s = sorted(values[:i])
+        m = len(s) // 2
+        out.append(s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2)
+    return out
+assert running_medians(data[:300]) == slow(data[:300])
+assert len(running_medians(data)) == 2_000</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Push each value onto the lower heap (as its negative), then move the lower heap's largest onto the upper heap; if the upper heap becomes bigger, move its smallest back.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With the lower heap kept equal or one larger, the median is <code>-low[0]</code> for odd counts and <code>(-low[0] + high[0]) / 2</code> for even ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+
+def running_medians(values):
+    low, high, out = [], [], []
+    for v in values:
+        heapq.heappush(low, -v)
+        heapq.heappush(high, -heapq.heappop(low))
+        if len(high) &gt; len(low):
+            heapq.heappush(low, -heapq.heappop(high))
+        if len(low) &gt; len(high):
+            out.append(-low[0])
+        else:
+            out.append((-low[0] + high[0]) / 2)
+    return out</code></pre></div><p>Re-sorting the data after every value (the reference <code>slow</code> function) costs O(n log n) per step and O(n^2 log n) overall; the two heaps keep the data split into a lower and an upper half, so the median is always at the top of one or both, and each new value costs a few O(log n) heap operations. Passing every value through the lower heap into the upper one keeps the invariant "every element of <code>low</code> is at most every element of <code>high</code>" without comparisons by hand. Streaming medians are used for latency monitoring (p50 of response times) and robust feature normalisation; for other percentiles, sketches such as t-digest do the same job approximately.</p></div></details>
+</article>
+<article class="prob" id="p-a-sort-inside-the-loop" data-pid="m16-1-a-sort-inside-the-loop" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A sort inside the loop</h3></header>
+<div class="prob-q"><p><code>rank_with_context(scores, k)</code> should return, for each position <code>i</code>, the ids of the <code>k</code> best-scoring items seen <strong>so far</strong> (inclusive), best first. It calls <code>sorted</code> on the whole history every iteration, which is O(n^2 log n), and it also breaks ties by id <strong>descending</strong> instead of ascending. Fix both: keep the top <code>k</code> with a heap (or a bounded sorted list) as you go, ties broken by smaller id first.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def rank_with_context(scores, k):
+    history, out = [], []
+    for item_id, score in scores:
+        history.append((score, item_id))
+        best = sorted(history, reverse=True)[:k]
+        out.append([i for _, i in best])
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">scores = [("a", 0.2), ("b", 0.9), ("c", 0.5), ("d", 0.9), ("e", 0.1)]
+assert rank_with_context(scores, 2) == [["a"], ["b", "a"], ["b", "c"], ["b", "d"], ["b", "d"]]
+assert rank_with_context([], 3) == [] and rank_with_context(scores, 1)[-1] == ["b"]
+many = [(f"id{i:05d}", (i * 37) % 1000 / 1000) for i in range(20_000)]
+out = rank_with_context(many, 3)
+assert out[-1] == ["id00027", "id00054", "id00081"] or len(out) == 20_000</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">scores = [(&quot;a&quot;, 0.2), (&quot;b&quot;, 0.9), (&quot;c&quot;, 0.5), (&quot;d&quot;, 0.9), (&quot;e&quot;, 0.1)]
+assert rank_with_context(scores, 2) == [[&quot;a&quot;], [&quot;b&quot;, &quot;a&quot;], [&quot;b&quot;, &quot;c&quot;], [&quot;b&quot;, &quot;d&quot;], [&quot;b&quot;, &quot;d&quot;]]
+assert rank_with_context([], 3) == [] and rank_with_context(scores, 1)[-1] == [&quot;b&quot;]
+many = [(f&quot;id{i:05d}&quot;, (i * 37) % 1000 / 1000) for i in range(20_000)]
+out = rank_with_context(many, 3)
+assert out[-1] == [&quot;id00027&quot;, &quot;id00054&quot;, &quot;id00081&quot;] or len(out) == 20_000</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Sort key <code>(-score, id)</code> gives best score first and smaller id first on ties.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a list of at most <code>k</code> <code>(-score, id)</code> pairs: insert with <code>bisect.insort</code> and drop the last when it grows beyond <code>k</code>; each step is O(k).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import bisect
+
+def rank_with_context(scores, k):
+    top, out = [], []
+    for item_id, score in scores:
+        bisect.insort(top, (-score, item_id))
+        if len(top) &gt; k:
+            top.pop()
+        out.append([i for _, i in top])
+    return out</code></pre></div><p>Sorting the full history at every step repeats work: after n items the function had sorted 1, 2, ..., n elements, O(n^2 log n) in total, which is hours for a long stream. Only the current top <code>k</code> can ever matter, so a bounded structure of size <code>k</code> suffices: insertion into a sorted list of length <code>k</code> is O(k), and the whole run is O(n k), linear for a fixed <code>k</code>. Encoding the order in the key <code>(-score, id)</code> makes both directions explicit: higher score first, then <strong>smaller</strong> id, where <code>reverse=True</code> on <code>(score, id)</code> had flipped the tie-break too. For large <code>k</code>, a heap gives O(log k) per step.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-measure-complexity-by-counting" data-pid="m16-1-measure-complexity-by-counting" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Measure complexity by counting</h3></header>
+<div class="prob-q"><p>Write <code>count_comparisons(fn, data)</code> that runs <code>fn</code> on a list of <code>Counted</code> wrappers around <code>data</code> (a class you write whose <code>__lt__</code> and <code>__eq__</code> increment a shared counter) and returns the number of comparisons, and <code>growth(fn, make_data, sizes)</code> returning the list of <code>(n, comparisons)</code> pairs. Use them to show that <code>sorted</code> is roughly n log n on random data but linear on already-sorted data, and that a selection sort is quadratic.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import math, random
+
+class Counted:
+    pass
+
+def count_comparisons(fn, data):
+    pass
+
+def growth(fn, make_data, sizes):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import math, random
+def selection_sort(items):
+    items = list(items)
+    for i in range(len(items)):
+        m = i
+        for j in range(i + 1, len(items)):
+            if items[j] < items[m]:
+                m = j
+        items[i], items[m] = items[m], items[i]
+    return items
+rng = random.Random(1)
+rand = lambda n: [rng.random() for _ in range(n)]
+sizes = [256, 512, 1024]
+sel = growth(selection_sort, rand, sizes)
+assert [c for _, c in sel] == [n * (n - 1) // 2 for n in sizes]
+srt = growth(sorted, lambda n: list(range(n)), sizes)
+assert [c for _, c in srt] == [n - 1 for n in sizes]
+rnd = dict(growth(sorted, rand, sizes))
+assert all(0.7 * n * math.log2(n) < rnd[n] < 1.1 * n * math.log2(n) for n in sizes)
+assert count_comparisons(lambda xs: max(xs), [3, 1, 2]) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math, random
+def selection_sort(items):
+    items = list(items)
+    for i in range(len(items)):
+        m = i
+        for j in range(i + 1, len(items)):
+            if items[j] &lt; items[m]:
+                m = j
+        items[i], items[m] = items[m], items[i]
+    return items
+rng = random.Random(1)
+rand = lambda n: [rng.random() for _ in range(n)]
+sizes = [256, 512, 1024]
+sel = growth(selection_sort, rand, sizes)
+assert [c for _, c in sel] == [n * (n - 1) // 2 for n in sizes]
+srt = growth(sorted, lambda n: list(range(n)), sizes)
+assert [c for _, c in srt] == [n - 1 for n in sizes]
+rnd = dict(growth(sorted, rand, sizes))
+assert all(0.7 * n * math.log2(n) &lt; rnd[n] &lt; 1.1 * n * math.log2(n) for n in sizes)
+assert count_comparisons(lambda xs: max(xs), [3, 1, 2]) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Counted</code> stores a value and a class-level counter; <code>__lt__</code> increments it and compares the wrapped values. Reset the counter at the start of <code>count_comparisons</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>growth</code> calls <code>count_comparisons(fn, make_data(n))</code> for each size.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math, random
+
+
+class Counted:
+    calls = 0
+
+    def __init__(self, value):
+        self.value = value
+
+    def __lt__(self, other):
+        Counted.calls += 1
+        return self.value &lt; other.value
+
+    def __eq__(self, other):
+        Counted.calls += 1
+        return self.value == other.value
+
+    __hash__ = None
+
+
+def count_comparisons(fn, data):
+    Counted.calls = 0
+    fn([Counted(x) for x in data])
+    return Counted.calls
+
+
+def growth(fn, make_data, sizes):
+    return [(n, count_comparisons(fn, make_data(n))) for n in sizes]</code></pre></div><p>Counting comparisons measures an algorithm's work exactly, free of timer noise, and makes complexity visible: selection sort does exactly <code>n(n - 1) / 2</code> comparisons whatever the input (quadratic), while Python's Timsort needs only <code>n - 1</code> on sorted input, because it detects the existing run, and about <code>n log2 n</code> on random data, the lower bound for comparison sorting. That adaptivity is why sorting nearly sorted data (appending a few items to a sorted list and re-sorting) is cheap in Python. The same instrumentation technique (wrapping objects to count operations) helps verify the complexity of your own functions in tests.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-quadratic-log-processor" data-pid="m16-1-read-the-code-a-quadratic-log-processor" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Read the code: a quadratic log processor</h3></header>
+<div class="prob-q"><p><code>process(events)</code> groups events by user and returns, per user, the ordered list of actions and a summary string. It uses a list as a FIFO queue but pops from the wrong end (so actions come out reversed), searches users in a list, recomputes a sorted list of users each iteration, and builds the summary with string <code>+=</code>. Fix the order bug and remove the hidden quadratic costs: a <code>deque</code>, a dict, one sort at the end, and <code>join</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def process(events):
+    queue = list(events)
+    users = []
+    actions = []
+    while queue:
+        user, action = queue.pop()
+        if user not in users:
+            users.append(user)
+            actions.append([])
+        actions[users.index(user)].append(action)
+        ordered = sorted(users)
+    summary = &quot;&quot;
+    for u in ordered:
+        summary += f&quot;{u}:{len(actions[users.index(u)])};&quot;
+    return {u: actions[users.index(u)] for u in ordered}, summary
+</textarea>
+<script type="text/plain" class="prob-tests">events = [("bo", "login"), ("ana", "search"), ("bo", "ask"), ("ana", "ask"), ("bo", "logout")]
+grouped, summary = process(events)
+assert grouped == {"ana": ["search", "ask"], "bo": ["login", "ask", "logout"]} and list(grouped) == ["ana", "bo"]
+assert summary == "ana:2;bo:3;"
+assert process([]) == ({}, "")
+big = [(f"u{i % 5000:04d}", f"a{i}") for i in range(100_000)]
+g, s = process(big)
+assert len(g) == 5000 and g["u0000"][:2] == ["a0", "a5000"] and s.startswith("u0000:20;u0001:20;")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">events = [(&quot;bo&quot;, &quot;login&quot;), (&quot;ana&quot;, &quot;search&quot;), (&quot;bo&quot;, &quot;ask&quot;), (&quot;ana&quot;, &quot;ask&quot;), (&quot;bo&quot;, &quot;logout&quot;)]
+grouped, summary = process(events)
+assert grouped == {&quot;ana&quot;: [&quot;search&quot;, &quot;ask&quot;], &quot;bo&quot;: [&quot;login&quot;, &quot;ask&quot;, &quot;logout&quot;]} and list(grouped) == [&quot;ana&quot;, &quot;bo&quot;]
+assert summary == &quot;ana:2;bo:3;&quot;
+assert process([]) == ({}, &quot;&quot;)
+big = [(f&quot;u{i % 5000:04d}&quot;, f&quot;a{i}&quot;) for i in range(100_000)]
+g, s = process(big)
+assert len(g) == 5000 and g[&quot;u0000&quot;][:2] == [&quot;a0&quot;, &quot;a5000&quot;] and s.startswith(&quot;u0000:20;u0001:20;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>queue = deque(events)</code> and <code>popleft()</code> for FIFO order (or simply iterate over <code>events</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>actions = defaultdict(list)</code>; sort the keys once after the loop; <code>"".join(f"{u}:{len(actions[u])};" for u in ordered)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict, deque
+
+
+def process(events):
+    queue = deque(events)
+    actions = defaultdict(list)
+    while queue:
+        user, action = queue.popleft()
+        actions[user].append(action)
+    ordered = sorted(actions)
+    summary = &quot;&quot;.join(f&quot;{u}:{len(actions[u])};&quot; for u in ordered)
+    return {u: actions[u] for u in ordered}, summary</code></pre></div><p>The correctness bug first: <code>pop()</code> takes from the end, so the queue was processed last-in first-out and every user's actions came out reversed; <code>popleft</code> on a deque (or a plain <code>for</code> loop over the events) keeps the order. Then the hidden costs: <code>user not in users</code> and <code>users.index(user)</code> scanned a list on every event (O(n * u)), a <code>sorted</code> of all users ran inside the loop (O(n * u log u)), and string <code>+=</code> can copy the growing summary each time. A dict from user to actions makes grouping O(1) per event, sorting happens once, and <code>join</code> builds the summary in one pass, so the whole function is O(n + u log u) and the 100,000-event test runs in a fraction of a second instead of minutes.</p></div></details>
+</article>
+<article class="prob" id="p-timsort-adapts-to-its-input" data-pid="m16-1-timsort-adapts-to-its-input" data-type="predict" data-level="hard" data-answer="1023 1023 True True
+True 1023">
+<header class="prob-head"><h3>13. Timsort adapts to its input</h3></header>
+<div class="code"><pre><code class="py">import random
+
+class C:
+    n = 0
+    def __init__(self, v):
+        self.v = v
+    def __lt__(self, other):
+        C.n += 1
+        return self.v &lt; other.v
+
+def comparisons(values):
+    C.n = 0
+    sorted(C(v) for v in values)
+    return C.n
+
+n = 1024
+rng = random.Random(0)
+shuffled = list(range(n))
+rng.shuffle(shuffled)
+nearly = list(range(n))
+nearly[100], nearly[900] = nearly[900], nearly[100]
+print(comparisons(range(n)), comparisons(range(n, 0, -1)), comparisons(nearly) &lt; 3 * n, comparisons(shuffled) &gt; 8 * n)
+print(comparisons(list(range(512)) + list(range(512))) &lt; 2 * n, comparisons([5] * n))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Timsort finds runs that are already ascending, or strictly descending (which it reverses), and merges runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1023 1023 True True
+True 1023</pre></div><p>Sorted input is one ascending run, found with <code>n - 1</code> comparisons and no merging; a strictly descending input is one run that Timsort reverses in place, also <code>n - 1</code>. A nearly sorted list, or two sorted halves, needs only a few merges, so the cost stays a small multiple of n, while a random permutation costs about <code>n log2 n</code> (roughly 10 per element here). Equal elements form one ascending run. Real data is often partly ordered (timestamps, appended logs, re-sorting after small changes), so Python's sort is frequently much faster than its O(n log n) worst case suggests.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-time-complexity-of-looking-u" data-pid="m16-1-what-is-the-time-complexity-of-looking-u" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What is the time complexity of looking up a key in a Python dict, and when is it not O(1)?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A dict is a hash table: Python hashes the key, uses the hash to pick a slot in an array, and compares the key with what is stored there, probing a few other slots on collisions. On average this takes constant time, O(1), independent of the dict's size, because the table is kept at most about two thirds full and resized (an O(n) rehash, amortised over many inserts) as it grows. The worst case is O(n): if many keys share hash values, lookups degrade into scanning colliding entries, which can happen with a badly written <code>__hash__</code> (for example returning a constant) or adversarial inputs (string hashes are randomised per process to defend against that). The key's hash and equality also have their own costs: hashing a long string or a big tuple is O(length) the first time (strings cache their hash). Iteration over a dict is O(n) and preserves insertion order.</p></div></details>
+</article>
+<article class="prob" id="p-why-is-appending-to-a-list-o-1-but-inser" data-pid="m16-1-why-is-appending-to-a-list-o-1-but-inser" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Why is appending to a list O(1) but inserting at the front O(n)?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A Python list is a dynamic array: a contiguous block of pointers with spare capacity. Appending writes into the next free slot, O(1); when the capacity runs out, the list allocates a larger block (over-allocating by a proportion of its size) and copies the pointers, an O(n) step, but because capacity grows geometrically those copies happen rarely enough that their total cost is proportional to the number of appends, so each append is <strong>amortised</strong> O(1). Inserting at index 0 must shift every existing pointer one place to the right to make room, which touches all n elements every time, O(n); the same applies to <code>pop(0)</code>. When you need fast operations at the front, use <code>collections.deque</code> (O(1) at both ends), and when you need fast inserts in the middle of sorted data, consider a different structure (a heap, a balanced tree such as <code>sortedcontainers</code>, or batching and re-sorting).</p></div></details>
+</article>
+<article class="prob" id="p-a-colleague-s-data-pipeline-is-fast-on-t" data-pid="m16-1-a-colleague-s-data-pipeline-is-fast-on-t" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. A colleague's data pipeline is fast on test data but never finishes on production data. How do you find and fix the problem?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Suspect superlinear growth hidden by small test inputs. Reproduce with increasing input sizes (1x, 2x, 4x a sample) and time each run: if doubling the input quadruples the time, there is an O(n^2) step. Profile a representative run with <code>cProfile</code> (or <code>py-spy</code> on the live process, which needs no code changes) to see which functions dominate, and look in them for the usual patterns: <code>in</code> on a list inside a loop, <code>list.pop(0)</code> or <code>insert(0, ...)</code>, <code>sorted</code>, <code>max</code> or <code>index</code> recomputed per item, string or list concatenation in a loop, pandas <code>apply</code> or row-wise loops where vectorised operations exist, repeated queries per row (N+1 queries) instead of a join, and loading data inside a loop. Fix with the right structure (sets and dicts for lookups, deques for queues, heaps for top-k), hoisting work out of loops, batching, and vectorisation, then confirm with the same doubling measurement that the growth is now linear, and add a test or benchmark on a large input so it does not come back.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Big-O describes growth: double the input and see how the cost changes; drop constants and smaller terms.</li><li>Recognise the shapes: one loop O(n), halving O(log n), nested loops over the data O(n^2), sorting O(n log n).</li><li>Measure: doubling experiments, log-log slopes, <code>cProfile</code>, and exact operation counts.</li><li>Know the built-ins: list append and pop from the end O(1) (amortised), front operations and <code>in</code> O(n); dict and set operations O(1) on average; deque O(1) at both ends; heap operations O(log n).</li><li>Hunt hidden quadratics: <code>in</code> on lists, <code>pop(0)</code>, sorting or searching inside loops, and concatenation in loops.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

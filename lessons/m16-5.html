@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16.5 · Dynamic programming</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m16-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 16 · Algorithms for interviews</span></div>
+  <h1>16.5 Dynamic programming</h1>
+  <p>Dynamic programming solves problems whose answer is built from answers to smaller, overlapping versions of the same problem. Recognising it, memoization with <code>functools.cache</code>, bottom-up tables, reconstructing the solution, and the classics that interviews and ML code actually use: coin change, longest common subsequence, edit distance (the metric behind word error rate), knapsack (choosing context chunks under a token budget), longest increasing subsequence and segmentation.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="idea">
+<h2><span class="n">1</span>Overlapping subproblems</h2>
+<p>Some recursive solutions call themselves with the <strong>same arguments many times</strong>. The naive Fibonacci <code>fib(n) = fib(n - 1) + fib(n - 2)</code> recomputes <code>fib(n - 2)</code> from both branches, and the number of calls grows exponentially, about 1.6^n. Dynamic programming applies when a problem has <strong>optimal substructure</strong> (the answer for a state is built from answers for smaller states) and <strong>overlapping subproblems</strong> (the same smaller states recur). Then each distinct state is computed <strong>once</strong>: the cost becomes the number of states times the work per state, often turning O(2^n) into O(n) or O(n^2).</p>
+<p>Every DP solution answers four questions: what is the <strong>state</strong> (the arguments that identify a subproblem: an index, a remaining budget, two prefix lengths), what is the <strong>recurrence</strong> (how a state's answer follows from smaller states), what are the <strong>base cases</strong>, and in what <strong>order</strong> states are computed (top-down with a cache, or bottom-up in a table). Writing them down before coding is most of the work, in interviews and in practice.</p>
+</section>
+<section class="sec" id="memo">
+<h2><span class="n">2</span>Top-down: memoization</h2>
+<p>The quickest way from a correct recursive solution to an efficient one is a cache: <strong><code>@functools.cache</code></strong> (or <code>@functools.lru_cache(maxsize=None)</code>) stores each call's result by its arguments, which must therefore be hashable (tuples, not lists; problem 3). The code stays close to the recurrence, and only states that are actually reached are computed. The costs are Python's recursion limit (about 1,000 frames by default; deep recursion can also crash browser-based Python such as this site's) and function-call overhead. <code>cache_info()</code> reports hits and misses, and <code>cache_clear()</code> empties the cache, which matters when the function depends on data that can change.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">memo.py</span><button class="copy">Copy</button></div><pre><code class="py">from functools import cache
+
+calls = {&quot;naive&quot;: 0}
+
+def fib_naive(n):
+    calls[&quot;naive&quot;] += 1
+    return n if n &lt; 2 else fib_naive(n - 1) + fib_naive(n - 2)
+
+@cache
+def fib(n):
+    return n if n &lt; 2 else fib(n - 1) + fib(n - 2)
+
+print(fib_naive(20), calls[&quot;naive&quot;])
+print(fib(20), fib.cache_info())
+print(fib(60), fib.cache_info().misses)</code></pre><div class="out"><span class="ol">Output</span><pre>6765 21891
+6765 CacheInfo(hits=18, misses=21, maxsize=None, currsize=21)
+1548008755920 61</pre></div></div>
+</section>
+<section class="sec" id="table">
+<h2><span class="n">3</span>Bottom-up: tabulation</h2>
+<p>Bottom-up DP fills a table from the base cases upwards in an order where every state's dependencies are already computed, with plain loops: no recursion limit, no call overhead, and often a chance to keep only the last row or two (O(n) memory instead of O(n^2)). Two-sequence problems use a table <code>dp[i][j]</code> for the first <code>i</code> items of one sequence and the first <code>j</code> of the other, with an extra row and column for the empty prefixes; most off-by-one errors come from forgetting those (problem 7). To return the <strong>solution</strong> and not just its value (which coins, which chunks, which edits), either store choices in the table or walk backwards from the final cell, checking which recurrence branch produced each value (problems 9 and 13).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">edit_distance.py</span><button class="copy">Copy</button></div><pre><code class="py">def edit_distance(a, b):
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[-1]
+
+print(edit_distance(&quot;kitten&quot;, &quot;sitting&quot;), edit_distance(&quot;refund&quot;, &quot;refunds&quot;), edit_distance(&quot;&quot;, &quot;abc&quot;), edit_distance(&quot;same&quot;, &quot;same&quot;))
+ref = &quot;refunds take five business days&quot;.split()
+hyp = &quot;refund takes five days&quot;.split()
+print(edit_distance(ref, hyp), round(edit_distance(ref, hyp) / len(ref), 2))</code></pre><div class="out"><span class="ol">Output</span><pre>3 1 3 0
+3 0.6</pre></div></div>
+<p>Edit distance counts the minimum insertions, deletions and substitutions turning one sequence into another; each cell takes the cheapest of deleting, inserting, or substituting (free when the items match), and keeping only the previous row makes memory O(len(b)). Applied to <strong>words</strong>, it is the numerator of <strong>word error rate</strong>, the standard metric for speech recognition and a useful one for comparing generated text with a reference: here 3 errors over 5 reference words.</p>
+</section>
+<section class="sec" id="classics">
+<h2><span class="n">4</span>The classics and where they appear</h2>
+<p><strong>Coin change</strong> (fewest coins, or number of ways, for an amount) is the template for "combine items to reach a total". <strong>Longest common subsequence</strong> underlies <code>diff</code>, sequence alignment and ROUGE-L for summarisation. <strong>Edit distance</strong> gives fuzzy matching, typo correction and WER. <strong>0/1 knapsack</strong> chooses items with weights and values under a capacity: choosing retrieved chunks to maximise relevance within a token budget is exactly this (problem 9), O(n * capacity). <strong>Longest increasing subsequence</strong> has an O(n log n) solution with <code>bisect</code> (problem 11). <strong>Kadane's algorithm</strong> finds the best contiguous sum in O(n) by deciding at each step whether to extend the current run or start over. <strong>Word break</strong> segments text with a dictionary, related to how tokenizers split words into subwords (problem 12).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-what-memoization-saves" data-pid="m16-5-what-memoization-saves" data-type="predict" data-level="easy" data-answer="5768 20617
+5768 18 28
+10609 19">
+<header class="prob-head"><h3>1. What memoization saves</h3></header>
+<div class="code"><pre><code class="py">from functools import cache
+
+count = {&quot;plain&quot;: 0, &quot;memo&quot;: 0}
+
+def ways_plain(n):
+    count[&quot;plain&quot;] += 1
+    if n &lt; 0:
+        return 0
+    if n == 0:
+        return 1
+    return ways_plain(n - 1) + ways_plain(n - 2) + ways_plain(n - 3)
+
+@cache
+def ways_memo(n):
+    count[&quot;memo&quot;] += 1
+    if n &lt; 0:
+        return 0
+    if n == 0:
+        return 1
+    return ways_memo(n - 1) + ways_memo(n - 2) + ways_memo(n - 3)
+
+print(ways_plain(15), count[&quot;plain&quot;])
+print(ways_memo(15), count[&quot;memo&quot;], ways_memo.cache_info().hits)
+print(ways_memo(16), count[&quot;memo&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The memoised function's body runs once per distinct argument; every other call is a cache hit.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5768 20617
+5768 18 28
+10609 19</pre></div><p>Counting the ways to climb 15 stairs taking 1, 2 or 3 steps at a time gives 5,768, and the plain recursion makes tens of thousands of calls because it solves the same smaller staircases over and over. With <code>@cache</code>, the body runs once for each distinct <code>n</code> reached (from -2 to 15, so 18 times: <code>n == 0</code> returns without recursing, so -3 is never asked for), and every repeated call is a hit. Asking for 16 afterwards runs the body only once more, because every smaller answer is already cached.</p></div></details>
+</article>
+<article class="prob" id="p-count-step-combinations-bottom-up" data-pid="m16-5-count-step-combinations-bottom-up" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Count step combinations bottom-up</h3></header>
+<div class="prob-q"><p>Write <code>count_ways(n, steps)</code> returning how many ordered sequences of step sizes from <code>steps</code> (positive integers) sum exactly to <code>n</code>, bottom-up in O(n * len(steps)) with a list <code>ways</code> where <code>ways[0] = 1</code>. For example <code>count_ways(4, (1, 2))</code> is 5.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def count_ways(n, steps):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert [count_ways(n, (1, 2)) for n in range(7)] == [1, 1, 2, 3, 5, 8, 13]
+assert count_ways(15, (1, 2, 3)) == 5768 and count_ways(7, (2, 4)) == 0 and count_ways(0, (5,)) == 1
+assert count_ways(500, (1, 2)) == count_ways(499, (1, 2)) + count_ways(498, (1, 2))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert [count_ways(n, (1, 2)) for n in range(7)] == [1, 1, 2, 3, 5, 8, 13]
+assert count_ways(15, (1, 2, 3)) == 5768 and count_ways(7, (2, 4)) == 0 and count_ways(0, (5,)) == 1
+assert count_ways(500, (1, 2)) == count_ways(499, (1, 2)) + count_ways(498, (1, 2))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ways[i] = sum(ways[i - s] for s in steps if s &lt;= i)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def count_ways(n, steps):
+    ways = [0] * (n + 1)
+    ways[0] = 1
+    for i in range(1, n + 1):
+        ways[i] = sum(ways[i - s] for s in steps if s &lt;= i)
+    return ways[n]</code></pre></div><p>The state is the remaining height <code>i</code>, and the recurrence follows from the last step taken: any sequence reaching <code>i</code> ends with some step <code>s</code>, after a sequence reaching <code>i - s</code>. With <code>ways[0] = 1</code> (the empty sequence) as the base case and the table filled from small to large, every needed value is ready when used, so there is no recursion and <code>n = 500</code> is instant despite the astronomically large answer (Python integers grow as needed). With steps 1 and 2 this is the Fibonacci sequence.</p></div></details>
+</article>
+<article class="prob" id="p-a-memoised-function-with-a-list-argument" data-pid="m16-5-a-memoised-function-with-a-list-argument" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A memoised function with a list argument</h3></header>
+<div class="prob-q"><p><code>best_split(costs)</code> is memoised with <code>@cache</code> but called with lists, so it raises <code>TypeError: unhashable type: 'list'</code>. Fix it so the cache works (convert to a tuple at the boundary, keep the public function accepting lists) and the recursion stays memoised.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from functools import cache
+
+@cache
+def best_split(costs):
+    # minimal total cost of grouping consecutive items, where a group of k items costs max(group) * k
+    if not costs:
+        return 0
+    best = None
+    for k in range(1, len(costs) + 1):
+        candidate = max(costs[:k]) * k + best_split(costs[k:])
+        if best is None or candidate &lt; best:
+            best = candidate
+    return best
+</textarea>
+<script type="text/plain" class="prob-tests">assert best_split([4, 1, 1, 4]) == 10 and best_split([]) == 0 and best_split([5]) == 5
+assert best_split([3, 3, 3]) == 9 and best_split([1, 9, 1]) == 11
+assert best_split(list(range(1, 25))) == sum(range(1, 25))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert best_split([4, 1, 1, 4]) == 10 and best_split([]) == 0 and best_split([5]) == 5
+assert best_split([3, 3, 3]) == 9 and best_split([1, 9, 1]) == 11
+assert best_split(list(range(1, 25))) == sum(range(1, 25))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A private <code>@cache</code> helper <code>_best(costs)</code> takes a tuple; <code>best_split(costs)</code> calls <code>_best(tuple(costs))</code>. Slicing a tuple gives a tuple.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from functools import cache
+
+@cache
+def _best(costs):
+    if not costs:
+        return 0
+    best = None
+    for k in range(1, len(costs) + 1):
+        candidate = max(costs[:k]) * k + _best(costs[k:])
+        if best is None or candidate &lt; best:
+            best = candidate
+    return best
+
+def best_split(costs):
+    return _best(tuple(costs))</code></pre></div><p>The cache stores results in a dict keyed by the arguments, so every argument must be hashable; a list is not, because it could change after being used as a key. Converting to a tuple once, at the public boundary, keeps callers free to pass lists while the memoised helper works on immutable tuples whose slices are tuples too. Even better for long inputs is to make the <strong>state</strong> an index (<code>_best(i)</code> for the suffix starting at <code>i</code>), which avoids building and hashing slices: O(n) states instead of slices of every length. Choosing a small, hashable state is half of designing a DP.</p></div></details>
+</article>
+<article class="prob" id="p-kadane-s-maximum-subarray" data-pid="m16-5-kadane-s-maximum-subarray" data-type="predict" data-level="easy" data-answer="(6, [4, -1, 2, 1])
+(-1, [-1]) (8, [2, 3, -1, 4])">
+<header class="prob-head"><h3>4. Kadane's maximum subarray</h3></header>
+<div class="code"><pre><code class="py">def max_subarray(values):
+    best = cur = values[0]
+    start = best_start = best_end = 0
+    for i in range(1, len(values)):
+        if cur + values[i] &lt; values[i]:
+            cur, start = values[i], i
+        else:
+            cur += values[i]
+        if cur &gt; best:
+            best, best_start, best_end = cur, start, i
+    return best, values[best_start:best_end + 1]
+
+daily_gain = [3, -5, 4, -1, 2, 1, -6, 5]
+print(max_subarray(daily_gain))
+print(max_subarray([-3, -1, -4]), max_subarray([2, 3, -1, 4]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>At each element: either extend the current run or start a new one there, whichever is larger; remember the best run seen.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(6, [4, -1, 2, 1])
+(-1, [-1]) (8, [2, 3, -1, 4])</pre></div><p>Kadane's algorithm is DP with a one-number state: the best sum of a run <strong>ending at</strong> the current position, which is either the element alone or the element added to the best run ending just before. The overall best is the maximum of those, found in one O(n) pass: <code>[4, -1, 2, 1]</code> sums to 6 here. With only negative values the answer is the largest single value, and when every prefix helps, the whole array wins (8).</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-coin-change-fewest-coins-and-number-of-w" data-pid="m16-5-coin-change-fewest-coins-and-number-of-w" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Coin change: fewest coins and number of ways</h3></header>
+<div class="prob-q"><p>Write <code>min_coins(coins, amount)</code> returning <code>(count, combination)</code> with the fewest coins summing to <code>amount</code> (combination sorted descending, any optimal one), or <code>None</code> if impossible, and <code>count_combinations(coins, amount)</code> returning the number of <strong>unordered</strong> combinations (so <code>1+2</code> and <code>2+1</code> count once). Both bottom-up, O(amount * len(coins)).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def min_coins(coins, amount):
+    pass
+
+def count_combinations(coins, amount):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert min_coins([1, 2, 5], 11) == (3, [5, 5, 1]) and min_coins([2], 3) is None and min_coins([1], 0) == (0, [])
+count, combo = min_coins([1, 3, 4], 6)
+assert count == 2 and sorted(combo) == [3, 3]
+assert count_combinations([1, 2, 5], 5) == 4 and count_combinations([2], 3) == 0 and count_combinations([1, 2, 3], 4) == 4
+assert count_combinations([1, 5, 10, 25], 100) == 242</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert min_coins([1, 2, 5], 11) == (3, [5, 5, 1]) and min_coins([2], 3) is None and min_coins([1], 0) == (0, [])
+count, combo = min_coins([1, 3, 4], 6)
+assert count == 2 and sorted(combo) == [3, 3]
+assert count_combinations([1, 2, 5], 5) == 4 and count_combinations([2], 3) == 0 and count_combinations([1, 2, 3], 4) == 4
+assert count_combinations([1, 5, 10, 25], 100) == 242</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>best[a]</code> = fewest coins for amount <code>a</code> (infinity if impossible) and <code>last[a]</code> = the coin used last; rebuild the combination by following <code>last</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For unordered combinations, loop over coins <strong>outside</strong> and amounts inside: <code>ways[a] += ways[a - c]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def min_coins(coins, amount):
+    INF = float(&quot;inf&quot;)
+    best = [0] + [INF] * amount
+    last = [None] * (amount + 1)
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= a and best[a - c] + 1 &lt; best[a]:
+                best[a], last[a] = best[a - c] + 1, c
+    if best[amount] == INF:
+        return None
+    combo, a = [], amount
+    while a:
+        combo.append(last[a])
+        a -= last[a]
+    return best[amount], sorted(combo, reverse=True)
+
+
+def count_combinations(coins, amount):
+    ways = [1] + [0] * amount
+    for c in coins:
+        for a in range(c, amount + 1):
+            ways[a] += ways[a - c]
+    return ways[amount]</code></pre></div><p>The state is the remaining amount. For the fewest coins, the recurrence tries every coin as the last one: <code>best[a] = 1 + min(best[a - c])</code>, and storing which coin achieved the minimum lets you rebuild the combination by walking back from <code>amount</code>. Greedy "take the largest coin" fails for coins <code>[1, 3, 4]</code> and amount 6 (4 + 1 + 1 instead of 3 + 3), which is the classic reason to reach for DP. For counting, the loop order decides what is counted: coins outside means each coin's uses are added before the next coin is considered, so every combination is built in one canonical order and counted once (242 ways to make a dollar from US coins); amounts outside would count orderings, as in problem 2.</p></div></details>
+</article>
+<article class="prob" id="p-word-error-rate" data-pid="m16-5-word-error-rate" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Word error rate</h3></header>
+<div class="prob-q"><p>Write <code>edit_distance(a, b)</code> for any two sequences (strings or lists of words) with unit costs, using two rows of memory, and <code>word_error_rate(reference, hypothesis)</code> returning the word-level edit distance divided by the number of reference words, rounded to 3, after lower-casing and stripping <code>.,!?</code> from words; an empty reference gives 0.0 if the hypothesis is empty too, else 1.0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def edit_distance(a, b):
+    pass
+
+def word_error_rate(reference, hypothesis):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert edit_distance("kitten", "sitting") == 3 and edit_distance("", "abc") == 3 and edit_distance("abc", "abc") == 0
+assert edit_distance(["a", "b", "c"], ["a", "c"]) == 1 and edit_distance("flaw", "lawn") == 2
+assert word_error_rate("Refunds take five business days.", "refund takes five days") == 0.6
+assert word_error_rate("Hello there!", "hello there") == 0.0 and word_error_rate("", "") == 0.0 and word_error_rate("", "x") == 1.0
+assert word_error_rate("a b", "a b c d") == 1.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert edit_distance(&quot;kitten&quot;, &quot;sitting&quot;) == 3 and edit_distance(&quot;&quot;, &quot;abc&quot;) == 3 and edit_distance(&quot;abc&quot;, &quot;abc&quot;) == 0
+assert edit_distance([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], [&quot;a&quot;, &quot;c&quot;]) == 1 and edit_distance(&quot;flaw&quot;, &quot;lawn&quot;) == 2
+assert word_error_rate(&quot;Refunds take five business days.&quot;, &quot;refund takes five days&quot;) == 0.6
+assert word_error_rate(&quot;Hello there!&quot;, &quot;hello there&quot;) == 0.0 and word_error_rate(&quot;&quot;, &quot;&quot;) == 0.0 and word_error_rate(&quot;&quot;, &quot;x&quot;) == 1.0
+assert word_error_rate(&quot;a b&quot;, &quot;a b c d&quot;) == 1.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Row <code>prev</code> holds distances from the first <code>i - 1</code> items of <code>a</code> to every prefix of <code>b</code>; <code>cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i-1] != b[j-1]))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def edit_distance(a, b):
+    prev = list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    return prev[-1]
+
+
+def _words(text):
+    return [w.strip(&quot;.,!?&quot;).lower() for w in text.split() if w.strip(&quot;.,!?&quot;)]
+
+
+def word_error_rate(reference, hypothesis):
+    ref, hyp = _words(reference), _words(hypothesis)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    return round(edit_distance(ref, hyp) / len(ref), 3)</code></pre></div><p>Edit distance's state is a pair of prefix lengths; the last items either match (free), or one is substituted, deleted or inserted (cost 1), and the table's first row and column are the costs of building a prefix from nothing. Only the previous row is needed for the next, so memory is O(len(b)) while time stays O(len(a) * len(b)). Because the function works on any sequences, the same code gives character edits (typo correction, fuzzy matching of entity names) and word edits: word error rate, the main metric for speech recognition and a robust way to compare transcripts or extracted text. WER can exceed 1 when the hypothesis has many insertions, so it is not a percentage.</p></div></details>
+</article>
+<article class="prob" id="p-an-lcs-table-without-the-empty-prefixes" data-pid="m16-5-an-lcs-table-without-the-empty-prefixes" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>7. An LCS table without the empty prefixes</h3></header>
+<div class="prob-q"><p><code>lcs_length(a, b)</code> should return the length of the longest common subsequence of two token lists (the core of ROUGE-L for summaries), but its table has no row and column for empty prefixes: it indexes <code>dp[i - 1]</code> with <code>i = 0</code>, silently reading the <strong>last</strong> row, and it crashes on empty input. Fix it with an <code>(len(a) + 1) x (len(b) + 1)</code> table.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def lcs_length(a, b):
+    dp = [[0] * len(b) for _ in range(len(a))]
+    for i in range(len(a)):
+        for j in range(len(b)):
+            if a[i] == b[j]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    return dp[-1][-1]
+</textarea>
+<script type="text/plain" class="prob-tests">assert lcs_length(list("ABCBDAB"), list("BDCABA")) == 4
+assert lcs_length("the cat sat on the mat".split(), "the cat lay on a mat".split()) == 4
+assert lcs_length([], ["a"]) == 0 and lcs_length(["x"], ["x"]) == 1 and lcs_length(list("abc"), list("def")) == 0
+assert lcs_length(list("aab"), list("ab")) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert lcs_length(list(&quot;ABCBDAB&quot;), list(&quot;BDCABA&quot;)) == 4
+assert lcs_length(&quot;the cat sat on the mat&quot;.split(), &quot;the cat lay on a mat&quot;.split()) == 4
+assert lcs_length([], [&quot;a&quot;]) == 0 and lcs_length([&quot;x&quot;], [&quot;x&quot;]) == 1 and lcs_length(list(&quot;abc&quot;), list(&quot;def&quot;)) == 0
+assert lcs_length(list(&quot;aab&quot;), list(&quot;ab&quot;)) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]</code>, loop <code>i</code> from 1 to <code>len(a)</code> and <code>j</code> from 1 to <code>len(b)</code>, comparing <code>a[i - 1]</code> with <code>b[j - 1]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def lcs_length(a, b):
+    dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    return dp[-1][-1]</code></pre></div><p><code>dp[i][j]</code> should mean "the LCS of the first <code>i</code> items of <code>a</code> and the first <code>j</code> of <code>b</code>", which needs <code>i</code> and <code>j</code> to range from 0 (empty prefix, LCS 0) upwards. Without that row and column, the base case was missing, and Python's negative indexing turned <code>dp[-1]</code> into the last row of the table, garbage that happens to be 0 at the start, which is why the bug can pass small tests. The padded table makes the base cases explicit and the indices honest. ROUGE-L divides the LCS length by the reference and candidate lengths to score how much of a reference summary's word order a generated summary preserves.</p></div></details>
+</article>
+<article class="prob" id="p-naive-recursion-or-memoization" data-pid="m16-5-naive-recursion-or-memoization" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Naive recursion or memoization</h3></header>
+<div class="prob-q"><p>Both compute the 25th Fibonacci number. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">from functools import cache
+
+def fib_naive(n):
+    return n if n &lt; 2 else fib_naive(n - 1) + fib_naive(n - 2)
+
+def fib_memo(n):
+    @cache
+    def f(k):
+        return k if k &lt; 2 else f(k - 1) + f(k - 2)
+    return f(n)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">fib_naive(25)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">fib_memo(25)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many calls does each make? The memoised version builds a fresh cache on each run, so it is not cheating.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>21.22 ms</td></tr><tr><td>B</td><td>22.22 µs</td></tr></table></div><p>The naive recursion makes about 250,000 calls because it recomputes the same subproblems exponentially often; the memoised one computes each of the 26 states once, so it does a few dozen calls even with a fresh cache per run. This is the whole idea of dynamic programming in one measurement: same recurrence, exponential versus linear work.</p></div></details>
+</article>
+<article class="prob" id="p-filling-a-coin-change-table" data-pid="m16-5-filling-a-coin-change-table" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Filling a coin-change table</h3></header>
+<div class="prob-q"><p>Fill in <code>ways</code> after each marked line: the number of combinations for amounts 0 to 6 after adding each coin.</p></div>
+<div class="code"><pre><code class="py">amount = 6
+ways = [1] + [0] * amount
+for coin in (1,):
+    for a in range(coin, amount + 1):
+        ways[a] += ways[a - coin]
+ways = list(ways)
+for coin in (2,):
+    for a in range(coin, amount + 1):
+        ways[a] += ways[a - coin]
+ways = list(ways)
+for coin in (5,):
+    for a in range(coin, amount + 1):
+        ways[a] += ways[a - coin]
+ways = list(ways)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>ways</code></th></tr><tr><td>after coin 1</td><td><input class="cell" data-a="[1, 1, 1, 1, 1, 1, 1]" data-s="[1, 1, 1, 1, 1, 1, 1]" aria-label="ways at after coin 1" autocomplete="off"></td></tr><tr><td>after coin 2</td><td><input class="cell" data-a="[1, 1, 2, 2, 3, 3, 4]" data-s="[1, 1, 2, 2, 3, 3, 4]" aria-label="ways at after coin 2" autocomplete="off"></td></tr><tr><td>after coin 5</td><td><input class="cell" data-a="[1, 1, 2, 2, 3, 4, 5]" data-s="[1, 1, 2, 2, 3, 4, 5]" aria-label="ways at after coin 5" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With only coin 1 there is one way to make every amount. Adding coin 2: <code>ways[a] += ways[a - 2]</code>, left to right.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>ways</code></th></tr><tr><td>after coin 1</td><td><code>[1, 1, 1, 1, 1, 1, 1]</code></td></tr><tr><td>after coin 2</td><td><code>[1, 1, 2, 2, 3, 3, 4]</code></td></tr><tr><td>after coin 5</td><td><code>[1, 1, 2, 2, 3, 4, 5]</code></td></tr></table></div><p>Each coin updates the table in increasing order of amount, so <code>ways[a - coin]</code> already includes combinations that use the current coin, which allows it to be used any number of times. With 1s only, every amount has one way. Adding 2s gives <code>[1, 1, 2, 2, 3, 3, 4]</code> (for 6: six 1s, one 2, two 2s, three 2s). Adding a 5 changes only amounts 5 and 6, each by one new combination (<code>5</code>, and <code>5 + 1</code>).</p></div></details>
+</article>
+<article class="prob" id="p-choose-chunks-under-a-token-budget" data-pid="m16-5-choose-chunks-under-a-token-budget" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. Choose chunks under a token budget</h3></header>
+<div class="prob-q"><p>Write <code>select_chunks(chunks, budget)</code> where each chunk is <code>(tokens, relevance)</code>. Choose a subset with total tokens <code>&lt;= budget</code> maximising total relevance (0/1 knapsack, O(n * budget)), and return <code>(total_relevance rounded to 3, sorted list of chosen indices)</code>. When several subsets tie, any optimal one is acceptable but the tests check the totals.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def select_chunks(chunks, budget):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">chunks = [(500, 0.9), (300, 0.6), (300, 0.55), (200, 0.3), (700, 1.2)]
+total, chosen = select_chunks(chunks, 1000)
+assert total == 1.8 and sum(chunks[i][0] for i in chosen) <= 1000 and round(sum(chunks[i][1] for i in chosen), 3) == total
+total, chosen = select_chunks(chunks, 800)
+assert total == 1.5 and chosen == [0, 1]
+assert select_chunks(chunks, 100) == (0.0, []) and select_chunks([], 500) == (0.0, [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">chunks = [(500, 0.9), (300, 0.6), (300, 0.55), (200, 0.3), (700, 1.2)]
+total, chosen = select_chunks(chunks, 1000)
+assert total == 1.8 and sum(chunks[i][0] for i in chosen) &lt;= 1000 and round(sum(chunks[i][1] for i in chosen), 3) == total
+total, chosen = select_chunks(chunks, 800)
+assert total == 1.5 and chosen == [0, 1]
+assert select_chunks(chunks, 100) == (0.0, []) and select_chunks([], 500) == (0.0, [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Table <code>best[i][w]</code>: best relevance using the first <code>i</code> chunks within <code>w</code> tokens; either skip chunk <code>i - 1</code> or take it if it fits.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk back from <code>best[n][budget]</code>: if the value differs from <code>best[i - 1][w]</code>, chunk <code>i - 1</code> was taken; subtract its tokens.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def select_chunks(chunks, budget):
+    n = len(chunks)
+    best = [[0.0] * (budget + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        tokens, value = chunks[i - 1]
+        for w in range(budget + 1):
+            best[i][w] = best[i - 1][w]
+            if tokens &lt;= w and best[i - 1][w - tokens] + value &gt; best[i][w]:
+                best[i][w] = best[i - 1][w - tokens] + value
+    chosen, w = [], budget
+    for i in range(n, 0, -1):
+        if best[i][w] != best[i - 1][w]:
+            chosen.append(i - 1)
+            w -= chunks[i - 1][0]
+    return round(best[n][budget], 3), sorted(chosen)</code></pre></div><p>Packing context is a knapsack: each chunk has a weight (its tokens) and a value (its relevance), and the budget is the capacity. Greedy by relevance per token is not optimal (with 1,000 tokens it might take the 700-token chunk and waste the rest); the DP considers every chunk in or out for every remaining budget, O(n * budget) time, and the table lets you walk back to the chosen set. Real systems round token counts to coarser units (multiples of 10 or 50) to shrink the table, and often add constraints such as "at most two chunks per document", which become extra state dimensions.</p></div></details>
+</article>
+<article class="prob" id="p-longest-increasing-subsequence-with-bise" data-pid="m16-5-longest-increasing-subsequence-with-bise" data-type="predict" data-level="medium" data-answer="(4, [2, 3, 7, 18], [2, 3, 7, 18])
+(1, [3], [3]) (0, [], []) (4, [1, 2, 3, 4], [1, 2, 3, 4])">
+<header class="prob-head"><h3>11. Longest increasing subsequence with bisect</h3></header>
+<div class="code"><pre><code class="py">from bisect import bisect_left
+
+def lis(values):
+    tails, idx, prev = [], [], [None] * len(values)
+    for i, v in enumerate(values):
+        k = bisect_left(tails, v)
+        if k == len(tails):
+            tails.append(v)
+            idx.append(i)
+        else:
+            tails[k] = v
+            idx[k] = i
+        prev[i] = idx[k - 1] if k else None
+    out, i = [], idx[-1] if idx else None
+    while i is not None:
+        out.append(values[i])
+        i = prev[i]
+    return len(tails), tails, out[::-1]
+
+print(lis([10, 9, 2, 5, 3, 7, 101, 18]))
+print(lis([3, 3, 3]), lis([]), lis([1, 2, 3, 4]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tails[k]</code> is the smallest possible last value of an increasing subsequence of length <code>k + 1</code> seen so far; each value replaces the first tail that is not smaller.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(4, [2, 3, 7, 18], [2, 3, 7, 18])
+(1, [3], [3]) (0, [], []) (4, [1, 2, 3, 4], [1, 2, 3, 4])</pre></div><p>The patience-sorting idea keeps, for each length, the smallest tail an increasing subsequence of that length can have; a new value extends the longest one if it is larger than every tail, or improves (lowers) the first tail it does not exceed, found with <code>bisect_left</code> in O(log n), so the whole algorithm is O(n log n) instead of the O(n^2) table. <code>tails</code> is not in general a real subsequence of the input (here it happens to be one); following the <code>prev</code> links from the last tail's index always rebuilds a real one, <code>[2, 3, 7, 18]</code>. With <code>bisect_left</code>, equal values do not extend the sequence (strictly increasing), so <code>[3, 3, 3]</code> gives length 1.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-segment-text-with-a-vocabulary" data-pid="m16-5-segment-text-with-a-vocabulary" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Segment text with a vocabulary</h3></header>
+<div class="prob-q"><p>Write <code>segment(text, vocab)</code> splitting a string without spaces into vocabulary words using the <strong>fewest</strong> words, returning the list of words or <code>None</code> if impossible, bottom-up over end positions in O(n * L) where <code>L</code> is the longest vocabulary word. Ties go to the segmentation whose first differing word is longer.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def segment(text, vocab):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">vocab = {"re", "fund", "refund", "s", "policy", "pol", "icy", "un", "fun", "fund", "funds"}
+assert segment("refundspolicy", vocab) == ["refund", "s", "policy"] or segment("refundspolicy", vocab) == ["re", "funds", "policy"]
+assert len(segment("refundspolicy", vocab)) == 3
+assert segment("refundpolicy", vocab) == ["refund", "policy"] and segment("policies", vocab) is None and segment("", vocab) == []
+tok = {"un", "believ", "able", "unbeliev", "a", "ble"}
+assert segment("unbelievable", tok) == ["unbeliev", "able"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">vocab = {&quot;re&quot;, &quot;fund&quot;, &quot;refund&quot;, &quot;s&quot;, &quot;policy&quot;, &quot;pol&quot;, &quot;icy&quot;, &quot;un&quot;, &quot;fun&quot;, &quot;fund&quot;, &quot;funds&quot;}
+assert segment(&quot;refundspolicy&quot;, vocab) == [&quot;refund&quot;, &quot;s&quot;, &quot;policy&quot;] or segment(&quot;refundspolicy&quot;, vocab) == [&quot;re&quot;, &quot;funds&quot;, &quot;policy&quot;]
+assert len(segment(&quot;refundspolicy&quot;, vocab)) == 3
+assert segment(&quot;refundpolicy&quot;, vocab) == [&quot;refund&quot;, &quot;policy&quot;] and segment(&quot;policies&quot;, vocab) is None and segment(&quot;&quot;, vocab) == []
+tok = {&quot;un&quot;, &quot;believ&quot;, &quot;able&quot;, &quot;unbeliev&quot;, &quot;a&quot;, &quot;ble&quot;}
+assert segment(&quot;unbelievable&quot;, tok) == [&quot;unbeliev&quot;, &quot;able&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>best[i]</code> = fewest words for <code>text[:i]</code> (<code>best[0] = 0</code>); for each <code>i</code>, try every word length <code>k &lt;= L</code> with <code>text[i - k:i]</code> in the vocabulary.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the start of the last word in <code>back[i]</code>, then walk back from <code>len(text)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def segment(text, vocab):
+    n = len(text)
+    longest = max((len(w) for w in vocab), default=0)
+    INF = float(&quot;inf&quot;)
+    best = [0] + [INF] * n
+    back = [None] * (n + 1)
+    for i in range(1, n + 1):
+        for k in range(min(longest, i), 0, -1):
+            j = i - k
+            if best[j] + 1 &lt; best[i] and text[j:i] in vocab:
+                best[i], back[i] = best[j] + 1, j
+    if best[n] == INF:
+        return None
+    words, i = [], n
+    while i:
+        words.append(text[back[i]:i])
+        i = back[i]
+    return words[::-1]</code></pre></div><p>The state is a prefix length; <code>text[:i]</code> can be segmented if some vocabulary word ends at <code>i</code> and the text before it can be segmented, and taking the minimum over those words gives the fewest pieces. Limiting candidates to the longest vocabulary word keeps the work O(n * L) with O(1) set lookups, and <code>back</code> records where each best last word starts, so the segmentation is rebuilt by walking backwards. Subword tokenizers face the same question of how to split a word into known pieces; WordPiece takes the longest match greedily from the left, while a DP like this finds a segmentation that is optimal for a chosen score (fewest pieces here, highest probability in a unigram language-model tokenizer).</p></div></details>
+</article>
+<article class="prob" id="p-explain-the-edits-between-two-texts" data-pid="m16-5-explain-the-edits-between-two-texts" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Explain the edits between two texts</h3></header>
+<div class="prob-q"><p>Write <code>align(reference, hypothesis)</code> for two word lists, returning the list of operations that turns the reference into the hypothesis with minimum edit distance: <code>("keep", r)</code>, <code>("sub", r, h)</code>, <code>("del", r)</code> and <code>("ins", h)</code>, in order. Build the full DP table, then backtrack from the bottom-right cell, preferring keep/sub, then delete, then insert when several moves are optimal. Also return the distance.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def align(reference, hypothesis):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ref = "refunds take five business days".split()
+hyp = "refund takes five days".split()
+dist, ops = align(ref, hyp)
+assert dist == 3
+assert ops == [("sub", "refunds", "refund"), ("sub", "take", "takes"), ("keep", "five"), ("del", "business"), ("keep", "days")]
+assert align([], ["a", "b"]) == (2, [("ins", "a"), ("ins", "b")]) and align(["a"], []) == (1, [("del", "a")])
+d, o = align("the cat sat".split(), "the cat sat on the mat".split())
+assert d == 3 and o[-3:] == [("ins", "on"), ("ins", "the"), ("ins", "mat")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ref = &quot;refunds take five business days&quot;.split()
+hyp = &quot;refund takes five days&quot;.split()
+dist, ops = align(ref, hyp)
+assert dist == 3
+assert ops == [(&quot;sub&quot;, &quot;refunds&quot;, &quot;refund&quot;), (&quot;sub&quot;, &quot;take&quot;, &quot;takes&quot;), (&quot;keep&quot;, &quot;five&quot;), (&quot;del&quot;, &quot;business&quot;), (&quot;keep&quot;, &quot;days&quot;)]
+assert align([], [&quot;a&quot;, &quot;b&quot;]) == (2, [(&quot;ins&quot;, &quot;a&quot;), (&quot;ins&quot;, &quot;b&quot;)]) and align([&quot;a&quot;], []) == (1, [(&quot;del&quot;, &quot;a&quot;)])
+d, o = align(&quot;the cat sat&quot;.split(), &quot;the cat sat on the mat&quot;.split())
+assert d == 3 and o[-3:] == [(&quot;ins&quot;, &quot;on&quot;), (&quot;ins&quot;, &quot;the&quot;), (&quot;ins&quot;, &quot;mat&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dp[i][j]</code> for prefixes of length <code>i</code> and <code>j</code>; first row <code>j</code>, first column <code>i</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Backtrack while <code>i &gt; 0 or j &gt; 0</code>: if <code>i and j</code> and <code>dp[i][j] == dp[i-1][j-1] + cost</code>, it was keep or sub; elif <code>i</code> and <code>dp[i][j] == dp[i-1][j] + 1</code>, a deletion; else an insertion. Reverse at the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def align(reference, hypothesis):
+    n, m = len(reference), len(hypothesis)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if reference[i - 1] == hypothesis[j - 1] else 1
+            dp[i][j] = min(dp[i - 1][j - 1] + cost, dp[i - 1][j] + 1, dp[i][j - 1] + 1)
+    ops, i, j = [], n, m
+    while i &gt; 0 or j &gt; 0:
+        if i and j:
+            cost = 0 if reference[i - 1] == hypothesis[j - 1] else 1
+            if dp[i][j] == dp[i - 1][j - 1] + cost:
+                ops.append((&quot;keep&quot;, reference[i - 1]) if cost == 0 else (&quot;sub&quot;, reference[i - 1], hypothesis[j - 1]))
+                i, j = i - 1, j - 1
+                continue
+        if i and dp[i][j] == dp[i - 1][j] + 1:
+            ops.append((&quot;del&quot;, reference[i - 1]))
+            i -= 1
+        else:
+            ops.append((&quot;ins&quot;, hypothesis[j - 1]))
+            j -= 1
+    return dp[n][m], ops[::-1]</code></pre></div><p>The distance alone says how wrong a transcript or generated answer is; the <strong>alignment</strong> says where: which words were substituted, dropped or added, which is what an evaluation report or a diff view shows. Recovering it requires the full table (O(n * m) memory instead of two rows), because backtracking asks, at each cell, which neighbour produced its value; a fixed preference order makes the result deterministic when several moves are optimal. The same backtracking pattern recovers the chosen items in knapsack (problem 9), the words in segmentation (problem 12) and the common subsequence in LCS.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-counting-decodings" data-pid="m16-5-read-the-code-counting-decodings" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: counting decodings</h3></header>
+<div class="prob-q"><p>Messages are encoded as digit strings with <code>A=1 ... Z=26</code>. <code>count_decodings(s)</code> should count the ways to decode <code>s</code> (<code>"226"</code> has 3: <code>BZ</code>, <code>VF</code>, <code>BBF</code>). The recursive version is exponential (it recomputes the same suffixes), treats <code>"0"</code> as a letter, accepts two-digit codes like <code>"06"</code> and <code>"27"</code>, and returns 1 for an empty string only by accident. Rewrite it bottom-up in O(n): a single <code>0</code> decodes to nothing, a two-digit code is valid only from 10 to 26, and the empty string has exactly one decoding.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def count_decodings(s):
+    if len(s) &lt;= 1:
+        return 1
+    ways = count_decodings(s[1:])
+    if int(s[:2]) &lt;= 26:
+        ways += count_decodings(s[2:])
+    return ways
+</textarea>
+<script type="text/plain" class="prob-tests">assert count_decodings("226") == 3 and count_decodings("12") == 2 and count_decodings("") == 1
+assert count_decodings("06") == 0 and count_decodings("10") == 1 and count_decodings("27") == 1 and count_decodings("100") == 0
+assert count_decodings("11106") == 2 and count_decodings("0") == 0
+assert count_decodings("1" * 25) == 121393</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert count_decodings(&quot;226&quot;) == 3 and count_decodings(&quot;12&quot;) == 2 and count_decodings(&quot;&quot;) == 1
+assert count_decodings(&quot;06&quot;) == 0 and count_decodings(&quot;10&quot;) == 1 and count_decodings(&quot;27&quot;) == 1 and count_decodings(&quot;100&quot;) == 0
+assert count_decodings(&quot;11106&quot;) == 2 and count_decodings(&quot;0&quot;) == 0
+assert count_decodings(&quot;1&quot; * 25) == 121393</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ways[i]</code> = decodings of <code>s[:i]</code>, <code>ways[0] = 1</code>. Add <code>ways[i - 1]</code> if <code>s[i - 1] != "0"</code>, and <code>ways[i - 2]</code> if <code>10 &lt;= int(s[i - 2:i]) &lt;= 26</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def count_decodings(s):
+    ways = [1] + [0] * len(s)
+    for i in range(1, len(s) + 1):
+        if s[i - 1] != &quot;0&quot;:
+            ways[i] += ways[i - 1]
+        if i &gt;= 2 and 10 &lt;= int(s[i - 2:i]) &lt;= 26:
+            ways[i] += ways[i - 2]
+    return ways[-1]</code></pre></div><p>The recursion had the right shape (the first letter uses one or two digits) but recomputed the same suffixes exponentially often: sixty <code>1</code>s would take years, while the table needs sixty steps (the answer is a Fibonacci number). The base case "length at most one means one way" was wrong for <code>"0"</code>, which cannot be decoded, and the two-digit test accepted <code>"06"</code> (leading zero) and any number below 27 including single digits; the precise rules are "one digit from 1 to 9" and "two digits from 10 to 26". The empty prefix has exactly one decoding (decode nothing), the base case that makes every count correct, the same role <code>{0: 1}</code> played in 16.2's prefix sums.</p></div></details>
+</article>
+<article class="prob" id="p-lru-cache-details" data-pid="m16-5-lru-cache-details" data-type="predict" data-level="hard" data-answer="CacheInfo(hits=1, misses=3, maxsize=2, currsize=2)
+CacheInfo(hits=1, misses=6, maxsize=2, currsize=2)
+CacheInfo(hits=0, misses=0, maxsize=2, currsize=0) True">
+<header class="prob-head"><h3>15. lru_cache details</h3></header>
+<div class="code"><pre><code class="py">from functools import lru_cache
+
+@lru_cache(maxsize=2)
+def embed(text, model=&quot;small&quot;):
+    return (text, model)
+
+embed(&quot;a&quot;)
+embed(&quot;a&quot;)
+embed(&quot;a&quot;, model=&quot;small&quot;)
+embed(text=&quot;a&quot;)
+print(embed.cache_info())
+embed(&quot;b&quot;)
+embed(&quot;c&quot;)
+embed(&quot;a&quot;)
+print(embed.cache_info())
+embed.cache_clear()
+print(embed.cache_info(), embed.__wrapped__(&quot;x&quot;) == (&quot;x&quot;, &quot;small&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The cache key is built from the arguments as passed: <code>f("a")</code>, <code>f("a", model="small")</code> and <code>f(text="a")</code> are three different keys. With <code>maxsize=2</code>, the least recently used entry is evicted.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>CacheInfo(hits=1, misses=3, maxsize=2, currsize=2)
+CacheInfo(hits=1, misses=6, maxsize=2, currsize=2)
+CacheInfo(hits=0, misses=0, maxsize=2, currsize=0) True</pre></div><p><code>lru_cache</code> keys on the arguments exactly as given, so a positional call, the same call with the default spelled out, and a keyword call are three separate cache entries even though they mean the same thing: one hit and three misses, with only two entries kept. Adding <code>"b"</code> and <code>"c"</code> evicts the older entries, so <code>"a"</code> is a miss again, and <code>currsize</code> never exceeds <code>maxsize</code>. <code>cache_clear()</code> resets the statistics and contents, and <code>__wrapped__</code> reaches the original function without the cache. For caches of expensive calls (embeddings, completions), normalise arguments into one canonical key yourself.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-how-do-you-recognise-a-dynamic-programmi" data-pid="m16-5-how-do-you-recognise-a-dynamic-programmi" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. How do you recognise a dynamic programming problem, and how do you approach it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Signals: the question asks for an optimum (minimum cost, maximum value, longest, fewest) or a count of ways, the input is a sequence, string, grid or budget, and a brute force would try all combinations, with the same sub-decisions recurring (the remaining amount, the suffix still to process, the prefixes compared so far). The approach: define the <strong>state</strong> (the smallest set of parameters that determines a subproblem), write the <strong>recurrence</strong> by considering the last (or first) decision, list the <strong>base cases</strong>, and choose an <strong>order</strong>: top-down recursion with <code>functools.cache</code> is quick to write and only visits reachable states, bottom-up tabulation avoids recursion limits and often allows keeping only one or two rows. State the complexity as states times transitions per state. Then reconstruct the solution if needed by storing choices or backtracking through the table. Check small cases by hand, including the empty input, and compare against brute force on random tests.</p></div></details>
+</article>
+<article class="prob" id="p-memoization-or-tabulation-what-are-the-t" data-pid="m16-5-memoization-or-tabulation-what-are-the-t" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Memoization or tabulation: what are the trade-offs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><strong>Memoization</strong> (top-down) keeps the code close to the recursive definition, computes only the states actually reached (a win when many states are irrelevant), and is fast to write with <code>@functools.cache</code>; but it pays function-call overhead, hits Python's recursion limit for deep state chains (about 1,000 by default), needs hashable arguments, and keeps every cached result in memory. <strong>Tabulation</strong> (bottom-up) uses loops in an order that guarantees dependencies are ready, has no recursion limit and lower overhead, and lets you discard old rows (edit distance in O(m) memory instead of O(n m)); but it computes every state in the table, even unused ones, and requires working out the iteration order explicitly. In interviews, starting top-down and converting to bottom-up when asked about memory or deep inputs is a good way to show both.</p></div></details>
+</article>
+<article class="prob" id="p-where-does-dynamic-programming-show-up-i" data-pid="m16-5-where-does-dynamic-programming-show-up-i" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Where does dynamic programming show up in ML and LLM work?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Many places, often hidden inside libraries. <strong>Evaluation</strong>: edit distance gives word and character error rates for speech and OCR, longest common subsequence gives ROUGE-L for summaries, and alignment (backtracking the edit table) explains errors. <strong>Sequence models</strong>: the Viterbi algorithm finds the most likely tag sequence in HMMs and CRFs, the forward algorithm computes sequence probabilities, CTC loss for speech recognition sums over alignments with DP, and beam search is a pruned approximation of exact DP decoding. <strong>Tokenisation</strong>: unigram language-model tokenizers (SentencePiece) choose the most probable segmentation with DP over the text, the same structure as word break. <strong>Retrieval and prompting</strong>: choosing context chunks under a token budget is a knapsack, and dynamic time warping aligns time series. <strong>Reinforcement learning</strong>: value iteration and the Bellman equation are DP over states. Knowing the pattern helps you recognise when a greedy shortcut is wrong and when an exact solution is cheap.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>DP applies when the answer for a state is built from smaller overlapping states: compute each state once.</li><li>Design it with four questions: state, recurrence, base cases, order; complexity is states times transitions.</li><li>Top-down: <code>@functools.cache</code> (hashable arguments, recursion limits). Bottom-up: tables filled in dependency order, often with one or two rows of memory.</li><li>Pad two-sequence tables with an empty-prefix row and column; reconstruct solutions by storing choices or backtracking.</li><li>Classics: coin change, LCS (ROUGE-L), edit distance (WER, alignment), knapsack (context budgets), LIS with <code>bisect</code>, Kadane, segmentation.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

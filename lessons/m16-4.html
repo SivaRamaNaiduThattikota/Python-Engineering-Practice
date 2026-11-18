@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16.4 · Graphs</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m16-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 16 · Algorithms for interviews</span></div>
+  <h1>16.4 Graphs</h1>
+  <p>Dependencies between tasks, imports between modules, links between documents, calls between services, steps in an agent's plan: all graphs. Representing a graph with dicts, breadth-first and depth-first search, shortest paths with and without weights, connected components and union-find, cycle detection, and topological sort for running dependency DAGs in the right order, with the complexity of each.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="represent">
+<h2><span class="n">1</span>Representing graphs</h2>
+<p>In Python, a graph is usually a <strong>dict from each node to its neighbours</strong>, an adjacency list: <code>{"ingest": ["chunk"], "chunk": ["embed"], ...}</code>, with sets instead of lists when you need fast "is there an edge?" checks, and dicts of dicts (<code>{"a": {"b": 3}}</code>) for weighted edges. Undirected edges are stored in both directions. This uses O(V + E) memory for V nodes and E edges, and iterating a node's neighbours costs O(its degree). An adjacency matrix (a V-by-V table) costs O(V^2) memory and suits only small, dense graphs. Remember to include nodes that have no outgoing edges, which a dict built only from edge sources silently drops (problem 7). Libraries such as <code>networkx</code> offer all the algorithms below, and <code>graphlib.TopologicalSorter</code> in the standard library does topological sorting.</p>
+</section>
+<section class="sec" id="bfs">
+<h2><span class="n">2</span>Breadth-first search</h2>
+<p><strong>BFS</strong> explores a graph in layers: first the start node, then all its neighbours, then their unvisited neighbours, and so on, using a <strong>queue</strong> (<code>collections.deque</code>, 16.1) and a <code>visited</code> set marked when a node is <strong>enqueued</strong>. Because it reaches nodes in order of distance, the first time BFS reaches a node it has found a path with the <strong>fewest edges</strong>, so it computes shortest paths in unweighted graphs; recording each node's <strong>parent</strong> lets you rebuild the path backwards (problem 5). It runs in O(V + E). Typical uses: degrees of separation, the fewest hops between two documents in a link graph, crawling a site to a maximum depth, and the shortest sequence of transformations (word ladders, state machines).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bfs.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+links = {
+    &quot;home&quot;: [&quot;pricing&quot;, &quot;docs&quot;],
+    &quot;docs&quot;: [&quot;api&quot;, &quot;faq&quot;],
+    &quot;pricing&quot;: [&quot;faq&quot;],
+    &quot;faq&quot;: [&quot;refunds&quot;],
+    &quot;api&quot;: [],
+    &quot;refunds&quot;: [&quot;home&quot;],
+}
+
+def bfs(graph, start):
+    dist = {start: 0}
+    order = []
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        order.append(node)
+        for nxt in graph.get(node, []):
+            if nxt not in dist:
+                dist[nxt] = dist[node] + 1
+                queue.append(nxt)
+    return order, dist
+
+order, dist = bfs(links, &quot;home&quot;)
+print(order)
+print(dist)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;home&#x27;, &#x27;pricing&#x27;, &#x27;docs&#x27;, &#x27;faq&#x27;, &#x27;api&#x27;, &#x27;refunds&#x27;]
+{&#x27;home&#x27;: 0, &#x27;pricing&#x27;: 1, &#x27;docs&#x27;: 1, &#x27;faq&#x27;: 2, &#x27;api&#x27;: 2, &#x27;refunds&#x27;: 3}</pre></div></div>
+</section>
+<section class="sec" id="dfs">
+<h2><span class="n">3</span>Depth-first search</h2>
+<p><strong>DFS</strong> follows one path as deep as possible before backtracking, using recursion or an explicit <strong>stack</strong>. It does not find shortest paths, but it is the natural tool for exploring everything reachable, finding <strong>connected components</strong>, detecting <strong>cycles</strong>, and producing a topological order. In Python, prefer an explicit stack for large graphs: recursion depth is limited (about 1,000 frames by default, and deep recursion can crash a browser-based Python like this site's). For cycle detection in a <strong>directed</strong> graph, DFS marks nodes with three states: unvisited, <strong>in progress</strong> (on the current path) and done; meeting an in-progress node means a back edge, which is a cycle (problem 14).</p>
+</section>
+<section class="sec" id="topo">
+<h2><span class="n">4</span>Topological sort</h2>
+<p>A <strong>topological order</strong> lists the nodes of a DAG so that each node comes after its dependencies; it exists exactly when there is no cycle. <strong>Kahn's algorithm</strong> counts each node's unmet dependencies (its in-degree), starts with the nodes that have none, and repeatedly removes a ready node, decrementing its dependants' counts and adding any that reach zero; if some nodes never become ready, they are on or behind a cycle. Processing the ready set in <strong>rounds</strong> also gives <strong>levels</strong>: every node in one round can run in parallel, which is how build systems, Airflow DAGs and multi-step agent plans schedule work (problem 6). It runs in O(V + E).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">graphlib_demo.py</span><button class="copy">Copy</button></div><pre><code class="py">from graphlib import TopologicalSorter, CycleError
+
+plan = {&quot;answer&quot;: {&quot;retrieve&quot;, &quot;rerank&quot;}, &quot;rerank&quot;: {&quot;retrieve&quot;}, &quot;retrieve&quot;: {&quot;embed_query&quot;}, &quot;embed_query&quot;: set(), &quot;log&quot;: {&quot;answer&quot;}}
+ts = TopologicalSorter(plan)
+print(list(ts.static_order()))
+try:
+    list(TopologicalSorter({&quot;a&quot;: {&quot;b&quot;}, &quot;b&quot;: {&quot;a&quot;}}).static_order())
+except CycleError as e:
+    print(&quot;cycle:&quot;, e.args[1])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;embed_query&#x27;, &#x27;retrieve&#x27;, &#x27;rerank&#x27;, &#x27;answer&#x27;, &#x27;log&#x27;]
+cycle: [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;a&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="weighted">
+<h2><span class="n">5</span>Weighted shortest paths and union-find</h2>
+<p>When edges have costs (latency between services, price of a model call, distance), BFS no longer finds the cheapest path. <strong>Dijkstra's algorithm</strong> does, for non-negative weights: keep a priority queue (<code>heapq</code>) of <code>(distance, node)</code>, repeatedly pop the closest unfinished node, and <strong>relax</strong> its edges, pushing any neighbour whose tentative distance improves; with a heap it runs in O((V + E) log V). Negative weights break it (Bellman-Ford handles them). For undirected connectivity questions that arrive as a stream of edges ("are these two records the same customer?"), <strong>union-find</strong> (disjoint sets) keeps a parent pointer per node; <code>find</code> follows parents to a root, with <strong>path compression</strong> flattening the chain, and <code>union</code> links two roots, so each operation is nearly O(1) amortised (problem 12).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-bfs-layers-and-dfs-order" data-pid="m16-4-bfs-layers-and-dfs-order" data-type="predict" data-level="easy" data-answer="[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;, &#x27;e&#x27;, &#x27;f&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;d&#x27;, &#x27;f&#x27;, &#x27;c&#x27;, &#x27;e&#x27;]
+[&#x27;d&#x27;, &#x27;f&#x27;] [&#x27;e&#x27;, &#x27;f&#x27;]">
+<header class="prob-head"><h3>1. BFS layers and DFS order</h3></header>
+<div class="code"><pre><code class="py">from collections import deque
+
+g = {&quot;a&quot;: [&quot;b&quot;, &quot;c&quot;], &quot;b&quot;: [&quot;d&quot;], &quot;c&quot;: [&quot;d&quot;, &quot;e&quot;], &quot;d&quot;: [&quot;f&quot;], &quot;e&quot;: [&quot;f&quot;], &quot;f&quot;: []}
+
+def bfs_order(start):
+    seen, order, q = {start}, [], deque([start])
+    while q:
+        n = q.popleft()
+        order.append(n)
+        for m in g[n]:
+            if m not in seen:
+                seen.add(m)
+                q.append(m)
+    return order
+
+def dfs_order(start):
+    seen, order, stack = set(), [], [start]
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        order.append(n)
+        for m in reversed(g[n]):
+            stack.append(m)
+    return order
+
+print(bfs_order(&quot;a&quot;), dfs_order(&quot;a&quot;))
+print(bfs_order(&quot;d&quot;), dfs_order(&quot;e&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>BFS visits by distance from the start; this DFS pushes neighbours in reverse so the first neighbour is explored first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;, &#x27;e&#x27;, &#x27;f&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;d&#x27;, &#x27;f&#x27;, &#x27;c&#x27;, &#x27;e&#x27;]
+[&#x27;d&#x27;, &#x27;f&#x27;] [&#x27;e&#x27;, &#x27;f&#x27;]</pre></div><p>BFS visits <code>a</code>, then both its neighbours, then the nodes two steps away, so <code>d</code> and <code>e</code> come before <code>f</code>. The iterative DFS goes as deep as possible along the first neighbour (<code>a</code>, <code>b</code>, <code>d</code>, <code>f</code>) before backtracking to <code>c</code> and <code>e</code>; pushing neighbours in reverse order makes it visit them in their listed order, like the recursive version. Starting elsewhere only reaches what is reachable from there, since edges are directed.</p></div></details>
+</article>
+<article class="prob" id="p-build-an-adjacency-list" data-pid="m16-4-build-an-adjacency-list" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Build an adjacency list</h3></header>
+<div class="prob-q"><p>Write <code>build_graph(edges, directed=True)</code> returning a dict from every node (including nodes that only appear as targets) to a <strong>sorted list</strong> of its neighbours, and <code>degrees(graph)</code> returning <code>{node: (out_degree, in_degree)}</code>. For undirected graphs, store each edge in both directions and ignore duplicate edges.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def build_graph(edges, directed=True):
+    pass
+
+def degrees(graph):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">edges = [("ingest", "chunk"), ("chunk", "embed"), ("chunk", "index"), ("embed", "index"), ("ingest", "chunk")]
+g = build_graph(edges)
+assert g == {"chunk": ["embed", "index"], "embed": ["index"], "index": [], "ingest": ["chunk"]}
+assert degrees(g) == {"chunk": (2, 1), "embed": (1, 1), "index": (0, 2), "ingest": (1, 0)}
+u = build_graph([("a", "b"), ("b", "c"), ("b", "a")], directed=False)
+assert u == {"a": ["b"], "b": ["a", "c"], "c": ["b"]}
+assert build_graph([]) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">edges = [(&quot;ingest&quot;, &quot;chunk&quot;), (&quot;chunk&quot;, &quot;embed&quot;), (&quot;chunk&quot;, &quot;index&quot;), (&quot;embed&quot;, &quot;index&quot;), (&quot;ingest&quot;, &quot;chunk&quot;)]
+g = build_graph(edges)
+assert g == {&quot;chunk&quot;: [&quot;embed&quot;, &quot;index&quot;], &quot;embed&quot;: [&quot;index&quot;], &quot;index&quot;: [], &quot;ingest&quot;: [&quot;chunk&quot;]}
+assert degrees(g) == {&quot;chunk&quot;: (2, 1), &quot;embed&quot;: (1, 1), &quot;index&quot;: (0, 2), &quot;ingest&quot;: (1, 0)}
+u = build_graph([(&quot;a&quot;, &quot;b&quot;), (&quot;b&quot;, &quot;c&quot;), (&quot;b&quot;, &quot;a&quot;)], directed=False)
+assert u == {&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;a&quot;, &quot;c&quot;], &quot;c&quot;: [&quot;b&quot;]}
+assert build_graph([]) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect neighbours in sets (<code>defaultdict(set)</code>), make sure targets get an entry too, then convert to sorted lists with sorted keys.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In-degree: count how many lists each node appears in.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+
+def build_graph(edges, directed=True):
+    adj = defaultdict(set)
+    for a, b in edges:
+        adj[a].add(b)
+        adj[b]
+        if not directed:
+            adj[b].add(a)
+    return {node: sorted(adj[node]) for node in sorted(adj)}
+
+
+def degrees(graph):
+    indeg = {node: 0 for node in graph}
+    for node, nbrs in graph.items():
+        for m in nbrs:
+            indeg[m] = indeg.get(m, 0) + 1
+    return {node: (len(graph[node]), indeg[node]) for node in graph}</code></pre></div><p>The adjacency list is the workhorse representation: O(V + E) memory and fast iteration over a node's neighbours. Sets remove duplicate edges (the repeated <code>ingest -&gt; chunk</code>), and touching <code>adj[b]</code> ensures that sinks such as <code>index</code>, which have no outgoing edges, still appear as nodes, otherwise algorithms that iterate over the dict's keys would miss them. Sorting makes the output deterministic, which matters for tests and for reproducible scheduling. Out-degree is the length of a node's list; in-degree counts how often it appears as a target, which is exactly what Kahn's algorithm needs.</p></div></details>
+</article>
+<article class="prob" id="p-a-search-that-uses-a-stack-instead-of-a-" data-pid="m16-4-a-search-that-uses-a-stack-instead-of-a-" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>3. A search that uses a stack instead of a queue</h3></header>
+<div class="prob-q"><p><code>hops(graph, start)</code> should return the minimum number of links from <code>start</code> to every reachable page, but it pops from the <strong>end</strong> of its list, so it explores depth-first and records longer distances for some pages. Make it a real breadth-first search with a <code>deque</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def hops(graph, start):
+    dist = {start: 0}
+    todo = [start]
+    while todo:
+        node = todo.pop()
+        for nxt in graph.get(node, []):
+            if nxt not in dist:
+                dist[nxt] = dist[node] + 1
+                todo.append(nxt)
+    return dist
+</textarea>
+<script type="text/plain" class="prob-tests">g = {"home": ["docs", "blog"], "blog": ["post1"], "post1": ["post2"], "post2": ["faq"], "docs": ["faq"], "faq": []}
+assert hops(g, "home") == {"home": 0, "blog": 1, "docs": 1, "post1": 2, "faq": 2, "post2": 3}
+assert hops(g, "faq") == {"faq": 0} and hops({}, "x") == {"x": 0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">g = {&quot;home&quot;: [&quot;docs&quot;, &quot;blog&quot;], &quot;blog&quot;: [&quot;post1&quot;], &quot;post1&quot;: [&quot;post2&quot;], &quot;post2&quot;: [&quot;faq&quot;], &quot;docs&quot;: [&quot;faq&quot;], &quot;faq&quot;: []}
+assert hops(g, &quot;home&quot;) == {&quot;home&quot;: 0, &quot;blog&quot;: 1, &quot;docs&quot;: 1, &quot;post1&quot;: 2, &quot;faq&quot;: 2, &quot;post2&quot;: 3}
+assert hops(g, &quot;faq&quot;) == {&quot;faq&quot;: 0} and hops({}, &quot;x&quot;) == {&quot;x&quot;: 0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from collections import deque</code>; <code>todo = deque([start])</code> and <code>node = todo.popleft()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+def hops(graph, start):
+    dist = {start: 0}
+    todo = deque([start])
+    while todo:
+        node = todo.popleft()
+        for nxt in graph.get(node, []):
+            if nxt not in dist:
+                dist[nxt] = dist[node] + 1
+                todo.append(nxt)
+    return dist</code></pre></div><p>Assigning a distance the first time a node is reached is only correct if nodes are reached in order of distance, which is what a FIFO queue guarantees: all nodes at distance 1 are processed before any at distance 2. With <code>pop()</code> (a stack), the search took the last discovered page first, went down the blog chain, and reached <code>faq</code> through the long <code>blog -&gt; post1 -&gt; post2</code> path, recording 4 instead of 2; with the links listed in the other order it would have been right by luck, which is why such bugs survive tests. <code>deque.popleft()</code> is O(1), whereas <code>list.pop(0)</code> would make the search quadratic.</p></div></details>
+</article>
+<article class="prob" id="p-kahn-s-algorithm-in-rounds" data-pid="m16-4-kahn-s-algorithm-in-rounds" data-type="predict" data-level="easy" data-answer="[[&#x27;features&#x27;], [&#x27;train&#x27;], [&#x27;predict&#x27;], [&#x27;metrics&#x27;, &#x27;plots&#x27;], [&#x27;report&#x27;]]
+cycle among [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]">
+<header class="prob-head"><h3>4. Kahn's algorithm in rounds</h3></header>
+<div class="code"><pre><code class="py">def levels(deps):
+    nodes = set(deps) | {d for ds in deps.values() for d in ds}
+    remaining = {n: set(deps.get(n, ())) for n in nodes}
+    rounds = []
+    while remaining:
+        ready = sorted(n for n, ds in remaining.items() if not ds)
+        if not ready:
+            raise ValueError(f&quot;cycle among {sorted(remaining)}&quot;)
+        rounds.append(ready)
+        for n in ready:
+            del remaining[n]
+        for ds in remaining.values():
+            ds.difference_update(ready)
+    return rounds
+
+pipeline = {&quot;report&quot;: [&quot;metrics&quot;, &quot;plots&quot;], &quot;metrics&quot;: [&quot;predict&quot;], &quot;plots&quot;: [&quot;predict&quot;], &quot;predict&quot;: [&quot;train&quot;, &quot;features&quot;], &quot;train&quot;: [&quot;features&quot;]}
+print(levels(pipeline))
+try:
+    levels({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;c&quot;], &quot;c&quot;: [&quot;a&quot;], &quot;d&quot;: []})
+except ValueError as e:
+    print(e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A task is ready when all its dependencies are done; each round runs every ready task, sorted for a stable order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[[&#x27;features&#x27;], [&#x27;train&#x27;], [&#x27;predict&#x27;], [&#x27;metrics&#x27;, &#x27;plots&#x27;], [&#x27;report&#x27;]]
+cycle among [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]</pre></div><p><code>features</code> depends on nothing, so it runs first; <code>train</code> needs only <code>features</code>; <code>predict</code> needs both; <code>metrics</code> and <code>plots</code> both need only <code>predict</code>, so they form one round and could run in parallel; <code>report</code> comes last. Dependencies that only appear as values (<code>features</code>) still count as nodes. When a round finds nothing ready while tasks remain, those tasks wait on each other: a cycle. Here <code>d</code> runs in the first round and <code>a</code>, <code>b</code>, <code>c</code> are reported.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-shortest-path-with-parents" data-pid="m16-4-shortest-path-with-parents" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>5. Shortest path with parents</h3></header>
+<div class="prob-q"><p>Write <code>shortest_path(graph, start, goal)</code> returning the list of nodes on a path with the fewest edges from <code>start</code> to <code>goal</code> (inclusive), or <code>None</code> if unreachable, using BFS with a parent dict. When several shortest paths exist, prefer the one found by exploring neighbours in their listed order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from collections import deque
+
+def shortest_path(graph, start, goal):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">kg = {
+    "refund": ["policy", "payment"],
+    "policy": ["terms"],
+    "payment": ["card", "terms"],
+    "terms": ["legal"],
+    "card": ["legal"],
+    "legal": [],
+}
+assert shortest_path(kg, "refund", "legal") == ["refund", "policy", "terms", "legal"]
+assert shortest_path(kg, "payment", "legal") == ["payment", "card", "legal"]
+assert shortest_path(kg, "refund", "refund") == ["refund"] and shortest_path(kg, "legal", "refund") is None
+assert shortest_path(kg, "refund", "missing") is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">kg = {
+    &quot;refund&quot;: [&quot;policy&quot;, &quot;payment&quot;],
+    &quot;policy&quot;: [&quot;terms&quot;],
+    &quot;payment&quot;: [&quot;card&quot;, &quot;terms&quot;],
+    &quot;terms&quot;: [&quot;legal&quot;],
+    &quot;card&quot;: [&quot;legal&quot;],
+    &quot;legal&quot;: [],
+}
+assert shortest_path(kg, &quot;refund&quot;, &quot;legal&quot;) == [&quot;refund&quot;, &quot;policy&quot;, &quot;terms&quot;, &quot;legal&quot;]
+assert shortest_path(kg, &quot;payment&quot;, &quot;legal&quot;) == [&quot;payment&quot;, &quot;card&quot;, &quot;legal&quot;]
+assert shortest_path(kg, &quot;refund&quot;, &quot;refund&quot;) == [&quot;refund&quot;] and shortest_path(kg, &quot;legal&quot;, &quot;refund&quot;) is None
+assert shortest_path(kg, &quot;refund&quot;, &quot;missing&quot;) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>parent = {start: None}</code>; when you first see a neighbour, set its parent. When <code>goal</code> is dequeued (or first seen), walk parents back to <code>start</code> and reverse.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+
+def shortest_path(graph, start, goal):
+    parent = {start: None}
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        if node == goal:
+            path = []
+            while node is not None:
+                path.append(node)
+                node = parent[node]
+            return path[::-1]
+        for nxt in graph.get(node, []):
+            if nxt not in parent:
+                parent[nxt] = node
+                queue.append(nxt)
+    return None</code></pre></div><p>BFS reaches every node first along a path with the fewest edges, so remembering <strong>who discovered</strong> each node is enough to reconstruct that path backwards from the goal, in O(V + E) time and O(V) memory. The <code>parent</code> dict doubles as the visited set. Exploring neighbours in listed order makes ties deterministic (<code>policy</code> before <code>payment</code>). In a knowledge graph, the shortest chain of relations between two entities is a compact explanation to show the user or to feed a model; graph-based retrieval uses such multi-hop paths to answer questions no single document answers.</p></div></details>
+</article>
+<article class="prob" id="p-run-an-agent-plan-as-a-dag" data-pid="m16-4-run-an-agent-plan-as-a-dag" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Run an agent plan as a DAG</h3></header>
+<div class="prob-q"><p>An agent's plan is a dict from step name to the list of steps it needs first. Write <code>execution_levels(plan)</code> returning a list of levels (each a sorted list of steps that can run in parallel once the previous levels are done), and <code>run_plan(plan, run_step)</code> that executes the steps level by level, calling <code>run_step(name, inputs)</code> where <code>inputs</code> maps each dependency to its result, and returns all results. A cycle raises <code>ValueError</code> listing the steps involved; a dependency that is not itself a step raises <code>KeyError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def execution_levels(plan):
+    pass
+
+def run_plan(plan, run_step):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">plan = {
+    "search_docs": [],
+    "search_tickets": [],
+    "rerank": ["search_docs", "search_tickets"],
+    "draft": ["rerank"],
+    "check_policy": ["rerank"],
+    "answer": ["draft", "check_policy"],
+}
+assert execution_levels(plan) == [["search_docs", "search_tickets"], ["rerank"], ["check_policy", "draft"], ["answer"]]
+calls = []
+def run_step(name, inputs):
+    calls.append((name, sorted(inputs)))
+    return f"{name}({','.join(sorted(inputs))})"
+results = run_plan(plan, run_step)
+assert results["answer"] == "answer(check_policy,draft)" and [c[0] for c in calls][:2] == ["search_docs", "search_tickets"]
+assert calls[2] == ("rerank", ["search_docs", "search_tickets"])
+try:
+    execution_levels({"a": ["b"], "b": ["a"], "c": []})
+    assert False
+except ValueError as e:
+    assert "a" in str(e) and "b" in str(e) and "c" not in str(e).split(":")[-1]
+try:
+    execution_levels({"a": ["ghost"]})
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">plan = {
+    &quot;search_docs&quot;: [],
+    &quot;search_tickets&quot;: [],
+    &quot;rerank&quot;: [&quot;search_docs&quot;, &quot;search_tickets&quot;],
+    &quot;draft&quot;: [&quot;rerank&quot;],
+    &quot;check_policy&quot;: [&quot;rerank&quot;],
+    &quot;answer&quot;: [&quot;draft&quot;, &quot;check_policy&quot;],
+}
+assert execution_levels(plan) == [[&quot;search_docs&quot;, &quot;search_tickets&quot;], [&quot;rerank&quot;], [&quot;check_policy&quot;, &quot;draft&quot;], [&quot;answer&quot;]]
+calls = []
+def run_step(name, inputs):
+    calls.append((name, sorted(inputs)))
+    return f&quot;{name}({&#x27;,&#x27;.join(sorted(inputs))})&quot;
+results = run_plan(plan, run_step)
+assert results[&quot;answer&quot;] == &quot;answer(check_policy,draft)&quot; and [c[0] for c in calls][:2] == [&quot;search_docs&quot;, &quot;search_tickets&quot;]
+assert calls[2] == (&quot;rerank&quot;, [&quot;search_docs&quot;, &quot;search_tickets&quot;])
+try:
+    execution_levels({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;a&quot;], &quot;c&quot;: []})
+    assert False
+except ValueError as e:
+    assert &quot;a&quot; in str(e) and &quot;b&quot; in str(e) and &quot;c&quot; not in str(e).split(&quot;:&quot;)[-1]
+try:
+    execution_levels({&quot;a&quot;: [&quot;ghost&quot;]})
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate dependencies first. Then Kahn's algorithm in rounds: the ready steps are those whose dependencies are all done.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>run_plan</code> walks the levels in order; a step's <code>inputs</code> are <code>{d: results[d] for d in plan[step]}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def execution_levels(plan):
+    for step, deps in plan.items():
+        for d in deps:
+            if d not in plan:
+                raise KeyError(f&quot;step {step!r} depends on unknown step {d!r}&quot;)
+    remaining = {step: set(deps) for step, deps in plan.items()}
+    levels = []
+    while remaining:
+        ready = sorted(s for s, deps in remaining.items() if not deps)
+        if not ready:
+            raise ValueError(f&quot;cycle among steps: {&#x27;, &#x27;.join(sorted(remaining))}&quot;)
+        levels.append(ready)
+        for s in ready:
+            del remaining[s]
+        for deps in remaining.values():
+            deps.difference_update(ready)
+    return levels
+
+
+def run_plan(plan, run_step):
+    results = {}
+    for level in execution_levels(plan):
+        for step in level:
+            results[step] = run_step(step, {d: results[d] for d in plan[step]})
+    return results</code></pre></div><p>Agent frameworks and workflow engines represent multi-step work as a DAG, so independent steps (two searches) can run concurrently and every step sees its dependencies' outputs. Kahn's algorithm in rounds gives both a valid order and the parallel levels; in an async runner, each level becomes one <code>asyncio.gather</code> (14.4). Validating that every dependency names a real step catches typos in a model-generated plan before anything runs, and the cycle check turns a plan that could never finish into a clear error, which can be sent back to the model to repair (7.4). The cost is O(V + E) per level scan here (O(V + E) overall with in-degree counters).</p></div></details>
+</article>
+<article class="prob" id="p-topological-sort-that-drops-dependency-o" data-pid="m16-4-topological-sort-that-drops-dependency-o" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Topological sort that drops dependency-only nodes</h3></header>
+<div class="prob-q"><p><code>build_order(deps)</code> returns an order in which packages can be built (dependencies first). Packages that appear only as dependencies, and have no entry of their own, are missing from the result, and the function crashes with <code>KeyError</code> when it decrements their counts. Fix it so every node mentioned anywhere is included, using in-degree counts and a queue, with ready nodes processed in sorted order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from collections import deque
+
+def build_order(deps):
+    indegree = {pkg: len(d) for pkg, d in deps.items()}
+    dependants = {pkg: [] for pkg in deps}
+    for pkg, d in deps.items():
+        for dep in d:
+            dependants[dep].append(pkg)
+    queue = deque(sorted(p for p, n in indegree.items() if n == 0))
+    order = []
+    while queue:
+        p = queue.popleft()
+        order.append(p)
+        for q in sorted(dependants[p]):
+            indegree[q] -= 1
+            if indegree[q] == 0:
+                queue.append(q)
+    if len(order) != len(indegree):
+        raise ValueError(&quot;cycle&quot;)
+    return order
+</textarea>
+<script type="text/plain" class="prob-tests">deps = {"app": ["httpx", "pydantic"], "httpx": ["anyio", "certifi"], "pydantic": ["typing-extensions"]}
+assert build_order(deps) == ["anyio", "certifi", "typing-extensions", "httpx", "pydantic", "app"]
+assert build_order({}) == [] and build_order({"solo": []}) == ["solo"]
+try:
+    build_order({"a": ["b"], "b": ["a"]})
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">deps = {&quot;app&quot;: [&quot;httpx&quot;, &quot;pydantic&quot;], &quot;httpx&quot;: [&quot;anyio&quot;, &quot;certifi&quot;], &quot;pydantic&quot;: [&quot;typing-extensions&quot;]}
+assert build_order(deps) == [&quot;anyio&quot;, &quot;certifi&quot;, &quot;typing-extensions&quot;, &quot;httpx&quot;, &quot;pydantic&quot;, &quot;app&quot;]
+assert build_order({}) == [] and build_order({&quot;solo&quot;: []}) == [&quot;solo&quot;]
+try:
+    build_order({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;a&quot;]})
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect <code>nodes = set(deps) | {d for ds in deps.values() for d in ds}</code> and give every node an in-degree and a dependants list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+def build_order(deps):
+    nodes = set(deps) | {d for ds in deps.values() for d in ds}
+    indegree = {n: len(deps.get(n, ())) for n in nodes}
+    dependants = {n: [] for n in nodes}
+    for pkg, d in deps.items():
+        for dep in d:
+            dependants[dep].append(pkg)
+    queue = deque(sorted(p for p, n in indegree.items() if n == 0))
+    order = []
+    while queue:
+        p = queue.popleft()
+        order.append(p)
+        for q in sorted(dependants[p]):
+            indegree[q] -= 1
+            if indegree[q] == 0:
+                queue.append(q)
+    if len(order) != len(nodes):
+        raise ValueError(&quot;cycle&quot;)
+    return order</code></pre></div><p>Leaf dependencies (<code>anyio</code>, <code>certifi</code>) are written only as values, never as keys, so a graph built from the keys alone has no entry for them: they never enter the queue, and the first <code>dependants[dep]</code> lookup fails. Taking the union of keys and values gives every node an in-degree (0 for leaves, which makes them the first ready nodes) and a dependants list. Comparing the output length with the number of nodes detects cycles: nodes on a cycle never reach in-degree 0. This node-collection step is the most common bug in hand-written dependency resolution, the same mistake as the sink nodes in problem 2.</p></div></details>
+</article>
+<article class="prob" id="p-union-find-with-path-compression" data-pid="m16-4-union-find-with-path-compression" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Union-find with path compression</h3></header>
+<div class="prob-q"><p>Fill in <code>state</code> after each marked line: the parent list and a <code>find</code> result.</p></div>
+<div class="code"><pre><code class="py">parent = list(range(6))
+
+def find(x):
+    root = x
+    while parent[root] != root:
+        root = parent[root]
+    while parent[x] != root:
+        parent[x], x = root, parent[x]
+    return root
+
+def union(a, b):
+    ra, rb = find(a), find(b)
+    if ra != rb:
+        parent[max(ra, rb)] = min(ra, rb)
+
+union(1, 2)
+union(3, 4)
+state = (list(parent), find(2))
+union(2, 4)
+state = (list(parent), find(4))
+parent[5] = 4
+state = (list(parent), find(5), list(parent))</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>two pairs</td><td><input class="cell" data-a="([0, 1, 1, 3, 3, 5], 1)" data-s="([0, 1, 1, 3, 3, 5], 1)" aria-label="state at two pairs" autocomplete="off"></td></tr><tr><td>merge the pairs</td><td><input class="cell" data-a="([0, 1, 1, 1, 3, 5], 1)" data-s="([0, 1, 1, 1, 3, 5], 1)" aria-label="state at merge the pairs" autocomplete="off"></td></tr><tr><td>compression</td><td><input class="cell" data-a="([0, 1, 1, 1, 1, 4], 1, [0, 1, 1, 1, 1, 1])" data-s="([0, 1, 1, 1, 1, 4], 1, [0, 1, 1, 1, 1, 1])" aria-label="state at compression" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>union</code> makes the smaller root the parent of the larger. <code>find</code> walks to the root, then points every node on the way directly at it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>two pairs</td><td><code>([0, 1, 1, 3, 3, 5], 1)</code></td></tr><tr><td>merge the pairs</td><td><code>([0, 1, 1, 1, 3, 5], 1)</code></td></tr><tr><td>compression</td><td><code>([0, 1, 1, 1, 1, 4], 1, [0, 1, 1, 1, 1, 1])</code></td></tr></table></div><p>Each union links two roots, here always attaching the larger root under the smaller, so sets are identified by their smallest member. Merging <code>{1, 2}</code> with <code>{3, 4}</code> links root 3 under root 1, so <code>find(4)</code> walks 4, 3, 1 and, by path compression, points 4 directly at 1 (the list in that row was copied before <code>find(4)</code> ran, so it still shows 4 pointing at 3; the next row shows the compressed pointer). In the last row, 5 is attached under 4 by hand; finding it walks 5, 4, 1 and compresses the path so 5 now points at 1 too: the tuple shows the list before and after the call, since <code>find</code> mutates it. Compression (with union by size or rank) keeps trees almost flat, giving nearly constant time per operation.</p></div></details>
+</article>
+<article class="prob" id="p-resolve-duplicate-customers" data-pid="m16-4-resolve-duplicate-customers" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. Resolve duplicate customers</h3></header>
+<div class="prob-q"><p>Records that share an email <strong>or</strong> a phone number belong to the same customer, transitively. Write <code>customer_groups(records)</code> where each record is <code>{"id", "email", "phone"}</code> (either may be <code>None</code>), returning a sorted list of groups, each a sorted list of record ids. Build a graph linking records through shared values and find connected components with an iterative DFS.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">from collections import defaultdict
+
+def customer_groups(records):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">records = [
+    {"id": "r1", "email": "ana@shop.io", "phone": None},
+    {"id": "r2", "email": "ana@shop.io", "phone": "555-1"},
+    {"id": "r3", "email": "a.lee@mail.com", "phone": "555-1"},
+    {"id": "r4", "email": "bo@shop.io", "phone": "555-9"},
+    {"id": "r5", "email": None, "phone": None},
+    {"id": "r6", "email": "BO@shop.io", "phone": None},
+]
+assert customer_groups(records) == [["r1", "r2", "r3"], ["r4", "r6"], ["r5"]]
+assert customer_groups([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">records = [
+    {&quot;id&quot;: &quot;r1&quot;, &quot;email&quot;: &quot;ana@shop.io&quot;, &quot;phone&quot;: None},
+    {&quot;id&quot;: &quot;r2&quot;, &quot;email&quot;: &quot;ana@shop.io&quot;, &quot;phone&quot;: &quot;555-1&quot;},
+    {&quot;id&quot;: &quot;r3&quot;, &quot;email&quot;: &quot;a.lee@mail.com&quot;, &quot;phone&quot;: &quot;555-1&quot;},
+    {&quot;id&quot;: &quot;r4&quot;, &quot;email&quot;: &quot;bo@shop.io&quot;, &quot;phone&quot;: &quot;555-9&quot;},
+    {&quot;id&quot;: &quot;r5&quot;, &quot;email&quot;: None, &quot;phone&quot;: None},
+    {&quot;id&quot;: &quot;r6&quot;, &quot;email&quot;: &quot;BO@shop.io&quot;, &quot;phone&quot;: None},
+]
+assert customer_groups(records) == [[&quot;r1&quot;, &quot;r2&quot;, &quot;r3&quot;], [&quot;r4&quot;, &quot;r6&quot;], [&quot;r5&quot;]]
+assert customer_groups([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Normalise emails (lower-case). Map each <code>("email", value)</code> and <code>("phone", value)</code> to the record ids that have it; link those records to each other.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then a standard components loop: for each unvisited id, DFS with a stack, collecting the component.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+
+def customer_groups(records):
+    by_value = defaultdict(list)
+    for r in records:
+        if r.get(&quot;email&quot;):
+            by_value[(&quot;email&quot;, r[&quot;email&quot;].strip().lower())].append(r[&quot;id&quot;])
+        if r.get(&quot;phone&quot;):
+            by_value[(&quot;phone&quot;, r[&quot;phone&quot;].strip())].append(r[&quot;id&quot;])
+    graph = {r[&quot;id&quot;]: set() for r in records}
+    for ids in by_value.values():
+        for a in ids:
+            graph[a].update(i for i in ids if i != a)
+    seen, groups = set(), []
+    for start in graph:
+        if start in seen:
+            continue
+        stack, comp = [start], []
+        seen.add(start)
+        while stack:
+            node = stack.pop()
+            comp.append(node)
+            for nxt in graph[node]:
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        groups.append(sorted(comp))
+    return sorted(groups)</code></pre></div><p>Entity resolution is a connected-components problem: <code>r1</code> and <code>r3</code> share nothing directly, but <code>r1</code> shares an email with <code>r2</code>, and <code>r2</code> a phone with <code>r3</code>, so all three are one customer. Indexing records by each normalised identifying value links them in O(total records) for typical data, and an iterative DFS (no recursion limit) groups them in O(V + E). Linking every pair within a large value group is quadratic in that group's size, so production code links each record only to the <strong>first</strong> record with the same value, or uses union-find (problem 12), which needs no explicit graph at all.</p></div></details>
+</article>
+<article class="prob" id="p-dijkstra-on-service-latencies" data-pid="m16-4-dijkstra-on-service-latencies" data-type="predict" data-level="medium" data-answer="{&#x27;gateway&#x27;: 0, &#x27;auth&#x27;: 3, &#x27;cache&#x27;: 2, &#x27;retriever&#x27;: 13, &#x27;llm&#x27;: 213}
+215">
+<header class="prob-head"><h3>10. Dijkstra on service latencies</h3></header>
+<div class="code"><pre><code class="py">import heapq
+
+def dijkstra(graph, start):
+    dist = {start: 0}
+    heap = [(0, start)]
+    while heap:
+        d, node = heapq.heappop(heap)
+        if d &gt; dist[node]:
+            continue
+        for nxt, w in graph.get(node, {}).items():
+            nd = d + w
+            if nd &lt; dist.get(nxt, float(&quot;inf&quot;)):
+                dist[nxt] = nd
+                heapq.heappush(heap, (nd, nxt))
+    return dist
+
+latency = {
+    &quot;gateway&quot;: {&quot;auth&quot;: 5, &quot;cache&quot;: 2},
+    &quot;cache&quot;: {&quot;retriever&quot;: 30, &quot;auth&quot;: 1},
+    &quot;auth&quot;: {&quot;retriever&quot;: 10},
+    &quot;retriever&quot;: {&quot;llm&quot;: 200},
+    &quot;llm&quot;: {},
+}
+print(dijkstra(latency, &quot;gateway&quot;))
+fewest_hops = [&quot;gateway&quot;, &quot;auth&quot;, &quot;retriever&quot;, &quot;llm&quot;]
+print(sum(latency[a][b] for a, b in zip(fewest_hops, fewest_hops[1:])))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pop the closest unfinished node, then lower its neighbours' tentative distances. A stale heap entry (larger than the recorded distance) is skipped.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;gateway&#x27;: 0, &#x27;auth&#x27;: 3, &#x27;cache&#x27;: 2, &#x27;retriever&#x27;: 13, &#x27;llm&#x27;: 213}
+215</pre></div><p>Dijkstra settles nodes in order of distance: <code>cache</code> at 2, then <code>auth</code> at 3 through the cache (cheaper than the direct 5), <code>retriever</code> at 13 through auth (instead of 32 directly from the cache), and <code>llm</code> at 213. The path with the fewest hops costs 215, so "fewest edges" and "cheapest" differ once edges have weights, which is why BFS is not enough. Skipping heap entries whose distance is larger than the best known one replaces the decrease-key operation that <code>heapq</code> does not provide.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-cheapest-route-with-dijkstra" data-pid="m16-4-cheapest-route-with-dijkstra" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Cheapest route with Dijkstra</h3></header>
+<div class="prob-q"><p>A router can answer a request through a chain of steps, each edge <code>(a, b, cost)</code> with a non-negative cost (dollars or milliseconds). Write <code>cheapest(edges, start, goal)</code> returning <code>(cost, path)</code> for the cheapest path, or <code>(None, [])</code> if unreachable, using Dijkstra with <code>heapq</code> and parent pointers; ties keep the first path found. Raise <code>ValueError</code> on a negative cost.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import heapq
+from collections import defaultdict
+
+def cheapest(edges, start, goal):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">edges = [
+    ("request", "small_model", 0.2), ("request", "cache", 0.01), ("cache", "small_model", 0.15),
+    ("small_model", "check", 0.05), ("request", "large_model", 2.0), ("large_model", "check", 0.05),
+    ("check", "answer", 0.0), ("cache", "answer", 1.5),
+]
+cost, path = cheapest(edges, "request", "answer")
+assert round(cost, 2) == 0.21 and path == ["request", "cache", "small_model", "check", "answer"]
+assert cheapest(edges, "answer", "request") == (None, []) and cheapest(edges, "request", "request") == (0, ["request"])
+try:
+    cheapest([("a", "b", -1)], "a", "b")
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">edges = [
+    (&quot;request&quot;, &quot;small_model&quot;, 0.2), (&quot;request&quot;, &quot;cache&quot;, 0.01), (&quot;cache&quot;, &quot;small_model&quot;, 0.15),
+    (&quot;small_model&quot;, &quot;check&quot;, 0.05), (&quot;request&quot;, &quot;large_model&quot;, 2.0), (&quot;large_model&quot;, &quot;check&quot;, 0.05),
+    (&quot;check&quot;, &quot;answer&quot;, 0.0), (&quot;cache&quot;, &quot;answer&quot;, 1.5),
+]
+cost, path = cheapest(edges, &quot;request&quot;, &quot;answer&quot;)
+assert round(cost, 2) == 0.21 and path == [&quot;request&quot;, &quot;cache&quot;, &quot;small_model&quot;, &quot;check&quot;, &quot;answer&quot;]
+assert cheapest(edges, &quot;answer&quot;, &quot;request&quot;) == (None, []) and cheapest(edges, &quot;request&quot;, &quot;request&quot;) == (0, [&quot;request&quot;])
+try:
+    cheapest([(&quot;a&quot;, &quot;b&quot;, -1)], &quot;a&quot;, &quot;b&quot;)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>graph = defaultdict(list)</code>; heap of <code>(cost, node)</code>; <code>dist = {start: 0}</code>, <code>parent = {start: None}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When popping <code>goal</code>, rebuild the path from <code>parent</code>. Skip stale entries with <code>if d &gt; dist[node]: continue</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+from collections import defaultdict
+
+
+def cheapest(edges, start, goal):
+    graph = defaultdict(list)
+    for a, b, w in edges:
+        if w &lt; 0:
+            raise ValueError(f&quot;negative cost on {a} -&gt; {b}&quot;)
+        graph[a].append((b, w))
+    dist, parent = {start: 0}, {start: None}
+    heap = [(0, start)]
+    while heap:
+        d, node = heapq.heappop(heap)
+        if d &gt; dist[node]:
+            continue
+        if node == goal:
+            path = []
+            while node is not None:
+                path.append(node)
+                node = parent[node]
+            return d, path[::-1]
+        for nxt, w in graph[node]:
+            nd = d + w
+            if nd &lt; dist.get(nxt, float(&quot;inf&quot;)):
+                dist[nxt], parent[nxt] = nd, node
+                heapq.heappush(heap, (nd, nxt))
+    return None, []</code></pre></div><p>Dijkstra pops nodes in order of their final cost, so when the goal is popped its cost and parent chain are final, and the search can stop early. Relaxation keeps, for each node, the cheapest known way in and who provided it, so the cheapest route (cache, then the small model, then the check, 0.21) beats both the direct small-model route (0.25) and the large model. Non-negative costs are essential: a negative edge could make an already settled node cheaper later, which Dijkstra never revisits, so the function rejects them. With a heap the cost is O((V + E) log V); model routers, network routing and map apps all rely on this algorithm or its variants (A*).</p></div></details>
+</article>
+<article class="prob" id="p-union-find-for-clustering-duplicates" data-pid="m16-4-union-find-for-clustering-duplicates" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>12. Union-find for clustering duplicates</h3></header>
+<div class="prob-q"><p>Write a class <code>DisjointSet</code> with <code>find(x)</code> (path compression; unseen items start as their own set), <code>union(a, b)</code> (union by size; returns <code>True</code> if two sets were merged), and <code>groups()</code> (a sorted list of sorted member lists). Then write <code>cluster(pairs, items)</code> that unions every near-duplicate pair (for example from 16.2's shingle search) and returns the groups including singletons from <code>items</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">class DisjointSet:
+    pass
+
+def cluster(pairs, items):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ds = DisjointSet()
+assert ds.union("a", "b") and ds.union("c", "d") and not ds.union("b", "a")
+assert ds.find("a") == ds.find("b") and ds.find("a") != ds.find("c")
+assert ds.union("b", "d") and ds.groups() == [["a", "b", "c", "d"]]
+pairs = [("faq-1", "faq-2"), ("faq-2", "faq-7"), ("faq-3", "faq-4"), ("faq-7", "faq-1")]
+assert cluster(pairs, ["faq-1", "faq-2", "faq-3", "faq-4", "faq-5", "faq-7"]) == [["faq-1", "faq-2", "faq-7"], ["faq-3", "faq-4"], ["faq-5"]]
+big = DisjointSet()
+for i in range(1, 20_000):
+    big.union(i - 1, i)
+assert big.find(0) == big.find(19_999) and len(big.groups()) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ds = DisjointSet()
+assert ds.union(&quot;a&quot;, &quot;b&quot;) and ds.union(&quot;c&quot;, &quot;d&quot;) and not ds.union(&quot;b&quot;, &quot;a&quot;)
+assert ds.find(&quot;a&quot;) == ds.find(&quot;b&quot;) and ds.find(&quot;a&quot;) != ds.find(&quot;c&quot;)
+assert ds.union(&quot;b&quot;, &quot;d&quot;) and ds.groups() == [[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;]]
+pairs = [(&quot;faq-1&quot;, &quot;faq-2&quot;), (&quot;faq-2&quot;, &quot;faq-7&quot;), (&quot;faq-3&quot;, &quot;faq-4&quot;), (&quot;faq-7&quot;, &quot;faq-1&quot;)]
+assert cluster(pairs, [&quot;faq-1&quot;, &quot;faq-2&quot;, &quot;faq-3&quot;, &quot;faq-4&quot;, &quot;faq-5&quot;, &quot;faq-7&quot;]) == [[&quot;faq-1&quot;, &quot;faq-2&quot;, &quot;faq-7&quot;], [&quot;faq-3&quot;, &quot;faq-4&quot;], [&quot;faq-5&quot;]]
+big = DisjointSet()
+for i in range(1, 20_000):
+    big.union(i - 1, i)
+assert big.find(0) == big.find(19_999) and len(big.groups()) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>parent</code> and <code>size</code> dicts; <code>find</code> adds unseen items, walks to the root, then compresses the path iteratively.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>union</code> attaches the smaller tree's root under the larger one's root and adds the sizes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class DisjointSet:
+    def __init__(self):
+        self.parent, self.size = {}, {}
+
+    def find(self, x):
+        if x not in self.parent:
+            self.parent[x], self.size[x] = x, 1
+            return x
+        root = x
+        while self.parent[root] != root:
+            root = self.parent[root]
+        while self.parent[x] != root:
+            self.parent[x], x = root, self.parent[x]
+        return root
+
+    def union(self, a, b):
+        ra, rb = self.find(a), self.find(b)
+        if ra == rb:
+            return False
+        if self.size[ra] &lt; self.size[rb]:
+            ra, rb = rb, ra
+        self.parent[rb] = ra
+        self.size[ra] += self.size[rb]
+        return True
+
+    def groups(self):
+        members = {}
+        for x in self.parent:
+            members.setdefault(self.find(x), []).append(x)
+        return sorted(sorted(m) for m in members.values())
+
+
+def cluster(pairs, items):
+    ds = DisjointSet()
+    for x in items:
+        ds.find(x)
+    for a, b in pairs:
+        ds.union(a, b)
+    return ds.groups()</code></pre></div><p>Union-find answers "are these in the same group?" while groups are being formed, without building or searching a graph: near-duplicate pairs from a similarity search are merged as they arrive, and transitivity (<code>faq-1</code> ~ <code>faq-2</code> ~ <code>faq-7</code>) comes for free. Union by size keeps trees shallow and path compression flattens them on every <code>find</code>, so a chain of 20,000 unions stays fast and, because both loops are iterative, never hits a recursion limit. Clusters then drive deduplication (keep one representative per cluster), and the same structure appears in Kruskal's minimum spanning tree and in entity resolution at scale.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-site-crawler" data-pid="m16-4-read-the-code-a-site-crawler" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Read the code: a site crawler</h3></header>
+<div class="prob-q"><p><code>crawl(start, get_links, max_depth)</code> should return every page reachable within <code>max_depth</code> links of <code>start</code>, each with its depth, visiting each page <strong>once</strong>. It has no visited set (pages are fetched again and again, and a link loop never ends without the depth limit), treats <code>/docs</code> and <code>/docs/</code> as different pages, allows one level too many, and uses <code>list.pop(0)</code>. Fix it: a <code>deque</code>, a visited set on normalised URLs (strip a trailing slash except for the root, drop <code>#fragments</code>), depth <code>&lt;= max_depth</code>, and a dict page -&gt; depth returned in BFS order. The grader counts calls to <code>get_links</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def crawl(start, get_links, max_depth):
+    depth_of = {}
+    queue = [(start, 0)]
+    while queue:
+        page, depth = queue.pop(0)
+        if depth &gt; max_depth + 1:
+            continue
+        depth_of[page] = depth
+        for link in get_links(page):
+            queue.append((link, depth + 1))
+    return depth_of
+</textarea>
+<script type="text/plain" class="prob-tests">site = {
+    "/": ["/docs/", "/pricing", "/blog#top"],
+    "/docs": ["/docs/api", "/", "/docs/faq/"],
+    "/pricing": ["/docs", "/pricing/"],
+    "/blog": ["/blog/post-1"],
+    "/docs/api": ["/docs/api/v2"],
+    "/docs/faq": ["/docs"],
+    "/blog/post-1": [],
+    "/docs/api/v2": [],
+}
+calls = []
+def get_links(page):
+    calls.append(page)
+    return site.get(page, [])
+out = crawl("/", get_links, max_depth=2)
+assert out == {"/": 0, "/docs": 1, "/pricing": 1, "/blog": 1, "/docs/api": 2, "/docs/faq": 2, "/blog/post-1": 2}
+assert list(out) == ["/", "/docs", "/pricing", "/blog", "/docs/api", "/docs/faq", "/blog/post-1"]
+assert sorted(calls) == sorted(["/", "/docs", "/pricing", "/blog"]) and crawl("/", get_links, 0) == {"/": 0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">site = {
+    &quot;/&quot;: [&quot;/docs/&quot;, &quot;/pricing&quot;, &quot;/blog#top&quot;],
+    &quot;/docs&quot;: [&quot;/docs/api&quot;, &quot;/&quot;, &quot;/docs/faq/&quot;],
+    &quot;/pricing&quot;: [&quot;/docs&quot;, &quot;/pricing/&quot;],
+    &quot;/blog&quot;: [&quot;/blog/post-1&quot;],
+    &quot;/docs/api&quot;: [&quot;/docs/api/v2&quot;],
+    &quot;/docs/faq&quot;: [&quot;/docs&quot;],
+    &quot;/blog/post-1&quot;: [],
+    &quot;/docs/api/v2&quot;: [],
+}
+calls = []
+def get_links(page):
+    calls.append(page)
+    return site.get(page, [])
+out = crawl(&quot;/&quot;, get_links, max_depth=2)
+assert out == {&quot;/&quot;: 0, &quot;/docs&quot;: 1, &quot;/pricing&quot;: 1, &quot;/blog&quot;: 1, &quot;/docs/api&quot;: 2, &quot;/docs/faq&quot;: 2, &quot;/blog/post-1&quot;: 2}
+assert list(out) == [&quot;/&quot;, &quot;/docs&quot;, &quot;/pricing&quot;, &quot;/blog&quot;, &quot;/docs/api&quot;, &quot;/docs/faq&quot;, &quot;/blog/post-1&quot;]
+assert sorted(calls) == sorted([&quot;/&quot;, &quot;/docs&quot;, &quot;/pricing&quot;, &quot;/blog&quot;]) and crawl(&quot;/&quot;, get_links, 0) == {&quot;/&quot;: 0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>normalise(u)</code>: drop <code>#...</code>, then strip a trailing <code>/</code> unless the URL is <code>/</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Mark pages visited when you enqueue them; only call <code>get_links</code> for pages whose depth is below <code>max_depth</code> (their links would be too deep otherwise).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+
+def _normalise(url):
+    url = url.split(&quot;#&quot;, 1)[0]
+    if len(url) &gt; 1 and url.endswith(&quot;/&quot;):
+        url = url[:-1]
+    return url
+
+
+def crawl(start, get_links, max_depth):
+    start = _normalise(start)
+    depth_of = {start: 0}
+    queue = deque([start])
+    while queue:
+        page = queue.popleft()
+        depth = depth_of[page]
+        if depth == max_depth:
+            continue
+        for link in get_links(page):
+            link = _normalise(link)
+            if link not in depth_of:
+                depth_of[link] = depth + 1
+                queue.append(link)
+    return depth_of</code></pre></div><p>A crawler is a BFS over a graph you discover as you go, and each bug breaks one BFS rule. Without a visited set, pages linking back to each other were fetched repeatedly (exponentially many paths), and without the depth limit it would never stop. URL normalisation decides what counts as the same node: <code>/docs</code> and <code>/docs/</code>, or a link with a <code>#fragment</code>, are one page, and treating them as different doubles the work and the duplicates in a RAG index. Recording depth when a page is first enqueued gives its true minimum depth, the off-by-one <code>max_depth + 1</code> let a third level in, and pages at the maximum depth are not expanded at all, which saves the fetches the grader counted. <code>deque.popleft</code> keeps it linear.</p></div></details>
+</article>
+<article class="prob" id="p-detecting-cycles-with-three-colours" data-pid="m16-4-detecting-cycles-with-three-colours" data-type="predict" data-level="hard" data-answer="None
+[&#x27;models&#x27;, &#x27;db&#x27;, &#x27;utils&#x27;, &#x27;models&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, &#x27;a&#x27;] [&#x27;x&#x27;, &#x27;x&#x27;]">
+<header class="prob-head"><h3>14. Detecting cycles with three colours</h3></header>
+<div class="code"><pre><code class="py">def find_cycle(graph):
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = {n: WHITE for n in graph}
+    for start in sorted(graph):
+        if colour[start] != WHITE:
+            continue
+        stack = [(start, iter(sorted(graph[start])))]
+        path = [start]
+        colour[start] = GREY
+        while stack:
+            node, it = stack[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                colour[node] = BLACK
+                stack.pop()
+                path.pop()
+            elif colour.get(nxt, WHITE) == GREY:
+                return path[path.index(nxt):] + [nxt]
+            elif colour.get(nxt, WHITE) == WHITE:
+                colour[nxt] = GREY
+                path.append(nxt)
+                stack.append((nxt, iter(sorted(graph.get(nxt, [])))))
+    return None
+
+imports = {&quot;api&quot;: [&quot;models&quot;, &quot;utils&quot;], &quot;models&quot;: [&quot;db&quot;], &quot;db&quot;: [&quot;utils&quot;], &quot;utils&quot;: []}
+print(find_cycle(imports))
+imports[&quot;utils&quot;] = [&quot;models&quot;]
+print(find_cycle(imports))
+print(find_cycle({&quot;a&quot;: [&quot;b&quot;], &quot;b&quot;: [&quot;c&quot;], &quot;c&quot;: [&quot;a&quot;], &quot;d&quot;: [&quot;a&quot;]}), find_cycle({&quot;x&quot;: [&quot;x&quot;]}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Grey means "on the current path". Reaching a grey node closes a cycle; reaching a black node is fine (it was fully explored already).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>None
+[&#x27;models&#x27;, &#x27;db&#x27;, &#x27;utils&#x27;, &#x27;models&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, &#x27;a&#x27;] [&#x27;x&#x27;, &#x27;x&#x27;]</pre></div><p>The first graph is a DAG: <code>utils</code> is reached twice, but the second time it is already black, which is not a cycle. After <code>utils</code> imports <code>models</code>, the search goes <code>api</code>, <code>models</code>, <code>db</code>, <code>utils</code>, and the edge back to the grey <code>models</code> closes the cycle <code>models -&gt; db -&gt; utils -&gt; models</code>. Starting from the alphabetically first node finds <code>a -&gt; b -&gt; c -&gt; a</code>, and a self-loop is the shortest cycle. The explicit stack of iterators replaces recursion, so deep dependency chains cannot overflow the call stack; this is the check that import-cycle linters (15.1) and workflow engines run before accepting a graph.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-bfs-or-dfs-how-do-you-choose" data-pid="m16-4-bfs-or-dfs-how-do-you-choose" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. BFS or DFS: how do you choose?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Both visit everything reachable in O(V + E). Use <strong>BFS</strong> (a queue) when you need <strong>shortest paths in unweighted graphs</strong> or anything layered by distance: fewest hops, nearest matching node, level-by-level processing, crawling to a depth; it may hold a whole frontier in memory, which can be wide. Use <strong>DFS</strong> (a stack or recursion) when you need to explore paths fully: connected components, cycle detection with colours, topological order by finishing times, backtracking searches, or when the graph is deep and narrow; it uses memory proportional to the depth, but recursion in Python is limited, so use an explicit stack for big graphs. For weighted shortest paths neither is enough: Dijkstra (non-negative weights) or Bellman-Ford. Mention visited sets (marked on enqueue for BFS) to avoid revisiting nodes and infinite loops on cycles.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-a-topological-sort-and-where-hav" data-pid="m16-4-what-is-a-topological-sort-and-where-hav" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What is a topological sort, and where have you used one?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A topological sort orders the nodes of a directed acyclic graph so that every edge points forward: each node appears after everything it depends on. It exists if and only if the graph has no cycle, so computing one doubles as cycle detection. Kahn's algorithm repeatedly takes nodes with no remaining dependencies (in-degree zero), and processing them in rounds yields groups that can run in parallel; a DFS that outputs nodes in reverse finishing order is the alternative. Both are O(V + E). Uses: build systems and package installers (dependencies before dependants), data pipelines and Airflow DAGs, running an agent's multi-step plan where steps consume earlier results, spreadsheet recalculation, migration ordering, and course prerequisites. In Python, <code>graphlib.TopologicalSorter</code> provides it, including an incremental API (<code>get_ready</code>, <code>done</code>) that fits concurrent execution.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-find-the-shortest-route-be" data-pid="m16-4-how-would-you-find-the-shortest-route-be" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How would you find the shortest route between two services when calls have different latencies, and when does your method fail?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Model the services as a directed graph with edge weights equal to latency (or cost) and run <strong>Dijkstra's algorithm</strong> from the source: a min-heap keyed by tentative distance, repeatedly settling the closest node and relaxing its outgoing edges, with parent pointers to rebuild the route, O((V + E) log V); stop early when the destination is settled. It fails with <strong>negative weights</strong> (use Bellman-Ford, O(V E), which also detects negative cycles), and it optimises a single additive metric, so trade-offs (latency versus cost, reliability) need a combined weight or a multi-objective method. Weights that change over time or with load call for recomputation, and for huge graphs with geometry (maps) <strong>A</strong>* with an admissible heuristic explores far fewer nodes. If all weights are equal, plain BFS suffices; with only 0 and 1 weights, a deque- based 0-1 BFS is linear.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Represent graphs as dicts of neighbour lists or sets (O(V + E) memory), and include nodes that only appear as edge targets.</li><li>BFS with a deque and visited-on-enqueue finds fewest-edge paths; record parents to rebuild them.</li><li>DFS (prefer an explicit stack) finds components and cycles; three colours detect cycles in directed graphs.</li><li>Topological sort (Kahn's algorithm, in rounds for parallel levels) orders dependency DAGs and reports cycles.</li><li>Dijkstra with <code>heapq</code> finds cheapest paths for non-negative weights; union-find groups connected items with near O(1) operations.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16.3 · Two pointers and binary search</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m16-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 16 · Algorithms for interviews</span></div>
+  <h1>16.3 Two pointers and binary search</h1>
+  <p>Sorted data unlocks two of the most useful techniques in interviews and in data code: two pointers that walk towards each other or in step, in O(n) with no extra memory, and binary search, which finds a position, or the best value of a parameter, in O(log n) steps. The <code>bisect</code> module, writing binary search without off-by-one errors, searching on the answer with a monotone check, and applications such as thresholds, token budgets and point-in-time lookups.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="pointers">
+<h2><span class="n">1</span>Two pointers</h2>
+<p>On <strong>sorted</strong> data, two indices can replace a nested loop. To find a pair with a given sum, start one pointer at each end: if the pair's sum is too small, the left element is too small for <strong>every</strong> remaining partner, so move left forward; if too large, move right back. Each step discards one element for good, O(n) total with O(1) extra memory, compared with the hash-set approach of 16.2, which needs O(n) memory but no sorting. Pointers moving <strong>in step</strong> merge two sorted lists (the merge step of merge sort, <code>heapq.merge</code>), remove duplicates in place (a slow pointer marks where the next unique value goes, a fast one scans), and partition arrays. <strong>Fast and slow</strong> pointers, one moving twice as fast, detect cycles in linked structures: if there is a loop, the fast one laps the slow one (problem 11).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">two_pointers.py</span><button class="copy">Copy</button></div><pre><code class="py">def pair_sum_sorted(nums, target):
+    lo, hi = 0, len(nums) - 1
+    while lo &lt; hi:
+        s = nums[lo] + nums[hi]
+        if s == target:
+            return nums[lo], nums[hi]
+        if s &lt; target:
+            lo += 1
+        else:
+            hi -= 1
+    return None
+
+def dedupe_sorted_in_place(nums):
+    if not nums:
+        return 0
+    write = 1
+    for read in range(1, len(nums)):
+        if nums[read] != nums[write - 1]:
+            nums[write] = nums[read]
+            write += 1
+    return write
+
+print(pair_sum_sorted([1, 3, 4, 6, 8, 11], 14), pair_sum_sorted([1, 2, 3], 10))
+data = [1, 1, 2, 2, 2, 5, 7, 7]
+k = dedupe_sorted_in_place(data)
+print(k, data[:k])</code></pre><div class="out"><span class="ol">Output</span><pre>(3, 11) None
+4 [1, 2, 5, 7]</pre></div></div>
+</section>
+<section class="sec" id="bisect">
+<h2><span class="n">2</span>Binary search and the bisect module</h2>
+<p>Binary search keeps an interval that must contain the answer and halves it each step: n = 1,000,000 takes about 20 comparisons. Python's <strong><code>bisect</code></strong> module implements it for sorted lists: <strong><code>bisect_left(a, x)</code></strong> returns the first index where <code>x</code> could be inserted keeping order (the index of the first element <code>&gt;= x</code>), <strong><code>bisect_right(a, x)</code></strong> the index after the last element <code>&lt;= x</code>; their difference counts occurrences of <code>x</code>, and <code>bisect_right(a, x) - 1</code> is the last element at or before <code>x</code>. <code>insort</code> inserts in order (O(log n) to find the place, O(n) to shift). Since Python 3.10, a <code>key=</code> argument lets you search a list of records by a field, as long as the list is sorted by that field.</p>
+<p>Writing binary search by hand is famously error-prone, so use a fixed <strong>invariant</strong>. For "the first index where <code>pred(i)</code> is true" (lower bound): keep <code>lo</code> where the predicate might still be false and <code>hi</code> where it is known true (start <code>hi = len(a)</code>), loop <code>while lo &lt; hi</code>, compute <code>mid = (lo + hi) // 2</code>, and set <code>hi = mid</code> if the predicate holds at <code>mid</code>, else <code>lo = mid + 1</code>. The loop always shrinks the interval and ends with <code>lo == hi</code> at the answer. Most bugs come from mixing conventions: <code>hi = len(a) - 1</code> with <code>while lo &lt; hi</code> never examines the last element, and <code>lo = mid</code> instead of <code>mid + 1</code> can loop forever (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bisect_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_left, bisect_right, insort
+
+scores = [0.12, 0.35, 0.35, 0.35, 0.61, 0.80, 0.93]
+print(bisect_left(scores, 0.35), bisect_right(scores, 0.35), bisect_right(scores, 0.35) - bisect_left(scores, 0.35))
+print(bisect_left(scores, 0.5), bisect_left(scores, 1.0), bisect_left(scores, 0.0))
+insort(scores, 0.5)
+print(scores)
+
+def lower_bound(n, pred):
+    lo, hi = 0, n
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if pred(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+print(lower_bound(len(scores), lambda i: scores[i] &gt;= 0.6), lower_bound(100, lambda x: x * x &gt;= 2000))</code></pre><div class="out"><span class="ol">Output</span><pre>1 4 3
+4 7 0
+[0.12, 0.35, 0.35, 0.35, 0.5, 0.61, 0.8, 0.93]
+5 45</pre></div></div>
+</section>
+<section class="sec" id="answer">
+<h2><span class="n">3</span>Binary search on the answer</h2>
+<p>Binary search is not only for lists. Whenever a question asks for the <strong>smallest (or largest) value</strong> of some parameter that satisfies a condition, and the condition is <strong>monotone</strong> (once true, true for all larger values), you can binary search the parameter itself: the smallest capacity that ships all packages within D days, the largest batch size that fits in GPU memory, the lowest classifier threshold that keeps recall above 90%, the smallest number of workers that meets a deadline. Each probe runs the (possibly expensive) check once, and O(log range) probes suffice, instead of trying every value. The work is in proving monotonicity and choosing safe bounds: <code>lo</code> must be a value that is definitely too small (or the smallest possible answer) and <code>hi</code> one that definitely works (problems 7 and 12).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">4</span>Warm-up</h2>
+<article class="prob" id="p-bisect-with-duplicates" data-pid="m16-3-bisect-with-duplicates" data-type="predict" data-level="easy" data-answer="1 4 4 0 5
+3 3 20
+[(1, &#x27;a&#x27;), (2, &#x27;a&#x27;), (2, &#x27;b&#x27;), (2, &#x27;bb&#x27;), (2, &#x27;c&#x27;)]">
+<header class="prob-head"><h3>1. bisect with duplicates</h3></header>
+<div class="code"><pre><code class="py">from bisect import bisect_left, bisect_right, insort_left, insort_right
+
+a = [10, 20, 20, 20, 30]
+print(bisect_left(a, 20), bisect_right(a, 20), bisect_left(a, 25), bisect_right(a, 5), bisect_left(a, 99))
+print(bisect_right(a, 20) - bisect_left(a, 20), bisect_right(a, 29) - 1, a[bisect_right(a, 29) - 1])
+b = [(1, &quot;a&quot;), (2, &quot;b&quot;), (2, &quot;c&quot;)]
+insort_right(b, (2, &quot;bb&quot;))
+insort_left(b, (2, &quot;a&quot;))
+print(b)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>bisect_left</code> gives the first position of an equal element, <code>bisect_right</code> the position after the last one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 4 4 0 5
+3 3 20
+[(1, &#x27;a&#x27;), (2, &#x27;a&#x27;), (2, &#x27;b&#x27;), (2, &#x27;bb&#x27;), (2, &#x27;c&#x27;)]</pre></div><p>For a value that is present, <code>bisect_left</code> points at its first occurrence and <code>bisect_right</code> just past its last, so their difference counts it; for an absent value, both give the insertion point. <code>bisect_right(a, x) - 1</code> is the index of the last element <code>&lt;= x</code>, the "value as of" lookup used for timestamps (problem 13). Insertion functions compare whole tuples, so <code>(2, "a")</code> sorts before <code>(2, "b")</code> and <code>(2, "bb")</code> between <code>(2, "b")</code> and <code>(2, "c")</code>.</p></div></details>
+</article>
+<article class="prob" id="p-all-pairs-with-a-target-sum-sorted-input" data-pid="m16-3-all-pairs-with-a-target-sum-sorted-input" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. All pairs with a target sum, sorted input</h3></header>
+<div class="prob-q"><p>Write <code>pairs_with_sum(nums, target)</code> for a <strong>sorted</strong> list, returning every <strong>distinct</strong> pair of values <code>(a, b)</code> with <code>a &lt;= b</code> and <code>a + b == target</code>, in increasing order of <code>a</code>, using two pointers and O(1) extra memory (apart from the output).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def pairs_with_sum(nums, target):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert pairs_with_sum([1, 2, 3, 4, 5, 6, 7], 8) == [(1, 7), (2, 6), (3, 5)]
+assert pairs_with_sum([1, 1, 2, 2, 3, 3], 4) == [(1, 3), (2, 2)]
+assert pairs_with_sum([2, 2, 2], 4) == [(2, 2)] and pairs_with_sum([1, 5], 3) == [] and pairs_with_sum([], 0) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert pairs_with_sum([1, 2, 3, 4, 5, 6, 7], 8) == [(1, 7), (2, 6), (3, 5)]
+assert pairs_with_sum([1, 1, 2, 2, 3, 3], 4) == [(1, 3), (2, 2)]
+assert pairs_with_sum([2, 2, 2], 4) == [(2, 2)] and pairs_with_sum([1, 5], 3) == [] and pairs_with_sum([], 0) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When a pair matches, record it, then move <strong>both</strong> pointers past every copy of their current values to avoid repeats.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def pairs_with_sum(nums, target):
+    out = []
+    lo, hi = 0, len(nums) - 1
+    while lo &lt; hi:
+        s = nums[lo] + nums[hi]
+        if s &lt; target:
+            lo += 1
+        elif s &gt; target:
+            hi -= 1
+        else:
+            out.append((nums[lo], nums[hi]))
+            a, b = nums[lo], nums[hi]
+            while lo &lt; hi and nums[lo] == a:
+                lo += 1
+            while lo &lt; hi and nums[hi] == b:
+                hi -= 1
+    return out</code></pre></div><p>Because the list is sorted, a sum that is too small can only be fixed by a larger left value and a sum that is too large by a smaller right value, so each comparison discards one element: O(n) after sorting, with constant extra memory. Skipping all copies of both values after a match is what makes the pairs distinct (<code>(1, 3)</code> once, though there are four index pairs). The <code>(2, 2)</code> case shows why the pointers must stay on different indices (<code>lo &lt; hi</code>): a value pairs with itself only when it occurs twice. Sorting first costs O(n log n), so on unsorted data the hash approach of 16.2 is usually simpler unless memory is tight.</p></div></details>
+</article>
+<article class="prob" id="p-a-binary-search-that-misses-the-last-ele" data-pid="m16-3-a-binary-search-that-misses-the-last-ele" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A binary search that misses the last element</h3></header>
+<div class="prob-q"><p><code>find(sorted_ids, target)</code> should return the index of <code>target</code> in a sorted list or <code>-1</code>. It mixes conventions (<code>hi</code> set to the last index but the loop runs <code>while lo &lt; hi</code>), so it never finds the last element and reports a missing target in a one-element list. Fix it with one consistent invariant.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def find(sorted_ids, target):
+    lo, hi = 0, len(sorted_ids) - 1
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if sorted_ids[mid] == target:
+            return mid
+        if sorted_ids[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1
+</textarea>
+<script type="text/plain" class="prob-tests">ids = [3, 8, 15, 23, 42, 57]
+assert [find(ids, x) for x in ids] == [0, 1, 2, 3, 4, 5]
+assert find(ids, 4) == -1 and find(ids, 99) == -1 and find([], 1) == -1 and find([7], 7) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ids = [3, 8, 15, 23, 42, 57]
+assert [find(ids, x) for x in ids] == [0, 1, 2, 3, 4, 5]
+assert find(ids, 4) == -1 and find(ids, 99) == -1 and find([], 1) == -1 and find([7], 7) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Either keep <code>hi = len - 1</code> and loop <code>while lo &lt;= hi</code>, or use the half-open <code>[lo, hi)</code> with <code>hi = len</code> and <code>hi = mid</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def find(sorted_ids, target):
+    lo, hi = 0, len(sorted_ids) - 1
+    while lo &lt;= hi:
+        mid = (lo + hi) // 2
+        if sorted_ids[mid] == target:
+            return mid
+        if sorted_ids[mid] &lt; target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1</code></pre></div><p>With an inclusive interval <code>[lo, hi]</code>, the search space is empty only when <code>lo &gt; hi</code>, so the loop must run while <code>lo &lt;= hi</code>; stopping at <code>lo == hi</code> skipped the last candidate, which is why the last id and the only element of a one-item list were never found. Pick one convention (inclusive bounds with <code>&lt;=</code>, or half-open bounds with <code>&lt;</code> and <code>hi = mid</code>) and keep every update consistent with it. In practice, <code>i = bisect_left(a, x)</code> followed by <code>i &lt; len(a) and a[i] == x</code> avoids writing the loop at all.</p></div></details>
+</article>
+<article class="prob" id="p-merging-and-cleaning-sorted-data" data-pid="m16-3-merging-and-cleaning-sorted-data" data-type="predict" data-level="easy" data-answer="[0, 1, 2, 4, 4, 9, 10, 12, 15]
+[&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]
+[1, 2, 4, 4, 9, 10, 12] [2, 4, 10] [1, 2, 5]">
+<header class="prob-head"><h3>4. Merging and cleaning sorted data</h3></header>
+<div class="code"><pre><code class="py">import heapq
+
+a = [1, 4, 9, 12]
+b = [2, 4, 10]
+c = [0, 15]
+print(list(heapq.merge(a, b, c)))
+print(list(heapq.merge([&quot;b&quot;, &quot;a&quot;], [&quot;c&quot;], key=str.lower)))
+
+def merge_two(x, y):
+    i = j = 0
+    out = []
+    while i &lt; len(x) and j &lt; len(y):
+        if x[i] &lt;= y[j]:
+            out.append(x[i])
+            i += 1
+        else:
+            out.append(y[j])
+            j += 1
+    return out + x[i:] + y[j:]
+
+print(merge_two(a, b), merge_two([], b), merge_two([5], [1, 2]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>heapq.merge</code> assumes each input is already sorted; it does not sort them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0, 1, 2, 4, 4, 9, 10, 12, 15]
+[&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]
+[1, 2, 4, 4, 9, 10, 12] [2, 4, 10] [1, 2, 5]</pre></div><p>Merging sorted inputs takes one pass with a pointer per input, O(total length), which is how merge sort combines halves and how large sorted files or log streams are combined without loading them all (<code>heapq.merge</code> works lazily on any number of iterators). It trusts its inputs: <code>["b", "a"]</code> is not sorted, so the output is not either, a reminder that these algorithms rely on their preconditions. The hand-written two-pointer merge appends whichever head is smaller, then the leftovers; using <code>&lt;=</code> keeps equal elements from the first list first, which makes the merge stable.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">5</span>Medium</h2>
+<article class="prob" id="p-lower-and-upper-bounds-from-scratch" data-pid="m16-3-lower-and-upper-bounds-from-scratch" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Lower and upper bounds from scratch</h3></header>
+<div class="prob-q"><p>Without the <code>bisect</code> module, write <code>lower_bound(a, x)</code> (the first index with <code>a[i] &gt;= x</code>) and <code>upper_bound(a, x)</code> (the first index with <code>a[i] &gt; x</code>) for a sorted list, both returning <code>len(a)</code> when there is none, and <code>count_in_range(a, lo, hi)</code> counting elements with <code>lo &lt;= v &lt;= hi</code>, all in O(log n).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def lower_bound(a, x):
+    pass
+
+def upper_bound(a, x):
+    pass
+
+def count_in_range(a, lo, hi):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import bisect, random
+a = [1, 3, 3, 3, 5, 8, 8, 13]
+assert [lower_bound(a, x) for x in (0, 1, 3, 4, 8, 13, 14)] == [0, 0, 1, 4, 5, 7, 8]
+assert [upper_bound(a, x) for x in (0, 1, 3, 4, 8, 13, 14)] == [0, 1, 4, 4, 7, 8, 8]
+assert count_in_range(a, 3, 8) == 6 and count_in_range(a, 9, 12) == 0 and count_in_range([], 0, 1) == 0
+rng = random.Random(4)
+data = sorted(rng.randint(0, 50) for _ in range(500))
+assert all(lower_bound(data, x) == bisect.bisect_left(data, x) and upper_bound(data, x) == bisect.bisect_right(data, x) for x in range(-2, 54))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import bisect, random
+a = [1, 3, 3, 3, 5, 8, 8, 13]
+assert [lower_bound(a, x) for x in (0, 1, 3, 4, 8, 13, 14)] == [0, 0, 1, 4, 5, 7, 8]
+assert [upper_bound(a, x) for x in (0, 1, 3, 4, 8, 13, 14)] == [0, 1, 4, 4, 7, 8, 8]
+assert count_in_range(a, 3, 8) == 6 and count_in_range(a, 9, 12) == 0 and count_in_range([], 0, 1) == 0
+rng = random.Random(4)
+data = sorted(rng.randint(0, 50) for _ in range(500))
+assert all(lower_bound(data, x) == bisect.bisect_left(data, x) and upper_bound(data, x) == bisect.bisect_right(data, x) for x in range(-2, 54))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Half-open interval: <code>lo, hi = 0, len(a)</code>; while <code>lo &lt; hi</code>: <code>mid = (lo + hi) // 2</code>; if <code>a[mid] &lt; x</code> (or <code>&lt;= x</code> for the upper bound) <code>lo = mid + 1</code> else <code>hi = mid</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def lower_bound(a, x):
+    lo, hi = 0, len(a)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if a[mid] &lt; x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def upper_bound(a, x):
+    lo, hi = 0, len(a)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if a[mid] &lt;= x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def count_in_range(a, lo, hi):
+    return upper_bound(a, hi) - lower_bound(a, lo)</code></pre></div><p>Both functions use the half-open invariant: the answer always lies in <code>[lo, hi]</code>, everything before <code>lo</code> is known too small, and everything from <code>hi</code> on is known to qualify, so the loop ends with <code>lo == hi</code> at the boundary and never runs forever, because <code>mid &lt; hi</code> guarantees progress in both branches. The only difference is <code>&lt;</code> versus <code>&lt;=</code>, which decides whether equal elements count as "before" the boundary. A range count is the difference of two boundaries, O(log n) on a sorted column, which is how databases answer <code>WHERE score BETWEEN a AND b</code> with an index. Testing against <code>bisect</code> on random data catches off-by-one mistakes quickly.</p></div></details>
+</article>
+<article class="prob" id="p-the-highest-threshold-that-keeps-recall" data-pid="m16-3-the-highest-threshold-that-keeps-recall" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. The highest threshold that keeps recall</h3></header>
+<div class="prob-q"><p>For a spam classifier, write <code>highest_threshold(scores, labels, min_recall)</code> returning the <strong>highest</strong> threshold <code>t</code> (one of the scores) such that predicting spam for <code>score &gt;= t</code> keeps recall (the share of true spam caught) at least <code>min_recall</code>, or <code>None</code> if no positives exist. Recall can only fall as the threshold rises, so binary search the sorted distinct scores, computing recall in O(log n) per probe with a sorted list of positive scores and <code>bisect</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from bisect import bisect_left
+
+def highest_threshold(scores, labels, min_recall):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">scores = [0.95, 0.9, 0.8, 0.7, 0.65, 0.6, 0.4, 0.3, 0.2, 0.1]
+labels = [1, 1, 0, 1, 1, 0, 1, 0, 0, 0]
+assert highest_threshold(scores, labels, 1.0) == 0.4
+assert highest_threshold(scores, labels, 0.8) == 0.65
+assert highest_threshold(scores, labels, 0.4) == 0.9 and highest_threshold(scores, labels, 0.2) == 0.95
+assert highest_threshold([0.5, 0.2], [0, 0], 0.5) is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">scores = [0.95, 0.9, 0.8, 0.7, 0.65, 0.6, 0.4, 0.3, 0.2, 0.1]
+labels = [1, 1, 0, 1, 1, 0, 1, 0, 0, 0]
+assert highest_threshold(scores, labels, 1.0) == 0.4
+assert highest_threshold(scores, labels, 0.8) == 0.65
+assert highest_threshold(scores, labels, 0.4) == 0.9 and highest_threshold(scores, labels, 0.2) == 0.95
+assert highest_threshold([0.5, 0.2], [0, 0], 0.5) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>pos = sorted(s for s, y in zip(scores, labels) if y)</code>; recall at <code>t</code> is <code>(len(pos) - bisect_left(pos, t)) / len(pos)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Find the last index <code>i</code> in the sorted distinct thresholds where recall is still enough: binary search for the first one where it is not, then step back.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_left
+
+
+def highest_threshold(scores, labels, min_recall):
+    pos = sorted(s for s, y in zip(scores, labels) if y)
+    if not pos:
+        return None
+
+    def recall(t):
+        return (len(pos) - bisect_left(pos, t)) / len(pos)
+
+    candidates = sorted(set(scores))
+    lo, hi = 0, len(candidates)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if recall(candidates[mid]) &gt;= min_recall:
+            lo = mid + 1
+        else:
+            hi = mid
+    return candidates[lo - 1] if lo &gt; 0 else None</code></pre></div><p>As the threshold rises, fewer examples are predicted positive, so recall never increases: "recall is enough" is true up to some threshold and false after it, a monotone predicate, and binary search finds the boundary in O(log n) probes. Each probe counts positives at or above the threshold with one <code>bisect</code> on the sorted positive scores, so the whole search is O(n log n) for sorting plus O(log^2 n) for searching, instead of recomputing recall over all data for every candidate. Picking the highest threshold that meets the recall target minimises false positives subject to the constraint, a common way to set operating points for moderation and fraud models.</p></div></details>
+</article>
+<article class="prob" id="p-binary-search-on-the-answer-with-bad-bou" data-pid="m16-3-binary-search-on-the-answer-with-bad-bou" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Binary search on the answer with bad bounds</h3></header>
+<div class="prob-q"><p><code>min_capacity(sizes, batches)</code> should return the smallest per-batch capacity (in tokens) that lets a list of documents be processed <strong>in order</strong> in at most <code>batches</code> batches, each batch holding consecutive documents whose sizes sum to at most the capacity. The search starts at <code>lo = 0</code>, so it can return a capacity smaller than the largest single document (which can never fit), and <code>hi = sum(sizes) - 1</code> excludes the answer when one batch is allowed. Fix the bounds.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def fits(sizes, capacity, batches):
+    used, current = 1, 0
+    for s in sizes:
+        if current + s &gt; capacity:
+            used += 1
+            current = 0
+        current += s
+    return used &lt;= batches
+
+
+def min_capacity(sizes, batches):
+    lo, hi = 0, sum(sizes) - 1
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if fits(sizes, mid, batches):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+</textarea>
+<script type="text/plain" class="prob-tests">assert min_capacity([120, 300, 80, 500, 200], 3) == 500
+assert min_capacity([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 5) == 15
+assert min_capacity([3, 2, 2, 4, 1, 4], 3) == 6
+assert min_capacity([7, 2, 5], 1) == 14 and min_capacity([7, 2, 5], 10) == 7</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert min_capacity([120, 300, 80, 500, 200], 3) == 500
+assert min_capacity([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 5) == 15
+assert min_capacity([3, 2, 2, 4, 1, 4], 3) == 6
+assert min_capacity([7, 2, 5], 1) == 14 and min_capacity([7, 2, 5], 10) == 7</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The answer is at least the largest document and at most the total: <code>lo, hi = max(sizes), sum(sizes)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def fits(sizes, capacity, batches):
+    used, current = 1, 0
+    for s in sizes:
+        if current + s &gt; capacity:
+            used += 1
+            current = 0
+        current += s
+    return used &lt;= batches
+
+
+def min_capacity(sizes, batches):
+    lo, hi = max(sizes), sum(sizes)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if fits(sizes, mid, batches):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo</code></pre></div><p>Binary search on the answer is only correct if the predicate is monotone over the whole search range and the range contains the answer. <code>fits</code> is monotone for capacities at least as large as the biggest document (more capacity never needs more batches), but below that it is wrong: with capacity 0 every document "starts a new batch" and is still added, so the greedy count can look acceptable for a capacity that cannot hold anything. Starting at <code>max(sizes)</code> keeps the search where the predicate is meaningful, and <code>sum(sizes)</code>, one batch with everything, is always feasible, so <code>hi</code> must include it. The greedy check is O(n) and the search O(n log(sum)), the same shape as sizing shards, batches or GPU memory.</p></div></details>
+</article>
+<article class="prob" id="p-many-lookups-in-a-sorted-list" data-pid="m16-3-many-lookups-in-a-sorted-list" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Many lookups in a sorted list</h3></header>
+<div class="prob-q"><p>Both find, for 2,000 timestamps, how many of 50,000 sorted event times are at or before it. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import bisect, random
+rng = random.Random(0)
+events = sorted(rng.random() * 1000 for _ in range(50_000))
+queries = [rng.random() * 1000 for _ in range(2_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">counts = [sum(1 for e in events if e &lt;= q) for q in queries[:200]]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">counts = [bisect.bisect_right(events, q) for q in queries[:200]]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How much of the list does each version look at per query?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>663.25 ms</td></tr><tr><td>B</td><td>143.12 µs</td></tr></table></div><p>The comprehension scans all 50,000 events for every query, O(n) per query, while <code>bisect_right</code> performs about 16 comparisons, O(log n), and runs in C. Once data is sorted, any "how many are below", "what is the last one before" or "where would this go" question should be a binary search; sorting once (O(n log n)) pays for itself after a handful of queries.</p></div></details>
+</article>
+<article class="prob" id="p-watching-a-binary-search" data-pid="m16-3-watching-a-binary-search" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Watching a binary search</h3></header>
+<div class="prob-q"><p>Fill in <code>steps</code> after each marked line: the list of <code>(lo, hi)</code> pairs at the start of each loop iteration, and the result.</p></div>
+<div class="code"><pre><code class="py">def first_at_least(a, x):
+    lo, hi, history = 0, len(a), []
+    while lo &lt; hi:
+        history.append((lo, hi))
+        mid = (lo + hi) // 2
+        if a[mid] &lt; x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return history, lo
+
+a = [2, 5, 8, 12, 16, 23, 38, 56]
+steps = first_at_least(a, 23)
+steps = first_at_least(a, 1)
+steps = first_at_least(a, 99)
+steps = first_at_least(a, 13)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>steps</code></th></tr><tr><td>present</td><td><input class="cell" data-a="([(0, 8), (5, 8), (5, 6)], 5)" data-s="([(0, 8), (5, 8), (5, 6)], 5)" aria-label="steps at present" autocomplete="off"></td></tr><tr><td>smaller than all</td><td><input class="cell" data-a="([(0, 8), (0, 4), (0, 2), (0, 1)], 0)" data-s="([(0, 8), (0, 4), (0, 2), (0, 1)], 0)" aria-label="steps at smaller than all" autocomplete="off"></td></tr><tr><td>larger than all</td><td><input class="cell" data-a="([(0, 8), (5, 8), (7, 8)], 8)" data-s="([(0, 8), (5, 8), (7, 8)], 8)" aria-label="steps at larger than all" autocomplete="off"></td></tr><tr><td>between</td><td><input class="cell" data-a="([(0, 8), (0, 4), (3, 4)], 4)" data-s="([(0, 8), (0, 4), (3, 4)], 4)" aria-label="steps at between" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each iteration roughly halves <code>hi - lo</code>. <code>mid = (lo + hi) // 2</code>; going left keeps <code>hi = mid</code>, going right sets <code>lo = mid + 1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>steps</code></th></tr><tr><td>present</td><td><code>([(0, 8), (5, 8), (5, 6)], 5)</code></td></tr><tr><td>smaller than all</td><td><code>([(0, 8), (0, 4), (0, 2), (0, 1)], 0)</code></td></tr><tr><td>larger than all</td><td><code>([(0, 8), (5, 8), (7, 8)], 8)</code></td></tr><tr><td>between</td><td><code>([(0, 8), (0, 4), (3, 4)], 4)</code></td></tr></table></div><p>Every iteration halves the interval, so eight elements need three or four steps, never more than <code>log2(8) + 1</code>. For a present value the search narrows to its first index; for a value smaller than everything, <code>hi</code> keeps moving left and the answer is 0; larger than everything, <code>lo</code> keeps moving right and the answer is <code>len(a)</code>, meaning "no such element"; for a value between elements, the answer is the index where it would be inserted. The number of steps barely depends on the target and grows by one each time the list doubles, which is what O(log n) means in practice.</p></div></details>
+</article>
+<article class="prob" id="p-how-many-chunks-fit-the-budget" data-pid="m16-3-how-many-chunks-fit-the-budget" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. How many chunks fit the budget</h3></header>
+<div class="prob-q"><p>Chunks are ranked best first. Write <code>max_chunks(token_counts, budget)</code> returning how many leading chunks fit within <code>budget</code> tokens, using prefix sums and <code>bisect</code> (O(log n) per query after O(n) set-up), as a class <code>Budgeter(token_counts)</code> with <code>max_chunks(budget)</code>. Also write <code>fit_largest(n_max, fits)</code> that binary searches the largest <code>n</code> in <code>0..n_max</code> for which the (expensive, monotone) check <code>fits(n)</code> is true, calling <code>fits</code> at most <code>ceil(log2(n_max + 1)) + 1</code> times.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from bisect import bisect_right
+from itertools import accumulate
+
+class Budgeter:
+    pass
+
+def fit_largest(n_max, fits):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import math
+b = Budgeter([120, 300, 80, 500, 200])
+assert [b.max_chunks(t) for t in (0, 119, 120, 499, 500, 1000, 1200, 5000)] == [0, 0, 1, 2, 3, 4, 5, 5]
+calls = []
+def fits(n):
+    calls.append(n)
+    return n * 37 <= 1000
+assert fit_largest(100, fits) == 27 and len(calls) <= math.ceil(math.log2(101)) + 1
+assert fit_largest(10, lambda n: True) == 10 and fit_largest(10, lambda n: n == 0) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math
+b = Budgeter([120, 300, 80, 500, 200])
+assert [b.max_chunks(t) for t in (0, 119, 120, 499, 500, 1000, 1200, 5000)] == [0, 0, 1, 2, 3, 4, 5, 5]
+calls = []
+def fits(n):
+    calls.append(n)
+    return n * 37 &lt;= 1000
+assert fit_largest(100, fits) == 27 and len(calls) &lt;= math.ceil(math.log2(101)) + 1
+assert fit_largest(10, lambda n: True) == 10 and fit_largest(10, lambda n: n == 0) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>self.prefix = list(accumulate(token_counts))</code>; the answer is <code>bisect_right(self.prefix, budget)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For <code>fit_largest</code>, search the first <code>n</code> in <code>1..n_max + 1</code> where <code>fits(n)</code> is false (treat <code>n_max + 1</code> as false without calling), then subtract one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_right
+from itertools import accumulate
+
+
+class Budgeter:
+    def __init__(self, token_counts):
+        self.prefix = list(accumulate(token_counts))
+
+    def max_chunks(self, budget):
+        return bisect_right(self.prefix, budget)
+
+
+def fit_largest(n_max, fits):
+    lo, hi = 1, n_max + 1
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo - 1</code></pre></div><p>Prefix sums turn "the total of the first k chunks" into one array element, and because token counts are positive the prefix sums are sorted, so "how many fit" is a <code>bisect_right</code> for the budget: the number of prefix totals that are at most the budget. Each new budget (per model, per request) is answered in O(log n). When the check is not a simple sum, for example "does the rendered prompt with n examples fit the model's context after tokenisation?", the same idea applies to the parameter itself: <code>fit_largest</code> makes about seven calls to an expensive check for a range of 100, instead of up to 100. It assumes <code>fits(0)</code> holds (an empty prompt always fits).</p></div></details>
+</article>
+<article class="prob" id="p-fast-and-slow-pointers" data-pid="m16-3-fast-and-slow-pointers" data-type="predict" data-level="medium" data-answer="/b
+None /self">
+<header class="prob-head"><h3>11. Fast and slow pointers</h3></header>
+<div class="code"><pre><code class="py">def find_cycle(next_of, start):
+    slow = fast = start
+    while fast in next_of and next_of[fast] in next_of:
+        slow = next_of[slow]
+        fast = next_of[next_of[fast]]
+        if slow == fast:
+            slow = start
+            while slow != fast:
+                slow, fast = next_of[slow], next_of[fast]
+            return slow
+    return None
+
+redirects = {&quot;/a&quot;: &quot;/b&quot;, &quot;/b&quot;: &quot;/c&quot;, &quot;/c&quot;: &quot;/d&quot;, &quot;/d&quot;: &quot;/b&quot;}
+print(find_cycle(redirects, &quot;/a&quot;))
+print(find_cycle({&quot;/x&quot;: &quot;/y&quot;, &quot;/y&quot;: &quot;/z&quot;}, &quot;/x&quot;), find_cycle({&quot;/self&quot;: &quot;/self&quot;}, &quot;/self&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If there is a cycle, the fast pointer eventually meets the slow one inside it; restarting one pointer from the start and moving both one step at a time, they meet at the cycle's entry.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>/b
+None /self</pre></div><p>Following redirects, <code>/b</code> leads to <code>/c</code>, <code>/d</code> and back to <code>/b</code>: a loop that would hang a crawler. The fast pointer moves two steps per round and the slow one one step, so inside a loop the gap shrinks by one each round and they must meet; then a pointer restarted from the beginning and one from the meeting point, both moving one step, meet exactly at the loop's entry, <code>/b</code> (Floyd's algorithm). A chain that ends returns <code>None</code>, and a page redirecting to itself is a loop of length one. It uses O(1) memory; a <code>seen</code> set (16.2) is simpler when memory is not a concern.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">6</span>Hard</h2>
+<article class="prob" id="p-split-work-into-k-balanced-parts" data-pid="m16-3-split-work-into-k-balanced-parts" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. Split work into k balanced parts</h3></header>
+<div class="prob-q"><p>Write <code>split_balanced(costs, k)</code> that splits a list of task costs into at most <code>k</code> <strong>contiguous</strong> parts minimising the largest part's total, returning <code>(largest, parts)</code> where <code>parts</code> lists the parts (as lists). Binary search the largest total between <code>max(costs)</code> and <code>sum(costs)</code> with a greedy feasibility check, then build the parts greedily for the answer. This is how consecutive model layers or sorted documents are assigned to workers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def split_balanced(costs, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">largest, parts = split_balanced([7, 2, 5, 10, 8], 2)
+assert largest == 18 and parts == [[7, 2, 5], [10, 8]]
+largest, parts = split_balanced([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)
+assert largest == 17 and sum(map(sum, parts)) == 45 and max(map(sum, parts)) == 17 and len(parts) <= 3
+assert split_balanced([4, 4, 4, 4], 4) == (4, [[4], [4], [4], [4]]) and split_balanced([5], 3) == (5, [[5]])
+assert split_balanced([3, 1, 2], 1) == (6, [[3, 1, 2]])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">largest, parts = split_balanced([7, 2, 5, 10, 8], 2)
+assert largest == 18 and parts == [[7, 2, 5], [10, 8]]
+largest, parts = split_balanced([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)
+assert largest == 17 and sum(map(sum, parts)) == 45 and max(map(sum, parts)) == 17 and len(parts) &lt;= 3
+assert split_balanced([4, 4, 4, 4], 4) == (4, [[4], [4], [4], [4]]) and split_balanced([5], 3) == (5, [[5]])
+assert split_balanced([3, 1, 2], 1) == (6, [[3, 1, 2]])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>can(limit)</code>: walk the costs, starting a new part whenever adding the next cost would exceed <code>limit</code>; feasible if parts used &lt;= k.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After finding the smallest feasible limit, run the same greedy walk again, collecting the parts.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def _greedy(costs, limit):
+    parts, current, total = [], [], 0
+    for c in costs:
+        if current and total + c &gt; limit:
+            parts.append(current)
+            current, total = [], 0
+        current.append(c)
+        total += c
+    if current:
+        parts.append(current)
+    return parts
+
+
+def split_balanced(costs, k):
+    lo, hi = max(costs), sum(costs)
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if len(_greedy(costs, mid)) &lt;= k:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo, _greedy(costs, lo)</code></pre></div><p>Asking for "the smallest possible maximum" invites binary search on the answer: if every part can stay under a limit L, it can also stay under any larger limit, so feasibility is monotone in L, between the largest single cost (no part can be smaller) and the total (one part). The greedy check, packing tasks into the current part until the next one would overflow, is optimal for contiguous parts, so each probe is O(n) and the whole search O(n log(sum)). The same greedy walk at the final limit produces the assignment. Pipeline-parallel training splits consecutive layers across GPUs exactly this way, and batch jobs split sorted inputs into balanced shards.</p></div></details>
+</article>
+<article class="prob" id="p-point-in-time-lookups-without-leakage" data-pid="m16-3-point-in-time-lookups-without-leakage" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Point-in-time lookups without leakage</h3></header>
+<div class="prob-q"><p>For training a churn model, features must use only data known <strong>at</strong> each prediction time. Write <code>PointInTime(events)</code> where <code>events</code> is a list of <code>(timestamp, value)</code> (any order), with <code>as_of(t)</code> returning the value of the latest event with <code>timestamp &lt;= t</code> (or <code>None</code>), <code>count_between(t0, t1)</code> counting events with <code>t0 &lt; timestamp &lt;= t1</code>, and <code>join(labels)</code> returning, for a list of <code>(t, label)</code> rows, <code>[(t, label, as_of(t))]</code>. Use sorting once and <code>bisect</code> (with <code>key=</code> or a separate list of times).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from bisect import bisect_right
+
+class PointInTime:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">events = [(30, "gold"), (10, "free"), (20, "pro"), (45, "free")]
+pit = PointInTime(events)
+assert [pit.as_of(t) for t in (5, 10, 15, 20, 44, 45, 100)] == [None, "free", "free", "pro", "gold", "free", "free"]
+assert pit.count_between(10, 30) == 2 and pit.count_between(0, 100) == 4 and pit.count_between(45, 50) == 0
+assert pit.join([(25, 0), (50, 1), (1, 0)]) == [(25, 0, "pro"), (50, 1, "free"), (1, 0, None)]
+tie = PointInTime([(10, "a"), (10, "b")])
+assert tie.as_of(10) == "b"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">events = [(30, &quot;gold&quot;), (10, &quot;free&quot;), (20, &quot;pro&quot;), (45, &quot;free&quot;)]
+pit = PointInTime(events)
+assert [pit.as_of(t) for t in (5, 10, 15, 20, 44, 45, 100)] == [None, &quot;free&quot;, &quot;free&quot;, &quot;pro&quot;, &quot;gold&quot;, &quot;free&quot;, &quot;free&quot;]
+assert pit.count_between(10, 30) == 2 and pit.count_between(0, 100) == 4 and pit.count_between(45, 50) == 0
+assert pit.join([(25, 0), (50, 1), (1, 0)]) == [(25, 0, &quot;pro&quot;), (50, 1, &quot;free&quot;), (1, 0, None)]
+tie = PointInTime([(10, &quot;a&quot;), (10, &quot;b&quot;)])
+assert tie.as_of(10) == &quot;b&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Sort the events by timestamp, keeping input order for equal timestamps (<code>sorted</code> is stable), and store the timestamps in a separate list for <code>bisect</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>i = bisect_right(times, t)</code>; the latest event at or before <code>t</code> is at <code>i - 1</code> if <code>i &gt; 0</code>. Counts are differences of two <code>bisect_right</code> calls.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from bisect import bisect_right
+
+
+class PointInTime:
+    def __init__(self, events):
+        self.events = sorted(events, key=lambda e: e[0])
+        self.times = [t for t, _ in self.events]
+
+    def as_of(self, t):
+        i = bisect_right(self.times, t)
+        return self.events[i - 1][1] if i else None
+
+    def count_between(self, t0, t1):
+        return bisect_right(self.times, t1) - bisect_right(self.times, t0)
+
+    def join(self, labels):
+        return [(t, label, self.as_of(t)) for t, label in labels]</code></pre></div><p><strong>Leakage</strong> (using information from after the prediction time) is the most common way ML models look great offline and fail in production: joining each label with the customer's <strong>current</strong> plan, instead of the plan at the time, lets the model see the future. A point-in-time join takes, for each label time, the latest event at or before it, which on sorted timestamps is <code>bisect_right(times, t) - 1</code>, O(log n) per lookup after one O(n log n) sort. Equal timestamps resolve to the last event recorded (stable sort plus <code>bisect_right</code>), and half-open ranges <code>(t0, t1]</code> make windows that tile without double counting. Feature stores and pandas <code>merge_asof</code> implement exactly this.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-three-sum-with-duplicate-b" data-pid="m16-3-read-the-code-three-sum-with-duplicate-b" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: three-sum with duplicate bugs</h3></header>
+<div class="prob-q"><p><code>three_sum(nums, target)</code> should return every <strong>distinct</strong> sorted triple of values summing to <code>target</code>, in sorted order, in O(n^2) with sorting plus two pointers. It reports duplicate triples, skips valid ones because it advances past duplicates before checking, and mutates the caller's list by sorting it in place. Fix all three.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def three_sum(nums, target=0):
+    nums.sort()
+    out = []
+    for i in range(len(nums) - 2):
+        lo, hi = i + 1, len(nums) - 1
+        while lo &lt; hi:
+            while lo &lt; hi and nums[lo] == nums[lo + 1]:
+                lo += 1
+            s = nums[i] + nums[lo] + nums[hi]
+            if s == target:
+                out.append((nums[i], nums[lo], nums[hi]))
+                lo += 1
+                hi -= 1
+            elif s &lt; target:
+                lo += 1
+            else:
+                hi -= 1
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">data = [-1, 0, 1, 2, -1, -4]
+assert three_sum(data) == [(-1, -1, 2), (-1, 0, 1)] and data == [-1, 0, 1, 2, -1, -4]
+assert three_sum([0, 0, 0, 0]) == [(0, 0, 0)] and three_sum([1, 2, 3, 4, 5], 9) == [(1, 3, 5), (2, 3, 4)]
+assert three_sum([1, 1, 1], 5) == [] and three_sum([], 0) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = [-1, 0, 1, 2, -1, -4]
+assert three_sum(data) == [(-1, -1, 2), (-1, 0, 1)] and data == [-1, 0, 1, 2, -1, -4]
+assert three_sum([0, 0, 0, 0]) == [(0, 0, 0)] and three_sum([1, 2, 3, 4, 5], 9) == [(1, 3, 5), (2, 3, 4)]
+assert three_sum([1, 1, 1], 5) == [] and three_sum([], 0) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Sort a copy. Skip a repeated first element with <code>if i &gt; 0 and a[i] == a[i - 1]: continue</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Skip repeated middle and last values <strong>after</strong> recording a match, by moving <code>lo</code> and <code>hi</code> past their current values.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def three_sum(nums, target=0):
+    a = sorted(nums)
+    out = []
+    for i in range(len(a) - 2):
+        if i &gt; 0 and a[i] == a[i - 1]:
+            continue
+        lo, hi = i + 1, len(a) - 1
+        while lo &lt; hi:
+            s = a[i] + a[lo] + a[hi]
+            if s &lt; target:
+                lo += 1
+            elif s &gt; target:
+                hi -= 1
+            else:
+                out.append((a[i], a[lo], a[hi]))
+                mid_val, hi_val = a[lo], a[hi]
+                while lo &lt; hi and a[lo] == mid_val:
+                    lo += 1
+                while lo &lt; hi and a[hi] == hi_val:
+                    hi -= 1
+    return out</code></pre></div><p>Three-sum reduces to "for each first element, two-sum on the rest" with two pointers, O(n^2) after an O(n log n) sort. Distinctness needs duplicates skipped at <strong>every</strong> level: the first element (otherwise <code>-1, -1, 2</code> is found once from each <code>-1</code>), and the other two after each match. The original skipped middle duplicates <strong>before</strong> evaluating, which jumped over the second <code>-1</code> that the triple <code>(-1, -1, 2)</code> needs, and never skipped repeated first elements. Sorting <code>nums</code> in place silently reordered the caller's data, the shared-mutation bug of 2.4; <code>sorted(nums)</code> works on a copy.</p></div></details>
+</article>
+<article class="prob" id="p-bisect-with-key-and-descending-data" data-pid="m16-3-bisect-with-key-and-descending-data" data-type="predict" data-level="hard" data-answer="1 2
+[&#x27;2025-01-03&#x27;, &#x27;2025-01-05&#x27;, &#x27;2025-01-07&#x27;, &#x27;2025-01-09&#x27;]
+0 3 3
+2 [300, 120, 95, 80]">
+<header class="prob-head"><h3>15. bisect with key and descending data</h3></header>
+<div class="code"><pre><code class="py">from bisect import bisect_left, bisect_right, insort
+
+records = [(&quot;2025-01-03&quot;, 120), (&quot;2025-01-07&quot;, 80), (&quot;2025-01-09&quot;, 300)]
+print(bisect_left(records, &quot;2025-01-07&quot;, key=lambda r: r[0]), bisect_right(records, &quot;2025-01-08&quot;, key=lambda r: r[0]))
+insort(records, (&quot;2025-01-05&quot;, 95), key=lambda r: r[0])
+print([d for d, _ in records])
+desc = [0.93, 0.8, 0.61, 0.35, 0.12]
+print(bisect_left(desc, 0.5), bisect_left([-x for x in desc], -0.5), bisect_left(desc, -0.5, key=lambda x: -x))
+ranks = sorted(records, key=lambda r: -r[1])
+print(bisect_right(ranks, -100, key=lambda r: -r[1]), [v for _, v in ranks])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With <code>key=</code>, the search value is compared with <code>key(element)</code>, so it must be in key form already (a date string, not a record).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>bisect assumes ascending order; for descending data, search the negated values or use a key that negates.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 2
+[&#x27;2025-01-03&#x27;, &#x27;2025-01-05&#x27;, &#x27;2025-01-07&#x27;, &#x27;2025-01-09&#x27;]
+0 3 3
+2 [300, 120, 95, 80]</pre></div><p>Since Python 3.10, <code>key=</code> makes bisect work on lists of records sorted by a field; the value you search for is a <strong>key value</strong>, the date string, while <code>insort</code> inserts a whole record and applies the key to it. bisect assumes ascending order: on a descending list it silently returns nonsense (here 0, "before everything", although 0.5 belongs after 0.61), while negating the values, or using <code>key=lambda x: -x</code> with a negated search value, turns descending into ascending and gives the correct position 3. The last line counts records with a value of at least 100 in a list sorted by descending value: two of them.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">7</span>Interview questions</h2>
+<article class="prob" id="p-how-do-you-write-a-binary-search-without" data-pid="m16-3-how-do-you-write-a-binary-search-without" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. How do you write a binary search without off-by-one errors?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Decide what you are searching for in terms of a monotone predicate, typically "the first index where <code>pred(i)</code> is true" (lower bound), then pick one interval convention and keep it. With the half-open convention: start <code>lo = 0, hi = len(a)</code> (so <code>len(a)</code> means "not found"), loop <code>while lo &lt; hi</code>, compute <code>mid = (lo + hi) // 2</code>, and set <code>hi = mid</code> when <code>pred(mid)</code> holds, otherwise <code>lo = mid + 1</code>. The invariant is that everything before <code>lo</code> fails the predicate and everything from <code>hi</code> on satisfies it; <code>mid</code> is always strictly less than <code>hi</code>, so the interval shrinks each iteration and the loop terminates with <code>lo == hi</code> at the answer. "Last index where true" is "first index where false, minus one". Test the empty input, a single element, a target smaller and larger than everything, duplicates, and compare against <code>bisect</code> on random data. In production Python code, use <code>bisect_left</code> / <code>bisect_right</code> (with <code>key=</code> for records) rather than hand-written loops.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-binary-search-on-the-answer-and-" data-pid="m16-3-what-is-binary-search-on-the-answer-and-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is 'binary search on the answer', and how do you recognise when it applies?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It is binary searching over the space of possible <strong>answers</strong> rather than over an array: when a problem asks for the minimum (or maximum) value of a parameter such that a condition holds, and the condition is monotone in that parameter (if capacity C works, any larger capacity works), you can test a candidate with a feasibility check and halve the range each time. Recognise it by phrases such as "minimum capacity", "smallest maximum", "largest size that fits", "minimum time to finish", where checking a given value is easier than computing the optimum directly. You need safe bounds (a definitely infeasible or minimal <code>lo</code>, a definitely feasible <code>hi</code>), a correct and monotone check (often a greedy O(n) pass), and care with integer versus real-valued answers (for reals, iterate a fixed number of times or to a tolerance). Typical complexity is O(n log(range)). Examples: shipping within D days, splitting an array into k parts, choosing a classifier threshold for a recall target, finding the largest batch size that fits in memory.</p></div></details>
+</article>
+<article class="prob" id="p-hash-set-or-two-pointers-for-finding-pai" data-pid="m16-3-hash-set-or-two-pointers-for-finding-pai" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Hash set or two pointers for finding pairs: how do you choose?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>For pair or triple problems on <strong>unsorted</strong> data, a hash set or dict gives O(n) time with O(n) extra memory and keeps original indices easy to return, so it is usually the first answer (two-sum). If the data is <strong>already sorted</strong>, or must be sorted anyway, two pointers give O(n) time after sorting with O(1) extra memory, handle "closest sum" and "all distinct pairs" naturally (the hash approach needs extra care for duplicates and cannot do "closest" easily), and extend cleanly to three-sum and k-sum. Sorting costs O(n log n) and loses original positions unless you sort indices. Other factors: hashable elements are required for hashing, while two pointers need a total order; streaming data favours hashing; very large data that does not fit in memory favours sorting (external sort) plus a merge-style pass. State the trade-off and pick based on whether order, memory or indices matter.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>On sorted data, two pointers replace nested loops: moving from both ends for pair sums, in step for merges and in-place deduplication, fast and slow for cycles.</li><li>Binary search halves the interval each step; use <code>bisect_left</code> / <code>bisect_right</code> (with <code>key=</code> for records) for positions, counts and as-of lookups.</li><li>Write searches with one invariant: half-open <code>[lo, hi)</code>, <code>while lo &lt; hi</code>, <code>hi = mid</code> or <code>lo = mid + 1</code>.</li><li>Binary search on the answer: a monotone feasibility check plus safe bounds finds minimum capacities, maximum sizes and thresholds in O(n log range).</li><li>Point-in-time joins with sorted timestamps and <code>bisect_right</code> prevent feature leakage in ML datasets.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
