@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m15-3", num="15.3", title="Command-line tools",
@@ -15,6 +16,8 @@ term("Exit code", "The integer a process returns when it ends: 0 means success, 
 term("Entry point", "A declaration in `pyproject.toml` (`[project.scripts]`) that installs a command which calls a given Python function.")
 
 section("argparse", "argparse basics",
+    fig(chain(["argv list|['docs/', '--dry-run']", ("parser.parse_args(argv)", "accent"), ("Namespace(path='docs/',|dry_run=True)", "good")], note="bad arguments: usage message and exit code 2"),
+        "argparse turns the list of words after the command into a namespace of typed values."),
     p("""`sys.argv` is the list of command-line words, starting with the program name. Parsing it by hand breaks on the first unusual input, so use **`argparse`**: create an
     `ArgumentParser(prog=..., description=...)`, declare arguments with `add_argument`, and call `parse_args(argv)`, which returns a namespace object with one attribute
     per argument. **Positional** arguments are required and identified by order (`add_argument("source")`). **Optional** arguments start with dashes (`--out`, short form
@@ -45,6 +48,8 @@ section("argparse", "argparse basics",
 )
 
 section("main", "The `main(argv)` pattern",
+    fig(chain(["if __name__ ==|'__main__':", "raise SystemExit(main())", ("main(argv) parses|and does the work", "accent"), ("returns an exit code|0 = success", "good")]),
+        "Keeping the work in `main(argv)` lets tests call the tool like a function."),
     p("""Structure every tool as a function **`main(argv=None) -> int`**: it builds the parser, parses `argv` (when `argv` is `None`, `parse_args` uses `sys.argv[1:]`), does the
     work, and **returns** an exit code instead of calling `sys.exit` deep inside. The file ends with `if __name__ == "__main__": raise SystemExit(main())`. Tests can then
     call `main(["docs/", "--dry-run"])` and check the return value and output, without a subprocess, and the same function serves as the entry point of an installed
@@ -57,6 +62,12 @@ section("main", "The `main(argv)` pattern",
 )
 
 section("streams", "Standard input, output and error",
+    fig(table(["stream", "carries", "example"], [
+        ["stdin", "input data", "cat tickets.jsonl | classify"],
+        ["stdout", "the result", "rag-ingest docs/ | jq ."],
+        ["stderr", "progress, warnings, errors, logs", "stays on screen when stdout is redirected"],
+    ], label="the three standard streams"),
+        "Results on stdout, diagnostics on stderr, so the tool works in a pipe."),
     p("""Every process has three streams. **Standard output** is for the program's **result**, so it can be redirected to a file or piped into another program (`rag-ingest docs/
     | jq .`). **Standard error** is for **diagnostics**: progress, warnings, errors and logs (12.3's handlers default to it), which stay visible on the terminal when stdout is
     redirected. **Standard input** lets a tool read data from a pipe (`cat tickets.jsonl | classify --label spam`); by convention a file argument of `-` means "read stdin".

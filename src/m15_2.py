@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m15-2", num="15.2", title="Environments and dependencies",
@@ -15,6 +16,9 @@ term("Specifier", "A version constraint such as `>=2.0,<3` or `~=1.4.2`, used in
 term("Lock file", "A file recording the exact version (and usually the hash) of every package installed, direct and transitive, so an environment can be recreated identically.")
 
 section("venv", "Virtual environments",
+    fig(refs(["project A", "project B"], ["A/.venv: pydantic 1", "B/.venv: pydantic 2"], [(0, 0), (1, 1)],
+        label="one environment per project", title_names="projects", title_objects="their own site-packages"),
+        "Each virtual environment has its own installed packages, so two projects can need different versions."),
     p("""Installing packages into the system Python mixes every project's dependencies in one `site-packages` folder, where project A needs `pydantic 1` and project B needs
     `pydantic 2`, and upgrading one breaks the other (or the operating system's own tools). A **virtual environment** gives each project its own folder of installed
     packages: `python -m venv .venv` creates it, activating it (`source .venv/bin/activate` on Linux and macOS, `.venv\\Scripts\\activate` on Windows) puts its `python` and
@@ -36,6 +40,14 @@ section("tools", "pip and uv",
 )
 
 section("versions", "Versions and specifiers",
+    fig(table(["specifier", "2.6", "2.7.0", "2.7.3", "2.8", "3.0"], [
+        [">=2.7,<3", "no", "yes", "yes", "yes", "no"],
+        ["~=2.7", "no", "yes", "yes", "yes", "no"],
+        ["~=2.7.1", "no", "no", "yes", "no", "no"],
+        ["==2.7.*", "no", "yes", "yes", "no", "no"],
+        ["!=2.7.3", "yes", "yes", "no", "yes", "yes"],
+    ], label="which versions each specifier accepts"),
+        "Checked with `packaging`: `~=2.7` means at least 2.7 within 2.x, and `~=2.7.1` means at least 2.7.1 within 2.7.x."),
     p("""Python versions follow **PEP 440**: a release such as `2.7.1`, optionally with a pre-release (`2.8.0a1`, `b2`, `rc1`), a post-release (`2.7.1.post1`), a development release
     (`2.8.0.dev3`), or a local label (`2.1.0+cu121`, used by PyTorch for CUDA builds). They compare numerically segment by segment, so `1.10` is newer than `1.9`, and
     pre-releases come before their final release. Most libraries use **semantic versioning** loosely: a major bump (2.x to 3.0) may break your code, a minor bump adds
@@ -73,6 +85,8 @@ section("pyproject", "pyproject.toml",
 )
 
 section("locks", "Lock files and reproducibility",
+    fig(chain(["pyproject.toml:|ranges you chose", ("resolver", "accent"), "lock file: exact|versions and hashes", ("same environment on|every machine", "good")]),
+        "Applications declare ranges and lock the result; libraries only declare ranges."),
     p("""Your direct dependencies have dependencies of their own (**transitive** dependencies), often dozens. If you declare only ranges, two installs a month apart can resolve
     to different versions, and a new release of a package you never heard of breaks your build. A **lock file** records the exact resolved version of every package, and
     usually its hash, so `uv sync` (or `pip install -r requirements.lock --require-hashes`) recreates the same environment on every machine and in CI and production. The

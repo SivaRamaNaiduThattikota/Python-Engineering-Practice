@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m15-p", num="15.P", title="Module 15 practice set and mini project",
@@ -11,6 +12,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(15, "an evaluation command-line tool"), "Module 15 at a glance: imports, environments and packaging, and command-line tools, building up to evalctl."),
     p("""When a tool misbehaves, ask three questions in order. **Which code is running?** Check `sys.path`, `module.__file__`, `__name__` and import-time side effects (15.1).
     **Which versions are installed, and which were declared?** Parse versions and requirements with `packaging`, never as strings, and compare the environment with the
     lock (15.2). **How is it invoked?** Through `main(argv) -> int`, with results on standard output, diagnostics on standard error and meaningful exit codes (15.3)."""),
@@ -331,6 +333,17 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: an evaluation command-line tool",
+    fig(flowchart({
+        "cmd": ("start", 1, 0, "evalctl"),
+        "run": ("accent", 0, 1, "run: score JSONL|from stdin"),
+        "sum": ("accent", 1, 1, "summary: count|and rate"),
+        "env": ("accent", 2, 1, "check-env: versions|vs requirements"),
+        "out": ("step", 1, 2, "data to stdout,|problems to stderr"),
+        "code": ("end", 1, 3, "exit code 0, 1 or 2"),
+    }, [("cmd", "run", "", {"route": "hv"}), ("cmd", "sum"), ("cmd", "env", "", {"route": "hv"}),
+        ("run", "out", "", {"route": "vh"}), ("sum", "out"), ("env", "out", "", {"route": "vh"}), ("out", "code")],
+        cell=(220, 80), label="the evalctl command"),
+        "Three subcommands share one contract: data on stdout, diagnostics on stderr, and an exit code a scheduler can act on."),
     p("""Teams evaluate prompts and models from the command line and from CI. Build `evalctl`, a small tool with three subcommands: `run` scores model answers read as JSON Lines,
     using a scorer plugin chosen by name; `summary` aggregates result lines; `check-env` checks installed package versions against requirements. It must behave well in pipes
     and schedulers: data on standard output, diagnostics on standard error, and meaningful exit codes."""),

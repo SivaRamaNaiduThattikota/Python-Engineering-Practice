@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m15-1", num="15.1", title="Imports and modules",
@@ -16,6 +17,18 @@ term("Package", "A folder of modules that can be imported as one name, usually m
 term("Import system", "The machinery behind `import`: it finds a module on the search path, runs its code once, and caches the module object in `sys.modules`.")
 
 section("what", "What `import` does",
+    fig(stage_map(15, "an evaluation command-line tool"), "Module 15 at a glance: imports, environments and packaging, and command-line tools, building up to evalctl."),
+    fig(flowchart({
+        "imp": ("start", 0, 0, "import shop"),
+        "cached": ("ask", 0, 1, "'shop' in sys.modules?"),
+        "bind": ("good", 1, 1, "bind the name|(no code runs)"),
+        "find": ("ask", 0, 2, "found in a folder|on sys.path?"),
+        "err": ("bad", 1, 2, "ModuleNotFoundError"),
+        "store": ("step", 0, 3, "create the module,|store it in sys.modules"),
+        "run": ("accent", 0, 4, "run its code top to|bottom, bind the name"),
+    }, [("imp", "cached"), ("cached", "bind", "yes"), ("cached", "find", "no"), ("find", "err", "no"), ("find", "store", "yes"), ("store", "run")],
+        cell=(250, 80), label="what import does"),
+        "A module's code runs once per process; every later import just finds it in `sys.modules`."),
     p("""`import shop` does three things. It looks in **`sys.modules`**, a dict of every module already imported, and if `shop` is there, simply binds the name. Otherwise it
     **finds** the module by searching the folders in **`sys.path`** in order (the folder of the script you ran, or the current folder for `python -m` and the REPL, then
     the `PYTHONPATH` entries, then the standard library and `site-packages`). Then it **executes** the module's code from top to bottom in a fresh namespace, stores the
@@ -96,6 +109,11 @@ section("packages", "Packages and relative imports",
 )
 
 section("main", "`__name__` and running modules",
+    fig(table(["", "python cart.py", "import shopkit.cart"], [
+        ["__name__", "'__main__'", "'shopkit.cart'"],
+        ["if __name__ == '__main__': block", "runs", "skipped"],
+    ], hl={(1, 1)}, label="the same file, run or imported"),
+        "`__name__` tells a module whether it is the program or a library being imported."),
     p("""Every module has `__name__`: its import name (`"shopkit.cart"`), except the module Python was asked to run, which is called **`"__main__"`**. The idiom `if __name__ ==
     "__main__":` therefore separates code to run when the file is executed (a command-line entry point, a quick demo) from definitions that importers need, and it is
     essential for multiprocessing (14.3). Two related attributes: `__file__` is the path the module was loaded from, and `__package__` is the package used to resolve
@@ -104,6 +122,8 @@ section("main", "`__name__` and running modules",
 )
 
 section("circular", "Circular imports",
+    fig(chain(["import a starts|running a", "a reaches import b,|b starts running", "b does from a|import helper", ("a is only half run:|ImportError", "bad")]),
+        "In a circular import, the second module sees the first one only partly initialised."),
     p("""If `a` imports `b` and `b` imports `a`, importing `a` starts running `a`, which reaches `import b`, which starts running `b`, which reaches `import a`. Because `a` is already
     in `sys.modules` (it is put there before its code runs), Python hands `b` the **partially initialised** `a`, whose code stopped at the `import b` line. `import a`
     succeeds, but `from a import helper` fails with `ImportError: cannot import name 'helper' from partially initialized module 'a' (most likely due to a circular
