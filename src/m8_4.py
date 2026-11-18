@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m8-4", num="8.4", title="Registration decorators",
@@ -16,6 +17,8 @@ term("Signature", "A function's parameters, with their kinds, defaults and annot
 term("Tool schema", "A JSON description of a function (name, description, parameter types) that tells an LLM how to call it.")
 
 section("register", "Decorators that register",
+    fig(chain(["@tool above def search", "registry['search'] = search", "the function is returned|unchanged", ("later: look it up|by name", "good")]),
+        "A registration decorator records the function and returns it untouched, so defining a function is enough to make it available."),
     p("""Not every decorator wraps. A **registration decorator** records the function somewhere and returns it **unchanged**. There is
     no wrapper, no extra cost per call and nothing that can break the function; the only effect is that, from the moment the module
     is imported, the function is listed in a **registry**: usually a dict from a name to the function. Later code looks functions up
@@ -126,6 +129,8 @@ section("signature", "Reading a function: `inspect.signature`",
 )
 
 section("schemas", "From a function to a tool schema",
+    fig(chain(["def search(query: str, k: int = 5)", "inspect.signature", "parameters, annotations|and defaults", ("a JSON schema|for the model", "accent")]),
+        "The function signature is the single source of truth: the tool schema sent to a model is generated from it."),
     p("""LLM tool calling (function calling) works by sending the model a **schema** for each tool: its name, a description, and a JSON
     Schema for its parameters. The model then replies with a tool name and JSON arguments, and your code calls the function. Writing
     those schemas by hand duplicates information the function already contains, so agent libraries generate them from the function:
@@ -166,6 +171,16 @@ section("schemas", "From a function to a tool schema",
 )
 
 section("dispatch", "Dispatching calls",
+    fig(flowchart({
+        "in": ("start", 0, 0, "model output: tool name|and arguments"),
+        "known": ("ask", 0, 1, "name registered?"),
+        "unk": ("bad", 1, 1, "error back to|the model"),
+        "bind": ("ask", 0, 2, "arguments bind to|the signature?"),
+        "bad": ("bad", 1, 2, "validation error back|to the model"),
+        "call": ("end", 0, 3, "call it, return|the result"),
+    }, [("in", "known"), ("known", "unk", "no"), ("known", "bind", "yes"), ("bind", "bad", "no"), ("bind", "call", "yes")], cell=(240, 80),
+        label="dispatching a tool call"),
+        "Dispatch checks the name, then the arguments, and turns every failure into a message the model can act on."),
     p("""A registry is useful because of **dispatch**: given a name (from a tool call, a URL, a command line), look up the function and
     call it with the arguments. Dispatch code is a boundary in the sense of 7.3: names and arguments come from outside (a user, a
     model), so unknown names and bad arguments are expected, and should produce clear errors, not tracebacks. A dict lookup also

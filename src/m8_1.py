@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m8-1", num="8.1", title="Functions that wrap functions",
@@ -15,6 +16,9 @@ term("Wrapper", "The inner function a decorator returns. It runs extra code befo
 term("functools.wraps", "A decorator for wrappers that copies the original's name, docstring and signature information onto the wrapper.")
 
 section("objects", "A function that takes and returns functions",
+    fig(stage_map(8, "a tool framework for an agent"), "Module 8 at a glance: from wrapping one function to decorators with settings, caching and registration, building up to a tool framework."),
+    fig(chain(["@timed above def f", "means f = timed(f)", "timed returns wrapper", ("the name f now|points at wrapper", "accent")]),
+        "The `@` line is shorthand for passing the function to the decorator and rebinding the name to whatever it returns."),
     p("""Everything in this lesson rests on two facts from Module 3. Functions are **objects**: you can pass them to other functions,
     return them, and store them in variables and dicts (3.5). And an inner function **remembers** the variables of the function
     that created it, even after that function has returned: a closure (3.4). Put together, you can write a function that receives
@@ -55,6 +59,11 @@ section("objects", "A function that takes and returns functions",
 )
 
 section("when", "When decorator code runs",
+    fig(table(["moment", "what runs"], [
+        ["the module is imported (def with @)", "the decorator body, once per decorated function"],
+        ["every call f(...)", "the wrapper, which calls the original inside"],
+    ], label="decoration time versus call time"),
+        "Decorator code runs at definition time; only the wrapper runs on each call."),
     p("""A decorator has two separate moments, and mixing them up causes most decorator bugs. The **decorator function** runs once,
     at **definition time**: when Python executes the `def` statement, which for a module-level function is when the module is
     imported. The **wrapper** runs at **call time**, every time someone calls the decorated name. Code in the decorator's body
@@ -84,6 +93,8 @@ section("when", "When decorator code runs",
 )
 
 section("wrapper", "The wrapper pattern",
+    fig(chain(["caller: f(x)", "wrapper: before", "original f(x)", "wrapper: after", ("result back|to the caller", "good")]),
+        "The wrapper pattern: do something before, call the original with the same arguments, do something after, return its result."),
     p("""Almost every decorator has the same shape. The wrapper accepts **any** arguments with `*args` and `**kwargs` (3.2), does
     something before the call, calls the original with exactly those arguments, does something after, and **returns the result**.
     Using `*args, **kwargs` instead of copying the original's parameters is what lets one decorator work on any function:
@@ -125,6 +136,12 @@ section("wrapper", "The wrapper pattern",
 )
 
 section("wraps", "`functools.wraps`: keep the original's identity",
+    fig(table(["attribute of the decorated f", "without @wraps", "with @functools.wraps(fn)"], [
+        ["f.__name__", "'wrapper'", "'f'"],
+        ["f.__doc__", "None", "the original docstring"],
+        ["f.__wrapped__", "missing", "the original function"],
+    ], hl={(0, 1), (1, 1)}, label="what functools.wraps copies"),
+        "`functools.wraps` copies the original's name, docstring and signature information onto the wrapper, so tools and logs see the real function."),
     p("""After decoration, the name `score` refers to `wrapper`. Unless you do something about it, the decorated function **looks**
     like `wrapper`: its `__name__` is `"wrapper"`, its docstring is gone, and `help()` and `inspect.signature()` describe `(*args,
     **kwargs)`. That breaks more than cosmetics. Logs and tracebacks show `wrapper` for every decorated function, test tools list

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m8-p", num="8.P", title="Module 8 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(8, "a tool framework for an agent"), "Module 8 at a glance: from wrapping one function to decorators with settings, caching and registration, building up to a tool framework."),
     p("""For every decorator, ask three questions. **What runs when?** The factory and the decorator run once, at definition time; the
     wrapper runs on every call (8.1, 8.2). **What does the name end up bound to?** A wrapper (then `functools.wraps` is mandatory), the
     original function (registration, 8.4), or something else. **What must the wrapper never change?** The arguments, the return
@@ -681,6 +683,8 @@ x, y = "refunds", "rufands" """,
 )
 
 section("project", "Mini project: a tool framework for an agent",
+    fig(chain(["@tool registers|functions", "schemas from|signatures", "model picks a tool", "dispatch with|validation", ("result or error|back to the model", "good")]),
+        "The tool framework: registration, schemas, dispatch and error handling, each a decorator pattern from this module."),
     p("""Agent libraries let you turn plain functions into tools with a decorator. Build a small version: tools are registered with
     metadata, their schemas are generated from signatures and type hints, idempotent tools can be cached, flaky ones retried, every
     call goes through one dispatcher that validates arguments and returns errors the model can act on, and per-tool statistics are

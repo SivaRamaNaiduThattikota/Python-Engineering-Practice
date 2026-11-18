@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m8-3", num="8.3", title="Caching, retries and timing",
@@ -16,6 +17,16 @@ term("Cache key", "What a cache uses to decide that two calls are \"the same\". 
 term("Percentile", "The value below which a given share of measurements fall. The 95th percentile (p95) latency is the time 95% of calls stay under.")
 
 section("lru", "`functools.lru_cache`: how it works",
+    fig(flowchart({
+        "call": ("start", 0, 0, "f(args)"),
+        "hit": ("ask", 0, 1, "key from args|in the cache?"),
+        "ret": ("good", 1, 1, "return the cached|value (a hit)"),
+        "run": ("step", 0, 2, "compute f(args)"),
+        "store": ("step", 0, 3, "store it; if full, evict the|least recently used"),
+        "out": ("end", 1, 3, "return the value"),
+    }, [("call", "hit"), ("hit", "ret", "yes"), ("hit", "run", "no"), ("run", "store"), ("store", "out")], cell=(240, 78),
+        label="how lru_cache handles a call"),
+        "`lru_cache` builds a key from the arguments; a hit skips the function entirely, and a full cache drops its least recently used entry."),
     p("""Memoization, which you built by hand in 8.1, is in the standard library: `@functools.lru_cache(maxsize=128)` and its unbounded
     form `@functools.cache`. On each call, the wrapper builds a **key** from the arguments, looks it up in a dict, and returns the
     stored result on a **hit**; on a **miss** it calls the function, stores the result and returns it. With a `maxsize`, the cache
@@ -115,6 +126,8 @@ section("ttl", "Time-limited caches",
 )
 
 section("retry", "Retry as a decorator",
+    fig(chain(["@retry(attempts=3)", "call fails with a|transient error", "wait, call again", ("success, or the last|error re-raised", "good")]),
+        "A retry decorator wraps the call in a loop with waits, and re-raises the final error so failures stay visible."),
     p("""Lesson 7.4 built the retry logic: transient errors only, exponential backoff with jitter, a maximum number of attempts, and
     re-raising the last error. As a decorator factory it becomes a one-line policy on any function: `@retry(attempts=4,
     on=(TimeoutError, ConnectionError))`. Keep `sleep` and the random generator injectable (with production defaults) so tests can run
@@ -163,6 +176,8 @@ section("retry", "Retry as a decorator",
 )
 
 section("timing", "Timing and latency statistics",
+    fig(chain(["start = perf_counter()", "call the function", "elapsed = now - start", ("record the latency,|even on errors", "good")]),
+        "A timing decorator measures in `finally`, so slow failures are measured too."),
     p("""For measuring durations, use `time.perf_counter()`: a high-resolution clock meant for intervals that never jumps backwards.
     `time.time()` is wall-clock time, which can jump when the system clock is adjusted (NTP corrections, daylight saving changes on
     some systems), producing negative or huge "durations". `time.monotonic()` also never goes backwards and is the right clock for

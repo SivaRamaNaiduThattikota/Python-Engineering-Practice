@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m8-2", num="8.2", title="Decorators with arguments",
@@ -14,6 +15,8 @@ term("Decorator factory", "A function that takes settings and returns a decorato
 term("Stacking", "Applying several decorators to one function. They are applied bottom-up at definition time, so the top one runs first at call time.")
 
 section("factory", "Three levels: settings, function, call",
+    fig(chain([("retry(times=3)|takes the settings", "accent"), "returns decorator(fn)", "returns wrapper(*args)", ("wrapper runs on|every call", "accent2")]),
+        "A decorator with arguments has three levels: the settings call, the decorator that receives the function, and the wrapper that runs per call."),
     p("""A plain decorator receives the function and nothing else. Many decorators need **settings**: how many times to retry, which
     range is valid, which role is required. The `@` line can contain any expression that evaluates to a decorator, so the solution is
     a function that takes the settings and **returns** a decorator: a **decorator factory**. `@retry(times=3)` is evaluated in two
@@ -164,6 +167,8 @@ section("optional", "Decorators that work with and without parentheses",
 )
 
 section("stacking", "Stacking decorators: order matters",
+    fig(chain(["@a over @b over def f", "means f = a(b(f))", "a call runs a's wrapper,|then b's, then f", ("results return through|b, then a", "good")]),
+        "Stacked decorators apply bottom-up but run top-down: the top decorator's wrapper is the outermost layer."),
     p("""Several decorators can sit on one function. They are **applied from the bottom up**: the one closest to the `def` wraps the
     function first, and the next one wraps that result. So `@a` / `@b` / `def f` means `f = a(b(f))`. At **call** time the order is
     the reverse: the outermost wrapper (`a`) runs first, calls `b`'s wrapper, which calls the original; on the way back, results pass
