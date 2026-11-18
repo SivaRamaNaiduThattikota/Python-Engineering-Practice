@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>6.3 · Generators and yield</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m6-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 6 · Comprehensions and generators</span></div>
+  <h1>6.3 Generators and yield</h1>
+  <p>How a <code>for</code> loop really works (iterables, iterators, <code>next</code> and <code>StopIteration</code>), generator functions that pause at <code>yield</code>, generator expressions, <code>yield from</code>, cleanup with <code>finally</code>, and the traps: one-shot iteration, delayed errors and closed files. Applied to streaming files, JSONL, batches and LLM token streams.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="protocol">
+<h2><span class="n">1</span>How a <code>for</code> loop really works</h2>
+<p>Every <code>for</code> loop in Python runs the same small protocol. An <strong>iterable</strong> is anything you can loop over: a list, a string, a dict, a file, a <code>range</code>. When the loop starts, Python calls <code>iter(iterable)</code>, which returns an <strong>iterator</strong>: an object that remembers where it is. Then, for every round, Python calls <code>next(iterator)</code> and binds the result to the loop variable. When the iterator has nothing left, <code>next</code> raises <code>StopIteration</code>, and the <code>for</code> loop catches it and ends quietly. You can run the protocol by hand:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">protocol.py</span><button class="copy">Copy</button></div><pre><code class="py">words = [&quot;refund&quot;, &quot;policy&quot;]
+it = iter(words)
+print(next(it), next(it))
+try:
+    next(it)
+except StopIteration:
+    print(&quot;StopIteration: the loop would end here&quot;)
+print(next(iter(words)), next(it, &quot;default&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>refund policy
+StopIteration: the loop would end here
+refund default</pre></div></div>
+<p><code>next(it, default)</code> returns the default instead of raising, which is the convenient form when "no more items" is a normal case. The important distinction is <strong>iterable versus iterator</strong>. A list is an iterable but not an iterator: each <code>iter(list)</code> gives a fresh iterator starting at the beginning, so you can loop over a list as many times as you like. An iterator is <strong>one-shot</strong>: it only moves forward, and once it is exhausted it stays empty. Calling <code>iter()</code> on an iterator returns the iterator itself, which is why looping over it a second time produces nothing.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">one_shot.py</span><button class="copy">Copy</button></div><pre><code class="py">nums = [1, 2, 3]
+print(sum(nums), sum(nums))          # a list can be walked again
+it = iter(nums)
+print(sum(it), sum(it))              # an iterator only once
+print(iter(it) is it, iter(nums) is iter(nums))
+import io
+f = io.StringIO(&quot;line 1\nline 2\n&quot;)
+print([line.strip() for line in f], [line for line in f])   # files are iterators too</code></pre><div class="out"><span class="ol">Output</span><pre>6 6
+6 0
+True False
+[&#x27;line 1&#x27;, &#x27;line 2&#x27;] []</pre></div></div>
+<p>Files are iterators over their lines, which is why reading a file twice in a row returns nothing the second time (you would need <code>f.seek(0)</code>). <code>zip</code>, <code>map</code>, <code>filter</code>, <code>enumerate</code>, <code>reversed</code>, dict views' iterators and everything in <code>itertools</code> (6.4) are iterators as well. This one-shot behaviour is the source of a whole family of bugs (problem 3).</p>
+</section>
+<section class="sec" id="yield">
+<h2><span class="n">2</span>Generator functions: <code>yield</code> pauses a function</h2>
+<p>A <strong>generator function</strong> is a normal <code>def</code> with at least one <code>yield</code> in its body. The <code>yield</code> changes what calling the function means. Calling it does <strong>not</strong> run the body; it immediately returns a <strong>generator object</strong>, which is an iterator. The body runs only when someone calls <code>next</code> on that object: it runs from the top <strong>until the first <code>yield</code></strong>, hands that value to the caller, and <strong>pauses</strong>, keeping all of its local variables and its position. The next <code>next</code> resumes right after the <code>yield</code> and runs to the following one. When the body finishes (falls off the end or hits <code>return</code>), the generator raises <code>StopIteration</code>, and a <code>for</code> loop ends.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pause_resume.py</span><button class="copy">Copy</button></div><pre><code class="py">def countdown(n):
+    print(f&quot;  start at {n}&quot;)
+    while n &gt; 0:
+        yield n
+        print(f&quot;  resumed after yielding {n}&quot;)
+        n -= 1
+    print(&quot;  done&quot;)
+
+g = countdown(2)
+print(&quot;created&quot;, type(g).__name__)
+print(&quot;got&quot;, next(g))
+print(&quot;got&quot;, next(g))
+print(&quot;got&quot;, next(g, &quot;nothing left&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>created generator
+  start at 2
+got 2
+  resumed after yielding 2
+got 1
+  resumed after yielding 1
+  done
+got nothing left</pre></div></div>
+<p>Follow the printed lines: "created" appears before "start", because creating the generator runs nothing. Each <code>next</code> runs the body only as far as the next <code>yield</code>. The local variable <code>n</code> survives between calls, which is what lets a generator produce a sequence without building it: it computes each value when asked, from the state it kept. That is called <strong>lazy</strong> evaluation. A generator that never finishes is fine, as long as the caller stops asking.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">infinite.py</span><button class="copy">Copy</button></div><pre><code class="py">def ids(prefix):
+    n = 0
+    while True:                      # infinite, and that is fine
+        n += 1
+        yield f&quot;{prefix}-{n:04d}&quot;
+
+gen = ids(&quot;TKT&quot;)
+print([next(gen) for _ in range(3)])
+for ticket in gen:
+    if ticket.endswith(&quot;5&quot;):
+        break
+print(ticket, next(gen))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;TKT-0001&#x27;, &#x27;TKT-0002&#x27;, &#x27;TKT-0003&#x27;]
+TKT-0005 TKT-0006</pre></div></div>
+<p>The <code>for</code> loop picked up where the comprehension left off, because both used the same generator: its state lives in the object, not in the loop. A <code>return value</code> inside a generator ends it; the value is attached to the <code>StopIteration</code> (<code>e.value</code>), which <code>yield from</code> uses (below) but a <code>for</code> loop ignores.</p>
+</section>
+<section class="sec" id="genexp">
+<h2><span class="n">3</span>Generator expressions</h2>
+<p>A <strong>generator expression</strong> is the lazy version of a list comprehension: the same syntax with parentheses, <code>(expr for x in xs if cond)</code>. It returns a generator object at once, without computing anything; each value is computed when it is requested. When a generator expression is the only argument of a function, the extra parentheses can be dropped: <code>sum(x * x for x in xs)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">genexp_memory.py</span><button class="copy">Copy</button></div><pre><code class="py">import sys
+
+squares_list = [x * x for x in range(1_000_000)]
+squares_gen = (x * x for x in range(1_000_000))
+print(f&quot;list: {sys.getsizeof(squares_list) / 1_000_000:.1f} MB, generator: {sys.getsizeof(squares_gen)} bytes&quot;)
+print(sum(squares_gen), sum(squares_gen))      # the second sum finds it exhausted
+print(max(len(w) for w in &quot;lazy evaluation saves memory&quot;.split()))</code></pre><div class="out"><span class="ol">Output</span><pre>list: 4.2 MB, generator: 104 bytes
+333332833333500000 0
+10</pre></div></div>
+<p>The list holds a million references: about 4 MB for the list object alone on this page's 32-bit WebAssembly Python, and about 8 MB on a normal 64-bit machine, where each reference takes 8 bytes, not counting the integer objects themselves. The generator is a small fixed-size object whatever the length. That is why the generator form is the default for anything consumed <strong>once</strong>: <code>sum</code>, <code>min</code>, <code>max</code>, <code>any</code>, <code>all</code>, <code>sorted</code>, <code>"".join</code>, <code>dict(...)</code>, <code>set(...)</code>, or a <code>for</code> loop. It is also one-shot, as the second <code>sum</code> shows. Note that a generator is not automatically <strong>faster</strong>; for small data the list comprehension is often slightly quicker. The wins are memory, early exit (6.1) and being able to start working before all the data exists.</p>
+<p>One detail of timing matters. In a generator expression, the <strong>first</strong> <code>for</code>'s iterable is evaluated immediately, when the expression is created; everything else (conditions, the expression, inner loops) is evaluated later, when values are requested. So rebinding the source name afterwards does not affect the generator, but changing a variable used in the expression does (problem 12).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">genexp_binding.py</span><button class="copy">Copy</button></div><pre><code class="py">xs = [1, 2, 3]
+g = (x * 10 for x in xs)
+xs = [7]                        # the generator already holds the old list
+print(list(g))
+factor = 2
+g = (x * factor for x in range(3))
+factor = 100                    # read later, when values are produced
+print(list(g))</code></pre><div class="out"><span class="ol">Output</span><pre>[10, 20, 30]
+[0, 100, 200]</pre></div></div>
+</section>
+<section class="sec" id="yieldfrom">
+<h2><span class="n">4</span><code>yield from</code>, and cleanup with <code>finally</code></h2>
+<p><code>yield from iterable</code> yields every value of another iterable, one by one, as if you had written <code>for v in iterable: yield v</code>. Its main use is <strong>delegating</strong> to another generator, especially in recursion: a function that walks a tree yields the current node and then <code>yield from</code> the walk of each child. When the inner iterable is a generator that <code>return</code>s a value, that value becomes the result of the <code>yield from</code> expression.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">yield_from.py</span><button class="copy">Copy</button></div><pre><code class="py">def walk(node, depth=0):
+    yield depth, node[&quot;title&quot;]
+    for child in node.get(&quot;children&quot;, []):
+        yield from walk(child, depth + 1)
+
+doc = {&quot;title&quot;: &quot;Policy&quot;, &quot;children&quot;: [
+    {&quot;title&quot;: &quot;Refunds&quot;, &quot;children&quot;: [{&quot;title&quot;: &quot;EU&quot;}, {&quot;title&quot;: &quot;US&quot;}]},
+    {&quot;title&quot;: &quot;Contact&quot;}]}
+print([&quot;  &quot; * d + t for d, t in walk(doc)])
+
+def inner():
+    yield &quot;a&quot;
+    return &quot;inner finished&quot;
+
+def outer():
+    result = yield from inner()
+    yield result
+print(list(outer()))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Policy&#x27;, &#x27;  Refunds&#x27;, &#x27;    EU&#x27;, &#x27;    US&#x27;, &#x27;  Contact&#x27;]
+[&#x27;a&#x27;, &#x27;inner finished&#x27;]</pre></div></div>
+<p>A generator can hold resources, such as an open file or a network connection, while it is paused. If the caller stops early (a <code>break</code>, an exception, or simply dropping the generator), the generator is <strong>closed</strong>: Python raises <code>GeneratorExit</code> inside it at the paused <code>yield</code>, so its <code>finally</code> blocks and <code>with</code> blocks run and release the resource. <code>g.close()</code> does this explicitly; otherwise it happens when the generator is garbage-collected, which in CPython is usually immediately after the last reference goes away.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">cleanup.py</span><button class="copy">Copy</button></div><pre><code class="py">def stream_lines(lines):
+    print(&quot;  open&quot;)
+    try:
+        for line in lines:
+            yield line
+    finally:
+        print(&quot;  closed&quot;)
+
+for line in stream_lines([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]):
+    print(line)
+    if line == &quot;b&quot;:
+        break
+print(&quot;after the loop&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>  open
+a
+b
+  closed
+after the loop</pre></div></div>
+<p>Generators can also receive values with <code>g.send(value)</code>, which makes <code>yield</code> an expression that returns what was sent. That is how coroutines worked before <code>async</code> and <code>await</code>; you will meet the modern form in the async module, and you rarely need <code>send</code> in everyday code.</p>
+</section>
+<section class="sec" id="traps">
+<h2><span class="n">5</span>The traps: one-shot, delayed errors and closed files</h2>
+<p>Generators remove a lot of memory pressure, but they move <strong>when</strong> code runs, which creates three classic bugs.</p>
+<p><strong>One-shot consumption.</strong> A function that receives an iterable and loops over it twice (say, once for the mean and once for the maximum) works with a list and silently breaks with a generator: the second pass sees nothing. Either take one pass that computes everything, or turn the input into a list once at the start, <code>items = list(items)</code>, when you know it fits in memory (problem 3).</p>
+<p><strong>Delayed errors.</strong> The body of a generator function, including argument checks at the top, runs only on the first <code>next</code>. So <code>batched(items, 0)</code> does not raise where it is called; it raises later, wherever the generator is first consumed, which can be far away and confusing. The fix is to split the function: a normal function validates the arguments and then returns the inner generator (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">delayed_errors.py</span><button class="copy">Copy</button></div><pre><code class="py">def lazy_check(n):
+    if n &lt; 1:
+        raise ValueError(&quot;n must be at least 1&quot;)
+    yield from range(n)
+
+g = lazy_check(0)
+print(&quot;no error yet:&quot;, type(g).__name__)
+try:
+    next(g)
+except ValueError as e:
+    print(&quot;raised only now:&quot;, e)
+
+def eager_check(n):
+    if n &lt; 1:
+        raise ValueError(&quot;n must be at least 1&quot;)
+    return (i for i in range(n))     # a normal function returning a generator
+try:
+    eager_check(0)
+except ValueError as e:
+    print(&quot;raised at the call:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>no error yet: generator
+raised only now: n must be at least 1
+raised at the call: n must be at least 1</pre></div></div>
+<p><strong>Closed resources.</strong> <code>with open(path) as f: return (json.loads(l) for l in f)</code> returns a generator, and then the <code>with</code> block ends and <strong>closes the file</strong> before anyone has read a line; iterating raises <code>ValueError: I/O operation on closed file</code>. Put the <code>with</code> <strong>inside a generator function</strong> and <code>yield</code> from within it, so the file stays open exactly as long as the generator is being consumed, and closes when it finishes or is closed (problem 14).</p>
+<p>Two smaller points. A generator has no <code>len()</code> and cannot be indexed, because its values do not exist yet; use <code>sum(1 for _ in g)</code> to count (which consumes it) or keep a counter. And for debugging, <code>list(g)</code> shows what a generator produces, at the price of consuming it.</p>
+</section>
+<section class="sec" id="streaming">
+<h2><span class="n">6</span>Generators in data and GenAI code</h2>
+<p>The common thread of everything above is <strong>streaming</strong>: process data as it arrives, one piece at a time, with memory that does not grow with the input. Three patterns cover most real uses. <strong>Reading large files:</strong> a generator that opens the file, yields one parsed record per line, and skips or reports bad lines, so a 50 GB JSON Lines file needs only one line of memory at a time (problem 2). <strong>Pipelines:</strong> each step is a generator that takes an iterable and yields transformed items, so chaining steps builds a lazy pipeline that does no work until the end is consumed (6.4). <strong>Streaming model output:</strong> LLM APIs can send a reply as a stream of small text pieces, and a generator is the natural way to represent it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">llm_stream.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+
+def fake_llm_stream(reply, delay=0.0):
+    # stands in for an SDK&#x27;s streaming iterator: one small piece at a time
+    for piece in reply.split(&quot; &quot;):
+        time.sleep(delay)
+        yield piece + &quot; &quot;
+
+def with_progress(stream):
+    text = &quot;&quot;
+    for delta in stream:
+        text += delta
+        yield text.rstrip()        # what a UI would show after each piece
+
+for shown in with_progress(fake_llm_stream(&quot;Refunds take five days.&quot;)):
+    print(repr(shown))</code></pre><div class="out"><span class="ol">Output</span><pre>&#x27;Refunds&#x27;
+&#x27;Refunds take&#x27;
+&#x27;Refunds take five&#x27;
+&#x27;Refunds take five days.&#x27;</pre></div></div>
+<p>Real SDKs work the same way: with <code>stream=True</code>, the client returns an iterator of events, and your code loops over it, printing or forwarding each delta as it arrives, so the user sees the first words within a fraction of a second instead of waiting for the whole reply. Web frameworks accept generators directly for this: FastAPI's <code>StreamingResponse</code> takes a generator and sends each yielded chunk to the browser as soon as it is produced. And if the user closes the page, the framework closes the generator, so its <code>finally</code> block is the place to stop the upstream request and log usage. In ML training code, PyTorch's <code>IterableDataset</code> is a class whose <code>__iter__</code> is a generator that yields training examples, which is how datasets larger than memory are fed to a model.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-iterators-are-one-shot" data-pid="m6-3-iterators-are-one-shot" data-type="predict" data-level="easy" data-answer="3 [1, 2] []
+12 0 3 True
+[(&#x27;a&#x27;, 1), (&#x27;b&#x27;, 2)] {}">
+<header class="prob-head"><h3>1. Iterators are one-shot</h3></header>
+<div class="code"><pre><code class="py">nums = [3, 1, 2]
+it = iter(nums)
+print(next(it), list(it), list(it))
+g = (n * 2 for n in nums)
+print(sum(g), sum(g), max(nums), sorted(nums) == sorted(nums))
+z = zip(&quot;ab&quot;, [1, 2])
+print(list(z), dict(z))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A list can be walked many times; an iterator, a generator expression and a <code>zip</code> object only once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 [1, 2] []
+12 0 3 True
+[(&#x27;a&#x27;, 1), (&#x27;b&#x27;, 2)] {}</pre></div><p>After one <code>next</code>, <code>list(it)</code> takes the remaining two items and leaves the iterator exhausted, so the second <code>list</code> is empty. The generator expression is used up by the first <code>sum</code>, so the second <code>sum</code> adds nothing and returns 0. The list <code>nums</code> itself can be walked again and again. <code>zip</code> is an iterator too: <code>list(z)</code> consumes it, and <code>dict(z)</code> then builds an empty dict, a classic bug when a zip object is stored in a variable and used twice.</p></div></details>
+</article>
+<article class="prob" id="p-read-json-lines-lazily" data-pid="m6-3-read-json-lines-lazily" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Read JSON Lines lazily</h3></header>
+<div class="prob-q"><p>Write a generator function <code>read_jsonl(lines)</code> that takes any iterable of text lines (a list, a file) and yields one parsed object per line, skipping lines that are empty or only whitespace. It must not build a list.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import json
+
+def read_jsonl(lines):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import inspect
+lines = ['{"id": 1, "text": "Refund"}\n', "\n", '  {"id": 2, "text": "Reset"}  \n', "   \n"]
+assert inspect.isgeneratorfunction(read_jsonl)
+assert list(read_jsonl(lines)) == [{"id": 1, "text": "Refund"}, {"id": 2, "text": "Reset"}]
+assert list(read_jsonl([])) == []
+g = read_jsonl(iter(['{"a": 1}', "not json"]))
+assert next(g) == {"a": 1}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import inspect
+lines = [&#x27;{&quot;id&quot;: 1, &quot;text&quot;: &quot;Refund&quot;}\n&#x27;, &quot;\n&quot;, &#x27;  {&quot;id&quot;: 2, &quot;text&quot;: &quot;Reset&quot;}  \n&#x27;, &quot;   \n&quot;]
+assert inspect.isgeneratorfunction(read_jsonl)
+assert list(read_jsonl(lines)) == [{&quot;id&quot;: 1, &quot;text&quot;: &quot;Refund&quot;}, {&quot;id&quot;: 2, &quot;text&quot;: &quot;Reset&quot;}]
+assert list(read_jsonl([])) == []
+g = read_jsonl(iter([&#x27;{&quot;a&quot;: 1}&#x27;, &quot;not json&quot;]))
+assert next(g) == {&quot;a&quot;: 1}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop over <code>lines</code>, <code>continue</code> on blank ones, and <code>yield json.loads(line)</code> for the rest.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def read_jsonl(lines):
+    for line in lines:
+        if line.strip():
+            yield json.loads(line)</code></pre></div><p>Because of <code>yield</code>, calling <code>read_jsonl</code> returns a generator and parses nothing until asked. The last test shows the laziness: the second line is not valid JSON, but <code>next(g)</code> only parses the first one, so no error happens yet. <code>json.loads</code> ignores surrounding whitespace, so the stripped check is only needed to skip blank lines. Passing an open file as <code>lines</code> streams a file of any size with one line in memory at a time.</p></div></details>
+</article>
+<article class="prob" id="p-statistics-that-break-on-a-generator" data-pid="m6-3-statistics-that-break-on-a-generator" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. Statistics that break on a generator</h3></header>
+<div class="prob-q"><p><code>summary(scores)</code> returns <code>(mean, maximum)</code>. It works on lists but fails with a <code>ValueError</code> when given a generator of scores. Fix it so it works with any iterable, in a single pass over the data.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def summary(scores):
+    total = 0
+    count = 0
+    for s in scores:
+        total += s
+        count += 1
+    return total / count, max(scores)
+</textarea>
+<script type="text/plain" class="prob-tests">assert summary([2, 9, 4]) == (5.0, 9)
+assert summary(s for s in [2, 9, 4]) == (5.0, 9)
+assert summary(iter([2])) == (2.0, 2)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert summary([2, 9, 4]) == (5.0, 9)
+assert summary(s for s in [2, 9, 4]) == (5.0, 9)
+assert summary(iter([2])) == (2.0, 2)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>for</code> loop exhausts the generator, so <code>max(scores)</code> sees an empty iterator. Track the maximum inside the same loop.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summary(scores):
+    total, count, best = 0, 0, None
+    for s in scores:
+        total += s
+        count += 1
+        if best is None or s &gt; best:
+            best = s
+    return total / count, best</code></pre></div><p>The loop consumed every value, so <code>max</code> received an exhausted iterator and raised <code>ValueError: max() iterable argument is empty</code>. With a list, a second pass works, which is why the bug hides in tests that use lists. Computing everything in one pass works for any iterable, including a file or a stream too large to keep. The alternative, <code>scores = list(scores)</code> at the top, is fine when the data fits in memory, and is the usual choice when you need several passes.</p></div></details>
+</article>
+<article class="prob" id="p-when-the-body-runs" data-pid="m6-3-when-the-body-runs" data-type="predict" data-level="easy" data-answer="created
+A
+got 1
+B
+got 2
+C
+A
+B
+C
+2">
+<header class="prob-head"><h3>4. When the body runs</h3></header>
+<div class="code"><pre><code class="py">def gen():
+    print(&quot;A&quot;)
+    yield 1
+    print(&quot;B&quot;)
+    yield 2
+    print(&quot;C&quot;)
+
+g = gen()
+print(&quot;created&quot;)
+for value in g:
+    print(&quot;got&quot;, value)
+print(list(gen())[-1])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Creating a generator runs nothing. Each <code>next</code> (each round of the <code>for</code>) runs the body up to the next <code>yield</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>created
+A
+got 1
+B
+got 2
+C
+A
+B
+C
+2</pre></div><p><code>gen()</code> returns at once, so "created" comes first. The loop's first <code>next</code> prints A and yields 1; the second resumes, prints B and yields 2; the third prints C, falls off the end and raises <code>StopIteration</code>, ending the loop. <code>list(gen())</code> runs a new generator to completion, so A, B and C print again before the list is complete and its last item, 2, is printed.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-show-a-streamed-reply-as-it-grows" data-pid="m6-3-show-a-streamed-reply-as-it-grows" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Show a streamed reply as it grows</h3></header>
+<div class="prob-q"><p>A chat UI re-renders the reply after each streamed piece. Write a generator <code>accumulate(deltas)</code> that takes an iterable of text pieces and yields the full text so far after each <strong>non-empty</strong> piece. After the stream ends, the generator should <code>return</code> the final text, so a caller using <code>yield from</code> can get it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def accumulate(deltas):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert list(accumulate(["Re", "", "funds ", "take", " 5 days."])) == ["Re", "Refunds ", "Refunds take", "Refunds take 5 days."]
+assert list(accumulate([])) == []
+
+def ui(deltas):
+    final = yield from accumulate(deltas)
+    yield f"FINAL: {final}"
+assert list(ui(["a", "b"])) == ["a", "ab", "FINAL: ab"]
+assert list(ui([""])) == ["FINAL: "]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert list(accumulate([&quot;Re&quot;, &quot;&quot;, &quot;funds &quot;, &quot;take&quot;, &quot; 5 days.&quot;])) == [&quot;Re&quot;, &quot;Refunds &quot;, &quot;Refunds take&quot;, &quot;Refunds take 5 days.&quot;]
+assert list(accumulate([])) == []
+
+def ui(deltas):
+    final = yield from accumulate(deltas)
+    yield f&quot;FINAL: {final}&quot;
+assert list(ui([&quot;a&quot;, &quot;b&quot;])) == [&quot;a&quot;, &quot;ab&quot;, &quot;FINAL: ab&quot;]
+assert list(ui([&quot;&quot;])) == [&quot;FINAL: &quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the pieces in a list and yield <code>"".join(parts)</code> after each non-empty one, or build the string with <code>+=</code> (fine for short replies).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>return text</code> at the end of a generator becomes the value of <code>yield from</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def accumulate(deltas):
+    text = &quot;&quot;
+    for delta in deltas:
+        if delta:
+            text += delta
+            yield text
+    return text</code></pre></div><p>Each yielded value is the whole text so far, which is what a UI needs to redraw; skipping empty deltas avoids pointless redraws (streams often send empty pieces at the start or around tool calls). The <code>return text</code> ends the generator and puts the text on the <code>StopIteration</code>, which <code>yield from</code> turns into its result, so the wrapper gets the final reply without rebuilding it. <code>+=</code> on a string is fine for a chat reply; for very long streams, collect pieces in a list and join (5.1).</p></div></details>
+</article>
+<article class="prob" id="p-a-batch-generator-that-fails-late" data-pid="m6-3-a-batch-generator-that-fails-late" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A batch generator that fails late</h3></header>
+<div class="prob-q"><p><code>batched(items, n)</code> yields lists of <code>n</code> items. Called with <code>n=0</code>, it should raise <code>ValueError</code> <strong>immediately</strong>, at the call, not later when the batches are consumed in a different part of the program. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def batched(items, n):
+    if n &lt; 1:
+        raise ValueError(&quot;n must be at least 1&quot;)
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) == n:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+</textarea>
+<script type="text/plain" class="prob-tests">assert list(batched(range(5), 2)) == [[0, 1], [2, 3], [4]]
+try:
+    batched([1, 2], 0)
+    assert False, "should raise at the call"
+except ValueError:
+    pass
+assert list(batched([], 3)) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert list(batched(range(5), 2)) == [[0, 1], [2, 3], [4]]
+try:
+    batched([1, 2], 0)
+    assert False, &quot;should raise at the call&quot;
+except ValueError:
+    pass
+assert list(batched([], 3)) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A generator function's body, including the check, only runs on the first <code>next</code>. Validate in a normal function, then return an inner generator.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def batched(items, n):
+    if n &lt; 1:
+        raise ValueError(&quot;n must be at least 1&quot;)
+    return _batches(items, n)
+
+
+def _batches(items, n):
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) == n:
+            yield batch
+            batch = []
+    if batch:
+        yield batch</code></pre></div><p>Because the original body contains <code>yield</code>, the whole function is a generator function: calling it only creates the generator, and the <code>if n &lt; 1</code> line runs on the first <code>next</code>, possibly much later, in code that has nothing to do with the mistake. Splitting it in two makes <code>batched</code> an ordinary function that validates eagerly and returns the generator from <code>_batches</code>. The callers see no other difference. Libraries use this pattern whenever arguments of a lazy function need checking.</p></div></details>
+</article>
+<article class="prob" id="p-batches-from-any-iterable-lazily" data-pid="m6-3-batches-from-any-iterable-lazily" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Batches from any iterable, lazily</h3></header>
+<div class="prob-q"><p>Write a generator <code>chunks_of(iterable, n)</code> yielding tuples of up to <code>n</code> items. It must work with <strong>any</strong> iterable, including generators and infinite ones, and must not read more items than it needs: taking the first batch of an infinite generator must work. (<code>n</code> is at least 1; you do not need to validate it.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def chunks_of(iterable, n):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert list(chunks_of("abcde", 2)) == [("a", "b"), ("c", "d"), ("e",)]
+assert list(chunks_of([], 3)) == []
+
+def naturals():
+    i = 0
+    while True:
+        i += 1
+        yield i
+g = chunks_of(naturals(), 3)
+assert next(g) == (1, 2, 3) and next(g) == (4, 5, 6)
+
+pulled = []
+def tracked():
+    for i in range(10):
+        pulled.append(i)
+        yield i
+first = next(chunks_of(tracked(), 4))
+assert first == (0, 1, 2, 3) and pulled == [0, 1, 2, 3]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert list(chunks_of(&quot;abcde&quot;, 2)) == [(&quot;a&quot;, &quot;b&quot;), (&quot;c&quot;, &quot;d&quot;), (&quot;e&quot;,)]
+assert list(chunks_of([], 3)) == []
+
+def naturals():
+    i = 0
+    while True:
+        i += 1
+        yield i
+g = chunks_of(naturals(), 3)
+assert next(g) == (1, 2, 3) and next(g) == (4, 5, 6)
+
+pulled = []
+def tracked():
+    for i in range(10):
+        pulled.append(i)
+        yield i
+first = next(chunks_of(tracked(), 4))
+assert first == (0, 1, 2, 3) and pulled == [0, 1, 2, 3]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>You cannot slice a generator. Get one iterator with <code>it = iter(iterable)</code>, and fill each batch with <code>next(it, sentinel)</code> until it is full or the sentinel appears.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A unique <code>sentinel = object()</code> tells "no more items" apart from items like <code>None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def chunks_of(iterable, n):
+    it = iter(iterable)
+    done = object()
+    while True:
+        batch = []
+        for _ in range(n):
+            item = next(it, done)
+            if item is done:
+                break
+            batch.append(item)
+        if batch:
+            yield tuple(batch)
+        if len(batch) &lt; n:
+            return</code></pre></div><p>Slicing (<code>items[i:i + n]</code>) only works on sequences, so a general version must pull items with <code>next</code>. Calling <code>iter</code> once is essential: the same iterator is shared by all batches, so each batch continues where the last stopped. A private sentinel object is the safe "no more" marker, since any real value, including <code>None</code>, could appear in the data. Pulling exactly <code>n</code> items per batch and stopping as soon as one batch is short means an infinite source is fine and no item is read early, which the <code>pulled</code> test checks. This is what <code>itertools.batched</code> (Python 3.12+) does, built on <code>islice</code> (6.4); sending embeddings in batches from a stream is the typical use.</p></div></details>
+</article>
+<article class="prob" id="p-the-first-five-matches-build-everything-" data-pid="m6-3-the-first-five-matches-build-everything-" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. The first five matches: build everything or stop early</h3></header>
+<div class="prob-q"><p>Both collect the first 5 ticket ids divisible by 7 from 1,000,000 ids. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">ids = list(range(1, 1_000_001))</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">first = [i for i in ids if i % 7 == 0][:5]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">first = []
+for i in (i for i in ids if i % 7 == 0):
+    first.append(i)
+    if len(first) == 5:
+        break</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many ids does each version check?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>90.11 ms</td></tr><tr><td>B</td><td>4.23 µs</td></tr></table></div><p>The list comprehension checks all million ids and builds a list of about 143,000 matches, then keeps five. The generator version checks ids only until the fifth match (35 ids) and stops, because the <code>break</code> stops asking the generator for more. The generator is not faster per item; it wins by not doing the work at all. <code>itertools.islice(gen, 5)</code> (6.4) is the one-line form of this pattern.</p></div></details>
+</article>
+<article class="prob" id="p-a-generator-step-by-step" data-pid="m6-3-a-generator-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. A generator step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> and <code>calls</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">calls = 0
+
+def numbers():
+    global calls
+    for n in [10, 20, 30]:
+        calls += 1
+        yield n
+
+g = numbers()
+r = &quot;created&quot;
+r = next(g)
+r = next(g) + next(g)
+r = next(g, &quot;empty&quot;)
+r = sum(numbers())</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th><th><code>calls</code></th></tr><tr><td>after creating g</td><td><input class="cell" data-a="&#x27;created&#x27;" data-s="created" aria-label="r at after creating g" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="calls at after creating g" autocomplete="off"></td></tr><tr><td>first next</td><td><input class="cell" data-a="10" data-s="10" aria-label="r at first next" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="calls at first next" autocomplete="off"></td></tr><tr><td>two more</td><td><input class="cell" data-a="50" data-s="50" aria-label="r at two more" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="calls at two more" autocomplete="off"></td></tr><tr><td>exhausted</td><td><input class="cell" data-a="&#x27;empty&#x27;" data-s="empty" aria-label="r at exhausted" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="calls at exhausted" autocomplete="off"></td></tr><tr><td>a new generator</td><td><input class="cell" data-a="60" data-s="60" aria-label="r at a new generator" autocomplete="off"></td><td><input class="cell" data-a="6" data-s="6" aria-label="calls at a new generator" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Creating <code>g</code> runs nothing, so <code>calls</code> stays 0. Each <code>next</code> runs the loop once more.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th><th><code>calls</code></th></tr><tr><td>after creating g</td><td><code>&#x27;created&#x27;</code></td><td><code>0</code></td></tr><tr><td>first next</td><td><code>10</code></td><td><code>1</code></td></tr><tr><td>two more</td><td><code>50</code></td><td><code>3</code></td></tr><tr><td>exhausted</td><td><code>&#x27;empty&#x27;</code></td><td><code>3</code></td></tr><tr><td>a new generator</td><td><code>60</code></td><td><code>6</code></td></tr></table></div><p><code>calls</code> counts how far the body has run. It is 0 after creating the generator, because the body has not started. Each <code>next</code> advances one round of the loop. After three values, the fourth <code>next</code> finds the loop finished and returns the default instead of raising. <code>sum(numbers())</code> uses a <strong>new</strong> generator object, which runs from the start, adding three more calls.</p></div></details>
+</article>
+<article class="prob" id="p-a-streaming-sse-parser-as-a-generator" data-pid="m6-3-a-streaming-sse-parser-as-a-generator" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A streaming SSE parser as a generator</h3></header>
+<div class="prob-q"><p>Turn the streaming reader from 5.P into a generator. <code>deltas(chunks)</code> takes an iterable of <code>bytes</code> chunks of server-sent events (lines like <code>data: {"delta": "Hi"}</code>, possibly ending in <code>\r\n</code>, split anywhere, even inside a character) and <strong>yields</strong> each delta as soon as its line is complete. It stops at <code>data: [DONE]</code> and ignores other lines.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import json
+
+def deltas(chunks):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">body = 'data: {"delta": "Caf\u00e9 "}\r\n: keep-alive\r\ndata: {"delta": "ok"}\r\ndata: [DONE]\r\ndata: {"delta": "x"}\r\n'
+raw = body.encode("utf-8")
+assert list(deltas(raw[i:i + 3] for i in range(0, len(raw), 3))) == ["Café ", "ok"]
+
+sent = []
+def network():
+    for i in range(0, len(raw), 7):
+        sent.append(i)
+        yield raw[i:i + 7]
+g = deltas(network())
+assert next(g) == "Café "
+assert len(sent) < 6</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">body = &#x27;data: {&quot;delta&quot;: &quot;Caf\u00e9 &quot;}\r\n: keep-alive\r\ndata: {&quot;delta&quot;: &quot;ok&quot;}\r\ndata: [DONE]\r\ndata: {&quot;delta&quot;: &quot;x&quot;}\r\n&#x27;
+raw = body.encode(&quot;utf-8&quot;)
+assert list(deltas(raw[i:i + 3] for i in range(0, len(raw), 3))) == [&quot;Café &quot;, &quot;ok&quot;]
+
+sent = []
+def network():
+    for i in range(0, len(raw), 7):
+        sent.append(i)
+        yield raw[i:i + 7]
+g = deltas(network())
+assert next(g) == &quot;Café &quot;
+assert len(sent) &lt; 6</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Same buffer logic as 5.P: append each chunk to a <code>bytes</code> buffer, split off complete lines at <code>b"\n"</code>, decode each line, strip <code>\r</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>yield</code> each delta instead of appending it to a list, and <code>return</code> at <code>[DONE]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+def deltas(chunks):
+    buffer = b&quot;&quot;
+    for chunk in chunks:
+        buffer += chunk
+        while b&quot;\n&quot; in buffer:
+            raw_line, buffer = buffer.split(b&quot;\n&quot;, 1)
+            line = raw_line.decode(&quot;utf-8&quot;).rstrip(&quot;\r&quot;)
+            if not line.startswith(&quot;data: &quot;):
+                continue
+            payload = line[len(&quot;data: &quot;):]
+            if payload == &quot;[DONE]&quot;:
+                return
+            yield json.loads(payload)[&quot;delta&quot;]</code></pre></div><p>The parsing logic is the same as in 5.P; the change is that results are <strong>yielded</strong> as soon as each line is complete, instead of collected and returned at the end. The second test checks the point of the change: the first delta is available after only a few network chunks, so a UI can show the first words while the rest is still arriving. <code>return</code> at <code>[DONE]</code> ends the generator, and since the caller drives the loop, it can also stop early with <code>break</code>, which closes the generator. Lines starting with <code>:</code> are SSE comments, commonly used as keep-alives, and are skipped like any other non-data line.</p></div></details>
+</article>
+<article class="prob" id="p-a-list-builder-to-a-streaming-generator" data-pid="m6-3-a-list-builder-to-a-streaming-generator" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. A list builder to a streaming generator</h3></header>
+<div class="prob-q"><p>Rewrite <code>clean_rows</code> as a generator function that yields each cleaned row. The tests use <code>list(...)</code>, so they stay green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def clean_rows(rows):
+    out = []
+    for row in rows:
+        if not row.strip() or row.startswith(&quot;#&quot;):
+            continue
+        parts = [p.strip() for p in row.split(&quot;,&quot;)]
+        if len(parts) != 3:
+            continue
+        out.append({&quot;id&quot;: int(parts[0]), &quot;name&quot;: parts[1], &quot;score&quot;: float(parts[2])})
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">rows = ["# id,name,score", "1, Ana , 0.9", "", "2,Bo", "3,Cy,0.75"]
+assert list(clean_rows(rows)) == [{"id": 1, "name": "Ana", "score": 0.9}, {"id": 3, "name": "Cy", "score": 0.75}]
+assert list(clean_rows([])) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [&quot;# id,name,score&quot;, &quot;1, Ana , 0.9&quot;, &quot;&quot;, &quot;2,Bo&quot;, &quot;3,Cy,0.75&quot;]
+assert list(clean_rows(rows)) == [{&quot;id&quot;: 1, &quot;name&quot;: &quot;Ana&quot;, &quot;score&quot;: 0.9}, {&quot;id&quot;: 3, &quot;name&quot;: &quot;Cy&quot;, &quot;score&quot;: 0.75}]
+assert list(clean_rows([])) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Replace <code>out.append(...)</code> with <code>yield ...</code>, and remove the list and the <code>return</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def clean_rows(rows):
+    for row in rows:
+        if not row.strip() or row.startswith(&quot;#&quot;):
+            continue
+        parts = [p.strip() for p in row.split(&quot;,&quot;)]
+        if len(parts) != 3:
+            continue
+        yield {&quot;id&quot;: int(parts[0]), &quot;name&quot;: parts[1], &quot;score&quot;: float(parts[2])}</code></pre></div><p>The change is mechanical: every <code>out.append(x)</code> becomes <code>yield x</code>, and the result list disappears. The behaviour changes in the useful way: memory no longer grows with the input, the first row is available immediately, and the function works on an open file or another generator of any size. Callers that need a list write <code>list(clean_rows(rows))</code>. The trade-off is one-shot iteration: a caller that loops twice must store the result first.</p></div></details>
+</article>
+<article class="prob" id="p-what-a-generator-expression-captures" data-pid="m6-3-what-a-generator-expression-captures" data-type="predict" data-level="medium" data-answer="[10, 20, 30]
+[10, 20, 30, 40]
+[50, 51, 52] []">
+<header class="prob-head"><h3>12. What a generator expression captures</h3></header>
+<div class="code"><pre><code class="py">data = [1, 2, 3]
+g1 = (x * 10 for x in data)
+data = [7, 8]
+print(list(g1))
+data2 = [1, 2, 3]
+g2 = (x * 10 for x in data2)
+data2.append(4)
+print(list(g2))
+k = 1
+g3 = (x + k for x in range(3))
+k = 50
+print(list(g3), list(g3))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The first iterable is evaluated when the generator is created; everything else when values are produced.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Rebinding a name is not the same as changing the object it refers to.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[10, 20, 30]
+[10, 20, 30, 40]
+[50, 51, 52] []</pre></div><p><code>g1</code> grabbed the <strong>list object</strong> <code>[1, 2, 3]</code> when it was created; rebinding <code>data</code> to a new list does not affect it. <code>g2</code> also holds its list, but <code>append</code> <strong>changes</strong> that same object before the generator runs, so the 4 is included, the alias effect of 2.2. <code>k</code> in the expression is looked up only when each value is produced, after <code>k = 50</code>. The second <code>list(g3)</code> is empty because the generator is exhausted.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-walk-a-document-outline" data-pid="m6-3-walk-a-document-outline" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Walk a document outline</h3></header>
+<div class="prob-q"><p>Chunkers for structured documents keep each section's heading path, such as <code>Policy &gt; Refunds &gt; EU</code>, as metadata. Write a generator <code>section_paths(node, sep=" &gt; ")</code> that walks a tree of <code>{"title": ..., "children": [...]}</code> nodes (<code>children</code> may be missing) and yields the path of every node, parents before children, using <code>yield from</code> for the recursion.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def section_paths(node, sep=&quot; &gt; &quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">doc = {"title": "Policy", "children": [
+    {"title": "Refunds", "children": [{"title": "EU"}, {"title": "US", "children": []}]},
+    {"title": "Contact"}]}
+assert list(section_paths(doc)) == ["Policy", "Policy > Refunds", "Policy > Refunds > EU", "Policy > Refunds > US", "Policy > Contact"]
+assert list(section_paths({"title": "Solo"})) == ["Solo"]
+assert next(section_paths(doc, sep="/")) == "Policy"
+deep = {"title": "0"}
+node = deep
+for i in range(1, 50):
+    node["children"] = [{"title": str(i)}]
+    node = node["children"][0]
+assert list(section_paths(deep))[-1].count(" > ") == 49</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">doc = {&quot;title&quot;: &quot;Policy&quot;, &quot;children&quot;: [
+    {&quot;title&quot;: &quot;Refunds&quot;, &quot;children&quot;: [{&quot;title&quot;: &quot;EU&quot;}, {&quot;title&quot;: &quot;US&quot;, &quot;children&quot;: []}]},
+    {&quot;title&quot;: &quot;Contact&quot;}]}
+assert list(section_paths(doc)) == [&quot;Policy&quot;, &quot;Policy &gt; Refunds&quot;, &quot;Policy &gt; Refunds &gt; EU&quot;, &quot;Policy &gt; Refunds &gt; US&quot;, &quot;Policy &gt; Contact&quot;]
+assert list(section_paths({&quot;title&quot;: &quot;Solo&quot;})) == [&quot;Solo&quot;]
+assert next(section_paths(doc, sep=&quot;/&quot;)) == &quot;Policy&quot;
+deep = {&quot;title&quot;: &quot;0&quot;}
+node = deep
+for i in range(1, 50):
+    node[&quot;children&quot;] = [{&quot;title&quot;: str(i)}]
+    node = node[&quot;children&quot;][0]
+assert list(section_paths(deep))[-1].count(&quot; &gt; &quot;) == 49</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a helper with a <code>prefix</code> parameter: yield <code>prefix + title</code>, then <code>yield from</code> the helper on each child with the new path as prefix.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def section_paths(node, sep=&quot; &gt; &quot;):
+    yield from _paths(node, sep, &quot;&quot;)
+
+
+def _paths(node, sep, prefix):
+    path = f&quot;{prefix}{sep}{node[&#x27;title&#x27;]}&quot; if prefix else node[&quot;title&quot;]
+    yield path
+    for child in node.get(&quot;children&quot;, []):
+        yield from _paths(child, sep, path)</code></pre></div><p>Each call yields its own path and then delegates to the calls for its children with <code>yield from</code>, which passes their values straight through to the caller. Passing the path down as a parameter means no node needs to know about its parents. The walk is lazy: <code>next(...)</code> gets the first path without visiting the rest of the tree. Depth is limited by the recursion limit (about 1,000 by default), which is plenty for document outlines; for unbounded depth, an explicit stack in a loop avoids recursion. LlamaIndex and LangChain's Markdown header splitters attach exactly this kind of heading path to each chunk so retrieval results can show where they came from.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-loader-that-reads-a-clos" data-pid="m6-3-read-the-code-a-loader-that-reads-a-clos" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a loader that reads a closed file</h3></header>
+<div class="prob-q"><p>This loads training records from a JSON Lines file and takes the first <code>n</code>. It crashes with <code>ValueError: I/O operation on closed file</code>. Once that is fixed, it returns one record too many, and a single bad line stops the whole run, when bad lines should be skipped and their line numbers recorded in <code>errors</code>. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+
+
+def load_records(path, errors):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return (json.loads(line) for line in f if line.strip())
+
+
+def first_n(records, n):
+    out = []
+    for i, record in enumerate(records):
+        if i &gt; n:
+            break
+        out.append(record)
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+p = os.path.join(tempfile.mkdtemp(), "train.jsonl")
+with open(p, "w", encoding="utf-8") as f:
+    f.write('{"text": "a", "label": 1}\n\n{broken\n{"text": "b", "label": 0}\n{"text": "c", "label": 1}\n')
+errors = []
+assert first_n(load_records(p, errors), 2) == [{"text": "a", "label": 1}, {"text": "b", "label": 0}]
+assert errors == [3]
+errors = []
+assert len(first_n(load_records(p, errors), 10)) == 3 and errors == [3]
+assert first_n(load_records(p, []), 0) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+p = os.path.join(tempfile.mkdtemp(), &quot;train.jsonl&quot;)
+with open(p, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&#x27;{&quot;text&quot;: &quot;a&quot;, &quot;label&quot;: 1}\n\n{broken\n{&quot;text&quot;: &quot;b&quot;, &quot;label&quot;: 0}\n{&quot;text&quot;: &quot;c&quot;, &quot;label&quot;: 1}\n&#x27;)
+errors = []
+assert first_n(load_records(p, errors), 2) == [{&quot;text&quot;: &quot;a&quot;, &quot;label&quot;: 1}, {&quot;text&quot;: &quot;b&quot;, &quot;label&quot;: 0}]
+assert errors == [3]
+errors = []
+assert len(first_n(load_records(p, errors), 10)) == 3 and errors == [3]
+assert first_n(load_records(p, []), 0) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>return (generator)</code> inside <code>with</code> returns, and the <code>with</code> closes the file before the generator runs. Make <code>load_records</code> itself a generator: <code>yield</code> inside the <code>with</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>enumerate(f, start=1)</code> for line numbers and <code>try</code> / <code>except json.JSONDecodeError</code> around <code>json.loads</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>if i &gt; n</code> lets index <code>n</code> through, which is item <code>n + 1</code>. Stop when <code>i == n</code> (before appending).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+def load_records(path, errors):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        for lineno, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                errors.append(lineno)
+
+
+def first_n(records, n):
+    out = []
+    for i, record in enumerate(records):
+        if i == n:
+            break
+        out.append(record)
+    return out</code></pre></div><p>Bug one is the classic generator-and-resource trap: the generator expression is created, <code>return</code> leaves the <code>with</code> block, and the file closes before a single line is read. With <code>yield</code> <strong>inside</strong> the <code>with</code>, the function itself is the generator, so the file stays open while records are being pulled and closes when the generator finishes or is closed (when <code>first_n</code> breaks out early and drops it). Bug two is an off-by-one: <code>i &gt; n</code> allows indices <code>0..n</code>, which is <code>n + 1</code> records. Bug three: one corrupt line raised <code>JSONDecodeError</code> and killed the run; catching it per line, recording the line number and continuing is the standard behaviour for large training files, where a few bad lines are normal. Note that the error for line 3 is only recorded because the loader reached line 3; with a lazy loader, errors after the last record you consume are never seen.</p></div></details>
+</article>
+<article class="prob" id="p-a-shuffle-buffer-for-streams" data-pid="m6-3-a-shuffle-buffer-for-streams" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. A shuffle buffer for streams</h3></header>
+<div class="prob-q"><p>Training on a stream that is too large to shuffle in memory uses a <strong>shuffle buffer</strong>, as in <code>tf.data</code>: fill a buffer with the first <code>size</code> items; then, for every new item, pick a random position in the buffer, yield the item there and put the new item in its place; at the end, yield the remaining buffer in random order. Write a generator <code>shuffled(iterable, size, seed)</code> using <code>random.Random(seed)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import random
+
+def shuffled(iterable, size, seed):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">data = list(range(100))
+out = list(shuffled(iter(data), size=10, seed=0))
+assert sorted(out) == data and out != data
+assert all(v <= j + 9 for j, v in enumerate(out))
+assert list(shuffled(data, 1, seed=3)) == data
+assert list(shuffled(data, 10, seed=7)) == list(shuffled(data, 10, seed=7))
+assert list(shuffled([], 5, seed=0)) == []
+assert sorted(shuffled("abc", 10, seed=1)) == ["a", "b", "c"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = list(range(100))
+out = list(shuffled(iter(data), size=10, seed=0))
+assert sorted(out) == data and out != data
+assert all(v &lt;= j + 9 for j, v in enumerate(out))
+assert list(shuffled(data, 1, seed=3)) == data
+assert list(shuffled(data, 10, seed=7)) == list(shuffled(data, 10, seed=7))
+assert list(shuffled([], 5, seed=0)) == []
+assert sorted(shuffled(&quot;abc&quot;, 10, seed=1)) == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>rng = random.Random(seed)</code> gives a private, reproducible random generator. <code>rng.randrange(len(buffer))</code> picks a position.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>While the buffer is not full, just append. After that, swap: <code>out, buffer[i] = buffer[i], item</code>, then yield <code>out</code>. At the end, <code>rng.shuffle(buffer)</code> and <code>yield from buffer</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+
+def shuffled(iterable, size, seed):
+    rng = random.Random(seed)
+    buffer = []
+    for item in iterable:
+        if len(buffer) &lt; size:
+            buffer.append(item)
+            continue
+        i = rng.randrange(size)
+        out, buffer[i] = buffer[i], item
+        yield out
+    rng.shuffle(buffer)
+    yield from buffer</code></pre></div><p>The buffer bounds memory at <code>size</code> items whatever the stream length, and each output is drawn from a window of the stream, which is what the <code>v &lt;= j + 9</code> test checks: item <code>v</code> can only be output once it has entered the buffer, so it never appears more than <code>size - 1</code> positions earlier than its original place. That also shows the limit of the technique: a small buffer gives a locally shuffled stream, so data sorted by label stays mostly sorted; real pipelines shuffle the file order too, or use a buffer much larger than the runs of similar items. A private <code>random.Random(seed)</code> makes the order reproducible without touching the global random state, which matters for repeatable experiments. With <code>size=1</code>, each item is swapped straight out, so the order is unchanged.</p></div></details>
+</article>
+<article class="prob" id="p-closing-finally-and-return-values" data-pid="m6-3-closing-finally-and-return-values" data-type="predict" data-level="hard" data-answer="step 1
+cleanup
+closed nothing
+[1, &#x27;INNER RESULT&#x27;]
+1
+value inner result">
+<header class="prob-head"><h3>16. Closing, finally and return values</h3></header>
+<div class="code"><pre><code class="py">def worker():
+    try:
+        yield &quot;step 1&quot;
+        yield &quot;step 2&quot;
+    finally:
+        print(&quot;cleanup&quot;)
+
+g = worker()
+print(next(g))
+g.close()
+print(&quot;closed&quot;, next(g, &quot;nothing&quot;))
+
+def inner():
+    yield 1
+    return &quot;inner result&quot;
+
+def outer():
+    r = yield from inner()
+    yield r.upper()
+
+print(list(outer()))
+g2 = inner()
+print(next(g2))
+try:
+    next(g2)
+except StopIteration as e:
+    print(&quot;value&quot;, e.value)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>close()</code> raises <code>GeneratorExit</code> at the paused <code>yield</code>, so <code>finally</code> runs. A closed generator is exhausted.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A generator's <code>return</code> value travels on the <code>StopIteration</code> it raises, as <code>e.value</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>step 1
+cleanup
+closed nothing
+[1, &#x27;INNER RESULT&#x27;]
+1
+value inner result</pre></div><p><code>close</code> runs the <code>finally</code> block at once ("cleanup"), and a closed generator behaves as exhausted, so <code>next(g, "nothing")</code> returns the default. In <code>outer</code>, <code>yield from</code> passes the 1 through and then receives the inner <code>return</code> value, which is yielded upper-cased. Driving <code>inner</code> by hand shows the mechanism: the first <code>next</code> returns 1, the second finds the body finished, and the <code>return</code> value arrives as the <code>value</code> attribute of the <code>StopIteration</code>. A <code>for</code> loop discards that value, which is why <code>yield from</code> is the normal way to receive it.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-an-iterab" data-pid="m6-3-what-is-the-difference-between-an-iterab" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between an iterable, an iterator and a generator?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>An <strong>iterable</strong> is any object you can loop over; it has <code>__iter__</code>, which returns an iterator. Lists, dicts, strings, files and ranges are iterables. An <strong>iterator</strong> is the object that does the walking: it has <code>__next__</code>, which returns the next value or raises <code>StopIteration</code>, and <code>__iter__</code> returning itself. Iterators are one-shot and stateful; iterables such as lists can produce a fresh iterator every time. A <strong>generator</strong> is a convenient way to write an iterator: a function with <code>yield</code> (or a generator expression) whose local state is kept between <code>next</code> calls, so you do not have to write a class with <code>__next__</code> by hand. Every generator is an iterator; not every iterator is a generator (<code>zip</code>, <code>map</code> and file objects are iterators implemented in C).</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-use-a-generator-instead-o" data-pid="m6-3-when-would-you-use-a-generator-instead-o" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When would you use a generator instead of returning a list, and what do you give up?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use a generator when the data is large or unbounded (files, database cursors, streams, infinite sequences), when the consumer may stop early (searching for the first match, taking the first N), when you want to start processing before all data exists (streaming model output to a user), or when you are building a pipeline of steps. You gain constant memory and lower latency to the first item. You give up random access and <code>len</code>, the ability to iterate twice (a generator is one-shot), and easy debugging (printing the generator shows nothing useful). Errors also move: they happen when values are consumed, not when the function is called. If the result is small and used several times, a list is simpler.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-stream-an-llm-reply-from-t" data-pid="m6-3-how-would-you-stream-an-llm-reply-from-t" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you stream an LLM reply from the model API through your backend to a browser?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Call the model with streaming enabled, which gives an iterator (or async iterator) of events. Wrap it in a generator in the backend that extracts each text delta and yields it, optionally formatted as server-sent events (<code>data: ...\n\n</code>), and pass that generator to the framework's streaming response (FastAPI's <code>StreamingResponse</code>, ideally with an async generator so one slow client does not block a worker). The browser reads the stream with <code>EventSource</code> or <code>fetch</code> and appends text as it arrives. Details that matter in production: collect the full text and usage counts in the generator for logging, in a <code>finally</code> block so they are recorded even if the stream ends early; handle client disconnects, where the framework closes the generator and you should cancel the upstream request so you stop paying for tokens; send an error event if the model fails mid-stream, because the HTTP status code was already sent; make sure no proxy buffers the response; and run moderation or output checks either on the stream in chunks or accept that some text was shown before the check.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A <code>for</code> loop calls <code>iter()</code> once and <code>next()</code> until <code>StopIteration</code>. Lists can be walked many times; iterators, generators, <code>zip</code> and files only once.</li><li>A function with <code>yield</code> returns a generator; its body runs only on <code>next</code>, pauses at each <code>yield</code> and keeps its locals.</li><li><code>(expr for x in xs)</code> is lazy and tiny in memory; its first iterable is captured at creation, the rest is evaluated on demand.</li><li><code>yield from</code> delegates and receives the inner <code>return</code> value; <code>close()</code> and early <code>break</code> run the generator's <code>finally</code> blocks.</li><li>Traps: second passes see nothing, argument checks run late (validate in a wrapper), and a generator returned from inside <code>with</code> reads a closed file.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

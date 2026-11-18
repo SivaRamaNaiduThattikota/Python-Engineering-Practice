@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>6.P · Module 6 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m6-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 6 · Comprehensions and generators</span></div>
+  <h1>6.P Module 6 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 6: list, dict and set comprehensions, generators, and lazy pipelines with <code>itertools</code>. Then a mini project that needs all of it: a streaming evaluation harness for an LLM classifier.</p>
+  <div class="chips"><span class="chip">15 problems</span><span class="chip">3 easy · 7 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For each problem, decide first whether the result must be <strong>stored</strong> or only <strong>streamed</strong>. If you need the result more than once, need its length, need to index it, or will return it to a caller who expects a list, build it: a list, dict or set comprehension (6.1, 6.2). If it is consumed once, may be large, or may be stopped early, stream it: a generator function or expression (6.3), chained with <code>itertools</code> (6.4). Then check the traps of each choice: a comprehension that repeats a key or shares a mutable value, a generator that is consumed twice or validates too late.</p>
+<p>The problems are mixed on purpose, from easy to hard. The mini project at the end combines every lesson in one realistic program.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-brackets-decide-everything" data-pid="m6-p-brackets-decide-everything" data-type="predict" data-level="easy" data-answer="[6, 8, 10] [6, 8, 10] {3: 6, 4: 8, 5: 10}
+generator 24 0">
+<header class="prob-head"><h3>1. Brackets decide everything</h3></header>
+<div class="code"><pre><code class="py">xs = [3, 1, 4, 1, 5]
+a = [x * 2 for x in xs if x &gt; 1]
+b = {x * 2 for x in xs if x &gt; 1}
+c = {x: x * 2 for x in xs if x &gt; 1}
+d = (x * 2 for x in xs if x &gt; 1)
+print(a, sorted(b), c)
+print(type(d).__name__, sum(d), sum(d))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Square brackets: list. Braces with one expression: set; with <code>key: value</code>: dict. Parentheses: a generator, used once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[6, 8, 10] [6, 8, 10] {3: 6, 4: 8, 5: 10}
+generator 24 0</pre></div><p>The same loop and filter give four different results depending only on the brackets. The filter removed the only repeated value (the two 1s), so the list and the sorted set print the same here; with repeats, the list would keep them and the set would not. The dict maps each kept <code>x</code> to its double, and the generator computes nothing until <code>sum</code> asks; the second <code>sum</code> finds it exhausted and returns 0.</p></div></details>
+</article>
+<article class="prob" id="p-number-every-turn-of-every-conversation" data-pid="m6-p-number-every-turn-of-every-conversation" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Number every turn of every conversation</h3></header>
+<div class="prob-q"><p>Write <code>turn_index(conversations)</code> where <code>conversations</code> maps conversation id to a list of messages (dicts with <code>"role"</code>). Return a list of <code>(conversation_id, turn_number, role)</code> tuples, turns numbered from 1 within each conversation, conversations in sorted id order, using one comprehension.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def turn_index(conversations):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">convs = {"c2": [{"role": "user"}, {"role": "assistant"}], "c1": [{"role": "user"}], "c3": []}
+assert turn_index(convs) == [("c1", 1, "user"), ("c2", 1, "user"), ("c2", 2, "assistant")]
+assert turn_index({}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">convs = {&quot;c2&quot;: [{&quot;role&quot;: &quot;user&quot;}, {&quot;role&quot;: &quot;assistant&quot;}], &quot;c1&quot;: [{&quot;role&quot;: &quot;user&quot;}], &quot;c3&quot;: []}
+assert turn_index(convs) == [(&quot;c1&quot;, 1, &quot;user&quot;), (&quot;c2&quot;, 1, &quot;user&quot;), (&quot;c2&quot;, 2, &quot;assistant&quot;)]
+assert turn_index({}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two <code>for</code> clauses: the outer over <code>sorted(conversations.items())</code>, the inner over <code>enumerate(messages, start=1)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def turn_index(conversations):
+    return [
+        (cid, n, msg[&quot;role&quot;])
+        for cid, messages in sorted(conversations.items())
+        for n, msg in enumerate(messages, start=1)
+    ]</code></pre></div><p>The outer <code>for</code> walks conversations in sorted order, and the inner one numbers the messages of each; the inner <code>enumerate</code> restarts at 1 for every conversation because it is created anew for each outer item. An empty conversation contributes nothing. This flat index is the shape you load into a DataFrame to analyse conversation lengths or role patterns.</p></div></details>
+</article>
+<article class="prob" id="p-a-count-and-a-list-from-one-generator" data-pid="m6-p-a-count-and-a-list-from-one-generator" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A count and a list from one generator</h3></header>
+<div class="prob-q"><p><code>valid_ids(rows)</code> should return <code>(count, ids)</code> of the rows that have a non-empty <code>"text"</code>. The count is right, but the list of ids is always empty. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def valid_ids(rows):
+    valid = (r for r in rows if r.get(&quot;text&quot;, &quot;&quot;).strip())
+    count = sum(1 for _ in valid)
+    return count, [r[&quot;id&quot;] for r in valid]
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [{"id": 1, "text": "a"}, {"id": 2, "text": " "}, {"id": 3}, {"id": 4, "text": "b"}]
+assert valid_ids(rows) == (2, [1, 4])
+assert valid_ids(iter(rows)) == (2, [1, 4])
+assert valid_ids([]) == (0, [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [{&quot;id&quot;: 1, &quot;text&quot;: &quot;a&quot;}, {&quot;id&quot;: 2, &quot;text&quot;: &quot; &quot;}, {&quot;id&quot;: 3}, {&quot;id&quot;: 4, &quot;text&quot;: &quot;b&quot;}]
+assert valid_ids(rows) == (2, [1, 4])
+assert valid_ids(iter(rows)) == (2, [1, 4])
+assert valid_ids([]) == (0, [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The generator is exhausted by the count. Build the list once and take its length.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def valid_ids(rows):
+    ids = [r[&quot;id&quot;] for r in rows if r.get(&quot;text&quot;, &quot;&quot;).strip()]
+    return len(ids), ids</code></pre></div><p>Counting consumed the generator, so the comprehension that followed got nothing (6.3). When you need a result twice, store it once: the list gives both the ids and, through <code>len</code>, the count, in one pass over <code>rows</code>, which also makes it work when <code>rows</code> itself is an iterator, as in the second test.</p></div></details>
+</article>
+<article class="prob" id="p-keys-runs-and-slices" data-pid="m6-p-keys-runs-and-slices" data-type="predict" data-level="medium" data-answer="{&#x27;refund&#x27;: 1, &#x27;eu&#x27;: 3, &#x27;policy&#x27;: 4}
+[(&#x27;refund&#x27;, 2), (&#x27;eu&#x27;, 2), (&#x27;policy&#x27;, 1)]
+[12, 14, 16]
+EU none">
+<header class="prob-head"><h3>4. Keys, runs and slices</h3></header>
+<div class="code"><pre><code class="py">from itertools import groupby, islice, accumulate
+
+words = [&quot;Refund&quot;, &quot;refund&quot;, &quot;EU&quot;, &quot;eu&quot;, &quot;Policy&quot;]
+print({w.lower(): i for i, w in enumerate(words)})
+print([(k, len(list(g))) for k, g in groupby(words, key=str.lower)])
+print(list(islice(accumulate(len(w) for w in words), 1, 4)))
+print(next((w for w in words if w.isupper()), None), next((w for w in words if w.isdigit()), &quot;none&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Repeated dict keys keep the last value. <code>groupby</code> groups consecutive items with the same key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;refund&#x27;: 1, &#x27;eu&#x27;: 3, &#x27;policy&#x27;: 4}
+[(&#x27;refund&#x27;, 2), (&#x27;eu&#x27;, 2), (&#x27;policy&#x27;, 1)]
+[12, 14, 16]
+EU none</pre></div><p>Lower-casing makes pairs of words collide: each key keeps the index of its <strong>last</strong> occurrence. <code>groupby</code> with <code>str.lower</code> as the key sees three runs, because the equal words happen to be adjacent. <code>accumulate</code> gives running totals of the lengths (6, 12, 14, 16, 22), and <code>islice(..., 1, 4)</code> takes positions 1 to 3. <code>next</code> with a default finds the first match or returns the default; <code>"EU"</code> is the first all-capital word.</p></div></details>
+</article>
+<article class="prob" id="p-k-fold-split-indices" data-pid="m6-p-k-fold-split-indices" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. K-fold split indices</h3></header>
+<div class="prob-q"><p>Write a generator <code>kfold(n, k)</code> yielding <code>(train, val)</code> pairs of index lists for k-fold cross-validation without shuffling, like scikit-learn's <code>KFold</code>: the indices <code>0..n-1</code> are cut into <code>k</code> consecutive folds, the first <code>n % k</code> folds one item larger than the rest; each fold is the validation set once, and the other indices, in order, are the training set. Raise <code>ValueError</code> at the call if <code>k &lt; 2</code> or <code>k &gt; n</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def kfold(n, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">folds = list(kfold(7, 3))
+assert [v for _, v in folds] == [[0, 1, 2], [3, 4], [5, 6]]
+assert folds[1][0] == [0, 1, 2, 5, 6]
+assert all(sorted(t + v) == list(range(7)) for t, v in folds)
+assert [len(v) for _, v in kfold(10, 5)] == [2] * 5
+for bad in [(5, 1), (3, 4)]:
+    try:
+        kfold(*bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">folds = list(kfold(7, 3))
+assert [v for _, v in folds] == [[0, 1, 2], [3, 4], [5, 6]]
+assert folds[1][0] == [0, 1, 2, 5, 6]
+assert all(sorted(t + v) == list(range(7)) for t, v in folds)
+assert [len(v) for _, v in kfold(10, 5)] == [2] * 5
+for bad in [(5, 1), (3, 4)]:
+    try:
+        kfold(*bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Fold sizes: <code>[n // k + (1 if i &lt; n % k else 0) for i in range(k)]</code>. Walk them with a running start.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate in a normal function and return an inner generator, so bad arguments fail at the call (6.3).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def kfold(n, k):
+    if not 2 &lt;= k &lt;= n:
+        raise ValueError(&quot;need 2 &lt;= k &lt;= n&quot;)
+    return _folds(n, k)
+
+
+def _folds(n, k):
+    sizes = [n // k + (1 if i &lt; n % k else 0) for i in range(k)]
+    start = 0
+    for size in sizes:
+        val = list(range(start, start + size))
+        train = [i for i in range(n) if not start &lt;= i &lt; start + size]
+        yield train, val
+        start += size</code></pre></div><p>The fold sizes come from integer division with the remainder spread over the first folds, so sizes differ by at most one and add up to <code>n</code>. Each validation fold is a <code>range</code> slice of consecutive indices, and the training set is every other index, kept in order by a filtered comprehension. Yielding folds one at a time lets a training loop start the first fold immediately. The wrapper makes invalid <code>k</code> fail at the call, not at the first <code>next</code>. Real cross-validation usually shuffles first (with a fixed seed) or stratifies by label, so that each fold has a similar class mix.</p></div></details>
+</article>
+<article class="prob" id="p-filtering-stop-words-list-or-set" data-pid="m6-p-filtering-stop-words-list-or-set" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Filtering stop words: list or set</h3></header>
+<div class="prob-q"><p>Both remove 300 stop words from 200,000 tokens. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">stop_list = [f&quot;w{i}&quot; for i in range(300)]
+tokens = [f&quot;w{i % 600}&quot; for i in range(200_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">kept = [t for t in tokens if t not in stop_list]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">stop_set = set(stop_list)
+kept = [t for t in tokens if t not in stop_set]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>not in</code> cost for a list, and for a set?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.03 s</td></tr><tr><td>B</td><td>13.83 ms</td></tr></table></div><p><code>not in</code> on a list scans it, up to 300 comparisons per token, and every kept token (half of them here) pays for the full scan. A set lookup is one hash and usually one comparison (4.4). The comprehension is the same in both; the data structure in its filter decides the speed. Build the set once, outside the comprehension: <code>if t not in set(stop_list)</code> would rebuild it for every token.</p></div></details>
+</article>
+<article class="prob" id="p-top-k-per-group" data-pid="m6-p-top-k-per-group" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>7. Top k per group</h3></header>
+<div class="prob-q"><p>Write <code>top_per_source(results, k)</code> returning a dict from source to the texts of its <code>k</code> highest-scoring results, best first, with sources in sorted order. Results are dicts with <code>"source"</code>, <code>"text"</code> and <code>"score"</code>, in any order. Use one pass to group and <code>heapq.nlargest</code> per group.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import heapq
+from collections import defaultdict
+
+def top_per_source(results, k):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">results = [{"source": "faq", "text": "a", "score": 0.5}, {"source": "terms", "text": "b", "score": 0.9},
+           {"source": "faq", "text": "c", "score": 0.8}, {"source": "faq", "text": "d", "score": 0.7},
+           {"source": "terms", "text": "e", "score": 0.1}]
+assert top_per_source(results, 2) == {"faq": ["c", "d"], "terms": ["b", "e"]}
+assert list(top_per_source(results, 1)) == ["faq", "terms"]
+assert top_per_source([], 3) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">results = [{&quot;source&quot;: &quot;faq&quot;, &quot;text&quot;: &quot;a&quot;, &quot;score&quot;: 0.5}, {&quot;source&quot;: &quot;terms&quot;, &quot;text&quot;: &quot;b&quot;, &quot;score&quot;: 0.9},
+           {&quot;source&quot;: &quot;faq&quot;, &quot;text&quot;: &quot;c&quot;, &quot;score&quot;: 0.8}, {&quot;source&quot;: &quot;faq&quot;, &quot;text&quot;: &quot;d&quot;, &quot;score&quot;: 0.7},
+           {&quot;source&quot;: &quot;terms&quot;, &quot;text&quot;: &quot;e&quot;, &quot;score&quot;: 0.1}]
+assert top_per_source(results, 2) == {&quot;faq&quot;: [&quot;c&quot;, &quot;d&quot;], &quot;terms&quot;: [&quot;b&quot;, &quot;e&quot;]}
+assert list(top_per_source(results, 1)) == [&quot;faq&quot;, &quot;terms&quot;]
+assert top_per_source([], 3) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Group with a <code>defaultdict(list)</code>, then a dict comprehension over <code>sorted(groups.items())</code> with <code>heapq.nlargest(k, items, key=...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+from collections import defaultdict
+
+def top_per_source(results, k):
+    groups = defaultdict(list)
+    for r in results:
+        groups[r[&quot;source&quot;]].append(r)
+    return {
+        source: [r[&quot;text&quot;] for r in heapq.nlargest(k, items, key=lambda r: r[&quot;score&quot;])]
+        for source, items in sorted(groups.items())
+    }</code></pre></div><p>Grouping is accumulation, so it is a loop with a <code>defaultdict</code> (6.2); the comprehension then turns each group into its summary. <code>heapq.nlargest</code> returns the <code>k</code> best in descending order without sorting the whole group, which matters when groups are large and <code>k</code> is small (4.2). Sorting the items of <code>groups</code> fixes the source order. Limiting results per source is a common RAG step, to stop one long document from filling the whole context.</p></div></details>
+</article>
+<article class="prob" id="p-a-stateful-pipeline-step-by-step" data-pid="m6-p-a-stateful-pipeline-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. A stateful pipeline step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from itertools import islice
+
+def dedupe(xs):
+    seen = set()
+    for x in xs:
+        if x not in seen:
+            seen.add(x)
+            yield x
+
+def running(xs):
+    total = 0
+    for x in xs:
+        total += x
+        yield total
+
+data = [3, 1, 3, 2, 1, 5]
+r = list(dedupe(data))
+r = list(running(dedupe(data)))
+r = list(islice(running(data), 2, 4))
+g = running(dedupe(data))
+r = [next(g), next(g)]
+r = sum(g)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>dedupe</td><td><input class="cell" data-a="[3, 1, 2, 5]" data-s="[3, 1, 2, 5]" aria-label="r at dedupe" autocomplete="off"></td></tr><tr><td>running totals of unique</td><td><input class="cell" data-a="[3, 4, 6, 11]" data-s="[3, 4, 6, 11]" aria-label="r at running totals of unique" autocomplete="off"></td></tr><tr><td>slice of running</td><td><input class="cell" data-a="[7, 9]" data-s="[7, 9]" aria-label="r at slice of running" autocomplete="off"></td></tr><tr><td>two values</td><td><input class="cell" data-a="[3, 4]" data-s="[3, 4]" aria-label="r at two values" autocomplete="off"></td></tr><tr><td>the rest</td><td><input class="cell" data-a="17" data-s="17" aria-label="r at the rest" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dedupe</code> keeps the first occurrence of each value. The generator <code>g</code> continues where it stopped.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>dedupe</td><td><code>[3, 1, 2, 5]</code></td></tr><tr><td>running totals of unique</td><td><code>[3, 4, 6, 11]</code></td></tr><tr><td>slice of running</td><td><code>[7, 9]</code></td></tr><tr><td>two values</td><td><code>[3, 4]</code></td></tr><tr><td>the rest</td><td><code>17</code></td></tr></table></div><p><code>dedupe</code> keeps 3, 1, 2, 5 in first-seen order. Running totals over those are 3, 4, 6, 11. On the raw data, the running totals are 3, 4, 7, 9, 10, 15, and positions 2 and 3 are 7 and 9. <code>g</code> yields 3 and 4 first; <code>sum(g)</code> then adds only what is left of the same generator, 6 + 11.</p></div></details>
+</article>
+<article class="prob" id="p-loops-to-a-lazy-pipeline" data-pid="m6-p-loops-to-a-lazy-pipeline" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. Loops to a lazy pipeline</h3></header>
+<div class="prob-q"><p>Rewrite as a pipeline of generator expressions and <code>itertools.islice</code>, same result. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def first_queries(lines, n):
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith(&quot;#&quot;):
+            continue
+        query = line.split(&quot;\t&quot;)[-1].lower()
+        if len(query) &lt; 3:
+            continue
+        out.append(query)
+        if len(out) == n:
+            break
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">lines = ["# ts\tquery", "1\tRefund", "", "2\tok", "3\tReset Password", "4\tInvoice", "5\tLate fee"]
+assert first_queries(lines, 2) == ["refund", "reset password"]
+assert first_queries(lines, 10) == ["refund", "reset password", "invoice", "late fee"]
+assert first_queries([], 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">lines = [&quot;# ts\tquery&quot;, &quot;1\tRefund&quot;, &quot;&quot;, &quot;2\tok&quot;, &quot;3\tReset Password&quot;, &quot;4\tInvoice&quot;, &quot;5\tLate fee&quot;]
+assert first_queries(lines, 2) == [&quot;refund&quot;, &quot;reset password&quot;]
+assert first_queries(lines, 10) == [&quot;refund&quot;, &quot;reset password&quot;, &quot;invoice&quot;, &quot;late fee&quot;]
+assert first_queries([], 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Steps: strip, drop blank and comment lines, take the last tab field lower-cased, drop short ones, take <code>n</code> with <code>islice</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from itertools import islice
+
+def first_queries(lines, n):
+    stripped = (line.strip() for line in lines)
+    content = (line for line in stripped if line and not line.startswith(&quot;#&quot;))
+    queries = (line.split(&quot;\t&quot;)[-1].lower() for line in content)
+    long_enough = (q for q in queries if len(q) &gt;= 3)
+    return list(islice(long_enough, n))</code></pre></div><p>Each line of the pipeline does one job and has a name that says what it holds, which replaces the <code>continue</code> and <code>break</code> bookkeeping. Nothing runs until <code>islice</code> pulls, and it stops after <code>n</code> results, so the early exit of the original loop is kept: the pipeline never reads past the <code>n</code>th query. Each step can now be reused or tested on its own. For a very short function, the original loop is also fine; the pipeline style pays off as steps grow.</p></div></details>
+</article>
+<article class="prob" id="p-stop-sequences-across-streamed-pieces" data-pid="m6-p-stop-sequences-across-streamed-pieces" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Stop sequences across streamed pieces</h3></header>
+<div class="prob-q"><p>When a model ignores the API's stop parameter, you apply the stop sequence yourself while streaming. Write a generator <code>until_stop(deltas, stop)</code> that yields text from the stream, never yielding any part of <code>stop</code> or anything after it, even when <code>stop</code> is split across pieces. Hold back only as much text as could be the start of <code>stop</code>; yield everything else as early as possible. If the stream ends without the stop, yield what was held back.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def until_stop(deltas, stop):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert "".join(until_stop(["Answer: 4", "2\nObs", "ervation: x"], "\nObservation:")) == "Answer: 42"
+assert "".join(until_stop(["abc", "def"], "XYZ")) == "abcdef"
+assert "".join(until_stop(["say STO", "P now", "STOP"], "STOP")) == "say "
+assert "".join(until_stop(["abcST", "x"], "STOP")) == "abcSTx"
+g = until_stop(["Hello wor", "ld, more"], "\n\nUser:")
+assert next(g) == "Hello wor"
+assert list(until_stop([], "X")) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert &quot;&quot;.join(until_stop([&quot;Answer: 4&quot;, &quot;2\nObs&quot;, &quot;ervation: x&quot;], &quot;\nObservation:&quot;)) == &quot;Answer: 42&quot;
+assert &quot;&quot;.join(until_stop([&quot;abc&quot;, &quot;def&quot;], &quot;XYZ&quot;)) == &quot;abcdef&quot;
+assert &quot;&quot;.join(until_stop([&quot;say STO&quot;, &quot;P now&quot;, &quot;STOP&quot;], &quot;STOP&quot;)) == &quot;say &quot;
+assert &quot;&quot;.join(until_stop([&quot;abcST&quot;, &quot;x&quot;], &quot;STOP&quot;)) == &quot;abcSTx&quot;
+g = until_stop([&quot;Hello wor&quot;, &quot;ld, more&quot;], &quot;\n\nUser:&quot;)
+assert next(g) == &quot;Hello wor&quot;
+assert list(until_stop([], &quot;X&quot;)) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a <code>buffer</code>. After adding each piece, if <code>stop</code> is in the buffer, yield the part before it and <code>return</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Otherwise, find the longest suffix of the buffer that is a prefix of <code>stop</code>; yield everything before that suffix and keep the suffix.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def until_stop(deltas, stop):
+    buffer = &quot;&quot;
+    for delta in deltas:
+        buffer += delta
+        cut = buffer.find(stop)
+        if cut != -1:
+            if cut:
+                yield buffer[:cut]
+            return
+        keep = 0
+        for size in range(min(len(stop) - 1, len(buffer)), 0, -1):
+            if stop.startswith(buffer[-size:]):
+                keep = size
+                break
+        safe = buffer[:len(buffer) - keep]
+        if safe:
+            yield safe
+        buffer = buffer[len(buffer) - keep:]
+    if buffer:
+        yield buffer</code></pre></div><p>Checking each piece alone misses a stop that is split across pieces, like <code>"\nObs"</code> + <code>"ervation:"</code>. Buffering everything would work but defeats streaming. The middle ground is to hold back only a suffix that could still grow into the stop: the longest end of the buffer that is a start of <code>stop</code>, at most <code>len(stop) - 1</code> characters. Everything before it can never become part of a stop, so it is yielded at once, which the <code>next(g)</code> test checks. When the held text turns out not to be the stop (<code>"ST"</code> followed by <code>"x"</code>), it is released with the next piece. Agent frameworks do exactly this, both for custom stop sequences and to hide markers such as <code>"Observation:"</code> from users.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-stratified-sample" data-pid="m6-p-read-the-code-a-stratified-sample" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Read the code: a stratified sample</h3></header>
+<div class="prob-q"><p>This draws up to <code>per_label</code> random examples of each label for a balanced evaluation set, reproducibly with a seed, and returns them with labels in sorted order. With a generator as input it returns nothing; with a list, every label gets examples of other labels; and the label order is not sorted. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import random
+
+
+def stratified_sample(records, per_label, seed):
+    rng = random.Random(seed)
+    buckets = dict.fromkeys({r[&quot;label&quot;] for r in records}, [])
+    for r in records:
+        buckets[r[&quot;label&quot;]].append(r)
+    return {
+        label: rng.sample(items, min(per_label, len(items)))
+        for label, items in buckets.items()
+    }
+</textarea>
+<script type="text/plain" class="prob-tests">records = [{"id": i, "label": ["spam", "ham", "phish"][i % 3]} for i in range(20)] + [{"id": 99, "label": "ham"}]
+out = stratified_sample(iter(records), 3, seed=1)
+assert list(out) == ["ham", "phish", "spam"]
+assert all(len(v) == 3 and all(r["label"] == label for r in v) for label, v in out.items())
+assert stratified_sample(records, 3, seed=1) == stratified_sample(records, 3, seed=1)
+small = stratified_sample([{"id": 1, "label": "a"}, {"id": 2, "label": "b"}, {"id": 3, "label": "b"}], 5, seed=0)
+assert [len(v) for v in small.values()] == [1, 2]
+assert stratified_sample([], 2, seed=0) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">records = [{&quot;id&quot;: i, &quot;label&quot;: [&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;][i % 3]} for i in range(20)] + [{&quot;id&quot;: 99, &quot;label&quot;: &quot;ham&quot;}]
+out = stratified_sample(iter(records), 3, seed=1)
+assert list(out) == [&quot;ham&quot;, &quot;phish&quot;, &quot;spam&quot;]
+assert all(len(v) == 3 and all(r[&quot;label&quot;] == label for r in v) for label, v in out.items())
+assert stratified_sample(records, 3, seed=1) == stratified_sample(records, 3, seed=1)
+small = stratified_sample([{&quot;id&quot;: 1, &quot;label&quot;: &quot;a&quot;}, {&quot;id&quot;: 2, &quot;label&quot;: &quot;b&quot;}, {&quot;id&quot;: 3, &quot;label&quot;: &quot;b&quot;}], 5, seed=0)
+assert [len(v) for v in small.values()] == [1, 2]
+assert stratified_sample([], 2, seed=0) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The set comprehension walks <code>records</code> once; if it is a generator, the loop afterwards gets nothing. Group in one pass.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(..., [])</code> shares one list (6.2). And the dict built from a set of strings follows the set's order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from collections import defaultdict
+
+
+def stratified_sample(records, per_label, seed):
+    rng = random.Random(seed)
+    buckets = defaultdict(list)
+    for r in records:
+        buckets[r[&quot;label&quot;]].append(r)
+    return {
+        label: rng.sample(items, min(per_label, len(items)))
+        for label, items in sorted(buckets.items())
+    }</code></pre></div><p>Three bugs from this module. The set comprehension that collected labels consumed a generator input, so the grouping loop saw nothing (6.3); grouping in a single pass with a <code>defaultdict</code> needs only one walk. <code>dict.fromkeys(labels, [])</code> gave every label the same list, so each "bucket" held every record (6.2). And iterating a dict built from a set of strings follows hash order, which varies between processes; besides breaking the required sorted order, it made the sample itself irreproducible, because the shared random generator is consumed label by label, so a different label order gives different samples for the same seed. Sorting the labels fixes both. <code>min(per_label, len(items))</code> keeps <code>rng.sample</code> from failing on rare labels.</p></div></details>
+</article>
+<article class="prob" id="p-everything-at-once" data-pid="m6-p-everything-at-once" data-type="predict" data-level="hard" data-answer="[2, 4, 6] []
+{0: [0, 3, 6, 9], 1: [1, 4, 7], 2: [2, 5, 8]}
+[1, 12, 20]
+{&#x27;double&#x27;: 10, &#x27;triple&#x27;: 15}">
+<header class="prob-head"><h3>12. Everything at once</h3></header>
+<div class="code"><pre><code class="py">from itertools import batched, chain, groupby
+
+def gen():
+    for i in range(1, 8):
+        yield i
+
+g = gen()
+evens = [x for x in g if x % 2 == 0]
+print(evens, list(g))
+pairs = {k: list(v) for k, v in groupby(sorted(range(10), key=lambda n: n % 3), key=lambda n: n % 3)}
+print(pairs)
+print([sum(b) for b in batched(chain(range(3), [10, 20]), 2)])
+fs = {name: (lambda x, n=n: x * n) for name, n in [(&quot;double&quot;, 2), (&quot;triple&quot;, 3)]}
+print({k: f(5) for k, f in fs.items()})</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The comprehension consumes <code>g</code> completely.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted</code> with a key is stable, so numbers keep their order inside each remainder group.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[2, 4, 6] []
+{0: [0, 3, 6, 9], 1: [1, 4, 7], 2: [2, 5, 8]}
+[1, 12, 20]
+{&#x27;double&#x27;: 10, &#x27;triple&#x27;: 15}</pre></div><p>The list comprehension runs the generator to the end, so <code>list(g)</code> afterwards is empty. Sorting by <code>n % 3</code> puts all remainder-0 numbers first, keeping their original order (stable sort, 4.2), so <code>groupby</code> sees exactly three runs and the dict comprehension stores each group as a list before moving on. <code>chain</code> joins the two sources and <code>batched</code> cuts the joined stream into pairs: (0, 1), (2, 10), (20,). The lambdas bind <code>n</code> as a default argument, so each keeps its own factor (6.1).</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-process-a-20-gb-csv-file-i" data-pid="m6-p-how-would-you-process-a-20-gb-csv-file-i" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. How would you process a 20 GB CSV file in Python on a machine with 8 GB of RAM?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Stream it instead of loading it. With the standard library, open the file with an explicit encoding and pass it to <code>csv.reader</code> or <code>csv.DictReader</code>, which yields one row at a time; build the processing as a pipeline of generators (parse, validate, transform, filter) and aggregate incrementally with <code>Counter</code>, <code>defaultdict</code> or running totals, so memory depends on the size of the aggregates, not the file. If the output must be written, write as you go. With pandas, use <code>read_csv(..., chunksize=100_000)</code> (or <code>usecols</code> and <code>dtype</code> to shrink each chunk) and combine per-chunk results. For heavier analytics, tools like Polars (lazy <code>scan_csv</code> with a streaming engine) or DuckDB query the file directly without loading it, and converting it once to Parquet makes later reads much faster. Watch for steps that need all the data at once (sorting, exact distinct counts, joins); they need external sorting, approximate algorithms or a database.</p></div></details>
+</article>
+<article class="prob" id="p-what-are-the-trade-offs-between-eager-an" data-pid="m6-p-what-are-the-trade-offs-between-eager-an" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What are the trade-offs between eager and lazy evaluation in a data pipeline?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Eager code (lists, comprehensions, DataFrames) computes everything at each step: it is simple to inspect and debug, results can be reused, indexed and counted, and errors appear at the step that caused them, but memory grows with the data and nothing is available until the whole step is done. Lazy code (generators, iterators, lazy query engines) computes items only when asked: memory stays constant, the first results arrive immediately, early exits skip work, and infinite or streaming sources work, but results are one-shot, have no length, and errors surface where the data is consumed, possibly far from the code that caused them; debugging needs care because inspecting a generator consumes it. Laziness also lets an engine optimise the whole plan (Polars, Spark, SQL databases push filters down and skip columns). A practical pattern is lazy streaming for the large, linear part of a pipeline, and eager materialisation for small results that are reused, with validation at the boundaries so errors are caught close to their source.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a streaming evaluation harness</h2>
+<p>You are evaluating an LLM as a text classifier on a labelled test set stored as JSON Lines. The model is called in batches and replies with free text such as <code>"Label: spam"</code>. Build the harness. It must stream the file, batch the model calls, parse replies, and report metrics. Every rule in the spec maps to a lesson in this module, and the tests check each one.</p>
+<article class="prob" id="p-eval-harness" data-pid="m6-p-eval-harness" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>15. Evaluate a classifier on a stream</h3></header>
+<div class="prob-q"><p>Implement <code>evaluate(lines, predict, labels, batch_size)</code>. <code>lines</code> is an iterable of JSON lines with <code>"id"</code>, <code>"text"</code> and <code>"label"</code>; <code>predict(texts)</code> returns one reply string per text; <code>labels</code> is the list of valid labels. Return a <code>Report</code> named tuple:</p>
+<ul><li><strong><code>invalid</code></strong>: line numbers (from 1) of lines that are not valid JSON, lack one of the three fields, or have a label not in <code>labels</code>. Blank lines are skipped silently. Invalid lines are not evaluated.</li><li><strong><code>calls</code></strong>: how many times <code>predict</code> was called. Valid records are sent in batches of <code>batch_size</code>, in file order.</li><li><strong><code>unparsed</code></strong>: ids of records whose reply could not be parsed, in file order. A reply is parsed by taking the text after its last <code>:</code> (or the whole reply if there is none), stripped and case-folded; it must then equal a label (compared case-folded). Unparsed records count as wrong.</li><li><strong><code>accuracy</code></strong>: correct predictions divided by the number of valid records, rounded to 4 decimals (0.0 if none).</li><li><strong><code>confusion</code></strong>: <code>{gold: {predicted: count}}</code> for parsed predictions, with every label from <code>labels</code> (sorted) in both levels.</li><li><strong><code>per_label</code></strong>: <code>{label: {"precision": ..., "recall": ..., "support": ...}}</code> for every label, sorted. Support is the number of valid records with that gold label; recall is correct ones over support; precision is correct ones over parsed predictions of that label. Round to 3 decimals; 0.0 when dividing by zero.</li></ul>
+<p>It must be lazy: if the caller only needs the first batch evaluated, the harness must not read the whole file before calling <code>predict</code> (the tests check the order of reads and calls).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import json
+from itertools import batched
+from typing import NamedTuple
+
+
+class Report(NamedTuple):
+    accuracy: float
+    per_label: dict
+    confusion: dict
+    invalid: list
+    unparsed: list
+    calls: int
+
+
+def evaluate(lines, predict, labels, batch_size):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">lines = [
+    '{"id": "a", "text": "Win a prize now", "label": "spam"}',
+    '{"id": "b", "text": "Lunch at noon?", "label": "ham"}',
+    '',
+    '{"id": "c", "text": "Verify your account", "label": "phish"}',
+    '{not json',
+    '{"id": "d", "text": "Cheap pills", "label": "spam"}',
+    '{"id": "e", "text": "Meeting notes", "label": "HAM"}',
+    '{"id": "f", "text": "Reset password here", "label": "phish"}',
+    '{"id": "g", "text": "no label"}',
+    '{"id": "h", "text": "Your invoice", "label": "ham"}',
+]
+replies = {"a": "Label: spam", "b": "label: Ham", "c": "spam", "d": "I think this is spam: SPAM",
+           "e": "Label: ham", "f": "Label: phishing", "h": "Label: ham"}
+log = []
+def predict(texts):
+    log.append(("predict", len(texts)))
+    by_text = {"Win a prize now": "a", "Lunch at noon?": "b", "Verify your account": "c", "Cheap pills": "d",
+               "Meeting notes": "e", "Reset password here": "f", "Your invoice": "h"}
+    return [replies[by_text[t]] for t in texts]
+
+r = evaluate(lines, predict, ["spam", "ham", "phish"], batch_size=4)
+assert r.invalid == [5, 9]
+assert r.calls == 2 and log == [("predict", 4), ("predict", 3)]
+assert r.unparsed == ["f"]
+assert r.accuracy == 0.7143
+assert r.confusion == {"ham": {"ham": 3, "phish": 0, "spam": 0}, "phish": {"ham": 0, "phish": 0, "spam": 1},
+                       "spam": {"ham": 0, "phish": 0, "spam": 2}}
+assert list(r.per_label) == ["ham", "phish", "spam"]
+assert r.per_label["spam"] == {"precision": 0.667, "recall": 1.0, "support": 2}
+assert r.per_label["phish"] == {"precision": 0.0, "recall": 0.0, "support": 2}
+assert r.per_label["ham"] == {"precision": 1.0, "recall": 1.0, "support": 3}
+
+log.clear()
+def reading(ls):
+    for i, line in enumerate(ls, 1):
+        log.append(("read", i))
+        yield line
+evaluate(reading(lines), predict, ["spam", "ham", "phish"], batch_size=2)
+assert log.index(("predict", 2)) < log.index(("read", 4))
+
+empty = evaluate([], predict, ["x"], 3)
+assert empty == Report(0.0, {"x": {"precision": 0.0, "recall": 0.0, "support": 0}}, {"x": {"x": 0}}, [], [], 0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 11 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">lines = [
+    &#x27;{&quot;id&quot;: &quot;a&quot;, &quot;text&quot;: &quot;Win a prize now&quot;, &quot;label&quot;: &quot;spam&quot;}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;b&quot;, &quot;text&quot;: &quot;Lunch at noon?&quot;, &quot;label&quot;: &quot;ham&quot;}&#x27;,
+    &#x27;&#x27;,
+    &#x27;{&quot;id&quot;: &quot;c&quot;, &quot;text&quot;: &quot;Verify your account&quot;, &quot;label&quot;: &quot;phish&quot;}&#x27;,
+    &#x27;{not json&#x27;,
+    &#x27;{&quot;id&quot;: &quot;d&quot;, &quot;text&quot;: &quot;Cheap pills&quot;, &quot;label&quot;: &quot;spam&quot;}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;e&quot;, &quot;text&quot;: &quot;Meeting notes&quot;, &quot;label&quot;: &quot;HAM&quot;}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;f&quot;, &quot;text&quot;: &quot;Reset password here&quot;, &quot;label&quot;: &quot;phish&quot;}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;g&quot;, &quot;text&quot;: &quot;no label&quot;}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;h&quot;, &quot;text&quot;: &quot;Your invoice&quot;, &quot;label&quot;: &quot;ham&quot;}&#x27;,
+]
+replies = {&quot;a&quot;: &quot;Label: spam&quot;, &quot;b&quot;: &quot;label: Ham&quot;, &quot;c&quot;: &quot;spam&quot;, &quot;d&quot;: &quot;I think this is spam: SPAM&quot;,
+           &quot;e&quot;: &quot;Label: ham&quot;, &quot;f&quot;: &quot;Label: phishing&quot;, &quot;h&quot;: &quot;Label: ham&quot;}
+log = []
+def predict(texts):
+    log.append((&quot;predict&quot;, len(texts)))
+    by_text = {&quot;Win a prize now&quot;: &quot;a&quot;, &quot;Lunch at noon?&quot;: &quot;b&quot;, &quot;Verify your account&quot;: &quot;c&quot;, &quot;Cheap pills&quot;: &quot;d&quot;,
+               &quot;Meeting notes&quot;: &quot;e&quot;, &quot;Reset password here&quot;: &quot;f&quot;, &quot;Your invoice&quot;: &quot;h&quot;}
+    return [replies[by_text[t]] for t in texts]
+
+r = evaluate(lines, predict, [&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;], batch_size=4)
+assert r.invalid == [5, 9]
+assert r.calls == 2 and log == [(&quot;predict&quot;, 4), (&quot;predict&quot;, 3)]
+assert r.unparsed == [&quot;f&quot;]
+assert r.accuracy == 0.7143
+assert r.confusion == {&quot;ham&quot;: {&quot;ham&quot;: 3, &quot;phish&quot;: 0, &quot;spam&quot;: 0}, &quot;phish&quot;: {&quot;ham&quot;: 0, &quot;phish&quot;: 0, &quot;spam&quot;: 1},
+                       &quot;spam&quot;: {&quot;ham&quot;: 0, &quot;phish&quot;: 0, &quot;spam&quot;: 2}}
+assert list(r.per_label) == [&quot;ham&quot;, &quot;phish&quot;, &quot;spam&quot;]
+assert r.per_label[&quot;spam&quot;] == {&quot;precision&quot;: 0.667, &quot;recall&quot;: 1.0, &quot;support&quot;: 2}
+assert r.per_label[&quot;phish&quot;] == {&quot;precision&quot;: 0.0, &quot;recall&quot;: 0.0, &quot;support&quot;: 2}
+assert r.per_label[&quot;ham&quot;] == {&quot;precision&quot;: 1.0, &quot;recall&quot;: 1.0, &quot;support&quot;: 3}
+
+log.clear()
+def reading(ls):
+    for i, line in enumerate(ls, 1):
+        log.append((&quot;read&quot;, i))
+        yield line
+evaluate(reading(lines), predict, [&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;], batch_size=2)
+assert log.index((&quot;predict&quot;, 2)) &lt; log.index((&quot;read&quot;, 4))
+
+empty = evaluate([], predict, [&quot;x&quot;], 3)
+assert empty == Report(0.0, {&quot;x&quot;: {&quot;precision&quot;: 0.0, &quot;recall&quot;: 0.0, &quot;support&quot;: 0}}, {&quot;x&quot;: {&quot;x&quot;: 0}}, [], [], 0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A generator <code>_records(lines, valid, invalid)</code> with <code>enumerate(lines, start=1)</code> parses each line, appends bad line numbers to <code>invalid</code> and yields good records (6.3).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>for batch in batched(records, batch_size)</code>: call <code>predict</code> once, then <code>zip</code> the batch with the replies and parse each reply (6.4).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect <code>(gold, predicted_or_None)</code> pairs in a list, then build the confusion matrix and metrics with nested dict comprehensions over <code>sorted(labels)</code> and a <code>Counter</code> of pairs (6.2).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 4</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Labels in the file may differ in case (<code>"HAM"</code>): compare with <code>casefold()</code> and map back to the canonical label with a dict comprehension.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from collections import Counter
+from itertools import batched
+from typing import NamedTuple
+
+
+class Report(NamedTuple):
+    accuracy: float
+    per_label: dict
+    confusion: dict
+    invalid: list
+    unparsed: list
+    calls: int
+
+
+def _ratio(num, den):
+    return round(num / den, 3) if den else 0.0
+
+
+def _records(lines, canonical, invalid):
+    for lineno, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+            gold = canonical.get(str(rec[&quot;label&quot;]).casefold())
+            rid, text = rec[&quot;id&quot;], rec[&quot;text&quot;]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            invalid.append(lineno)
+            continue
+        if gold is None:
+            invalid.append(lineno)
+            continue
+        yield rid, text, gold
+
+
+def _parse(reply, canonical):
+    return canonical.get(reply.rsplit(&quot;:&quot;, 1)[-1].strip().casefold())
+
+
+def evaluate(lines, predict, labels, batch_size):
+    canonical = {label.casefold(): label for label in labels}
+    classes = sorted(labels)
+    invalid, unparsed, pairs = [], [], []
+    calls = 0
+    for batch in batched(_records(lines, canonical, invalid), batch_size):
+        replies = predict([text for _, text, _ in batch])
+        calls += 1
+        for (rid, _, gold), reply in zip(batch, replies, strict=True):
+            pred = _parse(reply, canonical)
+            if pred is None:
+                unparsed.append(rid)
+            pairs.append((gold, pred))
+
+    counts = Counter(p for p in pairs if p[1] is not None)
+    confusion = {g: {p: counts[(g, p)] for p in classes} for g in classes}
+    correct = sum(confusion[c][c] for c in classes)
+    support = Counter(g for g, _ in pairs)
+    predicted = Counter(p for _, p in pairs if p is not None)
+    per_label = {
+        c: {&quot;precision&quot;: _ratio(confusion[c][c], predicted[c]),
+            &quot;recall&quot;: _ratio(confusion[c][c], support[c]),
+            &quot;support&quot;: support[c]}
+        for c in classes
+    }
+    accuracy = round(correct / len(pairs), 4) if pairs else 0.0
+    return Report(accuracy, per_label, confusion, invalid, unparsed, calls)</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Generators (6.3):</strong> <code>_records</code> streams the file, numbering lines with <code>enumerate(..., start=1)</code>, skipping blank lines, and reporting bad ones through the <code>invalid</code> list instead of stopping the run. Nothing is read until the batches ask for records.</li><li><strong>Lazy pipelines (6.4):</strong> <code>batched</code> pulls exactly <code>batch_size</code> records before each <code>predict</code> call, which is why the first call happens after reading only the first few lines, as the read-order test checks. <code>zip(..., strict=True)</code> fails loudly if the model returns the wrong number of replies.</li><li><strong>Dict comprehensions (6.2):</strong> <code>canonical</code> maps case-folded labels back to their official spelling, which handles <code>"HAM"</code> in the data and <code>"label: Ham"</code> in a reply; the confusion matrix and per-label metrics are nested comprehensions over the sorted labels, so every label appears in a fixed order, including ones with no examples.</li><li><strong>List comprehensions and generator expressions (6.1):</strong> the texts of each batch, and the filtered pairs fed into each <code>Counter</code>.</li></ul>
+<p>Unparsed replies (<code>"Label: phishing"</code> is not a valid label) count against accuracy but are left out of the confusion matrix and of precision, which is the usual convention, and they are reported by id so you can look at them: they often reveal a prompt that needs a clearer label list. The pairs list grows with the dataset, but it holds two short strings per record; for a really large evaluation, the <code>Counter</code>s could be updated inside the loop instead. This is the core of tools like OpenAI's evals, Promptfoo or a scikit-learn <code>classification_report</code> run on LLM output.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Store or stream: build lists, dicts and sets when results are reused or small; use generators and <code>itertools</code> when consumed once, large or stopped early.</li><li>Comprehensions transform and filter; grouping and counting accumulate (<code>defaultdict</code>, <code>Counter</code>), then comprehensions summarise.</li><li>Watch the collisions: repeated dict keys keep the last value, <code>fromkeys</code> shares one mutable value, sets of strings have no stable order.</li><li>Generators are one-shot and run late: consume once, validate in a wrapper, keep resources open inside the generator.</li><li>Pipelines of small lazy steps (<code>islice</code>, <code>batched</code>, <code>accumulate</code>, <code>groupby</code> on sorted data) keep memory flat and results early.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

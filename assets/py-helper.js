@@ -13,6 +13,9 @@ def _format(e):
 
 def _why(node, ns):
     # For "assert a == b" show what a actually was, which is what you want to see first.
+    # Asserts nested inside try/for blocks get no detail.
+    if not isinstance(node, ast.Assert):
+        return ""
     t = node.test
     if not (isinstance(t, ast.Compare) and len(t.ops) == 1):
         return ""

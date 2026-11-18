@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>6.1 · List comprehensions</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m6-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 6 · Comprehensions and generators</span></div>
+  <h1>6.1 List comprehensions</h1>
+  <p>A list comprehension builds a list from another iterable in one expression. What it translates to, filtering versus transforming, several <code>for</code> clauses, its own scope, why it is fast, and when a plain loop is the better choice. Applied to batching, message building, feature extraction and chunking.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a comprehension is, and the loop it stands for</h2>
+<p>A <strong>list comprehension</strong> builds a new list by running an expression for every item of an iterable. The general shape is <code>[expression for name in iterable if condition]</code>, and it means exactly the same as this loop:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">loop_vs_comp.py</span><button class="copy">Copy</button></div><pre><code class="py">scores = [0.91, 0.42, 0.77, 0.15]
+
+# the loop
+kept = []
+for s in scores:
+    if s &gt;= 0.5:
+        kept.append(round(s * 100))
+
+# the comprehension: the same three parts, in a different order
+kept2 = [round(s * 100) for s in scores if s &gt;= 0.5]
+print(kept, kept2, kept == kept2)</code></pre><div class="out"><span class="ol">Output</span><pre>[91, 77] [91, 77] True</pre></div></div>
+<p>Read a comprehension in this order: first the <code>for</code> part (what you loop over and the name each item gets), then the <code>if</code> part (which items are kept), and last the expression at the front (what goes into the new list for each kept item). The expression comes first in the syntax because it is the most important thing: the result is "a list <strong>of these</strong>". Step by step, Python creates an empty list, takes each item of <code>scores</code> in order, binds it to <code>s</code>, evaluates the condition, and if it is true evaluates the expression and appends the result. The original list is never changed.</p>
+<p>Any iterable works on the right: lists, tuples, strings, <code>range</code>, dict views, files (one line per item), and the generators of 6.3. The result is always a new <code>list</code>. The parts are optional except the first <code>for</code>: <code>[x * 2 for x in xs]</code> only transforms, <code>[x for x in xs if x]</code> only filters (it drops falsy items like <code>""</code>, <code>0</code> and <code>None</code>).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">any_iterable.py</span><button class="copy">Copy</button></div><pre><code class="py">print([c.upper() for c in &quot;rag&quot;], [n * n for n in range(5)])
+print([w for w in [&quot;a&quot;, &quot;&quot;, &quot;b&quot;, None, &quot;c&quot;] if w])
+totals = {&quot;api&quot;: 12, &quot;web&quot;: 0, &quot;db&quot;: 7}
+print([name for name, n in totals.items() if n &gt; 0])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;R&#x27;, &#x27;A&#x27;, &#x27;G&#x27;] [0, 1, 4, 9, 16]
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;]
+[&#x27;api&#x27;, &#x27;db&#x27;]</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A comprehension reads like a small <code>SELECT</code>: <code>[round(s * 100) for s in scores if s &gt;= 0.5]</code> is <code>SELECT ROUND(s * 100) FROM scores WHERE s &gt;= 0.5</code>. The expression is the select list, the <code>for</code> is the <code>FROM</code>, the <code>if</code> is the <code>WHERE</code>. In Power Query it is <code>Table.SelectRows</code> followed by <code>Table.TransformColumns</code>, and in DAX it is close to <code>SELECTCOLUMNS(FILTER(...), ...)</code>.</p></div></div>
+</section>
+<section class="sec" id="ifelse">
+<h2><span class="n">2</span>Filtering versus transforming: where the <code>if</code> goes</h2>
+<p>There are two different <code>if</code>s, and mixing them up is the most common comprehension mistake. An <code>if</code> <strong>at the end</strong> is a filter: items that fail it are left out, so the result can be shorter than the input. An <code>if ... else</code> <strong>at the front</strong> is a conditional expression (<code>a if cond else b</code>): every item produces something, so the result has the same length as the input. A filter has no <code>else</code>; a conditional expression must have one.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">if_positions.py</span><button class="copy">Copy</button></div><pre><code class="py">xs = [3, -1, 0, 5, -2]
+print([x for x in xs if x &gt; 0])            # filter: shorter
+print([x if x &gt; 0 else 0 for x in xs])     # transform: same length (ReLU)
+print([&quot;pos&quot; if x &gt; 0 else &quot;zero&quot; if x == 0 else &quot;neg&quot; for x in xs])
+print([x * 10 if x % 2 else x for x in xs if x != 0])   # both at once</code></pre><div class="out"><span class="ol">Output</span><pre>[3, 5]
+[3, 0, 0, 5, 0]
+[&#x27;pos&#x27;, &#x27;neg&#x27;, &#x27;zero&#x27;, &#x27;pos&#x27;, &#x27;neg&#x27;]
+[30, -10, 50, -2]</pre></div></div>
+<p>The second line is the ReLU activation function from neural networks, written as a comprehension: negative values become 0, the length is kept. Keeping the length matters whenever the list is aligned with another one, such as predictions and labels: filtering one of them silently misaligns every item after the first dropped one (problem 6).</p>
+<p>Conditional expressions can be chained, as the third line shows, but two levels is the readable limit; beyond that, put the logic in a small named function and call it from the comprehension. Two filters in a row, <code>if a if b</code>, mean <code>if a and b</code>. The syntax errors tell you which <code>if</code> you used wrongly: <code>[x if x &gt; 0 for x in xs]</code> is a <code>SyntaxError</code> because a front-position <code>if</code> needs an <code>else</code>, and <code>[x for x in xs if x &gt; 0 else 0]</code> is one because a filter cannot have an <code>else</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">if_rules.py</span><button class="copy">Copy</button></div><pre><code class="py">def label(score):
+    if score &gt;= 0.8:
+        return &quot;high&quot;
+    if score &gt;= 0.5:
+        return &quot;medium&quot;
+    return &quot;low&quot;
+
+print([label(s) for s in [0.91, 0.42, 0.77, 0.15]])
+print([n for n in range(20) if n % 2 if n % 3])     # odd and not divisible by 3
+for bad in [&quot;[x if x &gt; 0 for x in xs]&quot;, &quot;[x for x in xs if x &gt; 0 else 0]&quot;]:
+    try:
+        compile(bad, &quot;&lt;demo&gt;&quot;, &quot;eval&quot;)
+    except SyntaxError as e:
+        print(&quot;SyntaxError:&quot;, e.msg)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;high&#x27;, &#x27;low&#x27;, &#x27;medium&#x27;, &#x27;low&#x27;]
+[1, 5, 7, 11, 13, 17, 19]
+SyntaxError: expected &#x27;else&#x27; after &#x27;if&#x27; expression
+SyntaxError: invalid syntax</pre></div></div>
+</section>
+<section class="sec" id="nested">
+<h2><span class="n">3</span>Several <code>for</code> clauses, and comprehensions inside comprehensions</h2>
+<p>A comprehension can have more than one <code>for</code>. They nest <strong>left to right, in the same order as written loops</strong>: the first <code>for</code> is the outer loop, the next one is inside it. So <code>[(a, b) for a in "xy" for b in "12"]</code> is the loop <code>for a in "xy":</code> with <code>for b in "12":</code> inside, producing <code>x1, x2, y1, y2</code>. A later <code>for</code> can use the name of an earlier one, which is how you <strong>flatten</strong> a list of lists: <code>[x for row in rows for x in row]</code> ("for each row, for each x in that row").</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">multi_for.py</span><button class="copy">Copy</button></div><pre><code class="py">print([a + b for a in &quot;xy&quot; for b in &quot;12&quot;])
+docs = [[&quot;refund&quot;, &quot;policy&quot;], [&quot;reset&quot;, &quot;password&quot;, &quot;now&quot;], []]
+print([w for doc in docs for w in doc])
+print([w for doc in docs if len(doc) &gt; 2 for w in doc if w != &quot;now&quot;])
+flat = []
+for doc in docs:           # the same as the second line, as loops
+    for w in doc:
+        flat.append(w)
+print(flat)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;x1&#x27;, &#x27;x2&#x27;, &#x27;y1&#x27;, &#x27;y2&#x27;]
+[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;reset&#x27;, &#x27;password&#x27;, &#x27;now&#x27;]
+[&#x27;reset&#x27;, &#x27;password&#x27;]
+[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;reset&#x27;, &#x27;password&#x27;, &#x27;now&#x27;]</pre></div></div>
+<p>A trick for the order: write the loops as normal nested loops first, then move the innermost body (<code>flat.append(w)</code>) to the front, and keep the <code>for</code> and <code>if</code> lines in their original order. Putting the <code>for</code>s the other way round, <code>[w for w in doc for doc in docs]</code>, fails because <code>doc</code> is used before the loop that defines it.</p>
+<p>Different again is a comprehension <strong>inside</strong> the expression of another, which builds a list of lists: <code>[[r * c for c in range(3)] for r in range(3)]</code> builds a 3 x 3 table, one inner list per row. This is how you create a grid correctly. The tempting <code>[[0] * 3] * 3</code> does not work: <code>*</code> repeats <strong>references</strong> to one inner list (2.2), so all three rows are the same object and changing one changes them all (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">nested_comp.py</span><button class="copy">Copy</button></div><pre><code class="py">table = [[r * c for c in range(3)] for r in range(3)]
+print(table)
+matrix = [[1, 2, 3], [4, 5, 6]]
+print([[row[i] for row in matrix] for i in range(3)])     # transpose
+bad = [[0] * 3] * 3
+good = [[0] * 3 for _ in range(3)]
+bad[0][0] = 9
+good[0][0] = 9
+print(bad, good)</code></pre><div class="out"><span class="ol">Output</span><pre>[[0, 0, 0], [0, 1, 2], [0, 2, 4]]
+[[1, 4], [2, 5], [3, 6]]
+[[9, 0, 0], [9, 0, 0], [9, 0, 0]] [[9, 0, 0], [0, 0, 0], [0, 0, 0]]</pre></div></div>
+<p>Use <code>_</code> as the loop name when the value is not needed, as in <code>for _ in range(3)</code>: it tells the reader the loop only counts. Beyond two <code>for</code> clauses, or when nesting and filters combine, a written loop is usually clearer.</p>
+</section>
+<section class="sec" id="scope">
+<h2><span class="n">4</span>Scope: what a comprehension can see and leak</h2>
+<p>A comprehension has its <strong>own scope</strong> for its loop variables. In Python 3 the name after <code>for</code> does not exist after the comprehension, and it does not overwrite a variable with the same name outside it. (In Python 2 it did leak, which is why old code avoided reusing names.) Everything else follows the normal rules of 3.3: the expression and conditions can read variables from the enclosing function and module.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">comp_scope.py</span><button class="copy">Copy</button></div><pre><code class="py">x = &quot;outer&quot;
+squares = [x * x for x in range(4)]
+print(squares, x)
+threshold = 2
+print([n for n in range(5) if n &gt; threshold])     # reads the enclosing name
+try:
+    print(n)
+except NameError as e:
+    print(&quot;NameError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[0, 1, 4, 9] outer
+[3, 4]
+NameError: name &#x27;n&#x27; is not defined</pre></div></div>
+<p>Two scope details matter in real code. The <strong>walrus operator</strong> <code>:=</code> inside a comprehension binds its name in the <strong>enclosing</strong> scope, on purpose, so you can compute a value once, use it in both the filter and the expression, and still see the last value afterwards. And because the loop variable is looked up when a function <strong>runs</strong>, not when it is created, <code>[lambda: i for i in range(3)]</code> builds three functions that all see the <strong>last</strong> <code>i</code>: the late-binding closure of 3.4. The fix is the same as there: bind the current value as a default argument, <code>lambda i=i: i</code> (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">walrus_and_lambdas.py</span><button class="copy">Copy</button></div><pre><code class="py">texts = [&quot;  refund  &quot;, &quot;&quot;, &quot;reset password &quot;, &quot;   &quot;]
+cleaned = [t for raw in texts if (t := raw.strip())]
+print(cleaned, repr(t))
+fns = [lambda: i for i in range(3)]
+fixed = [lambda i=i: i for i in range(3)]
+print([f() for f in fns], [f() for f in fixed])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;refund&#x27;, &#x27;reset password&#x27;] &#x27;&#x27;
+[2, 2, 2] [0, 1, 2]</pre></div></div>
+<p>In the first line, <code>raw.strip()</code> runs once per item: its result is bound to <code>t</code>, tested in the filter, and reused in the expression. Without the walrus you would write <code>[raw.strip() for raw in texts if raw.strip()]</code> and strip every item twice.</p>
+</section>
+<section class="sec" id="speed">
+<h2><span class="n">5</span>Speed: what is true today, and what comprehensions cost</h2>
+<p>You will often read that comprehensions are much faster than a loop with <code>append</code>. The reason is real: the loop looks up <code>result.append</code> on every iteration and makes a method call, while the comprehension compiles to a dedicated bytecode instruction, <code>LIST_APPEND</code>, that adds to the list directly. On older Pythons that saved 20 to 50 percent for simple expressions. But since Python 3.11 the interpreter <strong>specialises</strong> hot code while it runs, and it recognises <code>some_list.append(x)</code> and turns it into a fast path; Python 3.12 also inlines comprehensions into the enclosing function. Measured on this page's Python 3.14, squaring a million integers takes nearly the same time either way (a few percent apart). The lesson is the general one: performance folklore goes out of date, so measure on the version you run.</p>
+<p>So choose a comprehension for <strong>clarity</strong>: it says "build a list of these" in one expression, with no half-built list visible to the rest of the function. The big speed differences come from elsewhere: doing less work (stopping early, as below), using a better data structure (4.4, 4.5), or moving numeric work into NumPy, which runs the whole loop in C.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bytecode.py</span><button class="copy">Copy</button></div><pre><code class="py">import dis
+
+def with_loop(xs):
+    out = []
+    for x in xs:
+        out.append(x * 2)
+    return out
+
+def with_comp(xs):
+    return [x * 2 for x in xs]
+
+def ops(f):
+    return {i.opname for i in dis.get_instructions(f)}
+
+print(&quot;LIST_APPEND&quot; in ops(with_comp), &quot;LIST_APPEND&quot; in ops(with_loop))
+print(with_loop([1, 2]) == with_comp([1, 2]))</code></pre><div class="out"><span class="ol">Output</span><pre>True False
+True</pre></div></div>
+<p>The real cost of a list comprehension is <strong>memory</strong>: it builds the whole list at once. That is fine for thousands or millions of small items, but not for a 50 GB file, and it is wasteful when you only need one pass over the results, such as a sum or an <code>any</code> check. Replacing the square brackets with parentheses gives a <strong>generator expression</strong>, which produces items one at a time without storing them (6.3). With <code>any</code> and <code>all</code> it also <strong>stops early</strong>: the list version computes every item first, the generator version stops at the first true one.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">comp_vs_genexp.py</span><button class="copy">Copy</button></div><pre><code class="py">calls = 0
+
+def is_long(text):
+    global calls
+    calls += 1
+    return len(text) &gt; 10
+
+docs = [&quot;short&quot;, &quot;a very long document&quot;, &quot;x&quot;, &quot;y&quot;, &quot;z&quot;]
+print(any([is_long(d) for d in docs]), calls)
+calls = 0
+print(any(is_long(d) for d in docs), calls)
+print(sum(len(d) for d in docs))</code></pre><div class="out"><span class="ol">Output</span><pre>True 5
+True 2
+28</pre></div></div>
+<p><code>map</code> and <code>filter</code> do the same jobs (<code>list(map(str.upper, words))</code>), and they can be slightly faster when the function is a C built-in, but a comprehension is clearer as soon as you need a <code>lambda</code> or both filtering and transforming.</p>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">6</span>When to use a comprehension, and when not</h2>
+<p>Use a comprehension when you are <strong>building a list from another iterable</strong> with one expression and at most a simple filter. That covers a large share of everyday data code: selecting fields, cleaning values, filtering results, batching, building prompts and messages. Use a written loop when:</p>
+<ul><li>the body has <strong>several statements</strong>, <code>try</code> / <code>except</code>, or early exits (<code>break</code>, <code>return</code>);</li><li>you need <strong>side effects</strong>, such as printing, logging or writing to a database: <code>[print(x) for x in xs]</code> builds a list of <code>None</code> values just to throw it away, and hides the side effect in an expression;</li><li>the comprehension would need more than two <code>for</code> clauses or chained conditions that no longer read as one sentence;</li><li>you are <strong>updating</strong> existing objects rather than building new values.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">in_practice.py</span><button class="copy">Copy</button></div><pre><code class="py">texts = [&quot;Refunds take 5 days.&quot;, &quot;Reset your password here.&quot;, &quot;OK&quot;]
+batch_size = 2
+batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+print(batches)
+history = [(&quot;user&quot;, &quot;Hi&quot;), (&quot;assistant&quot;, &quot;Hello!&quot;), (&quot;user&quot;, &quot;Refund?&quot;)]
+messages = [{&quot;role&quot;: role, &quot;content&quot;: text} for role, text in history]
+print(messages[-1])
+features = [[len(t), t.count(&quot; &quot;) + 1, t.endswith(&quot;?&quot;)] for t in texts]
+print(features)</code></pre><div class="out"><span class="ol">Output</span><pre>[[&#x27;Refunds take 5 days.&#x27;, &#x27;Reset your password here.&#x27;], [&#x27;OK&#x27;]]
+{&#x27;role&#x27;: &#x27;user&#x27;, &#x27;content&#x27;: &#x27;Refund?&#x27;}
+[[20, 4, False], [25, 4, False], [2, 1, False]]</pre></div></div>
+<p>These three are the most common comprehensions in GenAI and ML code. <strong>Batching</strong> with <code>range(0, n, size)</code> and slices sends texts to an embedding API in groups that respect its limit (slices never fail, so the last batch is simply shorter). <strong>Message building</strong> turns stored chat history into the list of dicts that chat APIs expect. <strong>Feature extraction</strong> turns each text into a row of numbers, the list-of-lists shape that scikit-learn accepts as <code>X</code>.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-reading-comprehensions" data-pid="m6-1-reading-comprehensions" data-type="predict" data-level="easy" data-answer="[4, -2, 7, -5]
+[4, 0, 0, 7, 0]
+[&#x27;-2&#x27;, &#x27;-5&#x27;] [&#x27;aa&#x27;, &#x27;bb&#x27;]
+[1, 2, 3] 100">
+<header class="prob-head"><h3>1. Reading comprehensions</h3></header>
+<div class="code"><pre><code class="py">xs = [4, -2, 0, 7, -5]
+print([x for x in xs if x])
+print([x if x &gt; 0 else 0 for x in xs])
+print([str(x) for x in xs if x &lt; 0], [c * 2 for c in &quot;ab&quot;])
+x = 100
+print([x + 1 for x in range(3)], x)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An <code>if</code> at the end filters; <code>if ... else</code> at the front transforms every item. The comprehension's <code>x</code> is its own.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[4, -2, 7, -5]
+[4, 0, 0, 7, 0]
+[&#x27;-2&#x27;, &#x27;-5&#x27;] [&#x27;aa&#x27;, &#x27;bb&#x27;]
+[1, 2, 3] 100</pre></div><p><code>if x</code> drops the falsy <code>0</code>. The conditional expression keeps the length and turns negatives into 0. The third line filters and then transforms the survivors into strings; strings are iterables of characters. The comprehension's <code>x</code> lives in its own scope, so the outer <code>x = 100</code> is untouched.</p></div></details>
+</article>
+<article class="prob" id="p-batch-texts-for-an-embedding-api" data-pid="m6-1-batch-texts-for-an-embedding-api" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Batch texts for an embedding API</h3></header>
+<div class="prob-q"><p>Embedding APIs limit how many texts one request can carry. Write <code>batches(texts, size)</code> returning a list of lists of at most <code>size</code> texts each, in order, using one list comprehension. Raise <code>ValueError</code> if <code>size</code> is less than 1.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def batches(texts, size):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">texts = [f"t{i}" for i in range(7)]
+assert batches(texts, 3) == [["t0", "t1", "t2"], ["t3", "t4", "t5"], ["t6"]]
+assert batches(texts, 10) == [texts]
+assert batches([], 4) == []
+try:
+    batches(texts, 0)
+    assert False, "size 0 should raise"
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">texts = [f&quot;t{i}&quot; for i in range(7)]
+assert batches(texts, 3) == [[&quot;t0&quot;, &quot;t1&quot;, &quot;t2&quot;], [&quot;t3&quot;, &quot;t4&quot;, &quot;t5&quot;], [&quot;t6&quot;]]
+assert batches(texts, 10) == [texts]
+assert batches([], 4) == []
+try:
+    batches(texts, 0)
+    assert False, &quot;size 0 should raise&quot;
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>range(0, len(texts), size)</code> gives the start of each batch; slice from there.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def batches(texts, size):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    return [texts[i:i + size] for i in range(0, len(texts), size)]</code></pre></div><p>The <code>range</code> step jumps from one batch start to the next, and the slice takes up to <code>size</code> items, shorter at the end because slicing past the end is safe (4.1). With an empty list, <code>range(0, 0, size)</code> is empty, so the result is <code>[]</code>. The check for <code>size</code> comes first because <code>range</code> with a step of 0 raises its own, less helpful, <code>ValueError</code>, and a negative step would silently return nothing. <code>itertools.batched</code> (Python 3.12+, 6.4) does the same lazily.</p></div></details>
+</article>
+<article class="prob" id="p-a-grid-where-every-row-changes-together" data-pid="m6-1-a-grid-where-every-row-changes-together" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A grid where every row changes together</h3></header>
+<div class="prob-q"><p><code>empty_grid(rows, cols)</code> builds a confusion-matrix grid of zeros. Updating one cell changes the whole column. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def empty_grid(rows, cols):
+    return [[0] * cols] * rows
+</textarea>
+<script type="text/plain" class="prob-tests">g = empty_grid(3, 2)
+g[0][1] += 1
+assert g == [[0, 1], [0, 0], [0, 0]]
+assert empty_grid(0, 4) == []
+assert len({id(row) for row in empty_grid(4, 1)}) == 4</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">g = empty_grid(3, 2)
+g[0][1] += 1
+assert g == [[0, 1], [0, 0], [0, 0]]
+assert empty_grid(0, 4) == []
+assert len({id(row) for row in empty_grid(4, 1)}) == 4</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>* rows</code> repeats the same inner list object. Build a new inner list for each row with a comprehension.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def empty_grid(rows, cols):
+    return [[0] * cols for _ in range(rows)]</code></pre></div><p><code>[inner] * rows</code> makes a list of <code>rows</code> references to <strong>one</strong> inner list (2.2), so <code>g[0]</code>, <code>g[1]</code> and <code>g[2]</code> are the same object. The comprehension evaluates <code>[0] * cols</code> once per iteration, creating a new list each time. The inner <code>[0] * cols</code> is fine, because it repeats an immutable <code>0</code>. The last test checks identity directly: four rows, four distinct objects.</p></div></details>
+</article>
+<article class="prob" id="p-several-for-clauses" data-pid="m6-1-several-for-clauses" data-type="predict" data-level="easy" data-answer="[&#x27;ax&#x27;, &#x27;ay&#x27;, &#x27;az&#x27;, &#x27;bx&#x27;, &#x27;by&#x27;, &#x27;bz&#x27;]
+[1, 2, 3, 4, 5, 6]
+[2, 4, 6]
+[[10, 20], [30], [40, 50, 60]]">
+<header class="prob-head"><h3>4. Several <code>for</code> clauses</h3></header>
+<div class="code"><pre><code class="py">print([a + b for a in &quot;ab&quot; for b in &quot;xyz&quot;])
+rows = [[1, 2], [3], [], [4, 5, 6]]
+print([x for row in rows for x in row])
+print([x for row in rows if len(row) &gt; 1 for x in row if x % 2 == 0])
+print([[x * 10 for x in row] for row in rows if row])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The first <code>for</code> is the outer loop. A comprehension in the expression builds one inner list per outer item.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;ax&#x27;, &#x27;ay&#x27;, &#x27;az&#x27;, &#x27;bx&#x27;, &#x27;by&#x27;, &#x27;bz&#x27;]
+[1, 2, 3, 4, 5, 6]
+[2, 4, 6]
+[[10, 20], [30], [40, 50, 60]]</pre></div><p><code>for a</code> is the outer loop, so all of <code>a</code>'s pairs come before <code>b</code>'s. The second line flattens. The third filters rows (two rows have more than one item), then filters items inside them (the even ones). The last line keeps the nested shape: the inner comprehension runs once per non-empty row and produces one list for each.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-keep-the-best-retrieved-chunks" data-pid="m6-1-keep-the-best-retrieved-chunks" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>5. Keep the best retrieved chunks</h3></header>
+<div class="prob-q"><p>A retriever returns results as dicts with <code>"text"</code>, <code>"score"</code> and <code>"source"</code>. Write <code>context_chunks(results, min_score, limit)</code> returning the texts (stripped) of results with <code>score &gt;= min_score</code>, best score first, at most <code>limit</code> of them, dropping results whose text is empty after stripping. Use comprehensions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def context_chunks(results, min_score, limit):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">results = [
+    {"text": " Refunds take 5 days. ", "score": 0.82, "source": "faq"},
+    {"text": "Office hours", "score": 0.31, "source": "misc"},
+    {"text": "   ", "score": 0.95, "source": "empty"},
+    {"text": "No refunds after 30 days.", "score": 0.91, "source": "terms"},
+    {"text": "Refund form link", "score": 0.66, "source": "faq"},
+]
+assert context_chunks(results, 0.5, 2) == ["No refunds after 30 days.", "Refunds take 5 days."]
+assert context_chunks(results, 0.5, 10) == ["No refunds after 30 days.", "Refunds take 5 days.", "Refund form link"]
+assert context_chunks(results, 0.99, 3) == []
+assert context_chunks([], 0.0, 3) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">results = [
+    {&quot;text&quot;: &quot; Refunds take 5 days. &quot;, &quot;score&quot;: 0.82, &quot;source&quot;: &quot;faq&quot;},
+    {&quot;text&quot;: &quot;Office hours&quot;, &quot;score&quot;: 0.31, &quot;source&quot;: &quot;misc&quot;},
+    {&quot;text&quot;: &quot;   &quot;, &quot;score&quot;: 0.95, &quot;source&quot;: &quot;empty&quot;},
+    {&quot;text&quot;: &quot;No refunds after 30 days.&quot;, &quot;score&quot;: 0.91, &quot;source&quot;: &quot;terms&quot;},
+    {&quot;text&quot;: &quot;Refund form link&quot;, &quot;score&quot;: 0.66, &quot;source&quot;: &quot;faq&quot;},
+]
+assert context_chunks(results, 0.5, 2) == [&quot;No refunds after 30 days.&quot;, &quot;Refunds take 5 days.&quot;]
+assert context_chunks(results, 0.5, 10) == [&quot;No refunds after 30 days.&quot;, &quot;Refunds take 5 days.&quot;, &quot;Refund form link&quot;]
+assert context_chunks(results, 0.99, 3) == []
+assert context_chunks([], 0.0, 3) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Filter first: <code>[r for r in results if r["score"] &gt;= min_score and r["text"].strip()]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then sort the survivors by score, descending, slice to <code>limit</code>, and take the stripped texts.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def context_chunks(results, min_score, limit):
+    good = [r for r in results if r[&quot;score&quot;] &gt;= min_score and r[&quot;text&quot;].strip()]
+    good.sort(key=lambda r: r[&quot;score&quot;], reverse=True)
+    return [r[&quot;text&quot;].strip() for r in good[:limit]]</code></pre></div><p>Each step is one simple operation: filter, sort, cut, project. Filtering before sorting means less to sort. Checking <code>r["text"].strip()</code> in the filter drops the whitespace-only result even though it has the best score, which is a real failure mode: a high-scoring empty chunk wastes a context slot. Sorting the filtered dicts (rather than the texts) keeps the score available as the key (4.2). The same filter-sort-limit shape appears in every RAG pipeline before the prompt is built.</p></div></details>
+</article>
+<article class="prob" id="p-relu-that-drops-values" data-pid="m6-1-relu-that-drops-values" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. ReLU that drops values</h3></header>
+<div class="prob-q"><p><code>relu(xs)</code> should replace negative values with 0 and keep the rest, so the output lines up with the input. The code drops the negatives instead, and predictions no longer align with labels. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def relu(xs):
+    return [x for x in xs if x &gt; 0]
+</textarea>
+<script type="text/plain" class="prob-tests">assert relu([1.5, -2.0, 0.0, 3.0]) == [1.5, 0.0, 0.0, 3.0]
+assert len(relu([-1] * 5)) == 5
+assert relu([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert relu([1.5, -2.0, 0.0, 3.0]) == [1.5, 0.0, 0.0, 3.0]
+assert len(relu([-1] * 5)) == 5
+assert relu([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>You need a value for every item: a conditional expression at the front, not a filter at the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def relu(xs):
+    return [x if x &gt; 0 else 0.0 for x in xs]</code></pre></div><p>A filter changes the length; a conditional expression at the front keeps it, producing one value per input. Whenever a list is aligned with another (features and labels, predictions and ids), filtering one of them shifts every later item, and the error shows up far away as nonsense metrics rather than as an exception. <code>max(x, 0.0)</code> is an equivalent expression. In NumPy this is <code>np.maximum(xs, 0)</code>, done on the whole array at once.</p></div></details>
+</article>
+<article class="prob" id="p-chat-history-to-api-messages" data-pid="m6-1-chat-history-to-api-messages" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Chat history to API messages</h3></header>
+<div class="prob-q"><p>Your app stores chat history as <code>(speaker, text)</code> tuples, with speakers <code>"user"</code>, <code>"bot"</code> and <code>"system"</code>. Write <code>to_messages(history, system_prompt)</code> returning the list of dicts a chat API expects: the system prompt first as <code>{"role": "system", "content": ...}</code>, then each stored turn with <code>"bot"</code> renamed to <code>"assistant"</code>, stripped text, skipping turns whose text is empty and skipping stored <code>"system"</code> turns (the new system prompt replaces them).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def to_messages(history, system_prompt):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">history = [("system", "old prompt"), ("user", " Hi "), ("bot", "Hello!"), ("user", "   "), ("user", "Refund?")]
+assert to_messages(history, "Be brief.") == [
+    {"role": "system", "content": "Be brief."},
+    {"role": "user", "content": "Hi"},
+    {"role": "assistant", "content": "Hello!"},
+    {"role": "user", "content": "Refund?"},
+]
+assert to_messages([], "S") == [{"role": "system", "content": "S"}]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">history = [(&quot;system&quot;, &quot;old prompt&quot;), (&quot;user&quot;, &quot; Hi &quot;), (&quot;bot&quot;, &quot;Hello!&quot;), (&quot;user&quot;, &quot;   &quot;), (&quot;user&quot;, &quot;Refund?&quot;)]
+assert to_messages(history, &quot;Be brief.&quot;) == [
+    {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;},
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hi&quot;},
+    {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Hello!&quot;},
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;},
+]
+assert to_messages([], &quot;S&quot;) == [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;S&quot;}]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small dict <code>{"bot": "assistant"}</code> with <code>.get(speaker, speaker)</code> renames roles.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use the walrus to strip once: <code>if speaker != "system" and (text := raw.strip())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">ROLES = {&quot;bot&quot;: &quot;assistant&quot;}
+
+def to_messages(history, system_prompt):
+    turns = [
+        {&quot;role&quot;: ROLES.get(speaker, speaker), &quot;content&quot;: text}
+        for speaker, raw in history
+        if speaker != &quot;system&quot; and (text := raw.strip())
+    ]
+    return [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system_prompt}] + turns</code></pre></div><p>Unpacking <code>speaker, raw</code> in the <code>for</code> clause names the tuple parts (4.3). The walrus strips each text once and makes it available to both the filter and the expression; the <code>and</code> short-circuits, so system turns are not even stripped. A lookup dict with <code>.get(key, key)</code> renames only what needs renaming and passes everything else through (4.5). Splitting a long comprehension over several lines, one clause per line, keeps it readable. This conversion layer is where chat apps keep their storage format independent of any one provider's API.</p></div></details>
+</article>
+<article class="prob" id="p-is-any-score-above-the-threshold-bracket" data-pid="m6-1-is-any-score-above-the-threshold-bracket" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Is any score above the threshold: brackets or not</h3></header>
+<div class="prob-q"><p>Both check whether any of 1,000,000 scores is above 0.9. The first such score is near the start. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">scores = [0.1] * 20 + [0.95] + [0.2] * 999_979</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">found = any([s &gt; 0.9 for s in scores])</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">found = any(s &gt; 0.9 for s in scores)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many comparisons does each version make before <code>any</code> can answer?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>41.41 ms</td></tr><tr><td>B</td><td>1.81 µs</td></tr></table></div><p>The square brackets build the full list of one million booleans first, and only then does <code>any</code> look at it. The generator expression hands <code>any</code> one value at a time, and <code>any</code> stops at the first <code>True</code>, here after 21 comparisons. The two brackets look like a small style choice, but they change the amount of work from "all items" to "until the answer is known". The same holds for <code>all</code> (stops at the first <code>False</code>) and for <code>next(x for x in xs if cond)</code>, which finds the first match. When the match is at the end, or there is none, both do all the work and the difference becomes small.</p></div></details>
+</article>
+<article class="prob" id="p-comprehensions-step-by-step" data-pid="m6-1-comprehensions-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Comprehensions step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">words = [&quot;Refund&quot;, &quot;&quot;, &quot;policy&quot;, &quot;EU&quot;, &quot;  &quot;]
+r = [w.lower() for w in words if w.strip()]
+r = [len(w) for w in r]
+r = [n if n &gt; 2 else -n for n in r]
+r = [(i, n) for i, n in enumerate(r) if n &gt; 0]
+r = [x for pair in r for x in pair]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>clean and filter</td><td><input class="cell" data-a="[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;eu&#x27;]" data-s="[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;eu&#x27;]" aria-label="r at clean and filter" autocomplete="off"></td></tr><tr><td>lengths</td><td><input class="cell" data-a="[6, 6, 2]" data-s="[6, 6, 2]" aria-label="r at lengths" autocomplete="off"></td></tr><tr><td>conditional</td><td><input class="cell" data-a="[6, 6, -2]" data-s="[6, 6, -2]" aria-label="r at conditional" autocomplete="off"></td></tr><tr><td>enumerate and filter</td><td><input class="cell" data-a="[(0, 6), (1, 6)]" data-s="[(0, 6), (1, 6)]" aria-label="r at enumerate and filter" autocomplete="off"></td></tr><tr><td>flatten</td><td><input class="cell" data-a="[0, 6, 1, 6]" data-s="[0, 6, 1, 6]" aria-label="r at flatten" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each line uses the previous <code>r</code>. <code>enumerate</code> numbers the items from 0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>clean and filter</td><td><code>[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;eu&#x27;]</code></td></tr><tr><td>lengths</td><td><code>[6, 6, 2]</code></td></tr><tr><td>conditional</td><td><code>[6, 6, -2]</code></td></tr><tr><td>enumerate and filter</td><td><code>[(0, 6), (1, 6)]</code></td></tr><tr><td>flatten</td><td><code>[0, 6, 1, 6]</code></td></tr></table></div><p>The first line drops the empty and whitespace-only words and lower-cases the rest. Lengths are then 6, 6 and 2. The conditional expression keeps the length of the list, negating the 2. The filter after <code>enumerate</code> keeps the original positions of the survivors, which is how you remember where a kept item came from. The last line flattens the pairs into one list.</p></div></details>
+</article>
+<article class="prob" id="p-scalers-that-all-use-the-last-factor" data-pid="m6-1-scalers-that-all-use-the-last-factor" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Scalers that all use the last factor</h3></header>
+<div class="prob-q"><p><code>make_scalers(factors)</code> should return one function per factor, each multiplying its input by that factor. Every function multiplies by the last factor. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def make_scalers(factors):
+    return [lambda x: x * f for f in factors]
+</textarea>
+<script type="text/plain" class="prob-tests">double, triple, half = make_scalers([2, 3, 0.5])
+assert (double(10), triple(10), half(10)) == (20, 30, 5.0)
+assert make_scalers([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">double, triple, half = make_scalers([2, 3, 0.5])
+assert (double(10), triple(10), half(10)) == (20, 30, 5.0)
+assert make_scalers([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The lambda looks up <code>f</code> when it is called, after the comprehension has finished. Capture the current value as a default argument.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_scalers(factors):
+    return [lambda x, f=f: x * f for f in factors]</code></pre></div><p>All three lambdas close over the same variable <code>f</code> of the comprehension's scope, and they read it when called, by which time the loop has finished and <code>f</code> is <code>0.5</code>: late binding (3.4). A default argument is evaluated when the lambda is <strong>created</strong>, so <code>f=f</code> stores each current value in its own function. <code>functools.partial(operator.mul, f)</code> is an alternative that avoids the trick. The same bug appears when building callbacks or tools in a loop.</p></div></details>
+</article>
+<article class="prob" id="p-nested-loops-to-a-comprehension" data-pid="m6-1-nested-loops-to-a-comprehension" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Nested loops to a comprehension</h3></header>
+<div class="prob-q"><p>Rewrite with one list comprehension, same result. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def long_sentences(docs, min_words):
+    out = []
+    for doc in docs:
+        if doc[&quot;lang&quot;] != &quot;en&quot;:
+            continue
+        for sentence in doc[&quot;text&quot;].split(&quot;. &quot;):
+            sentence = sentence.strip(&quot; .&quot;)
+            if len(sentence.split()) &gt;= min_words:
+                out.append((doc[&quot;id&quot;], sentence))
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">docs = [
+    {"id": "a", "lang": "en", "text": "Refunds take 5 days. Ok. Contact support for help."},
+    {"id": "b", "lang": "de", "text": "Rückerstattung dauert 5 Tage."},
+    {"id": "c", "lang": "en", "text": "Reset your password from the login page."},
+]
+assert long_sentences(docs, 3) == [("a", "Refunds take 5 days"), ("a", "Contact support for help"),
+                                   ("c", "Reset your password from the login page")]
+assert long_sentences([], 1) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [
+    {&quot;id&quot;: &quot;a&quot;, &quot;lang&quot;: &quot;en&quot;, &quot;text&quot;: &quot;Refunds take 5 days. Ok. Contact support for help.&quot;},
+    {&quot;id&quot;: &quot;b&quot;, &quot;lang&quot;: &quot;de&quot;, &quot;text&quot;: &quot;Rückerstattung dauert 5 Tage.&quot;},
+    {&quot;id&quot;: &quot;c&quot;, &quot;lang&quot;: &quot;en&quot;, &quot;text&quot;: &quot;Reset your password from the login page.&quot;},
+]
+assert long_sentences(docs, 3) == [(&quot;a&quot;, &quot;Refunds take 5 days&quot;), (&quot;a&quot;, &quot;Contact support for help&quot;),
+                                   (&quot;c&quot;, &quot;Reset your password from the login page&quot;)]
+assert long_sentences([], 1) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the loop order: <code>for doc in docs if ...</code> then <code>for raw in doc["text"].split(". ")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>sentence = sentence.strip(" .")</code> step can become a walrus in the last filter: <code>if len((s := raw.strip(" .")).split()) &gt;= min_words</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def long_sentences(docs, min_words):
+    return [
+        (doc[&quot;id&quot;], s)
+        for doc in docs
+        if doc[&quot;lang&quot;] == &quot;en&quot;
+        for raw in doc[&quot;text&quot;].split(&quot;. &quot;)
+        if len((s := raw.strip(&quot; .&quot;)).split()) &gt;= min_words
+    ]</code></pre></div><p>The clauses appear in exactly the order of the loops: the <code>continue</code> becomes a filter on <code>doc</code>, the inner loop becomes the second <code>for</code>, and the reassignment of <code>sentence</code> becomes a walrus inside the last filter, so the stripped text is computed once and used in the expression. This is about the limit of what a comprehension should hold; one more condition or transformation and the written loop would be the better choice.</p></div></details>
+</article>
+<article class="prob" id="p-comprehensions-that-stop-early-and-those" data-pid="m6-1-comprehensions-that-stop-early-and-those" data-type="predict" data-level="medium" data-answer="True [1, 3, 5, 7]
+True [1, 3]
+False [3, 1]
+list generator">
+<header class="prob-head"><h3>12. Comprehensions that stop early, and those that do not</h3></header>
+<div class="code"><pre><code class="py">seen = []
+
+def check(x):
+    seen.append(x)
+    return x &gt; 2
+
+print(any([check(x) for x in [1, 3, 5, 7]]), seen)
+seen.clear()
+print(any(check(x) for x in [1, 3, 5, 7]), seen)
+seen.clear()
+print(all(check(x) for x in [3, 1, 5]), seen)
+print(type([x for x in &quot;ab&quot;]).__name__, type((x for x in &quot;ab&quot;)).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The list comprehension is fully built before <code>any</code> sees it. The generator expression produces one value at a time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True [1, 3, 5, 7]
+True [1, 3]
+False [3, 1]
+list generator</pre></div><p>With square brackets, the whole list is computed first, so <code>check</code> runs on all four items. With parentheses, <code>any</code> pulls values one at a time and stops at the first true one (3), so <code>check</code> ran twice. <code>all</code> stops at the first false one (1). The parentheses give a <code>generator</code> object, not a tuple; 6.3 explains how it works. For <code>any</code>, <code>all</code>, <code>sum</code>, <code>min</code> and <code>max</code>, the generator form is the default choice.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-one-hot-encode-labels" data-pid="m6-1-one-hot-encode-labels" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. One-hot encode labels</h3></header>
+<div class="prob-q"><p>Write <code>one_hot(labels, classes)</code> returning one row per label, each a list of <code>0</code>s with a <code>1</code> at the position of that label in <code>classes</code>. Raise <code>ValueError</code> naming the unknown labels (sorted) if any label is not in <code>classes</code>. Build the rows with a nested comprehension.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def one_hot(labels, classes):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert one_hot(["spam", "ham", "spam"], ["ham", "spam"]) == [[0, 1], [1, 0], [0, 1]]
+assert one_hot([], ["a"]) == []
+assert one_hot(["b"], ["a", "b", "c"]) == [[0, 1, 0]]
+try:
+    one_hot(["ham", "eggs", "bacon"], ["ham", "spam"])
+    assert False, "should raise"
+except ValueError as e:
+    assert "bacon" in str(e) and "eggs" in str(e) and str(e).index("bacon") < str(e).index("eggs")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert one_hot([&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;], [&quot;ham&quot;, &quot;spam&quot;]) == [[0, 1], [1, 0], [0, 1]]
+assert one_hot([], [&quot;a&quot;]) == []
+assert one_hot([&quot;b&quot;], [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]) == [[0, 1, 0]]
+try:
+    one_hot([&quot;ham&quot;, &quot;eggs&quot;, &quot;bacon&quot;], [&quot;ham&quot;, &quot;spam&quot;])
+    assert False, &quot;should raise&quot;
+except ValueError as e:
+    assert &quot;bacon&quot; in str(e) and &quot;eggs&quot; in str(e) and str(e).index(&quot;bacon&quot;) &lt; str(e).index(&quot;eggs&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check first: <code>unknown = sorted(set(labels) - set(classes))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then <code>[[1 if c == label else 0 for c in classes] for label in labels]</code>, or <code>int(c == label)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def one_hot(labels, classes):
+    unknown = sorted(set(labels) - set(classes))
+    if unknown:
+        raise ValueError(f&quot;unknown labels: {unknown}&quot;)
+    return [[int(c == label) for c in classes] for label in labels]</code></pre></div><p>Validation comes first, with set difference (4.4), so the function fails with a clear message instead of producing a row of all zeros that a model would silently learn from. The nested comprehension builds one inner list per label; inside it, <code>int(c == label)</code> turns the <code>True</code>/<code>False</code> comparison into <code>1</code>/<code>0</code>. Each row is compared against every class, which is O(labels x classes); for many classes, build an index dict once (4.5) and set one position per row. scikit-learn's <code>OneHotEncoder</code> and <code>pandas.get_dummies</code> do this on whole columns.</p></div></details>
+</article>
+<article class="prob" id="p-overlapping-windows-for-chunking" data-pid="m6-1-overlapping-windows-for-chunking" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>14. Overlapping windows for chunking</h3></header>
+<div class="prob-q"><p>RAG pipelines often cut token lists into overlapping windows so a sentence at a boundary appears whole in at least one chunk. Write <code>windows(tokens, size, overlap)</code> returning windows of <code>size</code> tokens, each starting <code>size - overlap</code> after the previous one. If the last regular window does not reach the end, add one final window made of the last <code>size</code> tokens. If there are <code>size</code> tokens or fewer, return one window with all of them (none for an empty list). Raise <code>ValueError</code> unless <code>0 &lt;= overlap &lt; size</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def windows(tokens, size, overlap):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = list(range(10))
+assert windows(t, 4, 1) == [[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]]
+assert windows(t, 4, 2) == [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7], [6, 7, 8, 9]]
+assert windows(t, 6, 0) == [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]]
+assert windows(t[:3], 5, 1) == [[0, 1, 2]]
+assert windows([], 5, 1) == []
+for bad in [(4, 4), (4, -1)]:
+    try:
+        windows(t, *bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = list(range(10))
+assert windows(t, 4, 1) == [[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]]
+assert windows(t, 4, 2) == [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7], [6, 7, 8, 9]]
+assert windows(t, 6, 0) == [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]]
+assert windows(t[:3], 5, 1) == [[0, 1, 2]]
+assert windows([], 5, 1) == []
+for bad in [(4, 4), (4, -1)]:
+    try:
+        windows(t, *bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The starts of the regular windows are <code>range(0, len(tokens) - size + 1, size - overlap)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After building them, compare the last window's end (<code>start + size</code>) with <code>len(tokens)</code> and append <code>tokens[-size:]</code> if it falls short.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def windows(tokens, size, overlap):
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;need 0 &lt;= overlap &lt; size&quot;)
+    if len(tokens) &lt;= size:
+        return [list(tokens)] if tokens else []
+    step = size - overlap
+    starts = range(0, len(tokens) - size + 1, step)
+    out = [tokens[s:s + size] for s in starts]
+    if starts[-1] + size &lt; len(tokens):
+        out.append(tokens[-size:])
+    return out</code></pre></div><p>The window starts form an arithmetic sequence, so a <code>range</code> with step <code>size - overlap</code> generates them, and its stop value <code>len - size + 1</code> makes the last regular window end exactly at or before the end. A <code>range</code> supports indexing, so <code>starts[-1]</code> gives the last start without building a list. When the step does not divide evenly (the third test), the final window is aligned to the end, which overlaps the previous one more than requested but never drops tokens and never produces a short chunk. <code>overlap &gt;= size</code> would make the step 0 or negative, so it is rejected first. Libraries such as LangChain's <code>TokenTextSplitter</code> use this scheme with <code>chunk_size</code> and <code>chunk_overlap</code>.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-document-term-matrix" data-pid="m6-1-read-the-code-a-document-term-matrix" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. Read the code: a document-term matrix</h3></header>
+<div class="prob-q"><p>This builds a bag-of-words matrix: a vocabulary of words that occur at least <code>min_count</code> times across all documents, and one row of word counts per document. It crashes, and after fixing the crash the counts are wrong. Read it, find the bugs and fix them. Words are lower-cased, with <code>.,!?</code> stripped from their ends.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def doc_term_matrix(docs, min_count=1):
+    tokens = [w.strip(&quot;.,!?&quot;) for w in doc.lower().split() for doc in docs]
+    counts = {}
+    [counts.update({w: counts.get(w, 0) + 1}) for w in tokens]
+    vocab = sorted(w for w in counts if counts[w] &gt;= min_count)
+    index = {}
+    for i, w in enumerate(vocab):
+        index[w] = i
+    matrix = [[0] * len(vocab)] * len(docs)
+    for d, doc in enumerate(docs):
+        for w in doc.lower().split():
+            w = w.strip(&quot;.,!?&quot;)
+            if w in index:
+                matrix[d][index[w]] += 1
+    return vocab, matrix
+</textarea>
+<script type="text/plain" class="prob-tests">docs = ["Refund now!", "Refund, refund policy.", "Policy update"]
+vocab, m = doc_term_matrix(docs)
+assert vocab == ["now", "policy", "refund", "update"]
+assert m == [[1, 0, 1, 0], [0, 1, 2, 0], [0, 1, 0, 1]]
+vocab, m = doc_term_matrix(docs, min_count=2)
+assert vocab == ["policy", "refund"] and m == [[0, 1], [1, 2], [1, 0]]
+assert doc_term_matrix([]) == ([], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [&quot;Refund now!&quot;, &quot;Refund, refund policy.&quot;, &quot;Policy update&quot;]
+vocab, m = doc_term_matrix(docs)
+assert vocab == [&quot;now&quot;, &quot;policy&quot;, &quot;refund&quot;, &quot;update&quot;]
+assert m == [[1, 0, 1, 0], [0, 1, 2, 0], [0, 1, 0, 1]]
+vocab, m = doc_term_matrix(docs, min_count=2)
+assert vocab == [&quot;policy&quot;, &quot;refund&quot;] and m == [[0, 1], [1, 2], [1, 0]]
+assert doc_term_matrix([]) == ([], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>for</code> clauses of the first comprehension are in the wrong order: <code>doc</code> is used before the loop that defines it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[[0] * len(vocab)] * len(docs)</code> repeats one row object.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>[counts.update(...) for w in tokens]</code> line works, but it builds a throwaway list of <code>None</code>s for a side effect. Use a plain loop or <code>Counter</code> (4.6).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+
+def doc_term_matrix(docs, min_count=1):
+    tokens = [w.strip(&quot;.,!?&quot;) for doc in docs for w in doc.lower().split()]
+    counts = Counter(tokens)
+    vocab = sorted(w for w in counts if counts[w] &gt;= min_count)
+    index = {}
+    for i, w in enumerate(vocab):
+        index[w] = i
+    matrix = [[0] * len(vocab) for _ in docs]
+    for d, doc in enumerate(docs):
+        for w in doc.lower().split():
+            w = w.strip(&quot;.,!?&quot;)
+            if w in index:
+                matrix[d][index[w]] += 1
+    return vocab, matrix</code></pre></div><p>Bug one: <code>for w in doc.lower().split() for doc in docs</code> puts the inner loop first. The first <code>for</code> is evaluated in the function's scope, where <code>doc</code> is a local assigned only later by the <code>enumerate</code> loop, so it raises <code>UnboundLocalError</code>. The <code>for</code> clauses must be in the order of written nested loops. Bug two: the matrix rows were one shared list, so every document's counts were added into the same row and every row showed the total. A comprehension creates one row per document. The side-effect comprehension was not a bug, but it is a code smell: it builds a list of <code>None</code> only to discard it; <code>Counter(tokens)</code> says what it means. The tokenising rule is written twice (once for the vocabulary, once for the rows), which is the next thing to refactor into one function. scikit-learn's <code>CountVectorizer</code> produces the same matrix, stored sparsely.</p></div></details>
+</article>
+<article class="prob" id="p-scope-walrus-and-two-filters" data-pid="m6-1-scope-walrus-and-two-filters" data-type="predict" data-level="hard" data-answer="[16, 18, 8] 8 outer
+[1, 5, 7] outer
+[(1, 0), (2, 0), (2, 1)]
+[[], [0], [0, 1], [0, 1, 2]]">
+<header class="prob-head"><h3>16. Scope, walrus and two filters</h3></header>
+<div class="code"><pre><code class="py">i = &quot;outer&quot;
+data = [3, 8, 1, 9, 4]
+big = [y for x in data if (y := x * 2) &gt; 6]
+print(big, y, i)
+print([i for i in range(10) if i % 2 if i % 3], i)
+pairs = [(i, j) for i in range(3) for j in range(i)]
+print(pairs)
+print([[j for j in range(i)] for i in range(4)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The walrus binds in the enclosing scope, so <code>y</code> exists afterwards. The loop variable <code>i</code> does not leak.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>for j in range(i)</code>, the inner range depends on the outer <code>i</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[16, 18, 8] 8 outer
+[1, 5, 7] outer
+[(1, 0), (2, 0), (2, 1)]
+[[], [0], [0, 1], [0, 1, 2]]</pre></div><p>The walrus runs for <strong>every</strong> item, before the filter decides, and binds <code>y</code> in the enclosing scope, so afterwards <code>y</code> holds the value from the last item processed, <code>4 * 2 = 8</code>, whether or not that item passed the filter. The comprehension's <code>i</code> is separate from the outer <code>i</code>, which still holds <code>"outer"</code>. Two filters mean both must be true: odd and not divisible by 3. In <code>for j in range(i)</code> the inner loop depends on the outer one, producing pairs below the diagonal, and the nested comprehension produces lists of growing length, one per outer <code>i</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-when-would-you-use-a-list-comprehension-" data-pid="m6-1-when-would-you-use-a-list-comprehension-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When would you use a list comprehension, a generator expression, <code>map</code>/<code>filter</code>, or a plain loop?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A <strong>list comprehension</strong> when you need the whole list (to index it, iterate it more than once, or return it) and the logic is one expression with at most a simple filter. A <strong>generator expression</strong> when you consume the values once, especially inside <code>sum</code>, <code>any</code>, <code>all</code>, <code>max</code>, <code>"".join</code> or a <code>for</code> loop, and for large or unbounded data, since it produces items lazily without storing them, and <code>any</code>/<code>all</code> can stop early. <strong><code>map</code>/<code>filter</code></strong> when you already have a named function, especially a built-in (<code>map(str.strip, lines)</code>); with a <code>lambda</code>, a comprehension is clearer. A <strong>plain loop</strong> when the body has several statements, error handling, early exit, or side effects, or when a comprehension would need more than two <code>for</code> clauses. Readability decides when performance is similar, which is most of the time.</p></div></details>
+</article>
+<article class="prob" id="p-are-list-comprehensions-faster-than-a-lo" data-pid="m6-1-are-list-comprehensions-faster-than-a-lo" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Are list comprehensions faster than a loop with <code>append</code>? Why, and does it matter?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Historically yes, noticeably: the loop looks up the <code>append</code> attribute and makes a method call on every iteration, while the comprehension compiles to a dedicated <code>LIST_APPEND</code> bytecode. On modern CPython the gap is small: since 3.11 the specialising interpreter turns <code>list.append</code> calls into a fast path, and since 3.12 comprehensions are inlined into the enclosing function (PEP 709). A good answer says that, and adds that you would measure with <code>timeit</code> on the version you deploy. The saving is per item and fixed, so it disappears when each item does real work (parsing JSON, running a regex, calling a model). Choose comprehensions for clarity; for real speed-ups, do less work (early exit with a generator and <code>any</code>), pick a better data structure, or vectorise numeric work with NumPy or pandas.</p></div></details>
+</article>
+<article class="prob" id="p-a-teammate-loads-a-50-gb-json-lines-file" data-pid="m6-1-a-teammate-loads-a-50-gb-json-lines-file" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. A teammate loads a 50 GB JSON Lines file with <code>docs = [json.loads(line) for line in open(path)]</code>. What is wrong, and how would you fix it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It materialises every parsed document in memory at once; Python objects are several times larger than the raw text, so this needs far more than 50 GB of RAM and will crash or swap. The file is also opened without <code>with</code> and without an explicit encoding (5.4). The fix is to <strong>stream</strong>: open the file in a <code>with</code> block with <code>encoding="utf-8"</code>, and process it with a generator expression or a generator function that yields one parsed document at a time, so memory stays constant (6.3). If work must be batched (for example embedding 256 documents per request), group the stream into batches lazily (<code>itertools.batched</code>, 6.4) and write results out as you go. For analytics on such files, tools like Polars or DuckDB scan JSON Lines lazily and in parallel. Also handle bad lines: wrap <code>json.loads</code> in <code>try</code> and count or log failures instead of losing the whole run to one corrupt line.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>[expr for x in xs if cond]</code> is a loop that appends <code>expr</code> for every <code>x</code> that passes <code>cond</code>. Read it <code>for</code>, then <code>if</code>, then the expression.</li><li>An <code>if</code> at the end filters (shorter list); <code>a if c else b</code> at the front transforms every item (same length).</li><li>Several <code>for</code> clauses nest left to right like written loops; a comprehension in the expression builds a list of lists. Never <code>[[0] * n] * m</code>.</li><li>Loop variables do not leak, the walrus does on purpose, and lambdas created in a comprehension see the last value unless bound with a default.</li><li>Comprehensions are fast but build the whole list. For one pass, <code>any</code>/<code>all</code> or large data, use a generator expression; for multi-step bodies and side effects, a loop.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

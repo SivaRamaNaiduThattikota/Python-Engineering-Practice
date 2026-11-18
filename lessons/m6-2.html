@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>6.2 · Dict, set and nested comprehensions</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m6-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 6 · Comprehensions and generators</span></div>
+  <h1>6.2 Dict, set and nested comprehensions</h1>
+  <p>The same comprehension syntax builds dicts and sets. Duplicate keys and how the last one wins, inverting a mapping safely, why grouping is the job comprehensions do badly, ordering and determinism, and the <code>dict.fromkeys</code> trap. Applied to label maps, vocabularies, configs, inverted indexes and confusion matrices.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="dict">
+<h2><span class="n">1</span>Dict comprehensions</h2>
+<p>A <strong>dict comprehension</strong> has the same shape as a list comprehension, with curly braces and a <code>key: value</code> pair in front: <code>{key_expr: value_expr for name in iterable if condition}</code>. It means exactly this loop: start with an empty dict, and for every item that passes the condition, evaluate both expressions and <strong>assign</strong> <code>d[key] = value</code>. The word "assign" matters, as you will see in a moment.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dict_comp.py</span><button class="copy">Copy</button></div><pre><code class="py">prices = {&quot;gpt-small&quot;: 0.15, &quot;gpt-large&quot;: 2.50, &quot;embed&quot;: 0.02}
+
+cheap = {}
+for name, price in prices.items():          # the loop
+    if price &lt; 1:
+        cheap[name] = price * 1000
+cheap2 = {name: price * 1000 for name, price in prices.items() if price &lt; 1}
+print(cheap == cheap2, cheap2)
+
+words = [&quot;refund&quot;, &quot;policy&quot;, &quot;reset&quot;]
+print({w: len(w) for w in words}, {i: w for i, w in enumerate(words)})
+print(dict(zip(words, [3, 1, 2])))</code></pre><div class="out"><span class="ol">Output</span><pre>True {&#x27;gpt-small&#x27;: 150.0, &#x27;embed&#x27;: 20.0}
+{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6, &#x27;reset&#x27;: 5} {0: &#x27;refund&#x27;, 1: &#x27;policy&#x27;, 2: &#x27;reset&#x27;}
+{&#x27;refund&#x27;: 3, &#x27;policy&#x27;: 1, &#x27;reset&#x27;: 2}</pre></div></div>
+<p>The most common sources are <code>d.items()</code> (to transform or filter an existing dict, unpacking each pair into two names), <code>enumerate</code> (to number things) and <code>zip</code> (to pair two lists). For a plain pairing with no transformation, <code>dict(zip(keys, values))</code> is shorter than a comprehension and says the same thing. Remember from 4.1 that <code>zip</code> stops at the shorter input silently; pass <code>strict=True</code> when the lengths must match.</p>
+<p>Because each item does <code>d[key] = value</code>, a <strong>repeated key overwrites</strong> the earlier value: the last one wins. The key keeps the position where it was <strong>first</strong> inserted, though, because assigning to an existing key does not move it (4.5). This is the source of a classic bug: inverting a dict whose values are not unique silently loses entries.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">last_wins.py</span><button class="copy">Copy</button></div><pre><code class="py">pairs = [(&quot;a&quot;, 1), (&quot;b&quot;, 2), (&quot;a&quot;, 3)]
+print({k: v for k, v in pairs})
+category = {&quot;faq.md&quot;: &quot;billing&quot;, &quot;terms.md&quot;: &quot;legal&quot;, &quot;invoice.md&quot;: &quot;billing&quot;}
+print({cat: doc for doc, cat in category.items()})       # loses faq.md
+print(len(category), len({cat: doc for doc, cat in category.items()}))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;a&#x27;: 3, &#x27;b&#x27;: 2}
+{&#x27;billing&#x27;: &#x27;invoice.md&#x27;, &#x27;legal&#x27;: &#x27;terms.md&#x27;}
+3 2</pre></div></div>
+<p>The inverted dict has two keys for three documents: <code>faq.md</code> was overwritten by <code>invoice.md</code>, with no error. When values can repeat, inverting is really <strong>grouping</strong> (one key, several values), which needs a list per key; the next sections show why a comprehension is the wrong tool for that and what to use instead (problem 3).</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Set comprehensions</h2>
+<p>A <strong>set comprehension</strong> uses curly braces with a single expression: <code>{expr for name in iterable if condition}</code>. It builds a set, so duplicates disappear and membership checks are O(1) (4.4). It is the natural way to <strong>transform and deduplicate at once</strong>: the distinct domains of a list of emails, the distinct lower-cased words of a text, the ids that appear in a log.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">set_comp.py</span><button class="copy">Copy</button></div><pre><code class="py">emails = [&quot;ana@Example.com&quot;, &quot;bo@example.com&quot;, &quot;cy@test.io&quot;, &quot;dee@EXAMPLE.com&quot;]
+domains = {e.split(&quot;@&quot;)[1].lower() for e in emails}
+print(sorted(domains), len(domains))
+text = &quot;Refund the refund, then REFUND it&quot;
+print(sorted({w.strip(&quot;,&quot;).lower() for w in text.split()}))
+print(type({}).__name__, type({1}).__name__, type(set()).__name__, type({x for x in &quot;&quot;}).__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;example.com&#x27;, &#x27;test.io&#x27;] 2
+[&#x27;it&#x27;, &#x27;refund&#x27;, &#x27;the&#x27;, &#x27;then&#x27;]
+dict set set set</pre></div></div>
+<p>Two details catch people. <code>{}</code> is an <strong>empty dict</strong>, not an empty set, because dicts came first in Python; an empty set is written <code>set()</code>. And a set has <strong>no meaningful order</strong>: for strings, the order even changes between runs of the program, because string hashes are randomised per process for security (hash randomisation, controlled by the <code>PYTHONHASHSEED</code> environment variable). So never number, save or display a set without sorting it first; the examples on this page always print <code>sorted(...)</code>. Building anything from a set, such as ids for labels, without sorting makes the result different on every run, which is a real bug in ML code (problem 19).</p>
+<p>Equality also decides what counts as a duplicate: <code>{1, 1.0, True}</code> has one element, because <code>1 == 1.0 == True</code> and they hash the same, while <code>0.1 + 0.2</code> and <code>0.3</code> are two elements, because they are not equal (1.1). Normalise values (case, whitespace, rounding) inside the comprehension when "the same" should mean more than <code>==</code>.</p>
+</section>
+<section class="sec" id="group">
+<h2><span class="n">3</span>Grouping: the job comprehensions do badly</h2>
+<p>A frequent wish is "a dict from each category to the list of its items". You can write it as a nested comprehension, <code>{c: [x for x in items if key(x) == c] for c in categories}</code>, and it gives the right answer. But look at what it does: for <strong>every</strong> category, it scans <strong>all</strong> items. With <code>n</code> items and <code>k</code> categories that is <code>n x k</code> checks, where a single pass with a <code>defaultdict(list)</code> does <code>n</code> (4.6). With 100,000 items and 50 categories, that is 5,000,000 checks instead of 100,000 (problem 8).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">grouping.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+docs = [(&quot;faq.md&quot;, &quot;billing&quot;), (&quot;terms.md&quot;, &quot;legal&quot;), (&quot;invoice.md&quot;, &quot;billing&quot;), (&quot;gdpr.md&quot;, &quot;legal&quot;)]
+
+cats = sorted({cat for _, cat in docs})
+slow = {c: [d for d, cat in docs if cat == c] for c in cats}     # scans docs once per category
+
+groups = defaultdict(list)                                       # one pass
+for doc, cat in docs:
+    groups[cat].append(doc)
+print(slow, dict(groups), slow == dict(groups))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;billing&#x27;: [&#x27;faq.md&#x27;, &#x27;invoice.md&#x27;], &#x27;legal&#x27;: [&#x27;terms.md&#x27;, &#x27;gdpr.md&#x27;]} {&#x27;billing&#x27;: [&#x27;faq.md&#x27;, &#x27;invoice.md&#x27;], &#x27;legal&#x27;: [&#x27;terms.md&#x27;, &#x27;gdpr.md&#x27;]} True</pre></div></div>
+<p>So the rule is: a comprehension <strong>transforms or filters</strong> one item at a time; <strong>grouping</strong> and <strong>counting</strong> accumulate across items, which is what <code>defaultdict</code> and <code>Counter</code> are for. Comprehensions combine well with the result, though: after grouping, a dict comprehension can turn each group into a summary, such as its size or mean, in one readable line.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">group_then_summarise.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+latencies = [(&quot;rag-api&quot;, 120), (&quot;auth&quot;, 30), (&quot;rag-api&quot;, 340), (&quot;auth&quot;, 50), (&quot;rag-api&quot;, 200)]
+groups = defaultdict(list)
+for service, ms in latencies:
+    groups[service].append(ms)
+summary = {s: {&quot;n&quot;: len(v), &quot;mean&quot;: sum(v) / len(v), &quot;max&quot;: max(v)} for s, v in sorted(groups.items())}
+print(summary)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;auth&#x27;: {&#x27;n&#x27;: 2, &#x27;mean&#x27;: 40.0, &#x27;max&#x27;: 50}, &#x27;rag-api&#x27;: {&#x27;n&#x27;: 3, &#x27;mean&#x27;: 220.0, &#x27;max&#x27;: 340}}</pre></div></div>
+</section>
+<section class="sec" id="fromkeys">
+<h2><span class="n">4</span><code>dict.fromkeys</code>, merging, and initial values</h2>
+<p><code>dict.fromkeys(keys, value)</code> builds a dict with every key mapped to the <strong>same</strong> value. For an immutable value like <code>0</code> or <code>None</code> that is fine. For a mutable value like <code>[]</code> or <code>{}</code> it is a trap, exactly like <code>[[]] * 3</code> in 6.1: there is one list, and every key refers to it, so appending under one key appends under all of them. A dict comprehension evaluates the value expression once <strong>per key</strong>, creating a separate list each time (problem 11).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">fromkeys.py</span><button class="copy">Copy</button></div><pre><code class="py">classes = [&quot;ham&quot;, &quot;spam&quot;]
+shared = dict.fromkeys(classes, [])
+shared[&quot;spam&quot;].append(0.9)
+separate = {c: [] for c in classes}
+separate[&quot;spam&quot;].append(0.9)
+print(shared, separate)
+print(dict.fromkeys([&quot;b&quot;, &quot;a&quot;, &quot;b&quot;]), list(dict.fromkeys([&quot;b&quot;, &quot;a&quot;, &quot;b&quot;])))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;ham&#x27;: [0.9], &#x27;spam&#x27;: [0.9]} {&#x27;ham&#x27;: [], &#x27;spam&#x27;: [0.9]}
+{&#x27;b&#x27;: None, &#x27;a&#x27;: None} [&#x27;b&#x27;, &#x27;a&#x27;]</pre></div></div>
+<p>The last line is the good use of <code>fromkeys</code> you saw in 4.5: deduplicating while keeping order, since every value is <code>None</code>. For <strong>merging</strong> dicts, you rarely need a comprehension. <code>{**defaults, **overrides}</code> and <code>defaults | overrides</code> (Python 3.9+) both build a new dict where later keys win, and <code>|=</code> updates in place. A comprehension is for when the merge has a rule, such as ignoring overrides that are <code>None</code>, or rejecting unknown keys (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">merging.py</span><button class="copy">Copy</button></div><pre><code class="py">defaults = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.7, &quot;max_tokens&quot;: 256}
+overrides = {&quot;temperature&quot;: 0, &quot;max_tokens&quot;: None}
+print({**defaults, **overrides})
+print(defaults | overrides == {**defaults, **overrides})
+print({k: overrides[k] if overrides.get(k) is not None else v for k, v in defaults.items()})
+print({k: overrides.get(k) or v for k, v in defaults.items()})      # wrong: drops temperature 0</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;model&#x27;: &#x27;small&#x27;, &#x27;temperature&#x27;: 0, &#x27;max_tokens&#x27;: None}
+True
+{&#x27;model&#x27;: &#x27;small&#x27;, &#x27;temperature&#x27;: 0, &#x27;max_tokens&#x27;: 256}
+{&#x27;model&#x27;: &#x27;small&#x27;, &#x27;temperature&#x27;: 0.7, &#x27;max_tokens&#x27;: 256}</pre></div></div>
+<p>The last line shows the falsy trap of 1.2 inside a comprehension: <code>x or default</code> replaces <strong>any</strong> falsy value, so a deliberate <code>temperature=0</code> (deterministic output) is silently turned back into <code>0.7</code>. Test for <code>None</code> explicitly when 0, <code>""</code> or <code>False</code> are valid values.</p>
+</section>
+<section class="sec" id="nested">
+<h2><span class="n">5</span>Nested dict comprehensions</h2>
+<p>The value expression of a dict comprehension can be another comprehension, which builds nested structures: a dict of lists, a dict of dicts, a dict of sets. Read it from the outside in: the outer <code>for</code> decides the keys, and the inner comprehension builds the value for each key. Two typical ML uses are a <strong>confusion matrix</strong> as a dict of dicts, <code>{actual: {predicted: count}}</code>, and per-document sets of words for keyword search.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">confusion.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+y_true = [&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;]
+y_pred = [&quot;spam&quot;, &quot;spam&quot;, &quot;ham&quot;, &quot;ham&quot;, &quot;spam&quot;]
+classes = sorted(set(y_true) | set(y_pred))
+pairs = Counter(zip(y_true, y_pred))
+matrix = {a: {p: pairs[(a, p)] for p in classes} for a in classes}
+print(matrix)
+recall = {c: matrix[c][c] / sum(matrix[c].values()) for c in classes}
+print({c: round(r, 3) for c, r in recall.items()})</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;ham&#x27;: {&#x27;ham&#x27;: 1, &#x27;spam&#x27;: 1}, &#x27;spam&#x27;: {&#x27;ham&#x27;: 1, &#x27;spam&#x27;: 2}}
+{&#x27;ham&#x27;: 0.5, &#x27;spam&#x27;: 0.667}</pre></div></div>
+<p>Notice the division of labour: <code>Counter</code> does the counting in one pass, then the comprehension only <strong>looks up</strong> counts, which is cheap. A <code>Counter</code> returns 0 for a missing pair instead of raising, which is why <code>pairs[("ham", "ham")]</code> works even if that pair never occurred. Using <code>classes</code> for both loops gives every row every column, in a fixed order, which is what makes the matrix printable and comparable between runs.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">word_sets.py</span><button class="copy">Copy</button></div><pre><code class="py">docs = {&quot;faq&quot;: &quot;Refunds take 5 days.&quot;, &quot;terms&quot;: &quot;No refunds after 30 days.&quot;, &quot;auth&quot;: &quot;Reset your password.&quot;}
+words = {doc_id: {w.strip(&quot;.,&quot;).lower() for w in text.split()} for doc_id, text in docs.items()}
+print(sorted(words[&quot;terms&quot;]))
+query = {&quot;refunds&quot;, &quot;days&quot;}
+print([doc_id for doc_id, ws in words.items() if query &lt;= ws])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;30&#x27;, &#x27;after&#x27;, &#x27;days&#x27;, &#x27;no&#x27;, &#x27;refunds&#x27;]
+[&#x27;faq&#x27;, &#x27;terms&#x27;]</pre></div></div>
+<p><code>query &lt;= ws</code> is the subset test of 4.4: the document contains every query word. This is the core of keyword (lexical) search, the half of hybrid retrieval that catches exact terms such as product codes, which embeddings can miss (problem 7). Beyond two levels of nesting, write a function for the inner part and call it in the comprehension; three nested comprehensions are hard for anyone to check.</p>
+</section>
+<section class="sec" id="ml">
+<h2><span class="n">6</span>Label maps and vocabularies: comprehensions in model code</h2>
+<p>Models work with integers, people with names. Every classification project therefore has a <strong>label map</strong>: <code>label2id</code> from class name to integer and <code>id2label</code> back. Hugging Face models store exactly these two dicts in their <code>config.json</code>. Both are one dict comprehension over a <strong>sorted</strong> list of unique labels, and the sorting is what makes the ids the same on every machine and every run.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">label_maps.py</span><button class="copy">Copy</button></div><pre><code class="py">raw_labels = [&quot;spam&quot;, &quot;ham&quot;, &quot;phishing&quot;, &quot;spam&quot;, &quot;ham&quot;]
+classes = sorted(set(raw_labels))
+label2id = {label: i for i, label in enumerate(classes)}
+id2label = {i: label for label, i in label2id.items()}
+print(label2id, id2label)
+print([label2id[l] for l in raw_labels], [id2label[i] for i in [2, 0]])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;ham&#x27;: 0, &#x27;phishing&#x27;: 1, &#x27;spam&#x27;: 2} {0: &#x27;ham&#x27;, 1: &#x27;phishing&#x27;, 2: &#x27;spam&#x27;}
+[2, 0, 1, 2, 0] [&#x27;spam&#x27;, &#x27;ham&#x27;]</pre></div></div>
+<p>Inverting is safe here because the ids are unique by construction. A <strong>vocabulary</strong> works the same way, with a filter for rare words and special entries for padding and unknown tokens. Note the order of the comprehension's parts: the specials come first so their ids are fixed (0 and 1), and the real words are numbered after them with <code>enumerate(..., start=2)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">vocab.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+corpus = [&quot;refund my order&quot;, &quot;refund policy&quot;, &quot;order status&quot;, &quot;my refund&quot;]
+counts = Counter(w for line in corpus for w in line.split())
+specials = [&quot;&lt;pad&gt;&quot;, &quot;&lt;unk&gt;&quot;]
+words = sorted(w for w, n in counts.items() if n &gt;= 2)
+vocab = {**{s: i for i, s in enumerate(specials)}, **{w: i for i, w in enumerate(words, start=len(specials))}}
+print(vocab)
+print([vocab.get(w, vocab[&quot;&lt;unk&gt;&quot;]) for w in &quot;refund status please&quot;.split()])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;&lt;pad&gt;&#x27;: 0, &#x27;&lt;unk&gt;&#x27;: 1, &#x27;my&#x27;: 2, &#x27;order&#x27;: 3, &#x27;refund&#x27;: 4}
+[4, 1, 1]</pre></div></div>
+<p><code>vocab.get(w, vocab["&lt;unk&gt;"])</code> maps unseen words to the unknown id instead of raising, which is what a model needs at serving time, when users type words that were never in the training data. The vocabulary and label maps must be <strong>saved with the model</strong> and loaded at serving time, never rebuilt from new data, or the ids will not mean what the model learned (problem 19).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-dict-and-set-comprehension-basics" data-pid="m6-2-dict-and-set-comprehension-basics" data-type="predict" data-level="easy" data-answer="{&#x27;ab&#x27;: 2, &#x27;cde&#x27;: 3}
+{&#x27;x&#x27;: 3, &#x27;y&#x27;: 2}
+[0, 1, 2] dict
+{&#x27;a&#x27;: 0.9, &#x27;c&#x27;: 0.7} b">
+<header class="prob-head"><h3>1. Dict and set comprehension basics</h3></header>
+<div class="code"><pre><code class="py">print({w: len(w) for w in [&quot;ab&quot;, &quot;cde&quot;, &quot;ab&quot;]})
+print({k: v for k, v in [(&quot;x&quot;, 1), (&quot;y&quot;, 2), (&quot;x&quot;, 3)]})
+print(sorted({n % 3 for n in range(10)}), type({}).__name__)
+scores = {&quot;a&quot;: 0.9, &quot;b&quot;: 0.4, &quot;c&quot;: 0.7}
+print({k: v for k, v in scores.items() if v &gt; 0.5}, {v: k for k, v in scores.items()}[0.4])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A repeated key is assigned again: the value changes, the position does not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;ab&#x27;: 2, &#x27;cde&#x27;: 3}
+{&#x27;x&#x27;: 3, &#x27;y&#x27;: 2}
+[0, 1, 2] dict
+{&#x27;a&#x27;: 0.9, &#x27;c&#x27;: 0.7} b</pre></div><p><code>"ab"</code> appears twice but is one key. In the second line, <code>x</code> is assigned 1 and then 3; it keeps its first position, before <code>y</code>. The set of remainders has three values. <code>{}</code> is a dict. Filtering <code>items()</code> keeps the pairs that pass, and inverting works here because the scores are unique.</p></div></details>
+</article>
+<article class="prob" id="p-label-maps-for-a-classifier" data-pid="m6-2-label-maps-for-a-classifier" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Label maps for a classifier</h3></header>
+<div class="prob-q"><p>Write <code>label_maps(labels)</code> returning <code>(label2id, id2label)</code> for the distinct labels, numbered from 0 in sorted order, using dict comprehensions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def label_maps(labels):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">l2i, i2l = label_maps(["spam", "ham", "phishing", "spam"])
+assert l2i == {"ham": 0, "phishing": 1, "spam": 2}
+assert i2l == {0: "ham", 1: "phishing", 2: "spam"}
+assert all(i2l[l2i[x]] == x for x in l2i)
+assert label_maps([]) == ({}, {})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">l2i, i2l = label_maps([&quot;spam&quot;, &quot;ham&quot;, &quot;phishing&quot;, &quot;spam&quot;])
+assert l2i == {&quot;ham&quot;: 0, &quot;phishing&quot;: 1, &quot;spam&quot;: 2}
+assert i2l == {0: &quot;ham&quot;, 1: &quot;phishing&quot;, 2: &quot;spam&quot;}
+assert all(i2l[l2i[x]] == x for x in l2i)
+assert label_maps([]) == ({}, {})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted(set(labels))</code> gives the distinct labels in a fixed order; <code>enumerate</code> numbers them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def label_maps(labels):
+    classes = sorted(set(labels))
+    label2id = {label: i for i, label in enumerate(classes)}
+    id2label = {i: label for label, i in label2id.items()}
+    return label2id, id2label</code></pre></div><p>The set removes duplicates and <code>sorted</code> fixes the order, so the same labels always get the same ids, whatever order they arrive in and on whatever machine. Without <code>sorted</code>, the ids would follow the set's order, which for strings changes between runs. Inverting is safe because each id is unique. These are the <code>label2id</code> and <code>id2label</code> fields of a Hugging Face model config.</p></div></details>
+</article>
+<article class="prob" id="p-inverting-a-mapping-loses-documents" data-pid="m6-2-inverting-a-mapping-loses-documents" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Inverting a mapping loses documents</h3></header>
+<div class="prob-q"><p><code>docs_by_category(category)</code> should turn <code>{doc: category}</code> into <code>{category: sorted list of docs}</code>. Documents disappear. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def docs_by_category(category):
+    return {cat: [doc] for doc, cat in category.items()}
+</textarea>
+<script type="text/plain" class="prob-tests">category = {"faq.md": "billing", "terms.md": "legal", "invoice.md": "billing", "gdpr.md": "legal", "a.md": "misc"}
+assert docs_by_category(category) == {"billing": ["faq.md", "invoice.md"], "legal": ["gdpr.md", "terms.md"], "misc": ["a.md"]}
+assert docs_by_category({}) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">category = {&quot;faq.md&quot;: &quot;billing&quot;, &quot;terms.md&quot;: &quot;legal&quot;, &quot;invoice.md&quot;: &quot;billing&quot;, &quot;gdpr.md&quot;: &quot;legal&quot;, &quot;a.md&quot;: &quot;misc&quot;}
+assert docs_by_category(category) == {&quot;billing&quot;: [&quot;faq.md&quot;, &quot;invoice.md&quot;], &quot;legal&quot;: [&quot;gdpr.md&quot;, &quot;terms.md&quot;], &quot;misc&quot;: [&quot;a.md&quot;]}
+assert docs_by_category({}) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Repeated keys overwrite in a dict comprehension. This is grouping: one pass with a <code>defaultdict(list)</code>, then sort each list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+
+def docs_by_category(category):
+    groups = defaultdict(list)
+    for doc, cat in category.items():
+        groups[cat].append(doc)
+    return {cat: sorted(docs) for cat, docs in groups.items()}</code></pre></div><p>Each <code>billing</code> document assigned a new one-item list to the same key, so only the last survived. Grouping accumulates across items, which a comprehension cannot do; <code>defaultdict(list)</code> appends in one pass (4.6). A comprehension is still the right tool for the second step, turning each group into its sorted form. Dict equality ignores key order, so the test passes whatever order the categories were first seen in.</p></div></details>
+</article>
+<article class="prob" id="p-sets-zip-and-filtering-items" data-pid="m6-2-sets-zip-and-filtering-items" data-type="predict" data-level="easy" data-answer="[&#x27;ana&#x27;, &#x27;bo&#x27;, &#x27;cy&#x27;] 4
+{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}
+{&#x27;model&#x27;: &#x27;small&#x27;} [&#x27;debug&#x27;, &#x27;model&#x27;, &#x27;seed&#x27;, &#x27;tag&#x27;]">
+<header class="prob-head"><h3>4. Sets, zip and filtering items</h3></header>
+<div class="code"><pre><code class="py">names = [&quot;Ana&quot;, &quot;bo&quot;, &quot;ANA&quot;, &quot;Cy&quot;]
+print(sorted({n.lower() for n in names}), len({n for n in names}))
+print(dict(zip([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], [1, 2])))
+cfg = {&quot;model&quot;: &quot;small&quot;, &quot;debug&quot;: False, &quot;seed&quot;: 0, &quot;tag&quot;: &quot;&quot;}
+print({k: v for k, v in cfg.items() if v}, sorted({k for k, v in cfg.items() if v is not None}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>zip</code> stops at the shorter input. A plain <code>if v</code> drops every falsy value.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;ana&#x27;, &#x27;bo&#x27;, &#x27;cy&#x27;] 4
+{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}
+{&#x27;model&#x27;: &#x27;small&#x27;} [&#x27;debug&#x27;, &#x27;model&#x27;, &#x27;seed&#x27;, &#x27;tag&#x27;]</pre></div><p>Lower-casing before building the set merges <code>Ana</code> and <code>ANA</code>; without it there are four distinct names. <code>zip</code> silently drops <code>"c"</code>. Filtering with <code>if v</code> removes <code>False</code>, <code>0</code> and <code>""</code>, which are real settings, while <code>is not None</code> keeps them all, so the set has all four keys; it is sorted before printing because a set of strings has no stable order.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-cost-per-model" data-pid="m6-2-cost-per-model" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Cost per model</h3></header>
+<div class="prob-q"><p>Write <code>costs(usage, prices)</code> where <code>usage</code> maps model name to <code>{"in": tokens, "out": tokens}</code> and <code>prices</code> maps model name to <code>{"in": dollars per 1M tokens, "out": dollars per 1M tokens}</code>. Return a dict from model to cost in dollars, rounded to 4 decimals, for models that have a price, ordered from most to least expensive. Return models without a price separately as a sorted list: the result is <code>(costs_dict, unpriced)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def costs(usage, prices):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">usage = {"small": {"in": 1_200_000, "out": 300_000}, "large": {"in": 50_000, "out": 20_000},
+         "local": {"in": 9_000, "out": 1_000}, "embed": {"in": 2_000_000, "out": 0}}
+prices = {"small": {"in": 0.15, "out": 0.60}, "large": {"in": 2.50, "out": 10.00}, "embed": {"in": 0.02, "out": 0.0}}
+c, unpriced = costs(usage, prices)
+assert c == {"small": 0.36, "large": 0.325, "embed": 0.04}
+assert list(c) == ["small", "large", "embed"]
+assert unpriced == ["local"]
+assert costs({}, prices) == ({}, [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">usage = {&quot;small&quot;: {&quot;in&quot;: 1_200_000, &quot;out&quot;: 300_000}, &quot;large&quot;: {&quot;in&quot;: 50_000, &quot;out&quot;: 20_000},
+         &quot;local&quot;: {&quot;in&quot;: 9_000, &quot;out&quot;: 1_000}, &quot;embed&quot;: {&quot;in&quot;: 2_000_000, &quot;out&quot;: 0}}
+prices = {&quot;small&quot;: {&quot;in&quot;: 0.15, &quot;out&quot;: 0.60}, &quot;large&quot;: {&quot;in&quot;: 2.50, &quot;out&quot;: 10.00}, &quot;embed&quot;: {&quot;in&quot;: 0.02, &quot;out&quot;: 0.0}}
+c, unpriced = costs(usage, prices)
+assert c == {&quot;small&quot;: 0.36, &quot;large&quot;: 0.325, &quot;embed&quot;: 0.04}
+assert list(c) == [&quot;small&quot;, &quot;large&quot;, &quot;embed&quot;]
+assert unpriced == [&quot;local&quot;]
+assert costs({}, prices) == ({}, [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>First a dict comprehension over <code>usage.items()</code> filtered by <code>m in prices</code>. Then order it with <code>dict(sorted(c.items(), key=..., reverse=True))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The unpriced models are a set difference: <code>sorted(usage.keys() - prices.keys())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def costs(usage, prices):
+    raw = {
+        m: round((u[&quot;in&quot;] * prices[m][&quot;in&quot;] + u[&quot;out&quot;] * prices[m][&quot;out&quot;]) / 1_000_000, 4)
+        for m, u in usage.items()
+        if m in prices
+    }
+    ordered = dict(sorted(raw.items(), key=lambda kv: kv[1], reverse=True))
+    return ordered, sorted(usage.keys() - prices.keys())</code></pre></div><p>The comprehension filters and transforms in one step; <code>m in prices</code> is an O(1) dict check (4.5). Ordering a dict means rebuilding it from sorted items, since dicts keep insertion order. Dict key views support set operations, so <code>usage.keys() - prices.keys()</code> gives the unpriced models directly (4.4), and sorting makes the list deterministic. Prices per million tokens is how LLM providers quote them, which is why the division by 1,000,000 happens once at the end.</p></div></details>
+</article>
+<article class="prob" id="p-a-config-merge-that-ignores-temperature-" data-pid="m6-2-a-config-merge-that-ignores-temperature-" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. A config merge that ignores temperature 0</h3></header>
+<div class="prob-q"><p><code>merge(defaults, overrides)</code> should apply every override whose value is not <code>None</code>, keep defaults otherwise, and raise <code>KeyError</code> naming any override key that is not a known setting. A <code>temperature</code> of <code>0</code> is ignored, and typos pass silently. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def merge(defaults, overrides):
+    return {k: overrides.get(k) or v for k, v in defaults.items()}
+</textarea>
+<script type="text/plain" class="prob-tests">defaults = {"model": "small", "temperature": 0.7, "max_tokens": 256, "stream": True}
+assert merge(defaults, {"temperature": 0, "max_tokens": None, "stream": False}) == {
+    "model": "small", "temperature": 0, "max_tokens": 256, "stream": False}
+assert merge(defaults, {}) == defaults
+try:
+    merge(defaults, {"temprature": 0.2})
+    assert False, "typo should raise"
+except KeyError as e:
+    assert "temprature" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">defaults = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.7, &quot;max_tokens&quot;: 256, &quot;stream&quot;: True}
+assert merge(defaults, {&quot;temperature&quot;: 0, &quot;max_tokens&quot;: None, &quot;stream&quot;: False}) == {
+    &quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0, &quot;max_tokens&quot;: 256, &quot;stream&quot;: False}
+assert merge(defaults, {}) == defaults
+try:
+    merge(defaults, {&quot;temprature&quot;: 0.2})
+    assert False, &quot;typo should raise&quot;
+except KeyError as e:
+    assert &quot;temprature&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>x or default</code> replaces every falsy value, including <code>0</code> and <code>False</code>. Test <code>is not None</code> instead.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Unknown keys: <code>overrides.keys() - defaults.keys()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def merge(defaults, overrides):
+    unknown = overrides.keys() - defaults.keys()
+    if unknown:
+        raise KeyError(f&quot;unknown settings: {sorted(unknown)}&quot;)
+    return {k: v if overrides.get(k) is None else overrides[k] for k, v in defaults.items()}</code></pre></div><p>Two bugs. <code>or</code> treats <code>0</code> and <code>False</code> as missing, so a deterministic <code>temperature=0</code> and <code>stream=False</code> were silently replaced by the defaults (1.2); <code>is None</code> distinguishes "not given" from "given as a falsy value". And iterating over <code>defaults</code> alone means override keys that are not settings were never looked at, so a typo like <code>temprature</code> was simply ignored and the run used the default. Rejecting unknown keys is the behaviour of Pydantic models with <code>extra="forbid"</code> (Module 11), which is what production config loaders use.</p></div></details>
+</article>
+<article class="prob" id="p-keyword-search-with-word-sets" data-pid="m6-2-keyword-search-with-word-sets" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>7. Keyword search with word sets</h3></header>
+<div class="prob-q"><p>Write <code>keyword_search(docs, query)</code> where <code>docs</code> maps doc id to text. Return the sorted ids of documents that contain <strong>every</strong> word of the query. Words are compared lower-cased, with <code>.,!?</code> stripped from their ends; an empty query returns <code>[]</code>. Build each document's word set with a set comprehension inside a dict comprehension.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def keyword_search(docs, query):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">docs = {"faq": "Refunds take 5 days.", "terms": "No refunds after 30 days!", "auth": "Reset your password.",
+        "old": "Refund policy, 2019."}
+assert keyword_search(docs, "refunds days") == ["faq", "terms"]
+assert keyword_search(docs, "Refunds, 30") == ["terms"]
+assert keyword_search(docs, "refund") == ["old"]
+assert keyword_search(docs, "  ") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = {&quot;faq&quot;: &quot;Refunds take 5 days.&quot;, &quot;terms&quot;: &quot;No refunds after 30 days!&quot;, &quot;auth&quot;: &quot;Reset your password.&quot;,
+        &quot;old&quot;: &quot;Refund policy, 2019.&quot;}
+assert keyword_search(docs, &quot;refunds days&quot;) == [&quot;faq&quot;, &quot;terms&quot;]
+assert keyword_search(docs, &quot;Refunds, 30&quot;) == [&quot;terms&quot;]
+assert keyword_search(docs, &quot;refund&quot;) == [&quot;old&quot;]
+assert keyword_search(docs, &quot;  &quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write one helper, <code>words(text)</code>, returning <code>{w.strip(".,!?").lower() for w in text.split()}</code>, and use it for documents and query alike.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A document matches when <code>query_words &lt;= doc_words</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def words(text):
+    return {w.strip(&quot;.,!?&quot;).lower() for w in text.split()} - {&quot;&quot;}
+
+def keyword_search(docs, query):
+    q = words(query)
+    if not q:
+        return []
+    index = {doc_id: words(text) for doc_id, text in docs.items()}
+    return sorted(doc_id for doc_id, ws in index.items() if q &lt;= ws)</code></pre></div><p>Using the same <code>words</code> function for documents and query guarantees both are normalised the same way; tokenising them differently is the classic reason keyword search "misses" obvious matches. Subtracting <code>{""}</code> removes the empty string a bare punctuation token would leave. The subset test <code>q &lt;= ws</code> is "all query words present" (4.4). Note that <code>refund</code> does not match <code>refunds</code>: exact-word search needs stemming or a proper analyser for that, which is what BM25 libraries and search engines add. Without the empty-query check, <code>set() &lt;= ws</code> would be true for every document.</p></div></details>
+</article>
+<article class="prob" id="p-group-by-category-a-comprehension-per-ke" data-pid="m6-2-group-by-category-a-comprehension-per-ke" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Group by category: a comprehension per key or one pass</h3></header>
+<div class="prob-q"><p>Both group 100,000 tickets into lists by their category (50 categories). Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">from collections import defaultdict
+cats = [f&quot;cat{i}&quot; for i in range(50)]
+tickets = [(i, cats[i % 50]) for i in range(100_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">groups = {c: [t for t, cat in tickets if cat == c] for c in cats}</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">groups = defaultdict(list)
+for t, cat in tickets:
+    groups[cat].append(t)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many times does each version look at each ticket?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>199.31 ms</td></tr><tr><td>B</td><td>11.43 ms</td></tr></table></div><p>The comprehension scans all 100,000 tickets once <strong>per category</strong>: 5,000,000 comparisons. The <code>defaultdict</code> loop looks at each ticket once and appends it to its group: 100,000 steps. The comprehension is shorter, but its cost grows with <code>tickets x categories</code>, so it gets worse as either grows. Grouping is accumulation across items, which is the job of <code>defaultdict</code> (or <code>itertools.groupby</code> on sorted data, 6.4, or <code>df.groupby</code> in pandas).</p></div></details>
+</article>
+<article class="prob" id="p-dict-comprehensions-step-by-step" data-pid="m6-2-dict-comprehensions-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Dict comprehensions step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>d</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">words = [&quot;Refund&quot;, &quot;policy&quot;, &quot;refund&quot;, &quot;EU&quot;]
+d = {w.lower(): len(w) for w in words}
+d = {k: v for k, v in d.items() if v &gt; 2}
+d = {v: k for k, v in d.items()}
+d = {k: sorted(v) for k, v in {&quot;a&quot;: {3, 1}, &quot;b&quot;: set()}.items()}
+d = dict.fromkeys(&quot;aba&quot;, 0)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>d</code></th></tr><tr><td>lower-cased keys</td><td><input class="cell" data-a="{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6, &#x27;eu&#x27;: 2}" data-s="{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6, &#x27;eu&#x27;: 2}" aria-label="d at lower-cased keys" autocomplete="off"></td></tr><tr><td>filter items</td><td><input class="cell" data-a="{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6}" data-s="{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6}" aria-label="d at filter items" autocomplete="off"></td></tr><tr><td>invert</td><td><input class="cell" data-a="{6: &#x27;policy&#x27;}" data-s="{6: &#x27;policy&#x27;}" aria-label="d at invert" autocomplete="off"></td></tr><tr><td>sorted sets</td><td><input class="cell" data-a="{&#x27;a&#x27;: [1, 3], &#x27;b&#x27;: []}" data-s="{&#x27;a&#x27;: [1, 3], &#x27;b&#x27;: []}" aria-label="d at sorted sets" autocomplete="off"></td></tr><tr><td>fromkeys</td><td><input class="cell" data-a="{&#x27;a&#x27;: 0, &#x27;b&#x27;: 0}" data-s="{&#x27;a&#x27;: 0, &#x27;b&#x27;: 0}" aria-label="d at fromkeys" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Repeated keys keep their first position and take the last value.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>d</code></th></tr><tr><td>lower-cased keys</td><td><code>{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6, &#x27;eu&#x27;: 2}</code></td></tr><tr><td>filter items</td><td><code>{&#x27;refund&#x27;: 6, &#x27;policy&#x27;: 6}</code></td></tr><tr><td>invert</td><td><code>{6: &#x27;policy&#x27;}</code></td></tr><tr><td>sorted sets</td><td><code>{&#x27;a&#x27;: [1, 3], &#x27;b&#x27;: []}</code></td></tr><tr><td>fromkeys</td><td><code>{&#x27;a&#x27;: 0, &#x27;b&#x27;: 0}</code></td></tr></table></div><p><code>Refund</code> and <code>refund</code> collapse to one key, <code>refund</code>, with the length of the last one (both 6). The filter drops <code>eu</code>. Inverting gives <code>{6: "policy"}</code>, because both remaining values are 6 and the last pair wins: the second data loss of the trace. Sorting each set turns it into a list, the empty set into <code>[]</code>. <code>fromkeys</code> over a string uses its characters, once each.</p></div></details>
+</article>
+<article class="prob" id="p-per-class-metrics-without-the-loop" data-pid="m6-2-per-class-metrics-without-the-loop" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Per-class metrics without the loop</h3></header>
+<div class="prob-q"><p>Rewrite with dict comprehensions, same result. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def precision_recall(tp, fp, fn):
+    classes = sorted(set(tp) | set(fp) | set(fn))
+    out = {}
+    for c in classes:
+        t = tp.get(c, 0)
+        p_den = t + fp.get(c, 0)
+        r_den = t + fn.get(c, 0)
+        if p_den:
+            precision = round(t / p_den, 3)
+        else:
+            precision = 0.0
+        if r_den:
+            recall = round(t / r_den, 3)
+        else:
+            recall = 0.0
+        out[c] = {&quot;precision&quot;: precision, &quot;recall&quot;: recall}
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">tp = {"spam": 8, "ham": 30}
+fp = {"spam": 2, "ham": 4, "phish": 1}
+fn = {"spam": 4, "ham": 2}
+assert precision_recall(tp, fp, fn) == {
+    "ham": {"precision": 0.882, "recall": 0.938},
+    "phish": {"precision": 0.0, "recall": 0.0},
+    "spam": {"precision": 0.8, "recall": 0.667},
+}
+assert precision_recall({}, {}, {}) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tp = {&quot;spam&quot;: 8, &quot;ham&quot;: 30}
+fp = {&quot;spam&quot;: 2, &quot;ham&quot;: 4, &quot;phish&quot;: 1}
+fn = {&quot;spam&quot;: 4, &quot;ham&quot;: 2}
+assert precision_recall(tp, fp, fn) == {
+    &quot;ham&quot;: {&quot;precision&quot;: 0.882, &quot;recall&quot;: 0.938},
+    &quot;phish&quot;: {&quot;precision&quot;: 0.0, &quot;recall&quot;: 0.0},
+    &quot;spam&quot;: {&quot;precision&quot;: 0.8, &quot;recall&quot;: 0.667},
+}
+assert precision_recall({}, {}, {}) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small helper <code>ratio(num, den)</code> that returns <code>0.0</code> when <code>den</code> is 0 removes the repeated <code>if</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Then a dict comprehension over <code>classes</code>, with a dict as the value.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def ratio(num, den):
+    return round(num / den, 3) if den else 0.0
+
+def precision_recall(tp, fp, fn):
+    classes = sorted(tp.keys() | fp.keys() | fn.keys())
+    return {
+        c: {
+            &quot;precision&quot;: ratio(tp.get(c, 0), tp.get(c, 0) + fp.get(c, 0)),
+            &quot;recall&quot;: ratio(tp.get(c, 0), tp.get(c, 0) + fn.get(c, 0)),
+        }
+        for c in classes
+    }</code></pre></div><p>The repeated "divide unless the denominator is 0" logic moves into one named helper, which is what makes the comprehension short enough to read. Key views support <code>|</code> directly, so there is no need to build sets first. The class <code>phish</code> has only a false positive: its precision is 0 out of 1, and its recall has a denominator of 0, which the helper turns into 0.0 instead of a <code>ZeroDivisionError</code>. scikit-learn's <code>classification_report</code> computes the same numbers, and its <code>zero_division</code> parameter is exactly this helper's choice of 0.0.</p></div></details>
+</article>
+<article class="prob" id="p-per-class-scores-that-all-end-up-togethe" data-pid="m6-2-per-class-scores-that-all-end-up-togethe" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Per-class scores that all end up together</h3></header>
+<div class="prob-q"><p><code>scores_by_class(preds, classes)</code> collects the predicted probability of each prediction under its class. Every class ends up with every score. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def scores_by_class(preds, classes):
+    out = dict.fromkeys(classes, [])
+    for label, score in preds:
+        out[label].append(score)
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">preds = [("spam", 0.9), ("ham", 0.6), ("spam", 0.7)]
+assert scores_by_class(preds, ["ham", "spam", "phish"]) == {"ham": [0.6], "spam": [0.9, 0.7], "phish": []}
+assert scores_by_class([], []) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">preds = [(&quot;spam&quot;, 0.9), (&quot;ham&quot;, 0.6), (&quot;spam&quot;, 0.7)]
+assert scores_by_class(preds, [&quot;ham&quot;, &quot;spam&quot;, &quot;phish&quot;]) == {&quot;ham&quot;: [0.6], &quot;spam&quot;: [0.9, 0.7], &quot;phish&quot;: []}
+assert scores_by_class([], []) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fromkeys</code> puts the <strong>same</strong> list object under every key. Build a new list per key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def scores_by_class(preds, classes):
+    out = {c: [] for c in classes}
+    for label, score in preds:
+        out[label].append(score)
+    return out</code></pre></div><p><code>dict.fromkeys(classes, [])</code> evaluates <code>[]</code> once and stores that one list under all keys, so each <code>append</code> shows up under every class. The dict comprehension evaluates <code>[]</code> once per key. Unlike a <code>defaultdict</code>, pre-creating the keys from <code>classes</code> also gives classes with no predictions an empty list, which a report needs to show "phish: 0 predictions", and an unexpected label still raises <code>KeyError</code> instead of silently creating a new class.</p></div></details>
+</article>
+<article class="prob" id="p-merging-and-key-collisions" data-pid="m6-2-merging-and-key-collisions" data-type="predict" data-level="medium" data-answer="{&#x27;model&#x27;: &#x27;small&#x27;, &#x27;temperature&#x27;: 0.2, &#x27;seed&#x27;: 1} False
+{&#x27;refund&#x27;: &#x27;refund&#x27;, &#x27;eu&#x27;: &#x27;Eu&#x27;}
+{0: 4, 1: 3} {2, 6}">
+<header class="prob-head"><h3>12. Merging and key collisions</h3></header>
+<div class="code"><pre><code class="py">a = {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.7}
+b = {&quot;temperature&quot;: 0.2, &quot;seed&quot;: 1}
+print({**a, **b}, a | b == {**b, **a})
+tags = [&quot;Refund&quot;, &quot;refund&quot;, &quot;EU&quot;, &quot;eu&quot;, &quot;Eu&quot;]
+print({t.lower(): t for t in tags})
+print({i % 2: i for i in range(5)}, {len(t) for t in tags})</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When keys collide, the later dict or the later item wins. <code>{**b, **a}</code> lets <code>a</code> win.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;model&#x27;: &#x27;small&#x27;, &#x27;temperature&#x27;: 0.2, &#x27;seed&#x27;: 1} False
+{&#x27;refund&#x27;: &#x27;refund&#x27;, &#x27;eu&#x27;: &#x27;Eu&#x27;}
+{0: 4, 1: 3} {2, 6}</pre></div><p>In <code>{**a, **b}</code>, <code>b</code> comes later, so its temperature wins; <code>a | b</code> is the same merge, and <code>{**b, **a}</code> is a different one (with <code>a</code>'s temperature), so the comparison is false. Lower-casing makes the tags collide, and each key keeps the <strong>original</strong> spelling of its <strong>last</strong> occurrence. <code>i % 2</code> has two keys, holding the last even and last odd numbers, 4 and 3.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-flatten-a-nested-config" data-pid="m6-2-flatten-a-nested-config" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. Flatten a nested config</h3></header>
+<div class="prob-q"><p>Experiment trackers log nested configs as flat keys. Write <code>flatten(config, sep=".")</code> that turns nested dicts into one level with joined keys: <code>{"model": {"name": "small", "lora": {"r": 8}}}</code> becomes <code>{"model.name": "small", "model.lora.r": 8}</code>. Non-dict values (including lists) are kept as they are; an empty nested dict disappears. Use a dict comprehension and recursion.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def flatten(config, sep=&quot;.&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">cfg = {"model": {"name": "small", "lora": {"r": 8, "alpha": 16}}, "lr": 3e-4, "tags": ["a", "b"], "extra": {}}
+assert flatten(cfg) == {"model.name": "small", "model.lora.r": 8, "model.lora.alpha": 16, "lr": 3e-4, "tags": ["a", "b"]}
+assert flatten({"a": {"b": 1}}, sep="/") == {"a/b": 1}
+assert flatten({}) == {}
+assert list(flatten(cfg))[:3] == ["model.name", "model.lora.r", "model.lora.alpha"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">cfg = {&quot;model&quot;: {&quot;name&quot;: &quot;small&quot;, &quot;lora&quot;: {&quot;r&quot;: 8, &quot;alpha&quot;: 16}}, &quot;lr&quot;: 3e-4, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;], &quot;extra&quot;: {}}
+assert flatten(cfg) == {&quot;model.name&quot;: &quot;small&quot;, &quot;model.lora.r&quot;: 8, &quot;model.lora.alpha&quot;: 16, &quot;lr&quot;: 3e-4, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;]}
+assert flatten({&quot;a&quot;: {&quot;b&quot;: 1}}, sep=&quot;/&quot;) == {&quot;a/b&quot;: 1}
+assert flatten({}) == {}
+assert list(flatten(cfg))[:3] == [&quot;model.name&quot;, &quot;model.lora.r&quot;, &quot;model.lora.alpha&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each <code>key, value</code>: if <code>value</code> is a dict, flatten it recursively and prefix each of its keys; otherwise yield the pair as it is.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A dict comprehension with two <code>for</code> clauses can walk the pairs that the inner call returns: <code>{f"{k}{sep}{ik}": iv for k, v in ... for ik, iv in flatten(v, sep).items()}</code>. Handle non-dict values by wrapping them as a one-item dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def flatten(config, sep=&quot;.&quot;):
+    return {
+        f&quot;{key}{sep}{inner_key}&quot; if inner_key else key: inner_value
+        for key, value in config.items()
+        for inner_key, inner_value in (flatten(value, sep).items() if isinstance(value, dict) else [(&quot;&quot;, value)])
+    }</code></pre></div><p>Each item either is a leaf, represented as one pair with an empty inner key, or a nested dict, whose already-flattened pairs are walked by the second <code>for</code> clause and prefixed with the outer key. The recursion ends at leaves, and an empty nested dict produces no pairs at all, so it disappears. The conditional expression in the key position decides between <code>key</code> and <code>key.inner_key</code>. Iteration order follows the original dict, so the flat keys stay in a readable order. This is compact, and near the limit of what a comprehension should hold; a written generator function (6.3) is the more readable version for a team. Trackers like MLflow and Weights &amp; Biases flatten configs this way to make them searchable.</p></div></details>
+</article>
+<article class="prob" id="p-a-confusion-matrix-as-a-nested-dict" data-pid="m6-2-a-confusion-matrix-as-a-nested-dict" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>14. A confusion matrix as a nested dict</h3></header>
+<div class="prob-q"><p>Write <code>confusion(y_true, y_pred)</code> returning <code>(matrix, recall)</code>. <code>matrix[actual][predicted]</code> is the count of each pair, with <strong>every</strong> class (from both lists, sorted) present in both levels, including zeros. <code>recall[c]</code> is the diagonal count divided by the row total, rounded to 3 decimals, or <code>0.0</code> for a class with no true examples. Raise <code>ValueError</code> if the lists have different lengths.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def confusion(y_true, y_pred):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">y_true = ["spam", "ham", "spam", "ham", "spam", "ham"]
+y_pred = ["spam", "spam", "ham", "ham", "spam", "phish"]
+m, r = confusion(y_true, y_pred)
+assert m == {"ham": {"ham": 1, "phish": 1, "spam": 1}, "phish": {"ham": 0, "phish": 0, "spam": 0},
+             "spam": {"ham": 1, "phish": 0, "spam": 2}}
+assert r == {"ham": 0.333, "phish": 0.0, "spam": 0.667}
+assert list(m) == ["ham", "phish", "spam"] and list(m["spam"]) == ["ham", "phish", "spam"]
+assert confusion([], []) == ({}, {})
+try:
+    confusion(["a"], [])
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">y_true = [&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;]
+y_pred = [&quot;spam&quot;, &quot;spam&quot;, &quot;ham&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;phish&quot;]
+m, r = confusion(y_true, y_pred)
+assert m == {&quot;ham&quot;: {&quot;ham&quot;: 1, &quot;phish&quot;: 1, &quot;spam&quot;: 1}, &quot;phish&quot;: {&quot;ham&quot;: 0, &quot;phish&quot;: 0, &quot;spam&quot;: 0},
+             &quot;spam&quot;: {&quot;ham&quot;: 1, &quot;phish&quot;: 0, &quot;spam&quot;: 2}}
+assert r == {&quot;ham&quot;: 0.333, &quot;phish&quot;: 0.0, &quot;spam&quot;: 0.667}
+assert list(m) == [&quot;ham&quot;, &quot;phish&quot;, &quot;spam&quot;] and list(m[&quot;spam&quot;]) == [&quot;ham&quot;, &quot;phish&quot;, &quot;spam&quot;]
+assert confusion([], []) == ({}, {})
+try:
+    confusion([&quot;a&quot;], [])
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count pairs once with <code>Counter(zip(y_true, y_pred))</code>, then look counts up in a nested comprehension.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The row total is <code>sum(matrix[c].values())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+def confusion(y_true, y_pred):
+    if len(y_true) != len(y_pred):
+        raise ValueError(&quot;y_true and y_pred must have the same length&quot;)
+    classes = sorted(set(y_true) | set(y_pred))
+    pairs = Counter(zip(y_true, y_pred))
+    matrix = {a: {p: pairs[(a, p)] for p in classes} for a in classes}
+    recall = {
+        c: round(matrix[c][c] / total, 3) if (total := sum(matrix[c].values())) else 0.0
+        for c in classes
+    }
+    return matrix, recall</code></pre></div><p>Counting happens once, in O(n), and the nested comprehension only looks up counts, O(k^2) for k classes, which is small. A <code>Counter</code> returns 0 for a pair that never occurred, so every cell exists. Taking classes from <strong>both</strong> lists matters: <code>phish</code> was only ever predicted, and a matrix built from <code>y_true</code> alone would hide that the model invents a class. The walrus computes each row total once for both the test and the division. The length check runs first because <code>zip</code> would otherwise silently drop the extra items (4.1). This is <code>sklearn.metrics.confusion_matrix</code> with <code>labels=</code>, returned as named rows instead of a bare array.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-experiment-summary" data-pid="m6-2-read-the-code-an-experiment-summary" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. Read the code: an experiment summary</h3></header>
+<div class="prob-q"><p>This summarises experiment runs: for each model, the best F1, the mean F1 over its runs, and the number of runs, sorted by model name. The best F1 is often wrong, the means are all the same, and the order changes between runs of the program. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def summarize(runs):
+    models = {r[&quot;model&quot;] for r in runs}
+    best = {r[&quot;model&quot;]: r for r in runs}
+    f1s = dict.fromkeys(models, [])
+    for r in runs:
+        f1s[r[&quot;model&quot;]].append(r[&quot;f1&quot;])
+    return [
+        (m, best[m][&quot;f1&quot;], round(sum(f1s[m]) / len(f1s[m]), 3), len(f1s[m]))
+        for m in models
+    ]
+</textarea>
+<script type="text/plain" class="prob-tests">runs = [
+    {"model": "logreg", "f1": 0.81}, {"model": "xgb", "f1": 0.88}, {"model": "logreg", "f1": 0.84},
+    {"model": "xgb", "f1": 0.86}, {"model": "bert", "f1": 0.91}, {"model": "logreg", "f1": 0.79},
+]
+assert summarize(runs) == [("bert", 0.91, 0.91, 1), ("logreg", 0.84, 0.813, 3), ("xgb", 0.88, 0.87, 2)]
+assert summarize([]) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">runs = [
+    {&quot;model&quot;: &quot;logreg&quot;, &quot;f1&quot;: 0.81}, {&quot;model&quot;: &quot;xgb&quot;, &quot;f1&quot;: 0.88}, {&quot;model&quot;: &quot;logreg&quot;, &quot;f1&quot;: 0.84},
+    {&quot;model&quot;: &quot;xgb&quot;, &quot;f1&quot;: 0.86}, {&quot;model&quot;: &quot;bert&quot;, &quot;f1&quot;: 0.91}, {&quot;model&quot;: &quot;logreg&quot;, &quot;f1&quot;: 0.79},
+]
+assert summarize(runs) == [(&quot;bert&quot;, 0.91, 0.91, 1), (&quot;logreg&quot;, 0.84, 0.813, 3), (&quot;xgb&quot;, 0.88, 0.87, 2)]
+assert summarize([]) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>{r["model"]: r for r in runs}</code> keeps the <strong>last</strong> run per model, not the best.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(models, [])</code> shares one list. And iterating over a set of strings gives a different order per process.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summarize(runs):
+    f1s = {}
+    for r in runs:
+        f1s.setdefault(r[&quot;model&quot;], []).append(r[&quot;f1&quot;])
+    return [
+        (m, max(scores), round(sum(scores) / len(scores), 3), len(scores))
+        for m, scores in sorted(f1s.items())
+    ]</code></pre></div><p>Three bugs, each a rule from this lesson. The dict comprehension <code>best</code> assigns every run under its model, so the <strong>last</strong> run wins, which happens to be the best only sometimes. <code>dict.fromkeys(models, [])</code> puts one shared list under every model, so all means were the mean of all runs. And <code>for m in models</code> iterates a set of strings, whose order depends on hash randomisation and changes between processes, so the report order was not stable. The fix groups once (here with <code>setdefault</code>, equivalent to a <code>defaultdict</code>), takes <code>max</code> of each group instead of relying on order, and iterates <code>sorted(f1s.items())</code>. Once the runs are grouped, the best, the mean and the count all come from the same list, so they cannot disagree.</p></div></details>
+</article>
+<article class="prob" id="p-equality-hashing-and-order" data-pid="m6-2-equality-hashing-and-order" data-type="predict" data-level="hard" data-answer="{1} 2
+{1: True}
+{&#x27;a&#x27;: &#x27;aaaaaaaaaa&#x27;, &#x27;b&#x27;: &#x27;bbbbbbbbbb&#x27;} [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;a&#x27;]
+{&#x27;b&#x27;: 1, &#x27;c&#x27;: 2} [2, 3]">
+<header class="prob-head"><h3>16. Equality, hashing and order</h3></header>
+<div class="code"><pre><code class="py">print({1, 1.0, True}, {0.1 + 0.2, 0.3}.__len__())
+print({k: k for k in [1, 1.0, True]})
+calls = []
+
+def val(k):
+    calls.append(k)
+    return k * 10
+
+d = {k: val(k) for k in [&quot;a&quot;, &quot;b&quot;, &quot;a&quot;]}
+print(d, calls)
+print({x: y for x, y in zip(&quot;abc&quot;, range(3)) if y}, sorted({len(w) for w in &quot;to be or not&quot;.split()}))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>1</code>, <code>1.0</code> and <code>True</code> are equal and hash the same, so they are one key; the first-inserted key object is kept.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The value expression runs for every item, including repeated keys.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{1} 2
+{1: True}
+{&#x27;a&#x27;: &#x27;aaaaaaaaaa&#x27;, &#x27;b&#x27;: &#x27;bbbbbbbbbb&#x27;} [&#x27;a&#x27;, &#x27;b&#x27;, &#x27;a&#x27;]
+{&#x27;b&#x27;: 1, &#x27;c&#x27;: 2} [2, 3]</pre></div><p>For both the set and the dict, <code>1</code>, <code>1.0</code> and <code>True</code> count as one element. The set keeps the first object it saw, <code>1</code>. The dict keeps the first <strong>key</strong> object, <code>1</code>, but takes the <strong>last value</strong>, <code>True</code>: assigning to an existing key replaces the value and leaves the key alone. <code>0.1 + 0.2</code> is not equal to <code>0.3</code>, so the second set has two elements. The value expression ran three times, once per item, even though only two keys remain, which matters when it is expensive or has side effects. Filtering with <code>if y</code> drops the pair with <code>y == 0</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-happens-with-duplicate-keys-in-a-di" data-pid="m6-2-what-happens-with-duplicate-keys-in-a-di" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What happens with duplicate keys in a dict comprehension, and how do you invert a dict safely?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A dict comprehension assigns <code>d[key] = value</code> for every item, so a repeated key is overwritten: the last value wins, and the key keeps the position of its first insertion. There is no error, so data loss is silent. Inverting <code>{k: v}</code> with <code>{v: k for k, v in d.items()}</code> is only safe when the values are unique and hashable; you can check with <code>len(set(d.values())) == len(d)</code>, or assert it. If values can repeat, inversion is grouping: one pass with a <code>defaultdict(list)</code> gives <code>{v: [keys]}</code>. If values are unhashable (lists, dicts), they cannot be keys at all, and you need to convert them (for example to tuples) or rethink the structure.</p></div></details>
+</article>
+<article class="prob" id="p-when-should-you-use-a-set-comprehension-" data-pid="m6-2-when-should-you-use-a-set-comprehension-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When should you use a set comprehension instead of a list comprehension, and why can a set's order change between runs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use a set comprehension when you need distinct values or fast membership tests and do not care about order or count: unique domains, vocabulary candidates, ids already seen. Use a list when order, duplicates or positions matter. A set stores elements by hash in a table, so iteration order follows hash values and table layout, not insertion. For strings and bytes, Python randomises the hash function per process (to defend against attacks that force hash collisions), so the order of a set of strings can differ every time the program runs; <code>PYTHONHASHSEED</code> can fix it, but the robust answer is to sort before anything order-dependent: numbering, saving, printing, comparing outputs in tests.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-make-label-ids-and-vocabul" data-pid="m6-2-how-would-you-make-label-ids-and-vocabul" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you make label ids and vocabularies reproducible between training and serving?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Build them deterministically and then treat them as part of the model. Deterministically means from a sorted list of unique values (<code>{label: i for i, label in enumerate(sorted(set(labels)))}</code>), with special tokens (<code>&lt;pad&gt;</code>, <code>&lt;unk&gt;</code>) at fixed positions, and filters such as a minimum count applied in a fixed order, never from a set's iteration order. Part of the model means saving them with the weights (Hugging Face stores <code>label2id</code> and <code>id2label</code> in <code>config.json</code>, tokenizers in their own files), versioning them together, and loading them at serving time instead of rebuilding them from new data, which would renumber classes and silently scramble predictions. At serving time, map unknown values to <code>&lt;unk&gt;</code> or an "other" class, log how often that happens, and add a test that loads the saved maps and checks a few known ids.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>{k: v for ...}</code> assigns for every item: a repeated key keeps its first position and takes the last value, silently.</li><li><code>{x for ...}</code> builds a set: distinct by equality and hash, no order. Sort before numbering, saving or printing. <code>{}</code> is an empty dict.</li><li>Comprehensions transform and filter; grouping and counting accumulate, so use <code>defaultdict</code> or <code>Counter</code>, then summarise with a comprehension.</li><li><code>dict.fromkeys(keys, [])</code> shares one list; <code>{k: [] for k in keys}</code> does not. Test <code>is None</code> when 0 or False are valid values.</li><li>Label maps and vocabularies: built from sorted unique values, saved with the model, loaded at serving time.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
