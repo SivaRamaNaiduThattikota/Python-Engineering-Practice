@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5.3 · f-strings and formatting</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m5-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 5 · Strings and text</span></div>
+  <h1>5.3 f-strings and formatting</h1>
+  <p>How f-strings evaluate, the format-spec mini-language part by part (width, alignment, precision, separators, types), how formatting rounds, dates, the other formatting tools and when each is right, and why logs should not use f-strings.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="fstrings">
+<h2><span class="n">1</span>f-strings: expressions inside text</h2>
+<p>An f-string is a string literal with an <code>f</code> prefix. Each <code>{...}</code> field holds a <strong>Python expression</strong>: a name, an arithmetic expression, a function call, an index, a conditional expression. Step by step, when the line runs, Python evaluates each expression, converts the result to text (by calling <code>format(value, spec)</code>, which usually means <code>str</code>), and joins the pieces. It happens <strong>every time the line runs</strong>, and only then: an f-string is not a template that can be filled later (problem 12).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">fstring_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">model, tokens, price = &quot;small&quot;, 1234, 0.15
+print(f&quot;{model} used {tokens} tokens costing ${tokens * price / 1000:.4f}&quot;)
+docs = [{&quot;id&quot;: &quot;faq&quot;}, {&quot;id&quot;: &quot;terms&quot;}]
+print(f&quot;top doc: {docs[0][&#x27;id&#x27;]}, total {len(docs)}, {&#x27;ok&#x27; if tokens &lt; 4000 else &#x27;too long&#x27;}&quot;)
+print(f&quot;{{literal braces}} and a value: {tokens}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>small used 1234 tokens costing $0.1851
+top doc: faq, total 2, ok
+{literal braces} and a value: 1234</pre></div></div>
+<p>To put a literal <code>{</code> or <code>}</code> in an f-string, double it: <code>{{</code> and <code>}}</code>. That matters for prompts that contain JSON examples (problem 3). Since Python 3.12 you can also reuse the same quote character inside a field (<code>f"{d["id"]}"</code>), but code that must run on older versions should use the other quote type.</p>
+<p>Two field features are especially useful. A <strong>conversion</strong> <code>!r</code> formats <code>repr(value)</code> instead of <code>str(value)</code>, which shows quotes and escape characters, so stray spaces and newlines become visible in logs (5.1). And the <strong><code>=</code> specifier</strong> (<code>f"{x=}"</code>) prints the expression's text, an equals sign and its value: the fastest debugging print there is.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">debug_specifier.py</span><button class="copy">Copy</button></div><pre><code class="py">label = &quot;spam &quot;
+print(f&quot;[{label}]&quot;, f&quot;[{label!r}]&quot;)
+tokens, limit = 4200, 4096
+print(f&quot;{tokens=}, {limit=}, {tokens &gt; limit=}&quot;)
+print(f&quot;{tokens / limit = :.2f}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>[spam ] [&#x27;spam &#x27;]
+tokens=4200, limit=4096, tokens &gt; limit=True
+tokens / limit = 1.03</pre></div></div>
+</section>
+<section class="sec" id="spec">
+<h2><span class="n">2</span>The format spec, part by part</h2>
+<p>After the colon in a field comes the <strong>format spec</strong>, a small language with a fixed order: <code>[[fill]align][sign][#][0][width][grouping][.precision][type]</code>. Every part is optional. Reading a spec left to right:</p>
+<div class="tbl"><table>
+      <tr><th>Part</th><th>Examples</th><th>Meaning</th></tr>
+      <tr><td>fill + align</td><td><code>&lt;</code> <code>&gt;</code> <code>^</code>, <code>*^</code></td><td>left, right, centre; an optional fill character before the alignment</td></tr>
+      <tr><td>sign</td><td><code>+</code>, <code>-</code>, space</td><td>always show the sign; only for negatives (default); a space for positives</td></tr>
+      <tr><td>width</td><td><code>10</code>, <code>08</code></td><td>minimum total width; a leading <code>0</code> pads numbers with zeros after the sign</td></tr>
+      <tr><td>grouping</td><td><code>,</code> <code>_</code></td><td>thousands separators</td></tr>
+      <tr><td>precision</td><td><code>.2</code></td><td>digits after the point (<code>f</code>, <code>%</code>, <code>e</code>), significant digits (<code>g</code>), or maximum length for strings</td></tr>
+      <tr><td>type</td><td><code>f</code> <code>e</code> <code>g</code> <code>%</code> <code>d</code> <code>x</code> <code>b</code> <code>s</code></td><td>fixed point, exponent, general, percentage, integer, hex, binary, string</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">format_spec.py</span><button class="copy">Copy</button></div><pre><code class="py">x = 1234567.891
+print(f&quot;[{x:,.2f}] [{x:_.0f}] [{x:.3e}] [{x:.3g}]&quot;)
+print(f&quot;[{0.4567:.1%}] [{-3:05d}] [{42:+d}] [{255:#x}] [{5:08b}]&quot;)
+print(f&quot;[{&#x27;left&#x27;:&lt;10}] [{&#x27;right&#x27;:&gt;10}] [{&#x27;mid&#x27;:^10}] [{&#x27;mid&#x27;:*^10}]&quot;)
+print(f&quot;[{&#x27;a long description&#x27;:.8}] [{&#x27;cut&#x27;:&gt;6.2}]&quot;)
+width = 12
+print(f&quot;[{x:&gt;{width},.1f}]&quot;)       # a nested field supplies part of the spec</code></pre><div class="out"><span class="ol">Output</span><pre>[1,234,567.89] [1_234_568] [1.235e+06] [1.23e+06]
+[45.7%] [-0003] [+42] [0xff] [00000101]
+[left      ] [     right] [   mid    ] [***mid****]
+[a long d] [    cu]
+[ 1,234,567.9]</pre></div></div>
+<p>A few rules worth remembering. Numbers right-align by default and strings left-align. Width is a <strong>minimum</strong>: a value longer than the width is never cut, except strings with a precision (<code>.8</code> keeps the first 8 characters). The <code>g</code> type picks fixed or exponent notation depending on the size and drops trailing zeros. A nested <code>{width}</code> inside the spec lets you compute alignment at run time, which is how aligned tables of unknown widths are built (problem 14).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>The format spec is Python's version of Excel and Power BI format strings: <code>:,.2f</code> is <code>#,##0.00</code>, <code>:.1%</code> is <code>0.0%</code>, <code>:08d</code> is <code>00000000</code>. Like those, formatting changes only the <strong>text</strong>, never the stored value, so format at the very end, in the report, not in the data.</p></div></div>
+</section>
+<section class="sec" id="rounding">
+<h2><span class="n">3</span>How formatting rounds</h2>
+<p>Precision <strong>rounds</strong> (it never truncates), and it rounds the exact binary value of the float, with ties to even. So formatting shows the same surprises as <code>round</code> in 1.1: <code>2.675</code> is stored as 2.67499999..., so <code>f"{2.675:.2f}"</code> is <code>"2.67"</code>, and exact halves like 0.5 and 2.5 go to the even neighbour. For displaying measurements this is fine. For <strong>money</strong>, where a report must match an accounting system to the cent, round with <code>Decimal</code> first (1.1, problem 12) and then format.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">rounding.py</span><button class="copy">Copy</button></div><pre><code class="py">from decimal import Decimal, ROUND_HALF_UP
+
+print(f&quot;{2.675:.2f} {0.5:.0f} {1.5:.0f} {2.5:.0f}&quot;)
+amount = Decimal(&quot;2.675&quot;).quantize(Decimal(&quot;0.01&quot;), rounding=ROUND_HALF_UP)
+print(f&quot;{amount}&quot;, f&quot;{amount:,.2f}&quot;, f&quot;{Decimal(&#x27;1234567.5&#x27;):,.2f}&quot;)
+print(f&quot;{0.1 + 0.2}&quot;, f&quot;{0.1 + 0.2:.2f}&quot;, f&quot;{1e-7:.3f}&quot;, f&quot;{1e-7:.3g}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>2.67 0 2 2
+2.68 2.68 1,234,567.50
+0.30000000000000004 0.30 0.000 1e-07</pre></div></div>
+<p>The last line shows two more things: formatting is the right way to hide float noise (<code>0.30000000000000004</code> displays as <code>0.30</code>), and fixed-point formatting of a tiny number can show <code>0.000</code> and hide that it is not zero, where <code>g</code> or <code>e</code> keeps the information. Pick <code>f</code> for amounts and percentages of normal size, <code>g</code> or <code>e</code> for values that span many magnitudes, such as learning rates and p-values.</p>
+</section>
+<section class="sec" id="dates">
+<h2><span class="n">4</span>Dates and times</h2>
+<p><code>datetime</code> objects have their own format codes, the same as <code>strftime</code>, and an f-string field passes them through: <code>f"{dt:%Y-%m-%d %H:%M}"</code>. For machine-readable text (logs, APIs, file names that must sort), use ISO 8601, <code>dt.isoformat()</code>, which sorts correctly as text and includes the time zone offset when the datetime has one. Never build dates by concatenating numbers: <code>f"{d.year}-{d.month}-{d.day}"</code> gives <code>2025-6-1</code>, which neither sorts nor parses reliably.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dates.py</span><button class="copy">Copy</button></div><pre><code class="py">from datetime import datetime, timezone
+
+dt = datetime(2025, 6, 1, 9, 5, 7, tzinfo=timezone.utc)
+print(f&quot;{dt:%Y-%m-%d %H:%M:%S}&quot;, f&quot;{dt:%d %b %Y}&quot;, f&quot;{dt:%A}&quot;)
+print(dt.isoformat(), f&quot;{dt.year}-{dt.month}-{dt.day}&quot;)
+print(sorted([&quot;2025-10-01&quot;, &quot;2025-9-30&quot;, &quot;2025-09-30&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>2025-06-01 09:05:07 01 Jun 2025 Sunday
+2025-06-01T09:05:07+00:00 2025-6-1
+[&#x27;2025-09-30&#x27;, &#x27;2025-10-01&#x27;, &#x27;2025-9-30&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="tools">
+<h2><span class="n">5</span>The other formatting tools, and when to use each</h2>
+<p>Python has four ways to put values into text. They overlap, but each has a job:</p>
+<ul><li><strong>f-strings</strong>: your own code, values known at that line. Fastest and most readable.</li><li><strong><code>str.format</code> / <code>format_map</code></strong>: a template that is defined in one place and <strong>filled later</strong>, such as a prompt template loaded from a file (<code>template.format_map(values)</code>, 5.2). The template must be trusted: <code>format</code> can read attributes of the values.</li><li><strong><code>%</code> formatting</strong>: mostly legacy, but still the standard for <strong>logging</strong>, because the logger only builds the message if it will actually be emitted.</li><li><strong><code>string.Template</code></strong>: templates written by <strong>users</strong> or non-programmers. Its <code>$name</code> syntax cannot evaluate expressions or read attributes, and <code>safe_substitute</code> leaves unknown names alone instead of raising.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tools.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+from string import Template
+
+prompt = &quot;Answer in {lang}: {question}&quot;
+print(prompt.format(lang=&quot;French&quot;, question=&quot;Refund time?&quot;))
+print(&quot;%-8s|%6.2f|%03d&quot; % (&quot;small&quot;, 3.14159, 7))
+
+user_tpl = Template(&quot;Dear $name, your ticket $ticket is $status.&quot;)
+print(user_tpl.safe_substitute(name=&quot;Ana&quot;, ticket=&quot;T-42&quot;))
+
+log = logging.getLogger(&quot;demo&quot;)
+log.debug(&quot;expensive value: %s&quot;, list(range(5)))    # not formatted at all: DEBUG is off</code></pre><div class="out"><span class="ol">Output</span><pre>Answer in French: Refund time?
+small   |  3.14|007
+Dear Ana, your ticket T-42 is $status.</pre></div></div>
+<div class="callout c-warn"><div class="ci">!</div><div><div class="ct">Why not log with f-strings</div><p><code>log.debug(f"state: {big_object}")</code> builds the string (calling <code>repr</code> of <code>big_object</code>) even when debug logging is off, every time the line runs. <code>log.debug("state: %s", big_object)</code> passes the value along, and the text is only built if the message is emitted. Log aggregators can also group messages by their unchanged template. In hot paths the difference is large (problem 8).</p></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-format-specs-for-numbers" data-pid="m5-3-format-specs-for-numbers" data-type="predict" data-level="easy" data-answer="1,234,567.89 | 1234568 | 1,234,568
+4.6% | 0.046 | 4.57e-02
+[   42] [42   ] [00042] [-0042]
+[    id] [   3.142] [   7   ]">
+<header class="prob-head"><h3>1. Format specs for numbers</h3></header>
+<div class="code"><pre><code class="py">revenue = 1234567.891
+rate = 0.04567
+print(f&quot;{revenue:,.2f} | {revenue:.0f} | {revenue:,.0f}&quot;)
+print(f&quot;{rate:.1%} | {rate:.3f} | {rate:.2e}&quot;)
+print(f&quot;[{42:5d}] [{42:&lt;5d}] [{42:05d}] [{-42:05d}]&quot;)
+print(f&quot;[{&#x27;id&#x27;:&gt;6}] [{3.14159:8.3f}] [{7:^7}]&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>,</code> adds thousands separators, <code>%</code> multiplies by 100, a leading <code>0</code> in the width pads with zeros after the sign.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1,234,567.89 | 1234568 | 1,234,568
+4.6% | 0.046 | 4.57e-02
+[   42] [42   ] [00042] [-0042]
+[    id] [   3.142] [   7   ]</pre></div><p><code>,.2f</code> groups thousands and keeps two decimals; <code>.0f</code> rounds to a whole number. <code>.1%</code> multiplies by 100 and adds the sign: 4.6%. Numbers are right-aligned by default, <code>&lt;</code> overrides that, and zero-padding goes after the minus sign (<code>-0042</code>). Strings are left-aligned by default, so <code>&gt;6</code> is needed to right-align <code>"id"</code>. A width of 8 with <code>.3f</code> gives <code>   3.142</code>.</p></div></details>
+</article>
+<article class="prob" id="p-human-readable-file-sizes" data-pid="m5-3-human-readable-file-sizes" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Human-readable file sizes</h3></header>
+<div class="prob-q"><p>Write <code>human_size(n)</code> for a number of bytes, returning <code>"999 B"</code> below 1024, otherwise the value divided by 1024 as many times as needed (KB, MB, GB, TB) with one decimal: <code>"1.5 KB"</code>, <code>"2.0 MB"</code>. Stop at TB.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def human_size(n):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert human_size(0) == "0 B" and human_size(999) == "999 B" and human_size(1023) == "1023 B"
+assert human_size(1536) == "1.5 KB"
+assert human_size(2 * 1024 ** 2) == "2.0 MB"
+assert human_size(5 * 1024 ** 5) == "5120.0 TB"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert human_size(0) == &quot;0 B&quot; and human_size(999) == &quot;999 B&quot; and human_size(1023) == &quot;1023 B&quot;
+assert human_size(1536) == &quot;1.5 KB&quot;
+assert human_size(2 * 1024 ** 2) == &quot;2.0 MB&quot;
+assert human_size(5 * 1024 ** 5) == &quot;5120.0 TB&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop over the units, dividing while the value is at least 1024 and there is a bigger unit left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def human_size(n):
+    if n &lt; 1024:
+        return f&quot;{n} B&quot;
+    value = n / 1024
+    for unit in [&quot;KB&quot;, &quot;MB&quot;, &quot;GB&quot;, &quot;TB&quot;]:
+        if value &lt; 1024 or unit == &quot;TB&quot;:
+            return f&quot;{value:.1f} {unit}&quot;
+        value /= 1024</code></pre></div><p>Each pass divides by 1024 and moves to the next unit; the <code>unit == "TB"</code> check stops at the largest unit instead of running out of names. Bytes stay integers, everything else gets one decimal with <code>:.1f</code>. (Strictly, powers of 1024 are KiB, MiB and so on; many tools say KB anyway. Disk vendors use 1000, so pick one and label it.)</p></div></details>
+</article>
+<article class="prob" id="p-a-prompt-with-a-json-example" data-pid="m5-3-a-prompt-with-a-json-example" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A prompt with a JSON example</h3></header>
+<div class="prob-q"><p><code>make_prompt</code> should insert the question and show the model the JSON shape to answer in. The first version printed the placeholder names literally; after adding <code>f</code>, it crashes with an error about the braces. Fix it so the output is exactly what the test expects.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def make_prompt(question):
+    return f&quot;Answer the question.\nReply as JSON: {&quot;label&quot;: &quot;...&quot;, &quot;confidence&quot;: 0.0}\nQuestion: {question}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">out = make_prompt("Is this spam?")
+assert out == 'Answer the question.\nReply as JSON: {"label": "...", "confidence": 0.0}\nQuestion: Is this spam?'
+assert make_prompt("{question}").endswith("Question: {question}")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">out = make_prompt(&quot;Is this spam?&quot;)
+assert out == &#x27;Answer the question.\nReply as JSON: {&quot;label&quot;: &quot;...&quot;, &quot;confidence&quot;: 0.0}\nQuestion: Is this spam?&#x27;
+assert make_prompt(&quot;{question}&quot;).endswith(&quot;Question: {question}&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In an f-string, <code>{</code> starts a field. A literal brace is written <code>{{</code> or <code>}}</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_prompt(question):
+    return f&#x27;Answer the question.\nReply as JSON: {{&quot;label&quot;: &quot;...&quot;, &quot;confidence&quot;: 0.0}}\nQuestion: {question}&#x27;</code></pre></div><p>The JSON example's braces were read as an f-string field containing a dict expression, which fails to parse or produces the wrong text. Doubling them makes them literal. Switching the outer quotes to <code>'</code> also keeps the inner <code>"</code> readable. The second test shows that the <strong>value</strong> of <code>question</code> is inserted as plain text even if it contains braces: f-strings evaluate once and never re-scan what they insert, unlike the <code>replace</code>-based templates in 5.2.</p></div></details>
+</article>
+<article class="prob" id="p-debug-fields-and-conversions" data-pid="m5-3-debug-fields-and-conversions" data-type="predict" data-level="easy" data-answer="user=&#x27;ana &#x27;
+  &#x27;ana &#x27;|    ana |
+score=0.81, len(items)=2
+[&#x27;a&#x27;, &#x27;b&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;] &#x27;\xe9&#x27;">
+<header class="prob-head"><h3>4. Debug fields and conversions</h3></header>
+<div class="code"><pre><code class="py">user = &quot;ana &quot;
+score = 0.8125
+items = [&quot;a&quot;, &quot;b&quot;]
+print(f&quot;{user=}&quot;)
+print(f&quot;{user!r:&gt;8}|{user:&gt;8}|&quot;)
+print(f&quot;{score=:.2f}, {len(items)=}&quot;)
+print(f&quot;{items!s} {items!r} {&#x27;é&#x27;!a}&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>=</code> prints the expression text too. <code>!r</code> uses <code>repr</code>, which adds quotes. <code>!a</code> is like <code>!r</code> but escapes non-ASCII characters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>user=&#x27;ana &#x27;
+  &#x27;ana &#x27;|    ana |
+score=0.81, len(items)=2
+[&#x27;a&#x27;, &#x27;b&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;] &#x27;\xe9&#x27;</pre></div><p><code>f"{user=}"</code> shows the name, an equals sign and the <strong>repr</strong> of the value, which makes the trailing space visible. <code>!r</code> with <code>&gt;8</code> right-aligns the quoted text. A format spec after <code>=</code> applies to the value. For a list, <code>str</code> and <code>repr</code> are the same text. <code>!a</code> escapes <code>é</code> as <code>'\xe9'</code>, useful when logs must stay ASCII.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-an-aligned-metrics-report" data-pid="m5-3-an-aligned-metrics-report" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. An aligned metrics report</h3></header>
+<div class="prob-q"><p>Write <code>metrics_report(metrics)</code> for a dict from metric name to value. Return lines <code>"&lt;name&gt;  &lt;value&gt;"</code> with names left-aligned to the longest name, values right-aligned in a column of width 8: values between 0 and 1 (exclusive of 1 only when the name ends with <code>"_rate"</code>) are shown as percentages with one decimal, everything else with three decimals. Keep the dict's order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def metrics_report(metrics):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">m = {"precision": 0.8231, "recall": 0.61, "error_rate": 0.0425, "n": 1400}
+assert metrics_report(m) == (
+    "precision      0.823\n"
+    "recall         0.610\n"
+    "error_rate      4.2%\n"
+    "n           1400.000"
+)
+assert metrics_report({}) == ""</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">m = {&quot;precision&quot;: 0.8231, &quot;recall&quot;: 0.61, &quot;error_rate&quot;: 0.0425, &quot;n&quot;: 1400}
+assert metrics_report(m) == (
+    &quot;precision      0.823\n&quot;
+    &quot;recall         0.610\n&quot;
+    &quot;error_rate      4.2%\n&quot;
+    &quot;n           1400.000&quot;
+)
+assert metrics_report({}) == &quot;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute <code>width = max(map(len, metrics))</code> (guard the empty dict).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Choose the spec per value: <code>f"{v:8.1%}"</code> for rates, <code>f"{v:8.3f}"</code> otherwise, and the name with <code>f"{name:&lt;{width}}"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def metrics_report(metrics):
+    if not metrics:
+        return &quot;&quot;
+    width = max(map(len, metrics))
+    lines = []
+    for name, value in metrics.items():
+        text = f&quot;{value:8.1%}&quot; if name.endswith(&quot;_rate&quot;) else f&quot;{value:8.3f}&quot;
+        lines.append(f&quot;{name:&lt;{width}}  {text}&quot;)
+    return &quot;\n&quot;.join(lines)</code></pre></div><p>A nested field, <code>{name:&lt;{width}}</code>, computes the alignment from the data, so the report adapts to long metric names. Choosing the presentation by the metric's name, not its value, keeps a rate of 1.0 (100%) consistent with its neighbours. Formatting is the last step: the dict keeps full precision for anything that compares or plots it later.</p></div></details>
+</article>
+<article class="prob" id="p-invoice-totals-off-by-a-cent" data-pid="m5-3-invoice-totals-off-by-a-cent" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Invoice totals off by a cent</h3></header>
+<div class="prob-q"><p><code>format_total(amounts)</code> should sum line amounts given as strings like <code>"19.99"</code> and print the total with thousands separators and exactly two decimals, rounding half up as the accounting system does. It uses floats and gets some totals wrong by a cent. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def format_total(amounts):
+    total = sum(float(a) for a in amounts)
+    return f&quot;{total:,.2f}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert format_total(["1.005"]) == "1.01"
+assert format_total(["2.675", "0"]) == "2.68"
+assert format_total(["1000000.10", "234567.80"]) == "1,234,567.90"
+assert format_total([]) == "0.00"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert format_total([&quot;1.005&quot;]) == &quot;1.01&quot;
+assert format_total([&quot;2.675&quot;, &quot;0&quot;]) == &quot;2.68&quot;
+assert format_total([&quot;1000000.10&quot;, &quot;234567.80&quot;]) == &quot;1,234,567.90&quot;
+assert format_total([]) == &quot;0.00&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Parse with <code>Decimal(a)</code> (from the strings, not from floats), sum, then <code>quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>f-strings format <code>Decimal</code> values with the same <code>,.2f</code> spec.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from decimal import Decimal, ROUND_HALF_UP
+
+def format_total(amounts):
+    total = sum((Decimal(a) for a in amounts), Decimal(&quot;0&quot;))
+    return f&quot;{total.quantize(Decimal(&#x27;0.01&#x27;), rounding=ROUND_HALF_UP):,.2f}&quot;</code></pre></div><p><code>float("1.005")</code> is stored as 1.00499999..., so formatting rounds it down, and summing floats accumulates further binary error. <code>Decimal</code> built from the <strong>strings</strong> keeps the exact decimal values, <code>quantize</code> applies the business rounding rule explicitly, and the f-string only adds separators. Starting <code>sum</code> with <code>Decimal("0")</code> avoids mixing an int start value into the arithmetic and makes the empty case <code>0.00</code>.</p></div></details>
+</article>
+<article class="prob" id="p-formatting-one-value-many-ways" data-pid="m5-3-formatting-one-value-many-ways" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Formatting one value many ways</h3></header>
+<div class="prob-q"><p>Fill in <code>s</code> and <code>len(s)</code> after each marked line. <code>x = 3.14159</code>.</p></div>
+<div class="code"><pre><code class="py">x = 3.14159
+s = f&quot;{x:.2f}&quot;
+s = f&quot;{x:8.3f}&quot;
+s = f&quot;{x:&lt;8.1f}|&quot;
+s = f&quot;{x:+.0f}&quot;
+s = f&quot;{x:.3g}&quot;
+s = f&quot;{x * 1000:,.1f}&quot;</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>s</code></th><th><code>len(s)</code></th></tr><tr><td>.2f</td><td><input class="cell" data-a="&#x27;3.14&#x27;" data-s="3.14" aria-label="s at .2f" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="len(s) at .2f" autocomplete="off"></td></tr><tr><td>8.3f</td><td><input class="cell" data-a="&#x27;   3.142&#x27;" data-s="   3.142" aria-label="s at 8.3f" autocomplete="off"></td><td><input class="cell" data-a="8" data-s="8" aria-label="len(s) at 8.3f" autocomplete="off"></td></tr><tr><td>&lt;8.1f with a bar</td><td><input class="cell" data-a="&#x27;3.1     |&#x27;" data-s="3.1     |" aria-label="s at &lt;8.1f with a bar" autocomplete="off"></td><td><input class="cell" data-a="9" data-s="9" aria-label="len(s) at &lt;8.1f with a bar" autocomplete="off"></td></tr><tr><td>+.0f</td><td><input class="cell" data-a="&#x27;+3&#x27;" data-s="+3" aria-label="s at +.0f" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="len(s) at +.0f" autocomplete="off"></td></tr><tr><td>.3g</td><td><input class="cell" data-a="&#x27;3.14&#x27;" data-s="3.14" aria-label="s at .3g" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="len(s) at .3g" autocomplete="off"></td></tr><tr><td>x * 1000 with ,.1f</td><td><input class="cell" data-a="&#x27;3,141.6&#x27;" data-s="3,141.6" aria-label="s at x * 1000 with ,.1f" autocomplete="off"></td><td><input class="cell" data-a="7" data-s="7" aria-label="len(s) at x * 1000 with ,.1f" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Width is the total length including the point and decimals; <code>&lt;</code> pads on the right.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>s</code></th><th><code>len(s)</code></th></tr><tr><td>.2f</td><td><code>&#x27;3.14&#x27;</code></td><td><code>4</code></td></tr><tr><td>8.3f</td><td><code>&#x27;   3.142&#x27;</code></td><td><code>8</code></td></tr><tr><td>&lt;8.1f with a bar</td><td><code>&#x27;3.1     |&#x27;</code></td><td><code>9</code></td></tr><tr><td>+.0f</td><td><code>&#x27;+3&#x27;</code></td><td><code>2</code></td></tr><tr><td>.3g</td><td><code>&#x27;3.14&#x27;</code></td><td><code>4</code></td></tr><tr><td>x * 1000 with ,.1f</td><td><code>&#x27;3,141.6&#x27;</code></td><td><code>7</code></td></tr></table></div><p><code>.2f</code> keeps two decimals. <code>8.3f</code> is 5 characters of number padded to 8 on the left. <code>&lt;8.1f</code> pads <code>3.1</code> to 8 on the right, so the bar shows the padding. <code>+.0f</code> rounds to 3 and always shows the sign. <code>.3g</code> keeps three significant digits. <code>,.1f</code> on 3141.59 adds a thousands separator and rounds to <code>3,141.6</code>.</p></div></details>
+</article>
+<article class="prob" id="p-logging-with-an-f-string-or-arguments" data-pid="m5-3-logging-with-an-f-string-or-arguments" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Logging with an f-string or arguments</h3></header>
+<div class="prob-q"><p>Debug logging is turned off. Both lines run 20,000 times inside a request handler, logging the current list of retrieved chunk ids. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+log = logging.getLogger(&quot;rag&quot;)
+log.setLevel(logging.WARNING)
+chunk_ids = [f&quot;chunk-{i:05d}&quot; for i in range(300)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for _ in range(20_000):
+    log.debug(f&quot;retrieved {chunk_ids}&quot;)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">for _ in range(20_000):
+    log.debug(&quot;retrieved %s&quot;, chunk_ids)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does Python do with the f-string before <code>debug</code> even gets to decide whether to log?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.21 s</td></tr><tr><td>B</td><td>8.08 ms</td></tr></table></div><p>The f-string is evaluated <strong>before</strong> <code>debug</code> is called, so A builds the text of a 300-item list 20,000 times, only for <code>debug</code> to throw it away because the level is WARNING. B passes the list along unformatted; the logger checks the level first and never formats anything. In a busy service this is real CPU, and the same applies to expensive values like a DataFrame or a model's output. Linters flag it (Ruff rule G004, "logging-f-string").</p></div></details>
+</article>
+<article class="prob" id="p-a-cost-line-for-an-llm-call" data-pid="m5-3-a-cost-line-for-an-llm-call" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. A cost line for an LLM call</h3></header>
+<div class="prob-q"><p>Write <code>cost_line(tokens_in, tokens_out, price_in, price_out)</code> where prices are in dollars <strong>per million tokens</strong>. Return text like <code>"$0.0123 (1,234 in, 567 out)"</code>: the cost with 4 decimals, and token counts with thousands separators.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def cost_line(tokens_in, tokens_out, price_in, price_out):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert cost_line(1234, 567, 3.0, 15.0) == "$0.0122 (1,234 in, 567 out)"
+assert cost_line(0, 0, 3.0, 15.0) == "$0.0000 (0 in, 0 out)"
+assert cost_line(2_000_000, 500_000, 0.25, 1.25) == "$1.1250 (2,000,000 in, 500,000 out)"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert cost_line(1234, 567, 3.0, 15.0) == &quot;$0.0122 (1,234 in, 567 out)&quot;
+assert cost_line(0, 0, 3.0, 15.0) == &quot;$0.0000 (0 in, 0 out)&quot;
+assert cost_line(2_000_000, 500_000, 0.25, 1.25) == &quot;$1.1250 (2,000,000 in, 500,000 out)&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>cost = tokens_in / 1e6 * price_in + tokens_out / 1e6 * price_out.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def cost_line(tokens_in, tokens_out, price_in, price_out):
+    cost = tokens_in / 1_000_000 * price_in + tokens_out / 1_000_000 * price_out
+    return f&quot;${cost:.4f} ({tokens_in:,} in, {tokens_out:,} out)&quot;</code></pre></div><p>Prices quoted per million tokens are the norm for LLM APIs, with output tokens usually priced several times higher than input tokens, which is why both counts appear. <code>:,</code> works on integers without a type letter. Four decimals keep small per-call costs visible; when summing many calls for a bill, keep the unrounded floats (or <code>Decimal</code>) and format only the total.</p></div></details>
+</article>
+<article class="prob" id="p-dates-built-by-hand" data-pid="m5-3-dates-built-by-hand" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Dates built by hand</h3></header>
+<div class="prob-q"><p><code>partition_name(dt)</code> should return a file name like <code>"events_2025-06-01.parquet"</code> that sorts by date as text. Single-digit months and days break the sorting. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def partition_name(dt):
+    return &quot;events_&quot; + str(dt.year) + &quot;-&quot; + str(dt.month) + &quot;-&quot; + str(dt.day) + &quot;.parquet&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">from datetime import date
+assert partition_name(date(2025, 6, 1)) == "events_2025-06-01.parquet"
+names = [partition_name(date(2025, m, d)) for m, d in [(10, 1), (9, 30), (1, 5)]]
+assert sorted(names) == [partition_name(date(2025, 1, 5)), partition_name(date(2025, 9, 30)), partition_name(date(2025, 10, 1))]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from datetime import date
+assert partition_name(date(2025, 6, 1)) == &quot;events_2025-06-01.parquet&quot;
+names = [partition_name(date(2025, m, d)) for m, d in [(10, 1), (9, 30), (1, 5)]]
+assert sorted(names) == [partition_name(date(2025, 1, 5)), partition_name(date(2025, 9, 30)), partition_name(date(2025, 10, 1))]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>f"{dt:%Y-%m-%d}"</code> or <code>dt.isoformat()</code> pad month and day to two digits.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def partition_name(dt):
+    return f&quot;events_{dt:%Y-%m-%d}.parquet&quot;</code></pre></div><p><code>str(6)</code> is <code>"6"</code>, so June 1st becomes <code>2025-6-1</code>, and as text <code>"2025-10-01" &lt; "2025-9-30"</code>, which puts October before September. <code>%m</code> and <code>%d</code> always produce two digits, so text order equals date order. This is why data lakes partition by <code>YYYY-MM-DD</code> (or <code>year=2025/month=06/...</code>): tools list and prune partitions by name.</p></div></details>
+</article>
+<article class="prob" id="p-from-and-to-f-strings" data-pid="m5-3-from-and-to-f-strings" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. From % and + to f-strings</h3></header>
+<div class="prob-q"><p>Rewrite with f-strings, same output. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def summary(name, n, rate, elapsed):
+    return name + &quot;: &quot; + str(n) + &quot; requests, &quot; + &quot;%.1f&quot; % (rate * 100) + &quot;% errors, &quot; + &quot;%d&quot; % int(elapsed * 1000) + &quot; ms&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert summary("search", 1200, 0.0425, 1.2345) == "search: 1200 requests, 4.2% errors, 1234 ms"
+assert summary("x", 0, 0.0, 0.0) == "x: 0 requests, 0.0% errors, 0 ms"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert summary(&quot;search&quot;, 1200, 0.0425, 1.2345) == &quot;search: 1200 requests, 4.2% errors, 1234 ms&quot;
+assert summary(&quot;x&quot;, 0, 0.0, 0.0) == &quot;x: 0 requests, 0.0% errors, 0 ms&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>:.1%</code> does the multiply-by-100 and the percent sign. <code>int(elapsed * 1000)</code> truncates; <code>:.0f</code> would round, so keep <code>int</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def summary(name, n, rate, elapsed):
+    return f&quot;{name}: {n} requests, {rate:.1%} errors, {int(elapsed * 1000)} ms&quot;</code></pre></div><p>The f-string reads like the output. <code>:.1%</code> replaces the manual <code>* 100</code> and the separate <code>"%"</code>. One detail must be kept: the original <strong>truncated</strong> milliseconds with <code>int</code>, while <code>:.0f</code> would round 1234.5 up to 1235, so a "pure formatting" refactor would silently change the numbers. Refactors of formatting code should be checked against the original output, exactly as these tests do.</p></div></details>
+</article>
+<article class="prob" id="p-an-f-string-is-evaluated-once" data-pid="m5-3-an-f-string-is-evaluated-once" data-type="predict" data-level="medium" data-answer="Answer in a brief style.
+Answer in a detailed style.
+Answer in a formal style.">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. An f-string is evaluated once</h3></header>
+<div class="code"><pre><code class="py">style = &quot;brief&quot;
+prompt_f = f&quot;Answer in a {style} style.&quot;
+prompt_t = &quot;Answer in a {style} style.&quot;
+style = &quot;detailed&quot;
+print(prompt_f)
+print(prompt_t.format(style=style))
+make = lambda: f&quot;Answer in a {style} style.&quot;
+style = &quot;formal&quot;
+print(make())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The f-string on line 2 runs immediately, with the value <code>style</code> has at that moment.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Answer in a brief style.
+Answer in a detailed style.
+Answer in a formal style.</pre></div><p><code>prompt_f</code> was built when its line ran, with <code>"brief"</code>, and is now just a plain string: changing <code>style</code> later does nothing to it. A plain string with <code>{style}</code> is a <strong>template</strong> that <code>format</code> fills when called. Putting the f-string inside a function (here a lambda) delays evaluation to each call, so it sees the current value (late binding, 3.4). Prompt templates defined as module-level f-strings are a common bug: the values are baked in at import time.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-a-text-progress-bar" data-pid="m5-3-a-text-progress-bar" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. A text progress bar</h3></header>
+<div class="prob-q"><p>Write <code>progress(done, total, width=20)</code> returning <code>"[########------------] 40.0% (4/10)"</code>: <code>#</code> for the done fraction of <code>width</code> (rounded down), <code>-</code> for the rest, then the percentage with one decimal and the counts. Clamp <code>done</code> to the range 0 to <code>total</code>, and show an empty bar at 0.0% when <code>total</code> is 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def progress(done, total, width=20):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert progress(4, 10) == "[########------------] 40.0% (4/10)"
+assert progress(10, 10, width=5) == "[#####] 100.0% (10/10)"
+assert progress(15, 10, width=4) == "[####] 100.0% (10/10)"
+assert progress(-3, 10, width=4) == "[----] 0.0% (0/10)"
+assert progress(0, 0, width=3) == "[---] 0.0% (0/0)"
+assert progress(1, 3, width=10) == "[###-------] 33.3% (1/3)"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert progress(4, 10) == &quot;[########------------] 40.0% (4/10)&quot;
+assert progress(10, 10, width=5) == &quot;[#####] 100.0% (10/10)&quot;
+assert progress(15, 10, width=4) == &quot;[####] 100.0% (10/10)&quot;
+assert progress(-3, 10, width=4) == &quot;[----] 0.0% (0/10)&quot;
+assert progress(0, 0, width=3) == &quot;[---] 0.0% (0/0)&quot;
+assert progress(1, 3, width=10) == &quot;[###-------] 33.3% (1/3)&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Clamp with <code>max(0, min(done, total))</code>, compute <code>fraction = done / total if total else 0.0</code>, then <code>filled = int(fraction * width)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def progress(done, total, width=20):
+    done = max(0, min(done, total))
+    fraction = done / total if total else 0.0
+    filled = int(fraction * width)
+    bar = &quot;#&quot; * filled + &quot;-&quot; * (width - filled)
+    return f&quot;[{bar}] {fraction:.1%} ({done}/{total})&quot;</code></pre></div><p>Clamping first means every later step can trust its input (a guard clause, 3.1). <code>int(...)</code> rounds the filled length down, so the bar is only full at exactly 100%; with <code>round</code>, 97.5% would already look complete. <code>:.1%</code> formats the fraction directly. Libraries such as <code>tqdm</code> do this (plus rates and time estimates) for training loops and batch jobs.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-invoice-table-with-form" data-pid="m5-3-read-the-code-an-invoice-table-with-form" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: an invoice table with formatting bugs</h3></header>
+<div class="prob-q"><p>This renders an invoice as a fixed-width table: description 20 characters wide (longer ones cut to 20), quantity right-aligned in 4, unit price right-aligned in 10 with two decimals and thousands separators, and line total the same. The output is misaligned and long descriptions push the columns over. Read the function, find the format spec bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def render(lines):
+    out = []
+    for desc, qty, price in lines:
+        total = qty * price
+        out.append(f&quot;{desc:20} {qty:&lt;4} {price:10.2} {total:&gt;10,.2f}&quot;)
+    grand = sum(q * p for _, q, p in lines)
+    out.append(f&quot;{&#x27;TOTAL&#x27;:20} {&#x27;&#x27;:4} {&#x27;&#x27;:10} {grand:10.2f}&quot;)
+    return &quot;\n&quot;.join(out)
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [("Embedding API credits (annual)", 2, 1250.5), ("Support", 12, 80.0)]
+assert render(rows) == (
+    "Embedding API credit    2   1,250.50   2,501.00\n"
+    "Support                12      80.00     960.00\n"
+    "TOTAL                                  3,461.00"
+)
+assert all(len(line) == 47 for line in render(rows).splitlines())</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [(&quot;Embedding API credits (annual)&quot;, 2, 1250.5), (&quot;Support&quot;, 12, 80.0)]
+assert render(rows) == (
+    &quot;Embedding API credit    2   1,250.50   2,501.00\n&quot;
+    &quot;Support                12      80.00     960.00\n&quot;
+    &quot;TOTAL                                  3,461.00&quot;
+)
+assert all(len(line) == 47 for line in render(rows).splitlines())</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A width alone never cuts a string: add a precision, <code>.20</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>&lt;4</code> left-aligns the quantity; numbers should be right-aligned (the default, or <code>&gt;</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>10.2</code> without a type means two <strong>significant</strong> digits; use <code>,.2f</code>. The grand total also needs <code>,</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def render(lines):
+    out = []
+    for desc, qty, price in lines:
+        total = qty * price
+        out.append(f&quot;{desc:20.20} {qty:&gt;4} {price:&gt;10,.2f} {total:&gt;10,.2f}&quot;)
+    grand = sum(q * p for _, q, p in lines)
+    out.append(f&quot;{&#x27;TOTAL&#x27;:20} {&#x27;&#x27;:4} {&#x27;&#x27;:10} {grand:&gt;10,.2f}&quot;)
+    return &quot;\n&quot;.join(out)</code></pre></div><p>Four spec bugs, each producing plausible output. Width is a minimum, so the long description overflowed and pushed every column right; <code>.20</code> is a maximum for strings. <code>&lt;4</code> left-aligned the quantities. <code>10.2</code> without a type is the general format with <strong>two significant digits</strong>, so 1250.5 printed as <code>1.3e+03</code>. And the total line lacked the thousands separator that the line totals had. When you build fixed-width reports, test against exact expected text, as here: a misaligned column is invisible in a quick glance at small numbers.</p></div></details>
+</article>
+<article class="prob" id="p-format-a-duration" data-pid="m5-3-format-a-duration" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Format a duration</h3></header>
+<div class="prob-q"><p>Write <code>duration(seconds)</code> for a non-negative number of seconds (a float), returning the two largest non-zero units among days, hours, minutes and seconds, like <code>"2d 03h"</code>, <code>"1h 02m"</code>, <code>"4m 05s"</code>, <code>"45s"</code>, with the second unit zero-padded to two digits. Sub-second durations show milliseconds, <code>"350ms"</code>, and <code>0</code> is <code>"0s"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def duration(seconds):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert duration(0) == "0s"
+assert duration(0.35) == "350ms"
+assert duration(45) == "45s"
+assert duration(245) == "4m 05s"
+assert duration(3725) == "1h 02m"
+assert duration(2 * 86400 + 3 * 3600 + 59) == "2d 03h"
+assert duration(3600) == "1h 00m"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert duration(0) == &quot;0s&quot;
+assert duration(0.35) == &quot;350ms&quot;
+assert duration(45) == &quot;45s&quot;
+assert duration(245) == &quot;4m 05s&quot;
+assert duration(3725) == &quot;1h 02m&quot;
+assert duration(2 * 86400 + 3 * 3600 + 59) == &quot;2d 03h&quot;
+assert duration(3600) == &quot;1h 00m&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Split with <code>divmod</code> (1.1): days and the rest from 86,400, then hours from 3,600, then minutes from 60.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pair each value with its unit, find the first non-zero one, and format it with the next one, <code>f"{a}{u1} {b:02d}{u2}"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def duration(seconds):
+    if seconds &lt; 1:
+        return f&quot;{round(seconds * 1000)}ms&quot; if seconds &gt; 0 else &quot;0s&quot;
+    total = int(seconds)
+    days, rest = divmod(total, 86_400)
+    hours, rest = divmod(rest, 3_600)
+    minutes, secs = divmod(rest, 60)
+    parts = [(days, &quot;d&quot;), (hours, &quot;h&quot;), (minutes, &quot;m&quot;), (secs, &quot;s&quot;)]
+    for i, (value, unit) in enumerate(parts):
+        if value:
+            if i == len(parts) - 1:
+                return f&quot;{value}{unit}&quot;
+            nxt, nxt_unit = parts[i + 1]
+            return f&quot;{value}{unit} {nxt:02d}{nxt_unit}&quot;
+    return &quot;0s&quot;</code></pre></div><p>The <code>divmod</code> chain is the 1.1 pattern: each step takes off the largest unit and passes the remainder on. Showing the two largest units keeps the text short and meaningful: nobody cares about the seconds of a two-day job. Zero-padding the second unit (<code>03h</code>, <code>05s</code>) keeps columns aligned in logs, and <code>1h 00m</code> still shows the second unit because it is the one after the first non-zero unit, which is the readable choice. This is the kind of helper that turns raw latency and job-duration numbers into dashboards and agent progress messages.</p></div></details>
+</article>
+<article class="prob" id="p-format-spec-edge-cases" data-pid="m5-3-format-spec-edge-cases" data-type="predict" data-level="hard" data-answer="2 4 -0 0.12
+0.000000 1e-07 1.23457e+08 0.00012
+1 True   None |
+-0007  7 1_234 50.000000%
+nan inf -0.0">
+<header class="prob-head"><h3>16. Format spec edge cases</h3></header>
+<div class="code"><pre><code class="py">print(f&quot;{2.5:.0f} {3.5:.0f} {-0.4:.0f} {0.125:.2f}&quot;)
+print(f&quot;{1e-7:f} {1e-7:g} {123456789:g} {0.00012345:.2g}&quot;)
+print(f&quot;{True:d} {True} {None!r:&gt;6} {&#x27;abc&#x27;:.0}|&quot;)
+print(f&quot;{-7:+05d} {7: d} {1234:_} {0.5:%}&quot;)
+print(f&quot;{float(&#x27;nan&#x27;):.2f} {float(&#x27;inf&#x27;):,.1f} {-0.0:.1f}&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Formatting rounds halves to even, like <code>round</code>. <code>g</code> switches to exponent notation for very large or small values.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>-0.0</code> is a real float value with a sign.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2 4 -0 0.12
+0.000000 1e-07 1.23457e+08 0.00012
+1 True   None |
+-0007  7 1_234 50.000000%
+nan inf -0.0</pre></div><p>Halves round to even: <code>2.5</code> gives 2, <code>3.5</code> gives 4, and <code>-0.4</code> rounds to <code>-0</code>, keeping its sign. <code>0.125</code> is exactly representable, so it rounds to even, <code>0.12</code>. Default <code>f</code> has 6 decimals, which shows <code>0.000000</code> for 1e-7, while <code>g</code> keeps it visible as <code>1e-07</code> and writes large integers in exponent form. <code>True</code> formats as <code>1</code> with <code>d</code> and as <code>True</code> otherwise; a string precision of 0 gives the empty string. The space sign leaves room for a minus. <code>nan</code> and <code>inf</code> ignore precision, and <code>-0.0</code> keeps its minus sign, which surprises people in reports: add <code>z</code> (<code>f"{-0.0:z.1f}"</code>, Python 3.11+) to normalise it.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-f-strings-str-format-formatting-or-strin" data-pid="m5-3-f-strings-str-format-formatting-or-strin" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. f-strings, <code>str.format</code>, <code>%</code> formatting or <code>string.Template</code>: when do you use each?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>f-strings for almost all of your own code: the values are known where the text is built, they are the most readable and the fastest, and they support the full format-spec language plus <code>=</code> for debugging. <code>str.format</code> or <code>format_map</code> when the template is defined separately and filled later, such as prompt templates stored in files; the template must be trusted, since format fields can access attributes. <code>%</code> formatting mainly for logging calls, where the logger formats lazily only when the message is emitted. <code>string.Template</code> for templates written by users or non-programmers: <code>$name</code> placeholders cannot run expressions, and <code>safe_substitute</code> tolerates missing values. For HTML or anything needing escaping, use a real template engine such as Jinja2 with autoescaping.</p></div></details>
+</article>
+<article class="prob" id="p-why-should-log-messages-use-s-arguments-" data-pid="m5-3-why-should-log-messages-use-s-arguments-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why should log messages use <code>%s</code> arguments instead of f-strings?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>An f-string is evaluated before the logging call, so the message text (including <code>repr</code> of large objects) is built even when that log level is disabled, every time the line runs. Passing arguments (<code>log.debug("x=%s", x)</code>) lets the logger check the level first and format only when the record is actually emitted, which matters in hot paths. It also keeps the message <strong>template</strong> constant, so log aggregators (Datadog, ELK, Sentry) can group occurrences and extract the values as fields. Exceptions: f-strings are fine for messages that are always emitted and cheap to build, and structured logging libraries take keyword fields instead (<code>log.info("retrieved", n=len(chunks))</code>).</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-format-floats-for-financial-r" data-pid="m5-3-how-do-you-format-floats-for-financial-r" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How do you format floats for financial reports correctly?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Do not do money arithmetic in binary floats: values like 2.675 or 1.005 are not exactly representable, so sums drift and formatting can round the "wrong" way, and format specs round half to even. Parse amounts as <code>Decimal</code> from strings (or store integer cents), do the arithmetic in that type, round <strong>once</strong> at the defined point with an explicit rule (<code>quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)</code> or banker's rounding if the business requires it), and only then format for display with <code>:,.2f</code>. Keep full precision in storage, format at the edge, and be aware that thousands and decimal separators are locale-specific (<code>babel</code> or <code>locale</code> for non-English reports). Test against totals produced by the accounting system, because "matches Excel" is usually the real requirement.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>f-string fields are expressions evaluated when the line runs. Use <code>{{</code> <code>}}</code> for literal braces, <code>!r</code> to see quotes and whitespace, <code>{x=}</code> to debug.</li><li>Format spec order: fill, align, sign, <code>#</code>, <code>0</code>, width, grouping, <code>.precision</code>, type. Width is a minimum; only a string precision cuts.</li><li>Formatting rounds the binary value with ties to even. For money, round with <code>Decimal</code> first, then format.</li><li>Dates: <code>f"{dt:%Y-%m-%d}"</code> or <code>isoformat()</code>, never concatenated numbers.</li><li>f-strings for your code, <code>format_map</code> for templates filled later, <code>%</code> arguments for logging, <code>Template</code> for user-written templates.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

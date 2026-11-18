@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5.4 · Unicode, bytes and encodings</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m5-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 5 · Strings and text</span></div>
+  <h1>5.4 Unicode, bytes and encodings</h1>
+  <p>Text inside Python is Unicode; text in files, networks and databases is bytes. How UTF-8 turns code points into bytes, <code>encode</code> and <code>decode</code> with their error modes, mojibake and how to recognise it, reading files safely on Windows, the BOM, and normalisation for matching text.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="model">
+<h2><span class="n">1</span>Text inside, bytes outside</h2>
+<p>Inside your program, text is <code>str</code>: a sequence of Unicode <strong>code points</strong> (5.1). Outside your program, in files, network messages, HTTP bodies and database drivers, everything is <strong>bytes</strong>: numbers from 0 to 255. An <strong>encoding</strong> is the rule that converts between the two. <code>s.encode(encoding)</code> turns a <code>str</code> into <code>bytes</code>; <code>b.decode(encoding)</code> turns <code>bytes</code> back into a <code>str</code>. The golden rule follows: <strong>decode as early as possible when data comes in, work with <code>str</code>, encode as late as possible when it goes out</strong>, and always say which encoding.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 140" role="img" aria-label="encode turns the str 'café' into the bytes 63 61 66 c3 a9; decode turns them back.">
+  <defs><marker id="u1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker></defs>
+  <rect x="10" y="40" width="170" height="54" rx="12" class="box a"/>
+  <text x="95" y="62" class="w mid">str: "café"</text><text x="95" y="82" class="w mid">4 code points</text>
+  <rect x="440" y="40" width="190" height="54" rx="12" class="box b"/>
+  <text x="535" y="62" class="w mid">bytes: 63 61 66 c3 a9</text><text x="535" y="82" class="w mid">5 bytes (é takes 2)</text>
+  <path d="M184 56 L434 56" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#u1)"/>
+  <text x="310" y="48" class="mid">.encode("utf-8")</text>
+  <path d="M434 80 L184 80" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#u1)"/>
+  <text x="310" y="100" class="mid">.decode("utf-8")</text>
+  <text x="310" y="128" class="mid">inside Python: str. At every boundary (file, network, database): bytes.</text>
+</svg></div><figcaption>Encoding and decoding happen at the edges of a program, never in the middle.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">str_vs_bytes.py</span><button class="copy">Copy</button></div><pre><code class="py">s = &quot;café €5&quot;
+b = s.encode(&quot;utf-8&quot;)
+print(type(b).__name__, b, len(s), len(b))
+print(list(b[3:5]), b[0], chr(b[0]))          # indexing bytes gives integers
+print(b.decode(&quot;utf-8&quot;) == s)
+try:
+    &quot;x&quot; + b
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>bytes b&#x27;caf\xc3\xa9 \xe2\x82\xac5&#x27; 7 10
+[195, 169] 99 c
+True
+TypeError: can only concatenate str (not &quot;bytes&quot;) to str</pre></div></div>
+<p><code>bytes</code> look like strings when printed (<code>b'caf\xc3\xa9'</code>), but they are a different type: indexing gives an <strong>integer</strong>, you cannot mix them with <code>str</code> in <code>+</code>, <code>in</code> or <code>==</code> (a <code>str</code> never equals a <code>bytes</code>), and their methods (<code>split</code>, <code>startswith</code>) take bytes arguments. <code>bytearray</code> is the mutable version. Python 3 refuses to mix the two silently, which turns encoding confusion into an immediate <code>TypeError</code> instead of corrupted data.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>In SQL Server, <code>NVARCHAR</code> stores Unicode and <code>VARCHAR</code> stores bytes in a code page (or UTF-8 with a <code>_UTF8</code> collation); <code>VARBINARY</code> is raw bytes. A <code>str</code> is like <code>NVARCHAR</code>, <code>bytes</code> like <code>VARBINARY</code>, and the encoding is the collation's code page. Importing a CSV into Power BI with the wrong "File origin" setting is the same mistake as decoding with the wrong encoding: you get <code>Ã©</code> where <code>é</code> should be.</p></div></div>
+</section>
+<section class="sec" id="utf8">
+<h2><span class="n">2</span>How UTF-8 works</h2>
+<p>UTF-8 is the encoding to use unless something forces you otherwise: it is the default for the web, JSON, Python source files, Linux and macOS, and most databases. It stores each code point in <strong>1 to 4 bytes</strong>:</p>
+<div class="tbl"><table>
+      <tr><th>Code points</th><th>Bytes</th><th>Examples</th></tr>
+      <tr><td>U+0000 to U+007F (ASCII)</td><td>1</td><td><code>A</code>, <code>7</code>, <code>{</code></td></tr>
+      <tr><td>U+0080 to U+07FF</td><td>2</td><td><code>é</code>, <code>ß</code>, Greek, Cyrillic, Arabic, Hebrew</td></tr>
+      <tr><td>U+0800 to U+FFFF</td><td>3</td><td><code>€</code>, most Chinese, Japanese and Korean characters</td></tr>
+      <tr><td>U+10000 and above</td><td>4</td><td>emoji, rare scripts</td></tr>
+    </table></div>
+<p>Two properties make it so popular. <strong>ASCII text is unchanged</strong>: an ASCII file is already valid UTF-8, byte for byte. And it is <strong>self-synchronising</strong>: the first byte of a character says how many bytes follow, and continuation bytes always start with the bits <code>10</code>, so a decoder can tell where characters begin. That is also why cutting UTF-8 bytes at an arbitrary position can split a character in half, producing invalid data (problem 13).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">utf8_bytes.py</span><button class="copy">Copy</button></div><pre><code class="py">for ch in [&quot;A&quot;, &quot;é&quot;, &quot;€&quot;, &quot;\U0001F600&quot;]:
+    b = ch.encode(&quot;utf-8&quot;)
+    print(ch, f&quot;U+{ord(ch):04X}&quot;, len(b), &quot; &quot;.join(f&quot;{x:08b}&quot; for x in b))
+print(len(&quot;naïve résumé&quot;.encode(&quot;utf-8&quot;)), len(&quot;naïve résumé&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>A U+0041 1 01000001
+é U+00E9 2 11000011 10101001
+€ U+20AC 3 11100010 10000010 10101100
+😀 U+1F600 4 11110000 10011111 10011000 10000000
+15 12</pre></div></div>
+<p>Other encodings you will meet: <strong>UTF-16</strong> (2 or 4 bytes per code point, used inside Windows and Java, and by Excel's "Unicode text" export), <strong>Latin-1</strong> (ISO-8859-1, one byte per character, only the first 256 code points) and <strong>cp1252</strong> (Windows-1252, Latin-1 plus <code>€</code> and typographic quotes, the old Windows default for Western European text). The last two can decode <strong>any</strong> byte sequence without error, which makes them dangerous fallbacks: they never fail, they just produce the wrong characters.</p>
+</section>
+<section class="sec" id="errors">
+<h2><span class="n">3</span>Decoding errors and error modes</h2>
+<p>Decoding bytes that are not valid in the chosen encoding raises <code>UnicodeDecodeError</code>, which reports the encoding, the offending byte and its position. Encoding a character the target encoding cannot represent raises <code>UnicodeEncodeError</code>. The <code>errors=</code> argument chooses what to do instead of raising:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">error_modes.py</span><button class="copy">Copy</button></div><pre><code class="py">data = &quot;café&quot;.encode(&quot;utf-8&quot;) + b&quot;\xff&quot;            # valid UTF-8 followed by one bad byte
+try:
+    data.decode(&quot;utf-8&quot;)
+except UnicodeDecodeError as e:
+    print(&quot;UnicodeDecodeError:&quot;, e)
+print(data.decode(&quot;utf-8&quot;, errors=&quot;replace&quot;))        # U+FFFD replacement character
+print(data.decode(&quot;utf-8&quot;, errors=&quot;ignore&quot;))         # silently drop the bad byte
+print(repr(data.decode(&quot;utf-8&quot;, errors=&quot;backslashreplace&quot;)))
+try:
+    &quot;€5&quot;.encode(&quot;latin-1&quot;)
+except UnicodeEncodeError as e:
+    print(&quot;UnicodeEncodeError:&quot;, e)
+print(&quot;€5&quot;.encode(&quot;ascii&quot;, errors=&quot;xmlcharrefreplace&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>UnicodeDecodeError: &#x27;utf-8&#x27; codec can&#x27;t decode byte 0xff in position 5: invalid start byte
+café�
+café
+&#x27;café\\xff&#x27;
+UnicodeEncodeError: &#x27;latin-1&#x27; codec can&#x27;t encode character &#x27;\u20ac&#x27; in position 0: ordinal not in range(256)
+b&#x27;&amp;#8364;5&#x27;</pre></div></div>
+<p>Choose deliberately. <code>strict</code> (the default) is right for data you produce or that must be correct: failing loudly is better than corrupting it. <code>replace</code> is good for display and logs: the <code>�</code> shows where something was wrong. <code>ignore</code> loses data without a trace, so avoid it except for throwaway analysis. <code>backslashreplace</code> keeps the bad bytes visible and recoverable, which suits logs of untrusted input. Whatever you choose, <strong>count</strong> how many replacements happened in a data pipeline (problem 9), because "a few bad characters" can mean the whole file was decoded with the wrong encoding.</p>
+</section>
+<section class="sec" id="mojibake">
+<h2><span class="n">4</span>Mojibake: decoding with the wrong encoding</h2>
+<p>The most common encoding bug is not an error at all. Bytes written as UTF-8 and read back as cp1252 (or Latin-1) decode without complaint, because those encodings accept any byte, and every non-ASCII character turns into two or three wrong ones: <code>é</code> becomes <code>Ã©</code>, <code>€</code> becomes <code>â‚¬</code>, a typographic apostrophe <code>’</code> becomes <code>â€™</code> (a plain <code>'</code> is ASCII and survives). This is called <strong>mojibake</strong>, and its tell-tale sign is <code>Ã</code> or <code>â€</code> appearing in text that should contain accents or typographic punctuation.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mojibake.py</span><button class="copy">Copy</button></div><pre><code class="py">original = &quot;Café – it&#x27;s 5€&quot;
+garbled = original.encode(&quot;utf-8&quot;).decode(&quot;cp1252&quot;)
+print(garbled)
+repaired = garbled.encode(&quot;cp1252&quot;).decode(&quot;utf-8&quot;)
+print(repaired, repaired == original)</code></pre><div class="out"><span class="ol">Output</span><pre>CafÃ© â€“ it&#x27;s 5â‚¬
+Café – it&#x27;s 5€ True</pre></div></div>
+<p>When the damage is exactly one wrong decode, reversing it (encode with the wrong encoding, decode with the right one) restores the text, as above. When text was garbled twice, or saved after garbling with information lost, repair is guesswork; the <code>ftfy</code> library automates the common cases. The real fix is upstream: find the step that decoded with the wrong encoding, which is usually a file opened without <code>encoding=</code> (next section) or a database connection with the wrong character set.</p>
+</section>
+<section class="sec" id="files">
+<h2><span class="n">5</span>Reading and writing files safely</h2>
+<p><code>open(path)</code> in text mode decodes bytes into <code>str</code> for you, using an encoding. If you do not pass <code>encoding=</code>, Python uses the <strong>locale's</strong> encoding, which is UTF-8 on Linux and macOS but traditionally cp1252 on Windows (Python 3.15 makes UTF-8 the default everywhere). Code that works on a Mac and garbles text on a Windows VDI almost always has this bug. So: <strong>always pass <code>encoding="utf-8"</code></strong> (or the file's real encoding) to <code>open</code>, <code>pathlib.Path.read_text</code> and <code>write_text</code>, and to <code>pandas.read_csv</code> when the file is not UTF-8.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">files.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;notes.txt&quot;)
+with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;Résumé – naïve café\n&quot;)
+with open(path, &quot;rb&quot;) as f:
+    raw = f.read()
+print(raw[:12], len(raw))
+with open(path, encoding=&quot;utf-8&quot;) as f:
+    print(f.read().strip())
+with open(path, encoding=&quot;cp1252&quot;) as f:
+    print(f.read().strip())                    # wrong encoding: mojibake, no error</code></pre><div class="out"><span class="ol">Output</span><pre>b&#x27;R\xc3\xa9sum\xc3\xa9 \xe2\x80\x93&#x27; 26
+Résumé – naïve café
+RÃ©sumÃ© â€“ naÃ¯ve cafÃ©</pre></div></div>
+<p>Two more Windows realities. Some tools (Excel's "CSV UTF-8", Notepad in older versions) write a <strong>BOM</strong>, the three bytes <code>EF BB BF</code>, at the start of a UTF-8 file. Decoded as plain <code>utf-8</code>, it becomes the invisible character <code>\ufeff</code> glued to the first value, so the first column header is <code>"\ufeffid"</code> and <code>row["id"]</code> fails. Reading with <code>encoding="utf-8-sig"</code> strips it (and works for files without a BOM too). And files exported as "Unicode" from Excel are usually <strong>UTF-16</strong>, which <code>utf-8</code> cannot decode at all.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bom.py</span><button class="copy">Copy</button></div><pre><code class="py">data = &quot;\ufeffid,name\n1,Ana\n&quot;.encode(&quot;utf-8&quot;)
+print(data[:5])
+print(repr(data.decode(&quot;utf-8&quot;).split(&quot;,&quot;)[0]), repr(data.decode(&quot;utf-8-sig&quot;).split(&quot;,&quot;)[0]))</code></pre><div class="out"><span class="ol">Output</span><pre>b&#x27;\xef\xbb\xbfid&#x27;
+&#x27;\ufeffid&#x27; &#x27;id&#x27;</pre></div></div>
+</section>
+<section class="sec" id="normalize">
+<h2><span class="n">6</span>Normalization: making equal text compare equal</h2>
+<p>The same visible text can be written with different code points. <code>é</code> can be one precomposed code point (U+00E9) or <code>e</code> plus a combining accent (U+0301), and macOS file names and some keyboards produce the decomposed form. Compatibility characters add more variants: the ligature <code>ﬁ</code>, full-width <code>ＡＢＣ</code>, superscript <code>²</code>, the non-breaking space. Unicode defines four <strong>normal forms</strong> to make such text comparable:</p>
+<ul><li><strong>NFC</strong>: compose where possible (<code>e</code> + accent becomes <code>é</code>). The standard form for storage and comparison.</li><li><strong>NFD</strong>: decompose (<code>é</code> becomes <code>e</code> + accent). Useful for removing accents: decompose, then drop the combining marks.</li><li><strong>NFKC</strong> / <strong>NFKD</strong>: also replace <strong>compatibility</strong> characters with their plain equivalents (<code>ﬁ</code> to <code>fi</code>, <code>²</code> to <code>2</code>, full-width to normal width). Good for search and matching, but it changes meaning in some cases, so do not use it for storage.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">normalize.py</span><button class="copy">Copy</button></div><pre><code class="py">import unicodedata as ud
+
+a, b = &quot;café&quot;, &quot;cafe\u0301&quot;
+print(a == b, ud.normalize(&quot;NFC&quot;, a) == ud.normalize(&quot;NFC&quot;, b), len(ud.normalize(&quot;NFD&quot;, a)))
+for s in [&quot;ﬁle&quot;, &quot;ＡＢＣ&quot;, &quot;x²&quot;, &quot;\u00a0&quot;]:
+    print(repr(s), repr(ud.normalize(&quot;NFKC&quot;, s)))
+print(ud.name(&quot;é&quot;), &quot;|&quot;, ud.name(&quot;\u0301&quot;), &quot;|&quot;, ud.category(&quot;\u0301&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>False True 5
+&#x27;ﬁle&#x27; &#x27;file&#x27;
+&#x27;ＡＢＣ&#x27; &#x27;ABC&#x27;
+&#x27;x²&#x27; &#x27;x2&#x27;
+&#x27;\xa0&#x27; &#x27; &#x27;
+LATIN SMALL LETTER E WITH ACUTE | COMBINING ACUTE ACCENT | Mn</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-str-versus-bytes" data-pid="m5-4-str-versus-bytes" data-type="predict" data-level="easy" data-answer="10 12 82 b&#x27;Refund&#x27;
+False True True
+b&#x27;ABC&#x27; [b&#x27;a&#x27;, b&#x27;b&#x27;] e282ac">
+<header class="prob-head"><h3>1. str versus bytes</h3></header>
+<div class="code"><pre><code class="py">s = &quot;Refund €20&quot;
+b = s.encode(&quot;utf-8&quot;)
+print(len(s), len(b), b[0], b[:6])
+print(s == b, s.encode() == b, b.decode() == s)
+print(b&quot;abc&quot;.upper(), b&quot;a,b&quot;.split(b&quot;,&quot;), &quot;€&quot;.encode(&quot;utf-8&quot;).hex())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>€</code> needs 3 bytes in UTF-8. Indexing bytes gives an integer; slicing gives bytes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>10 12 82 b&#x27;Refund&#x27;
+False True True
+b&#x27;ABC&#x27; [b&#x27;a&#x27;, b&#x27;b&#x27;] e282ac</pre></div><p>The string has 10 code points, and the bytes 12, because <code>€</code> takes 3 bytes. <code>b[0]</code> is the integer 82 (<code>"R"</code>), and a slice stays <code>bytes</code>. A <code>str</code> never equals a <code>bytes</code>, even with the "same" content. <code>encode()</code> and <code>decode()</code> default to UTF-8. Bytes have string-like methods, but their arguments must be bytes too. <code>.hex()</code> shows the 3 bytes of <code>€</code>: <code>e282ac</code>.</p></div></details>
+</article>
+<article class="prob" id="p-byte-length-for-a-column-limit" data-pid="m5-4-byte-length-for-a-column-limit" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Byte length for a column limit</h3></header>
+<div class="prob-q"><p>A database column stores at most <code>max_bytes</code> bytes of UTF-8. Write <code>fits(text, max_bytes)</code> that returns <code>True</code> if the UTF-8 encoding of <code>text</code> fits, and <code>utf8_len(text)</code> returning that byte length. <code>len(text)</code> is not the right measure.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def utf8_len(text):
+    pass
+
+def fits(text, max_bytes):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert utf8_len("abc") == 3 and utf8_len("café") == 5 and utf8_len("€") == 3
+assert fits("café", 5) and not fits("café", 4)
+assert not fits("\U0001F600" * 3, 10) and fits("\U0001F600" * 3, 12)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert utf8_len(&quot;abc&quot;) == 3 and utf8_len(&quot;café&quot;) == 5 and utf8_len(&quot;€&quot;) == 3
+assert fits(&quot;café&quot;, 5) and not fits(&quot;café&quot;, 4)
+assert not fits(&quot;\U0001F600&quot; * 3, 10) and fits(&quot;\U0001F600&quot; * 3, 12)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Encode and take the length of the bytes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def utf8_len(text):
+    return len(text.encode(&quot;utf-8&quot;))
+
+def fits(text, max_bytes):
+    return utf8_len(text) &lt;= max_bytes</code></pre></div><p>A column limit like MySQL's <code>VARCHAR(255)</code> with a byte-based limit, an index key limit, or an HTTP header size limit counts <strong>bytes</strong>, so a 255-character name with accents or emoji can be rejected or silently truncated even though <code>len</code> says it fits. Measuring the encoded length uses the same rule the database will. (Many databases count characters for <code>VARCHAR(n)</code> and bytes for other limits; check which one applies.)</p></div></details>
+</article>
+<article class="prob" id="p-a-csv-header-with-an-invisible-character" data-pid="m5-4-a-csv-header-with-an-invisible-character" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A CSV header with an invisible character</h3></header>
+<div class="prob-q"><p>A CSV exported from Excel is read with <code>decode("utf-8")</code>, and <code>row["id"]</code> raises <code>KeyError</code> although the header clearly says <code>id</code>. Fix <code>parse_csv</code> so the first header is clean, whether or not the file has a BOM.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def parse_csv(data):
+    text = data.decode(&quot;utf-8&quot;)
+    lines = text.splitlines()
+    header = lines[0].split(&quot;,&quot;)
+    return [dict(zip(header, line.split(&quot;,&quot;))) for line in lines[1:]]
+</textarea>
+<script type="text/plain" class="prob-tests">with_bom = "\ufeffid,name\n1,Ana\n2,Ben\n".encode("utf-8")
+without = "id,name\n3,Cy\n".encode("utf-8")
+assert parse_csv(with_bom)[0]["id"] == "1" and parse_csv(with_bom)[1]["name"] == "Ben"
+assert parse_csv(without) == [{"id": "3", "name": "Cy"}]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">with_bom = &quot;\ufeffid,name\n1,Ana\n2,Ben\n&quot;.encode(&quot;utf-8&quot;)
+without = &quot;id,name\n3,Cy\n&quot;.encode(&quot;utf-8&quot;)
+assert parse_csv(with_bom)[0][&quot;id&quot;] == &quot;1&quot; and parse_csv(with_bom)[1][&quot;name&quot;] == &quot;Ben&quot;
+assert parse_csv(without) == [{&quot;id&quot;: &quot;3&quot;, &quot;name&quot;: &quot;Cy&quot;}]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The file starts with the byte order mark <code>EF BB BF</code>. Which codec strips it automatically?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_csv(data):
+    text = data.decode(&quot;utf-8-sig&quot;)
+    lines = text.splitlines()
+    header = lines[0].split(&quot;,&quot;)
+    return [dict(zip(header, line.split(&quot;,&quot;))) for line in lines[1:]]</code></pre></div><p>Excel's "CSV UTF-8" format starts the file with a BOM. Plain <code>utf-8</code> decodes it as the character <code>\ufeff</code>, which is invisible when printed, so the first key is really <code>"\ufeffid"</code>. <code>utf-8-sig</code> removes a leading BOM if present and otherwise behaves exactly like <code>utf-8</code>, so it is the safe choice for reading files that may come from Windows tools. With pandas, <code>read_csv(..., encoding="utf-8-sig")</code> does the same.</p></div></details>
+</article>
+<article class="prob" id="p-error-modes" data-pid="m5-4-error-modes" data-type="predict" data-level="easy" data-answer="Café � ok
+Café  ok
+CafÃ© ÿ ok
+6 7 invalid start byte">
+<header class="prob-head"><h3>4. Error modes</h3></header>
+<div class="code"><pre><code class="py">raw = b&quot;Caf\xc3\xa9 \xff ok&quot;
+print(raw.decode(&quot;utf-8&quot;, errors=&quot;replace&quot;))
+print(raw.decode(&quot;utf-8&quot;, errors=&quot;ignore&quot;))
+print(raw.decode(&quot;latin-1&quot;))
+try:
+    raw.decode(&quot;utf-8&quot;)
+except UnicodeDecodeError as e:
+    print(e.start, e.end, e.reason)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>\xff</code> can never appear in valid UTF-8. Latin-1 maps every byte to some character, so it never fails.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Café � ok
+Café  ok
+CafÃ© ÿ ok
+6 7 invalid start byte</pre></div><p><code>replace</code> puts <code>�</code> where the bad byte was, <code>ignore</code> drops it, and both decode <code>\xc3\xa9</code> correctly as <code>é</code>. Latin-1 never fails, but it decodes each byte separately, so the UTF-8 <code>é</code> becomes two wrong characters <code>Ã©</code>: no error, wrong text. The exception object tells you exactly where the problem is (<code>start</code>, <code>end</code>) and why, which is what you log when investigating bad input.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-repair-simple-mojibake" data-pid="m5-4-repair-simple-mojibake" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Repair simple mojibake</h3></header>
+<div class="prob-q"><p>Text was written as UTF-8 and read back as cp1252 once. Write <code>fix_mojibake(text)</code> that reverses that (encode as cp1252, decode as UTF-8) when it works, and returns the text <strong>unchanged</strong> if the reversal fails or the text does not look garbled. Treat text as garbled only if it contains <code>Ã</code> or <code>â€</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def fix_mojibake(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert fix_mojibake("CafÃ© â€“ itâ€™s 5â‚¬") == "Café – it’s 5€"
+assert fix_mojibake("Café") == "Café"
+assert fix_mojibake("plain text") == "plain text"
+assert fix_mojibake("Ã") == "Ã"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert fix_mojibake(&quot;CafÃ© â€“ itâ€™s 5â‚¬&quot;) == &quot;Café – it’s 5€&quot;
+assert fix_mojibake(&quot;Café&quot;) == &quot;Café&quot;
+assert fix_mojibake(&quot;plain text&quot;) == &quot;plain text&quot;
+assert fix_mojibake(&quot;Ã&quot;) == &quot;Ã&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check for the tell-tale sequences first. Then try <code>text.encode("cp1252").decode("utf-8")</code> inside <code>try</code> / <code>except UnicodeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def fix_mojibake(text):
+    if &quot;Ã&quot; not in text and &quot;â€&quot; not in text:
+        return text
+    try:
+        return text.encode(&quot;cp1252&quot;).decode(&quot;utf-8&quot;)
+    except UnicodeError:
+        return text</code></pre></div><p>A single wrong decode is reversible: encoding with the same wrong codec gives back the original bytes, which then decode correctly. Two guards keep it safe: only touch text that shows the signature of mojibake (so a real <code>Café</code> is never "repaired" into garbage), and give up if the round trip fails (<code>Ã</code> alone is not valid UTF-8 after re-encoding). <code>UnicodeError</code> catches both decode and encode errors. For real cleanup, <code>ftfy.fix_text</code> handles many more cases, but the better fix is always to read the source with the right encoding.</p></div></details>
+</article>
+<article class="prob" id="p-notes-that-turn-into-mojibake-on-windows" data-pid="m5-4-notes-that-turn-into-mojibake-on-windows" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Notes that turn into mojibake on Windows</h3></header>
+<div class="prob-q"><p><code>save_notes</code> and <code>load_notes</code> store an agent's notes in a text file. On Linux they round-trip perfectly; on the Windows VDI, accented text comes back garbled. Fix both functions so the round trip works everywhere.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def save_notes(path, notes):
+    with open(path, &quot;w&quot;) as f:
+        f.write(&quot;\n&quot;.join(notes))
+
+def load_notes(path):
+    with open(path) as f:
+        return f.read().split(&quot;\n&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">import builtins, codecs, os, tempfile
+p = os.path.join(tempfile.mkdtemp(), "notes.txt")
+notes = ["Résumé reviewed", "Customer: Zoë – urgent", "Refund 50€"]
+used = []
+real_open = builtins.open
+def watching_open(*args, **kwargs):
+    enc = kwargs.get("encoding", args[3] if len(args) > 3 else None)
+    used.append(codecs.lookup(enc).name if enc else "platform default")
+    return real_open(*args, **kwargs)
+builtins.open = watching_open
+try:
+    save_notes(p, notes)
+    loaded = load_notes(p)
+finally:
+    builtins.open = real_open
+assert loaded == notes
+assert used == ["utf-8", "utf-8"], f"encodings used: {used}"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import builtins, codecs, os, tempfile
+p = os.path.join(tempfile.mkdtemp(), &quot;notes.txt&quot;)
+notes = [&quot;Résumé reviewed&quot;, &quot;Customer: Zoë – urgent&quot;, &quot;Refund 50€&quot;]
+used = []
+real_open = builtins.open
+def watching_open(*args, **kwargs):
+    enc = kwargs.get(&quot;encoding&quot;, args[3] if len(args) &gt; 3 else None)
+    used.append(codecs.lookup(enc).name if enc else &quot;platform default&quot;)
+    return real_open(*args, **kwargs)
+builtins.open = watching_open
+try:
+    save_notes(p, notes)
+    loaded = load_notes(p)
+finally:
+    builtins.open = real_open
+assert loaded == notes
+assert used == [&quot;utf-8&quot;, &quot;utf-8&quot;], f&quot;encodings used: {used}&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>encoding=</code>, <code>open</code> uses the platform's default encoding. Pass <code>encoding="utf-8"</code> to both calls.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>This page's Python happens to default to UTF-8, so the test watches <code>open</code> and checks that the encoding is passed explicitly, which is what makes the code correct on every machine.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def save_notes(path, notes):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(&quot;\n&quot;.join(notes))
+
+def load_notes(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return f.read().split(&quot;\n&quot;)</code></pre></div><p>Text mode always encodes and decodes; the only question is with what. Without <code>encoding=</code>, it is the locale default, UTF-8 on Linux and macOS but cp1252 on many Windows setups, so the same code writes different bytes on different machines and a file moved between them is misread. Passing <code>encoding="utf-8"</code> explicitly makes the file format part of the code. The second test checks the bytes on disk are UTF-8, which is what other tools reading the file expect. Ruff's rule PLW1514 (<code>unspecified-encoding</code>) flags every <code>open</code> without an encoding.</p></div></details>
+</article>
+<article class="prob" id="p-encoding-step-by-step" data-pid="m5-4-encoding-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Encoding step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>b.hex()</code> and <code>len(b)</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">b = &quot;A&quot;.encode(&quot;utf-8&quot;)
+b = &quot;é&quot;.encode(&quot;utf-8&quot;)
+b = &quot;é&quot;.encode(&quot;latin-1&quot;)
+b = &quot;é&quot;.encode(&quot;utf-16-le&quot;)
+b = &quot;€&quot;.encode(&quot;utf-8&quot;)
+b = &quot;€&quot;.encode(&quot;cp1252&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>b.hex()</code></th><th><code>len(b)</code></th></tr><tr><td>&#x27;A&#x27; in UTF-8</td><td><input class="cell" data-a="&#x27;41&#x27;" data-s="41" aria-label="b.hex() at &#x27;A&#x27; in UTF-8" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(b) at &#x27;A&#x27; in UTF-8" autocomplete="off"></td></tr><tr><td>&#x27;é&#x27; in UTF-8</td><td><input class="cell" data-a="&#x27;c3a9&#x27;" data-s="c3a9" aria-label="b.hex() at &#x27;é&#x27; in UTF-8" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="len(b) at &#x27;é&#x27; in UTF-8" autocomplete="off"></td></tr><tr><td>&#x27;é&#x27; in Latin-1</td><td><input class="cell" data-a="&#x27;e9&#x27;" data-s="e9" aria-label="b.hex() at &#x27;é&#x27; in Latin-1" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(b) at &#x27;é&#x27; in Latin-1" autocomplete="off"></td></tr><tr><td>&#x27;é&#x27; in UTF-16-LE</td><td><input class="cell" data-a="&#x27;e900&#x27;" data-s="e900" aria-label="b.hex() at &#x27;é&#x27; in UTF-16-LE" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="len(b) at &#x27;é&#x27; in UTF-16-LE" autocomplete="off"></td></tr><tr><td>&#x27;€&#x27; in UTF-8</td><td><input class="cell" data-a="&#x27;e282ac&#x27;" data-s="e282ac" aria-label="b.hex() at &#x27;€&#x27; in UTF-8" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="len(b) at &#x27;€&#x27; in UTF-8" autocomplete="off"></td></tr><tr><td>&#x27;€&#x27; in cp1252</td><td><input class="cell" data-a="&#x27;80&#x27;" data-s="80" aria-label="b.hex() at &#x27;€&#x27; in cp1252" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="len(b) at &#x27;€&#x27; in cp1252" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>é</code> is U+00E9 and <code>€</code> is U+20AC. Latin-1 and cp1252 use one byte per character; UTF-16-LE uses two, low byte first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>b.hex()</code></th><th><code>len(b)</code></th></tr><tr><td>&#x27;A&#x27; in UTF-8</td><td><code>&#x27;41&#x27;</code></td><td><code>1</code></td></tr><tr><td>&#x27;é&#x27; in UTF-8</td><td><code>&#x27;c3a9&#x27;</code></td><td><code>2</code></td></tr><tr><td>&#x27;é&#x27; in Latin-1</td><td><code>&#x27;e9&#x27;</code></td><td><code>1</code></td></tr><tr><td>&#x27;é&#x27; in UTF-16-LE</td><td><code>&#x27;e900&#x27;</code></td><td><code>2</code></td></tr><tr><td>&#x27;€&#x27; in UTF-8</td><td><code>&#x27;e282ac&#x27;</code></td><td><code>3</code></td></tr><tr><td>&#x27;€&#x27; in cp1252</td><td><code>&#x27;80&#x27;</code></td><td><code>1</code></td></tr></table></div><p>ASCII is one byte, <code>41</code>. UTF-8 needs two bytes for <code>é</code> (<code>c3a9</code>) and three for <code>€</code> (<code>e282ac</code>). Latin-1 stores <code>é</code> as the single byte <code>e9</code>, its code point. UTF-16 little-endian writes U+00E9 as <code>e900</code>. cp1252 puts <code>€</code> at byte <code>80</code>, a position Latin-1 uses for an invisible control character, which is why the two "Western" encodings disagree exactly on <code>€</code> and typographic quotes. The same character, four different byte sequences: bytes mean nothing without their encoding.</p></div></details>
+</article>
+<article class="prob" id="p-is-it-ascii-a-per-character-check-or-isa" data-pid="m5-4-is-it-ascii-a-per-character-check-or-isa" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Is it ASCII? A per-character check or isascii</h3></header>
+<div class="prob-q"><p>Both test whether each of 20,000 strings is pure ASCII. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">texts = ([&quot;refund policy for the EU region&quot;] * 9 + [&quot;café opening hours&quot;]) * 2000</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">flags = [all(ord(ch) &lt; 128 for ch in t) for t in texts]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">flags = [t.isascii() for t in texts]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How much Python code runs per character in A?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>72.46 ms</td></tr><tr><td>B</td><td>1.46 ms</td></tr></table></div><p>A runs a Python generator, calling <code>ord</code> and comparing, for every character of every string. <code>str.isascii()</code> (Python 3.7+) answers from information CPython already stores with each string (it tracks the widest character), so it is effectively instant regardless of length. Checking for ASCII is a common fast path: ASCII text needs no normalisation and encodes byte for byte.</p></div></details>
+</article>
+<article class="prob" id="p-count-decoding-problems-in-a-batch" data-pid="m5-4-count-decoding-problems-in-a-batch" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. Count decoding problems in a batch</h3></header>
+<div class="prob-q"><p>Write <code>decode_batch(rows)</code> for a list of <code>bytes</code> values from an old system. Decode each as UTF-8 with <code>errors="replace"</code>, and return <code>(texts, bad_rows)</code> where <code>bad_rows</code> is the list of row indices that contained at least one undecodable byte. A file with many bad rows was probably not UTF-8 at all.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def decode_batch(rows):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [b"ok", "café".encode("utf-8"), b"caf\xe9", b"\xff\xfe", b""]
+texts, bad = decode_batch(rows)
+assert texts == ["ok", "café", "caf\ufffd", "\ufffd\ufffd", ""]
+assert bad == [2, 3]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [b&quot;ok&quot;, &quot;café&quot;.encode(&quot;utf-8&quot;), b&quot;caf\xe9&quot;, b&quot;\xff\xfe&quot;, b&quot;&quot;]
+texts, bad = decode_batch(rows)
+assert texts == [&quot;ok&quot;, &quot;café&quot;, &quot;caf\ufffd&quot;, &quot;\ufffd\ufffd&quot;, &quot;&quot;]
+assert bad == [2, 3]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After decoding with <code>replace</code>, a row had problems if <code>"\ufffd"</code> is in the text and was not in the original bytes.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The replacement character itself encodes to <code>b"\xef\xbf\xbd"</code> in UTF-8. A row that already contained it legitimately is rare; checking for it is fine here.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def decode_batch(rows):
+    texts, bad = [], []
+    for i, raw in enumerate(rows):
+        text = raw.decode(&quot;utf-8&quot;, errors=&quot;replace&quot;)
+        if &quot;\ufffd&quot; in text and b&quot;\xef\xbf\xbd&quot; not in raw:
+            bad.append(i)
+        texts.append(text)
+    return texts, bad</code></pre></div><p><code>errors="replace"</code> keeps the pipeline running, but silently. Recording which rows were damaged turns a hidden data quality problem into a number you can alert on: one bad row is noise, half the rows means the source encoding is wrong (here <code>b"caf\xe9"</code> is Latin-1 <code>café</code>). The check excludes rows whose bytes already contained a genuine replacement character. Logging the indices (not the content) also avoids leaking customer data into logs.</p></div></details>
+</article>
+<article class="prob" id="p-accents-break-the-search" data-pid="m5-4-accents-break-the-search" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. Accents break the search</h3></header>
+<div class="prob-q"><p>A keyword search compares the query with document titles case-insensitively, but <code>"cafe"</code> does not find <code>"Café Menu"</code>, and a title typed on a Mac (decomposed accents) is not found by <code>"café"</code> either. Make <code>matches</code> ignore case <strong>and</strong> accents, so all four tests pass.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def matches(query, title):
+    return query.casefold() in title.casefold()
+</textarea>
+<script type="text/plain" class="prob-tests">assert matches("cafe", "Café Menu")
+assert matches("café", "Cafe\u0301 Menu")
+assert matches("CAFÉ", "café menu")
+assert not matches("tea", "Café Menu")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert matches(&quot;cafe&quot;, &quot;Café Menu&quot;)
+assert matches(&quot;café&quot;, &quot;Cafe\u0301 Menu&quot;)
+assert matches(&quot;CAFÉ&quot;, &quot;café menu&quot;)
+assert not matches(&quot;tea&quot;, &quot;Café Menu&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Decompose with <code>unicodedata.normalize("NFD", s)</code>, drop characters whose <code>unicodedata.combining(ch)</code> is non-zero, then casefold.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Apply the same function to both the query and the title.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import unicodedata
+
+def fold(text):
+    decomposed = unicodedata.normalize(&quot;NFD&quot;, text)
+    return &quot;&quot;.join(ch for ch in decomposed if not unicodedata.combining(ch)).casefold()
+
+def matches(query, title):
+    return fold(query) in fold(title)</code></pre></div><p>NFD splits <code>é</code> into <code>e</code> plus a combining accent, whatever form it was typed in, and dropping the combining marks leaves the base letters, so precomposed, decomposed and unaccented spellings all become <code>cafe</code>. Folding <strong>both</strong> sides with one function is the important design point (5.2). Accent folding is right for search and matching, but keep the original for display, and note it merges words that differ only by accent in some languages. Search engines do this with "ASCII folding" analysers.</p></div></details>
+</article>
+<article class="prob" id="p-explicit-encodings-in-one-place" data-pid="m5-4-explicit-encodings-in-one-place" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Explicit encodings, in one place</h3></header>
+<div class="prob-q"><p>This code passes <code>"utf-8"</code> and an error mode around in several places. Refactor so there is one pair of helpers, <code>to_bytes</code> and <code>to_text</code>, with the encoding and error handling defined once. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def send(payload):
+    return payload.encode(&quot;utf-8&quot;, &quot;strict&quot;)
+
+def receive(data):
+    return data.decode(&quot;utf-8&quot;, &quot;strict&quot;)
+
+def receive_log(data):
+    return data.decode(&quot;utf-8&quot;, &quot;backslashreplace&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">assert send("€1") == b"\xe2\x82\xac1"
+assert receive(b"\xe2\x82\xac1") == "€1"
+assert receive_log(b"ok\xff") == "ok\\xff"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert send(&quot;€1&quot;) == b&quot;\xe2\x82\xac1&quot;
+assert receive(b&quot;\xe2\x82\xac1&quot;) == &quot;€1&quot;
+assert receive_log(b&quot;ok\xff&quot;) == &quot;ok\\xff&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Module constants <code>ENCODING = "utf-8"</code>, and helpers with an <code>errors</code> parameter defaulting to <code>"strict"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">ENCODING = &quot;utf-8&quot;
+
+def to_bytes(text, errors=&quot;strict&quot;):
+    return text.encode(ENCODING, errors)
+
+def to_text(data, errors=&quot;strict&quot;):
+    return data.decode(ENCODING, errors)
+
+def send(payload):
+    return to_bytes(payload)
+
+def receive(data):
+    return to_text(data)
+
+def receive_log(data):
+    return to_text(data, errors=&quot;backslashreplace&quot;)</code></pre></div><p>Encoding decisions belong at the boundaries, and they should be made <strong>once</strong>: if the protocol ever changes encoding, one constant changes. The default <code>strict</code> keeps correctness the norm, and the one place that tolerates bad input (logging) says so explicitly. The same idea is behind setting <code>encoding</code> once on a database connection or an HTTP client, rather than decoding by hand at every call site.</p></div></details>
+</article>
+<article class="prob" id="p-normal-forms-side-by-side" data-pid="m5-4-normal-forms-side-by-side" data-type="predict" data-level="medium" data-answer="NFC [4, 4, 5, 4]
+NFD [5, 5, 6, 4]
+NFKC [4, 4, 6, 4]
+True
+True">
+<header class="prob-head"><h3>12. Normal forms side by side</h3></header>
+<div class="code"><pre><code class="py">import unicodedata as ud
+
+words = [&quot;café&quot;, &quot;cafe\u0301&quot;, &quot;ﬁancé&quot;, &quot;ＣＡＦＥ&quot;]
+for form in [&quot;NFC&quot;, &quot;NFD&quot;, &quot;NFKC&quot;]:
+    print(form, [len(ud.normalize(form, w)) for w in words])
+print(ud.normalize(&quot;NFC&quot;, words[0]) == ud.normalize(&quot;NFC&quot;, words[1]))
+print(ud.normalize(&quot;NFKC&quot;, words[3]).casefold() == &quot;cafe&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>NFC composes, NFD decomposes, NFKC also replaces compatibility characters (ligatures, full-width letters).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>NFC [4, 4, 5, 4]
+NFD [5, 5, 6, 4]
+NFKC [4, 4, 6, 4]
+True
+True</pre></div><p>NFC makes both spellings of café 4 code points; NFD makes both 5 (<code>e</code> + accent). The <code>ﬁ</code> ligature is one code point under NFC and NFD but becomes <code>f</code> + <code>i</code> under NFKC, and full-width letters become ordinary ones. So NFC is enough to make the two cafés equal, while NFKC plus casefold makes full-width <code>ＣＡＦＥ</code> match <code>cafe</code>. Pick the weakest form that does the job: NFC for storage, NFKC for search keys.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-truncate-bytes-without-splitting-a-chara" data-pid="m5-4-truncate-bytes-without-splitting-a-chara" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Truncate bytes without splitting a character</h3></header>
+<div class="prob-q"><p>An API field accepts at most <code>max_bytes</code> bytes of UTF-8. Write <code>truncate_utf8(text, max_bytes)</code> returning the longest <strong>prefix</strong> of <code>text</code> whose UTF-8 encoding fits, never cutting a character in half. Return a <code>str</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def truncate_utf8(text, max_bytes):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert truncate_utf8("hello", 3) == "hel"
+assert truncate_utf8("café", 4) == "caf"
+assert truncate_utf8("café", 5) == "café"
+assert truncate_utf8("€€€", 7) == "€€"
+assert truncate_utf8("\U0001F600ok", 3) == ""
+assert truncate_utf8("", 10) == ""</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert truncate_utf8(&quot;hello&quot;, 3) == &quot;hel&quot;
+assert truncate_utf8(&quot;café&quot;, 4) == &quot;caf&quot;
+assert truncate_utf8(&quot;café&quot;, 5) == &quot;café&quot;
+assert truncate_utf8(&quot;€€€&quot;, 7) == &quot;€€&quot;
+assert truncate_utf8(&quot;\U0001F600ok&quot;, 3) == &quot;&quot;
+assert truncate_utf8(&quot;&quot;, 10) == &quot;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Encode, cut the bytes at <code>max_bytes</code>, then decode with <code>errors="ignore"</code>: a cut in the middle of a character leaves an incomplete sequence at the end, which <code>ignore</code> drops.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Is it safe to use <code>ignore</code> here? Only the end can be damaged, because the bytes came from valid UTF-8.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def truncate_utf8(text, max_bytes):
+    return text.encode(&quot;utf-8&quot;)[:max_bytes].decode(&quot;utf-8&quot;, errors=&quot;ignore&quot;)</code></pre></div><p>Cutting the bytes can leave the first one or two bytes of a multi-byte character at the end, which is invalid UTF-8. Because the input was valid UTF-8, the <strong>only</strong> damage is that incomplete tail, so decoding with <code>ignore</code> drops exactly those bytes and nothing else: a rare case where <code>ignore</code> is the right tool. Slicing the <code>str</code> by characters would not work, since the limit is in bytes (<code>"€€€"</code> is 3 characters but 9 bytes). This is how you safely fit text into byte-limited fields such as HTTP headers, database index keys or some LLM metadata fields.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-loader-that-guesses-wron" data-pid="m5-4-read-the-code-a-loader-that-guesses-wron" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a loader that guesses wrong</h3></header>
+<div class="prob-q"><p>This loader reads files of unknown encoding. It tries Latin-1 first "because it never fails", so UTF-8 files come out as mojibake, and UTF-16 files (Excel's "Unicode text") come out full of null characters. Rewrite <code>load_text</code> to try encodings in a sensible order: UTF-16 if the data starts with a UTF-16 BOM, then UTF-8 (stripping a BOM), and only then cp1252 as a last resort. Return <code>(text, encoding_used)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def load_text(data):
+    for enc in [&quot;latin-1&quot;, &quot;utf-8&quot;, &quot;utf-16&quot;]:
+        try:
+            return data.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+</textarea>
+<script type="text/plain" class="prob-tests">assert load_text("Café €5".encode("utf-8")) == ("Café €5", "utf-8")
+assert load_text("\ufeffid,name".encode("utf-8")) == ("id,name", "utf-8")
+assert load_text("Café".encode("utf-16")) == ("Café", "utf-16")
+assert load_text("Café €5".encode("cp1252")) == ("Café €5", "cp1252")
+assert load_text(b"plain") == ("plain", "utf-8")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert load_text(&quot;Café €5&quot;.encode(&quot;utf-8&quot;)) == (&quot;Café €5&quot;, &quot;utf-8&quot;)
+assert load_text(&quot;\ufeffid,name&quot;.encode(&quot;utf-8&quot;)) == (&quot;id,name&quot;, &quot;utf-8&quot;)
+assert load_text(&quot;Café&quot;.encode(&quot;utf-16&quot;)) == (&quot;Café&quot;, &quot;utf-16&quot;)
+assert load_text(&quot;Café €5&quot;.encode(&quot;cp1252&quot;)) == (&quot;Café €5&quot;, &quot;cp1252&quot;)
+assert load_text(b&quot;plain&quot;) == (&quot;plain&quot;, &quot;utf-8&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A decoder that never fails must come <strong>last</strong>, otherwise nothing after it is ever tried.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>UTF-16 files written by Python and Excel start with a BOM: <code>b"\xff\xfe"</code> or <code>b"\xfe\xff"</code>. Check <code>data.startswith(...)</code> first.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Decode UTF-8 with <code>utf-8-sig</code> so a UTF-8 BOM is removed, but report the encoding as <code>"utf-8"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def load_text(data):
+    if data.startswith((b&quot;\xff\xfe&quot;, b&quot;\xfe\xff&quot;)):
+        return data.decode(&quot;utf-16&quot;), &quot;utf-16&quot;
+    try:
+        return data.decode(&quot;utf-8-sig&quot;), &quot;utf-8&quot;
+    except UnicodeDecodeError:
+        return data.decode(&quot;cp1252&quot;, errors=&quot;replace&quot;), &quot;cp1252&quot;</code></pre></div><p>The original's order was backwards: Latin-1 accepts every byte sequence, so it always "succeeded" first and the better candidates were never tried. The rule for guessing is <strong>strictest first</strong>: a BOM is near-certain evidence, UTF-8 rarely decodes non-UTF-8 text by accident (random high bytes almost never form valid sequences), and a permissive single-byte encoding is only a fallback. cp1252 is a better fallback than Latin-1 for Western data because it maps <code>€</code> and smart quotes correctly, and <code>errors="replace"</code> covers its five undefined bytes. Returning the encoding used lets callers log it. For harder cases, the <code>charset-normalizer</code> library makes statistical guesses; the best solution is still to agree on UTF-8 with whoever produces the files.</p></div></details>
+</article>
+<article class="prob" id="p-remove-invisible-and-control-characters" data-pid="m5-4-remove-invisible-and-control-characters" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>15. Remove invisible and control characters</h3></header>
+<div class="prob-q"><p>Text extracted from PDFs and web pages contains invisible characters that break matching and waste tokens: zero-width spaces, BOMs, soft hyphens, control characters, and odd spaces. Write <code>clean_invisible(text)</code> that removes characters whose Unicode category is <code>Cf</code> (format) or <code>Cc</code> (control), <strong>except</strong> <code>\n</code> and <code>\t</code>, and turns every character in category <code>Zs</code> (space separators, such as the non-breaking space) into a normal space.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import unicodedata
+
+def clean_invisible(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">raw = "Re\u200bfund\u00a0policy\ufeff\u00ad:\x07 5\u2009days\nnext\tline"
+assert clean_invisible(raw) == "Refund policy: 5 days\nnext\tline"
+assert clean_invisible("plain") == "plain"
+assert len(clean_invisible("\u200b\u200c\u200d")) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">raw = &quot;Re\u200bfund\u00a0policy\ufeff\u00ad:\x07 5\u2009days\nnext\tline&quot;
+assert clean_invisible(raw) == &quot;Refund policy: 5 days\nnext\tline&quot;
+assert clean_invisible(&quot;plain&quot;) == &quot;plain&quot;
+assert len(clean_invisible(&quot;\u200b\u200c\u200d&quot;)) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>unicodedata.category(ch)</code> returns a two-letter code. Build the result with a generator and <code>join</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check <code>\n</code> and <code>\t</code> before the control-character rule, because they are in category <code>Cc</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import unicodedata
+
+def clean_invisible(text):
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if ch in &quot;\n\t&quot;:
+            out.append(ch)
+        elif cat in (&quot;Cf&quot;, &quot;Cc&quot;):
+            continue
+        elif cat == &quot;Zs&quot;:
+            out.append(&quot; &quot;)
+        else:
+            out.append(ch)
+    return &quot;&quot;.join(out)</code></pre></div><p>Unicode categories describe what a character <strong>is</strong>, so the rule covers every zero-width character, BOM, soft hyphen and control code without listing them one by one: <code>U+200B</code> (zero-width space), <code>U+FEFF</code> (BOM) and <code>U+00AD</code> (soft hyphen) are <code>Cf</code>, the bell character is <code>Cc</code>, and both the non-breaking space and the thin space are <code>Zs</code>. Newlines and tabs are kept explicitly because they carry structure. Invisible characters are a real RAG problem: "Re\u200bfund" never matches "Refund" in keyword search, inflates token counts, and can even be used to hide instructions from human reviewers in prompt injection attacks.</p></div></details>
+</article>
+<article class="prob" id="p-bytes-slices-and-decoding-traps" data-pid="m5-4-bytes-slices-and-decoding-traps" data-type="predict" data-level="hard" data-answer="b&#x27;\xe2\x82\xacuro&#x27; 6
+� ��uro
+â‚¬uro
+b&#x27;\xff\xfeZ\x00o\x00\xeb\x00&#x27; 8
+False True b&#x27;Hi&#x27;">
+<header class="prob-head"><h3>16. Bytes, slices and decoding traps</h3></header>
+<div class="code"><pre><code class="py">data = &quot;€uro&quot;.encode(&quot;utf-8&quot;)
+print(data, len(data))
+print(data[:2].decode(&quot;utf-8&quot;, errors=&quot;replace&quot;), data[1:].decode(&quot;utf-8&quot;, errors=&quot;replace&quot;))
+print(data.decode(&quot;cp1252&quot;))
+print(&quot;Zoë&quot;.encode(&quot;utf-16&quot;), len(&quot;Zoë&quot;.encode(&quot;utf-16&quot;)))
+print(b&quot;A&quot; == &quot;A&quot;, b&quot;A&quot;[0] == ord(&quot;A&quot;), bytes([72, 105]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>€</code> is three bytes. A slice of bytes can start or end in the middle of a character.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>UTF-16 output from Python starts with a 2-byte BOM.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>b&#x27;\xe2\x82\xacuro&#x27; 6
+� ��uro
+â‚¬uro
+b&#x27;\xff\xfeZ\x00o\x00\xeb\x00&#x27; 8
+False True b&#x27;Hi&#x27;</pre></div><p>Cutting after two bytes keeps an incomplete <code>€</code>, shown as one <code>�</code>; starting at byte 1 begins with two continuation bytes, each replaced. Decoding the UTF-8 <code>€</code> as cp1252 gives the classic mojibake <code>â‚¬</code>. Python's <code>utf-16</code> codec writes a BOM (<code>\xff\xfe</code>, little-endian) then two bytes per character, 8 bytes for "Zoë". A <code>bytes</code> never equals a <code>str</code>, but a byte is just an integer, so <code>b"A"[0]</code> equals <code>ord("A")</code>, and <code>bytes([72, 105])</code> builds bytes from integers.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-str-and-b" data-pid="m5-4-what-is-the-difference-between-str-and-b" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between <code>str</code> and <code>bytes</code> in Python 3, and where does each belong?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>str</code> is a sequence of Unicode code points: text. <code>bytes</code> is an immutable sequence of integers 0 to 255: raw data. An encoding (usually UTF-8) converts between them with <code>encode</code> and <code>decode</code>. Text belongs in <code>str</code> everywhere inside the program; <code>bytes</code> belongs at the boundaries: files opened in binary mode, sockets, HTTP bodies, hashing (<code>hashlib</code> needs bytes), compression, encryption and binary formats. The rule is "decode early, encode late, and name the encoding explicitly". Python 3 deliberately refuses to mix them (<code>"a" + b"a"</code> raises), which turns encoding mistakes into errors instead of silent corruption, unlike Python 2.</p></div></details>
+</article>
+<article class="prob" id="p-a-colleague-says-it-works-on-my-mac-but-" data-pid="m5-4-a-colleague-says-it-works-on-my-mac-but-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. A colleague says "it works on my Mac but the text is garbled on the Windows server". What do you check?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Almost certainly an implicit encoding: <code>open()</code>, <code>read_text()</code>, <code>subprocess</code> output or a CSV reader without <code>encoding=</code>, which uses the platform default (UTF-8 on macOS and Linux, often cp1252 on Windows), so UTF-8 files are decoded as cp1252 and accents turn into <code>Ã©</code>. Check every boundary: file reads and writes, <code>pd.read_csv</code>, database connection character sets, HTTP response decoding, and console output (a cp1252 console can raise <code>UnicodeEncodeError</code> on <code>print</code>). Fix by passing <code>encoding="utf-8"</code> explicitly (and <code>utf-8-sig</code> for files from Excel), or enable UTF-8 mode with <code>PYTHONUTF8=1</code>, which Python 3.15 makes the default. Also look for a BOM breaking the first column name.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-handle-text-of-unknown-or-" data-pid="m5-4-how-would-you-handle-text-of-unknown-or-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you handle text of unknown or mixed encoding in a data pipeline?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>First try to remove the unknown: ask the source, read metadata (HTTP <code>Content-Type</code> charset, XML declarations, database collations). If you must guess, go strictest first: a BOM identifies UTF-8 or UTF-16; then try strict UTF-8, which rarely decodes non-UTF-8 data by accident; only then fall back to a single-byte encoding such as cp1252, which never fails and therefore must be last; libraries like <code>charset-normalizer</code> add statistical detection. Record the encoding used per file and count replacement characters, so silent fallbacks show up in monitoring. After decoding, normalise (NFC), remove invisible characters and fix mojibake (<code>ftfy</code>) as a cleaning step that keeps the original bytes available. And store everything as UTF-8 from then on, so the problem happens once, at ingestion.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Inside Python text is <code>str</code> (code points); at every boundary it is <code>bytes</code>. Decode early, encode late, and always name the encoding.</li><li>UTF-8 uses 1 to 4 bytes per code point and leaves ASCII unchanged. Byte length is not <code>len</code>, and cutting bytes can split a character.</li><li><code>strict</code> errors are the default for a reason. <code>replace</code> for display, <code>backslashreplace</code> for logs; count replacements in pipelines.</li><li>Mojibake (<code>Ã©</code>, <code>â€™</code>) means bytes were decoded with the wrong encoding, usually a missing <code>encoding=</code> on Windows. Latin-1 and cp1252 never fail, so they hide the bug.</li><li>Read Excel CSVs with <code>utf-8-sig</code>. Normalise with NFC for storage, NFKC (and accent folding) for search keys.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

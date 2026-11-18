@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5.5 · Regex basics</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m5-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 5 · Strings and text</span></div>
+  <h1>5.5 Regex basics</h1>
+  <p>Regular expressions describe patterns of text. The pattern language piece by piece, the <code>re</code> functions, greedy and lazy matching, groups (and the <code>findall</code> surprise), substitution with functions, flags, and the cases where a regex is the wrong tool. Applied to logs, LLM replies, citations and redacting personal data.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a regex is, and the <code>re</code> functions</h2>
+<p>A <strong>regular expression</strong> (regex) is a small pattern language: <code>TKT-\d+</code> means "the letters TKT, a dash, then one or more digits". Python's <code>re</code> module compiles a pattern into a matcher and runs it over text. Always write patterns as <strong>raw strings</strong>, <code>r"..."</code>, because regex syntax uses backslashes heavily and a normal string would turn some of them into escape characters first (problem 3).</p>
+<div class="tbl"><table>
+      <tr><th>Function</th><th>Returns</th><th>Use for</th></tr>
+      <tr><td><code>re.search(p, s)</code></td><td>first match anywhere, or <code>None</code></td><td>"does it contain...", extracting one thing</td></tr>
+      <tr><td><code>re.match(p, s)</code></td><td>a match only at the <strong>start</strong>, or <code>None</code></td><td>prefixes (often confused with search)</td></tr>
+      <tr><td><code>re.fullmatch(p, s)</code></td><td>a match only if the <strong>whole</strong> string matches</td><td>validating a value</td></tr>
+      <tr><td><code>re.findall(p, s)</code></td><td>list of matched strings (or of groups)</td><td>extracting all occurrences</td></tr>
+      <tr><td><code>re.finditer(p, s)</code></td><td>iterator of match objects</td><td>all occurrences with positions and groups</td></tr>
+      <tr><td><code>re.sub(p, repl, s)</code></td><td>new string with matches replaced</td><td>cleaning, redacting, reformatting</td></tr>
+      <tr><td><code>re.split(p, s)</code></td><td>list of pieces between matches</td><td>splitting on a pattern rather than a fixed string</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">re_functions.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+text = &quot;Escalate TKT-00417 and TKT-89; ignore tkt-5.&quot;
+m = re.search(r&quot;TKT-\d+&quot;, text)
+print(m.group(), m.start(), m.end())
+print(re.findall(r&quot;TKT-\d+&quot;, text))
+print(re.match(r&quot;TKT&quot;, text), re.match(r&quot;Escalate&quot;, text) is not None)
+print(re.fullmatch(r&quot;\d{4}&quot;, &quot;2025&quot;) is not None, re.fullmatch(r&quot;\d{4}&quot;, &quot;20255&quot;) is not None)</code></pre><div class="out"><span class="ol">Output</span><pre>TKT-00417 9 18
+[&#x27;TKT-00417&#x27;, &#x27;TKT-89&#x27;]
+None True
+True False</pre></div></div>
+<p>Why raw strings matter: Python processes backslash escapes in a normal string <strong>before</strong> the <code>re</code> module ever sees it. <code>"\n"</code> becomes a newline, <code>"\t"</code> a tab, and <code>"\b"</code> the backspace character, so the pattern <code>"\bword\b"</code> reaches <code>re</code> as backspace, w, o, r, d, backspace, and never matches. Some escapes happen to survive (<code>"\d"</code> is not a Python escape, so it stays as backslash-d, with a warning in recent versions), which is why a missing <code>r</code> produces bugs that appear only for some patterns. A raw string, <code>r"\bword\b"</code>, keeps every backslash as written. When part of the pattern comes from a variable, combine both prefixes: <code>rf"\b{re.escape(word)}\b"</code> is a raw f-string.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">raw_strings.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+print(len(&quot;\b&quot;), repr(&quot;\b&quot;), len(r&quot;\b&quot;), repr(r&quot;\b&quot;))
+print(re.findall(&quot;\bcat\b&quot;, &quot;cat catalog cat&quot;), re.findall(r&quot;\bcat\b&quot;, &quot;cat catalog cat&quot;))
+word = &quot;a+b&quot;
+print(re.findall(rf&quot;{word}&quot;, &quot;a+b aab&quot;), re.findall(rf&quot;{re.escape(word)}&quot;, &quot;a+b aab&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>1 &#x27;\x08&#x27; 2 &#x27;\\b&#x27;
+[] [&#x27;cat&#x27;, &#x27;cat&#x27;]
+[&#x27;aab&#x27;] [&#x27;a+b&#x27;]</pre></div></div>
+<p>A <strong>match object</strong> (<code>m</code>) holds the matched text (<code>m.group()</code>), where it was (<code>m.start()</code>, <code>m.end()</code>, <code>m.span()</code>) and any groups (below). Functions that can fail to match return <code>None</code>, so check before using the result: <code>if m := re.search(...)</code> reads cleanly with the walrus operator.</p>
+</section>
+<section class="sec" id="syntax">
+<h2><span class="n">2</span>The pattern language, piece by piece</h2>
+<div class="tbl"><table>
+      <tr><th>Piece</th><th>Matches</th></tr>
+      <tr><td><code>abc</code></td><td>the literal characters a, b, c</td></tr>
+      <tr><td><code>.</code></td><td>any character except a newline (with <code>re.DOTALL</code>, also newlines)</td></tr>
+      <tr><td><code>[abc]</code>, <code>[a-z0-9]</code>, <code>[^,]</code></td><td>one character from the set or range; <code>^</code> first means "not these"</td></tr>
+      <tr><td><code>\d</code> <code>\w</code> <code>\s</code></td><td>a digit, a word character (letter, digit, underscore), whitespace; uppercase <code>\D \W \S</code> are the opposites</td></tr>
+      <tr><td><code>^</code> <code>$</code></td><td>start and end of the string (of each line with <code>re.MULTILINE</code>)</td></tr>
+      <tr><td><code>\b</code></td><td>a word boundary: between a word character and a non-word character</td></tr>
+      <tr><td><code>*</code> <code>+</code> <code>?</code> <code>{m,n}</code></td><td>repeat the previous item 0+, 1+, 0 or 1, m to n times</td></tr>
+      <tr><td><code>a|b</code></td><td>either alternative (tried left to right)</td></tr>
+      <tr><td><code>(...)</code>, <code>(?:...)</code></td><td>a capturing group; a group that only groups</td></tr>
+      <tr><td><code>\.</code> <code>\(</code> <code>\[</code></td><td>a literal special character, escaped</td></tr>
+    </table></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">syntax.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+log = &quot;2025-06-01 09:05:07 ERROR [auth] Token expired for user 42 (retry 3)&quot;
+print(re.search(r&quot;\d{4}-\d{2}-\d{2}&quot;, log).group())
+print(re.findall(r&quot;\[(\w+)\]&quot;, log), re.findall(r&quot;\b\d+\b&quot;, log))
+print(re.findall(r&quot;\b[A-Z]{3,}\b&quot;, log), re.search(r&quot;retry (\d)&quot;, log).group(1))
+print(re.findall(r&quot;[^ ]+&quot;, &quot;a  b c&quot;), re.escape(&quot;price (USD) 3.5?&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>2025-06-01
+[&#x27;auth&#x27;] [&#x27;2025&#x27;, &#x27;06&#x27;, &#x27;01&#x27;, &#x27;09&#x27;, &#x27;05&#x27;, &#x27;07&#x27;, &#x27;42&#x27;, &#x27;3&#x27;]
+[&#x27;ERROR&#x27;] 3
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;] price\ \(USD\)\ 3\.5\?</pre></div></div>
+<p>Two things surprise people coming from other tools. In Python 3, <code>\d</code>, <code>\w</code> and <code>\s</code> are <strong>Unicode-aware</strong>: <code>\d</code> matches Arabic-Indic and other digits, and <code>\w</code> matches accented letters, which is usually what you want for text but not for validating ASCII ids (use <code>[0-9]</code> or the <code>re.ASCII</code> flag then, problem 16). And <code>re.escape(text)</code> turns any literal text into a safe pattern, which you need whenever part of a pattern comes from data or a user.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>SQL's <code>LIKE 'TKT-%'</code> is a very small pattern language: <code>%</code> is <code>.*</code> and <code>_</code> is <code>.</code>. Regex is the full version; PostgreSQL's <code>~</code> and <code>regexp_replace</code>, Oracle's <code>REGEXP_LIKE</code> and <code>REGEXP_SUBSTR</code>, and Power Query's <code>Text.Select</code> cover similar ground. As in SQL, a pattern that needs to scan everything is slow, so keep patterns anchored and specific.</p></div></div>
+</section>
+<section class="sec" id="engine">
+<h2><span class="n">3</span>How the engine finds a match, step by step</h2>
+<p>Python's regex engine is a <strong>backtracking</strong> engine, and knowing exactly what it does explains every surprising result later in this lesson. For <code>search</code>, it tries to match the pattern starting at position 0 of the text. If that fails, it tries position 1, then 2, and so on, and it returns the <strong>first position where the whole pattern matches</strong>, not the longest or best match anywhere in the text. At each position it walks through the pattern piece by piece, consuming characters. When a piece has a choice (a quantifier can take more or fewer characters, an alternation has several options), it takes the first choice and remembers the others. If a later piece fails, it goes back to the most recent choice and tries the next option. That going back is <strong>backtracking</strong>.</p>
+<p>Trace <code>\d+%</code> against <code>"up 12.5% now"</code>. Positions 0 to 2 (<code>u</code>, <code>p</code>, space) fail at once, because <code>\d+</code> needs a digit. At position 3, <code>\d+</code> greedily takes <code>12</code>, then <code>%</code> is needed but the next character is <code>.</code>, so it fails. The engine backtracks: <code>\d+</code> gives back the <code>2</code> and holds only <code>1</code>, and <code>%</code> is tested against <code>2</code>, which fails again. <code>\d+</code> cannot give back its last digit (it needs at least one), so position 3 fails as a whole. Position 4 (<code>2</code>) fails the same way, and at position 5 (<code>.</code>) <code>\d+</code> fails. At position 6, <code>\d+</code> takes <code>5</code>, <code>%</code> matches, and the result is <code>5%</code>. The pattern was too narrow for the data; <code>\d+(?:\.\d+)?%</code> gives <code>12.5%</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">engine.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+print(re.search(r&quot;\d+%&quot;, &quot;up 12.5% now&quot;).group())
+print(re.search(r&quot;\d+(?:\.\d+)?%&quot;, &quot;up 12.5% now&quot;).group())
+print(re.search(r&quot;cat|category&quot;, &quot;category&quot;).group(), re.search(r&quot;category|cat&quot;, &quot;category&quot;).group())
+print(re.findall(r&quot;\d+|\d+\.\d+&quot;, &quot;3.5 and 10&quot;), re.findall(r&quot;\d+\.\d+|\d+&quot;, &quot;3.5 and 10&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>5%
+12.5%
+cat category
+[&#x27;3&#x27;, &#x27;5&#x27;, &#x27;10&#x27;] [&#x27;3.5&#x27;, &#x27;10&#x27;]</pre></div></div>
+<p>The last two lines show the rule for <strong>alternation</strong>: at each position, <code>a|b</code> tries <code>a</code> first, and if <code>a</code> matches, the engine takes it without checking whether <code>b</code> would have matched more. So <code>cat|category</code> finds only <code>cat</code> inside "category", and <code>\d+|\d+\.\d+</code> splits <code>3.5</code> into <code>3</code> and <code>5</code> because the short alternative wins at position 0. Put the <strong>longer or more specific</strong> alternative first. <code>findall</code> then continues searching from the end of each match, never inside it, so its matches never overlap.</p>
+<div class="callout c-key"><div class="ci">i</div><div><div class="ct">The two rules to remember</div><p>The engine returns the <strong>leftmost</strong> match, and at that position it takes the first way the pattern can succeed: greedy quantifiers try the most characters first, alternatives are tried left to right. Almost every "why did it match that?" question is answered by tracing these two rules by hand.</p></div></div>
+</section>
+<section class="sec" id="greedy">
+<h2><span class="n">4</span>Greedy and lazy matching</h2>
+<p>Quantifiers are <strong>greedy</strong>: <code>.*</code> matches as much as it can, then the engine <strong>backtracks</strong>, giving characters back one at a time, until the rest of the pattern can match. So <code>&lt;b&gt;.*&lt;/b&gt;</code> on a string with two bold sections matches from the first <code>&lt;b&gt;</code> to the <strong>last</strong> <code>&lt;/b&gt;</code>, swallowing everything between. Adding <code>?</code> makes a quantifier <strong>lazy</strong>: <code>.*?</code> matches as little as possible and grows only when needed, which gives one section at a time.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">greedy_lazy.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+html = &quot;&lt;b&gt;refund&lt;/b&gt; and &lt;b&gt;invoice&lt;/b&gt;&quot;
+print(re.findall(r&quot;&lt;b&gt;.*&lt;/b&gt;&quot;, html))
+print(re.findall(r&quot;&lt;b&gt;.*?&lt;/b&gt;&quot;, html))
+print(re.findall(r&quot;&lt;b&gt;([^&lt;]*)&lt;/b&gt;&quot;, html))      # often clearer: &quot;anything except &lt;&quot;
+quoted = &#x27;say &quot;yes&quot; or &quot;no&quot;&#x27;
+print(re.findall(r&#x27;&quot;(.*)&quot;&#x27;, quoted), re.findall(r&#x27;&quot;(.*?)&quot;&#x27;, quoted))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;&lt;b&gt;refund&lt;/b&gt; and &lt;b&gt;invoice&lt;/b&gt;&#x27;]
+[&#x27;&lt;b&gt;refund&lt;/b&gt;&#x27;, &#x27;&lt;b&gt;invoice&lt;/b&gt;&#x27;]
+[&#x27;refund&#x27;, &#x27;invoice&#x27;]
+[&#x27;yes&quot; or &quot;no&#x27;] [&#x27;yes&#x27;, &#x27;no&#x27;]</pre></div></div>
+<p>A negated class like <code>[^&lt;]*</code> ("any run of characters that are not <code>&lt;</code>") is often clearer and faster than a lazy <code>.*?</code>, because it cannot run past the delimiter. Backtracking also has a dark side: patterns with <strong>nested</strong> quantifiers, such as <code>(a+)+$</code>, can take exponential time on inputs that almost match, which is called catastrophic backtracking and has taken down production services. Keep patterns simple, avoid nested repeats of the same thing, and never run untrusted patterns (problem 17).</p>
+</section>
+<section class="sec" id="groups">
+<h2><span class="n">5</span>Groups: capturing the parts you need</h2>
+<p>Parentheses create a <strong>capturing group</strong>. After a match, <code>m.group(1)</code>, <code>m.group(2)</code> and so on return what each group matched, <code>m.groups()</code> returns all of them, and <strong>named groups</strong>, <code>(?P&lt;name&gt;...)</code>, are retrieved by name with <code>m.group("name")</code> or all at once with <code>m.groupdict()</code>. Named groups make patterns self-documenting and turn a match directly into a dict.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">groups.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+pattern = r&quot;(?P&lt;date&gt;\d{4}-\d{2}-\d{2}) (?P&lt;level&gt;[A-Z]+) \[(?P&lt;service&gt;\w+)\] (?P&lt;msg&gt;.*)&quot;
+m = re.fullmatch(pattern, &quot;2025-06-01 ERROR [billing] Card declined&quot;)
+print(m.group(&quot;level&quot;), m.group(4), m.groups())
+print(m.groupdict())</code></pre><div class="out"><span class="ol">Output</span><pre>ERROR Card declined (&#x27;2025-06-01&#x27;, &#x27;ERROR&#x27;, &#x27;billing&#x27;, &#x27;Card declined&#x27;)
+{&#x27;date&#x27;: &#x27;2025-06-01&#x27;, &#x27;level&#x27;: &#x27;ERROR&#x27;, &#x27;service&#x27;: &#x27;billing&#x27;, &#x27;msg&#x27;: &#x27;Card declined&#x27;}</pre></div></div>
+<p>The <strong><code>findall</code> surprise</strong>: if the pattern contains groups, <code>findall</code> returns the <strong>groups</strong>, not the whole match (one string per match for one group, a tuple per match for several). So adding parentheses "just for grouping" silently changes the result. Use a <strong>non-capturing</strong> group <code>(?:...)</code> when you need grouping (for <code>|</code> or a quantifier) without capturing, or use <code>finditer</code> and take <code>m.group(0)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">findall_groups.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+text = &quot;USD 120, EUR 80, GBP 5&quot;
+print(re.findall(r&quot;(USD|EUR) \d+&quot;, text))          # the group only
+print(re.findall(r&quot;(?:USD|EUR) \d+&quot;, text))        # the whole match
+print(re.findall(r&quot;(USD|EUR) (\d+)&quot;, text))        # tuples of groups
+print([m.group(0) for m in re.finditer(r&quot;(USD|EUR) \d+&quot;, text)])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;USD&#x27;, &#x27;EUR&#x27;]
+[&#x27;USD 120&#x27;, &#x27;EUR 80&#x27;]
+[(&#x27;USD&#x27;, &#x27;120&#x27;), (&#x27;EUR&#x27;, &#x27;80&#x27;)]
+[&#x27;USD 120&#x27;, &#x27;EUR 80&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="lookaround">
+<h2><span class="n">6</span>Lookarounds: conditions that consume nothing</h2>
+<p>Most pattern pieces <strong>consume</strong> characters: they match some text and move the position forward. Anchors such as <code>^</code>, <code>$</code> and <code>\b</code> are different: they test a condition at the current position and consume nothing, which is why they are called <strong>zero-width</strong>. <strong>Lookarounds</strong> let you write your own zero-width conditions with any pattern inside.</p>
+<div class="tbl"><table>
+      <tr><th>Syntax</th><th>Name</th><th>Succeeds when</th></tr>
+      <tr><td><code>X(?=Y)</code></td><td>lookahead</td><td>X is followed by Y (Y is not part of the match)</td></tr>
+      <tr><td><code>X(?!Y)</code></td><td>negative lookahead</td><td>X is not followed by Y</td></tr>
+      <tr><td><code>(?&lt;=Y)X</code></td><td>lookbehind</td><td>X is preceded by Y</td></tr>
+      <tr><td><code>(?&lt;!Y)X</code></td><td>negative lookbehind</td><td>X is not preceded by Y</td></tr>
+    </table></div>
+<p>Because the condition is not part of the match, the matched text stays clean: <code>\d+(?=%)</code> returns the number without the percent sign, and <code>(?&lt;=\$)\d+</code> returns the amount without the dollar. Negative lookarounds express "not next to something", which is how you match a whole token that contains non-word characters. <code>\b</code> needs a word character on one side, so it fails around <code>+</code> or <code>#</code>. But <code>(?&lt;!\w)</code> and <code>(?!\w)</code> mean "no word character before" and "no word character after", which also holds at the start and end of the text (problem 3 uses exactly this).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lookarounds.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+text = &quot;Growth 12% on $300, churn 3% of 1500 users, C++ and C# jobs&quot;
+print(re.findall(r&quot;\d+(?=%)&quot;, text), re.findall(r&quot;(?&lt;=\$)\d+&quot;, text))
+print(re.findall(r&quot;\b\d+\b(?!%)&quot;, text))
+print(re.findall(r&quot;\bC\+\+\b&quot;, text), re.findall(r&quot;(?&lt;!\w)C\+\+(?!\w)&quot;, text), re.findall(r&quot;(?&lt;!\w)C#(?!\w)&quot;, text))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;12&#x27;, &#x27;3&#x27;] [&#x27;300&#x27;]
+[&#x27;300&#x27;, &#x27;1500&#x27;]
+[] [&#x27;C++&#x27;] [&#x27;C#&#x27;]</pre></div></div>
+<p>Lookaheads can also stack several conditions at one position, since each one checks without moving: <code>^(?=.*\d)(?=.*[A-Z]).{8,}$</code> means "at the start, somewhere ahead there is a digit, somewhere ahead there is a capital, and the whole string is at least 8 characters". In Python, a <strong>lookbehind must have a fixed width</strong>: <code>(?&lt;=\$)</code> and <code>(?&lt;=USD )</code> are fine, <code>(?&lt;=\$+)</code> raises <code>re.error</code>. Use lookarounds sparingly; when a pattern needs many, a few lines of ordinary Python are often clearer.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lookahead_stack.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+strong = re.compile(r&quot;^(?=.*\d)(?=.*[A-Z]).{8,}$&quot;)
+print([bool(strong.match(pw)) for pw in [&quot;password1&quot;, &quot;Password1&quot;, &quot;Pass1&quot;]])
+try:
+    re.compile(r&quot;(?&lt;=\$+)\d+&quot;)
+except re.error as e:
+    print(&quot;re.error:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[False, True, False]
+re.error: look-behind requires fixed-width pattern</pre></div></div>
+</section>
+<section class="sec" id="sub">
+<h2><span class="n">7</span>Substitution, splitting and flags</h2>
+<p><code>re.sub(pattern, repl, text)</code> replaces every match. In the replacement string, <code>\1</code> or <code>\g&lt;name&gt;</code> insert a group, so you can reorder parts. The replacement can also be a <strong>function</strong> that receives the match object and returns the replacement text, which handles anything a fixed string cannot: conditional replacements, lookups, computed values. <code>count=</code> limits the number of replacements. <code>re.split</code> splits on a pattern, and if the pattern has a group, the separators are <strong>kept</strong> in the result.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">sub_split.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+print(re.sub(r&quot;(\d{2})/(\d{2})/(\d{4})&quot;, r&quot;\3-\2-\1&quot;, &quot;due 31/12/2025 or 01/06/2026&quot;))
+print(re.sub(r&quot;\s+&quot;, &quot; &quot;, &quot;  too    many\n spaces  &quot;).strip())
+prices = &quot;EUR 10, EUR 25.5&quot;
+print(re.sub(r&quot;EUR (\d+(?:\.\d+)?)&quot;, lambda m: f&quot;USD {float(m.group(1)) * 1.08:.2f}&quot;, prices))
+print(re.split(r&quot;[;,]\s*&quot;, &quot;a, b;c ,d&quot;), re.split(r&quot;([;,])&quot;, &quot;a,b;c&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>due 2025-12-31 or 2026-06-01
+too many spaces
+USD 10.80, USD 27.54
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c &#x27;, &#x27;d&#x27;] [&#x27;a&#x27;, &#x27;,&#x27;, &#x27;b&#x27;, &#x27;;&#x27;, &#x27;c&#x27;]</pre></div></div>
+<p><strong>Flags</strong> change how a pattern matches: <code>re.IGNORECASE</code> (<code>re.I</code>), <code>re.MULTILINE</code> (<code>re.M</code>, so <code>^</code> and <code>$</code> work per line), <code>re.DOTALL</code> (<code>re.S</code>, so <code>.</code> matches newlines too), <code>re.ASCII</code> (so <code>\d \w \s</code> match ASCII only) and <code>re.VERBOSE</code> (<code>re.X</code>), which ignores whitespace in the pattern and allows comments, so complex patterns can be laid out readably. For a pattern used many times, <code>re.compile</code> builds it once and returns an object with the same methods; Python also caches recently used patterns, so compiling is mainly about readability and naming.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">flags.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+ticket = re.compile(r&quot;&quot;&quot;
+    \b(?P&lt;prefix&gt;[A-Z]{2,4})     # project key
+    -(?P&lt;number&gt;\d{1,6})\b       # ticket number
+&quot;&quot;&quot;, re.VERBOSE)
+print([m.groupdict() for m in ticket.finditer(&quot;See OPS-12, BILL-4401 and x-1.&quot;)])
+notes = &quot;ok: yes\nerror: disk\nError: net&quot;
+print(re.findall(r&quot;^error: (\w+)&quot;, notes, flags=re.M | re.I))</code></pre><div class="out"><span class="ol">Output</span><pre>[{&#x27;prefix&#x27;: &#x27;OPS&#x27;, &#x27;number&#x27;: &#x27;12&#x27;}, {&#x27;prefix&#x27;: &#x27;BILL&#x27;, &#x27;number&#x27;: &#x27;4401&#x27;}]
+[&#x27;disk&#x27;, &#x27;net&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">8</span>When not to use a regex</h2>
+<p>Regex is powerful and easy to overuse. Prefer simpler tools when they fit:</p>
+<ul><li><strong>Fixed text:</strong> <code>"refund" in text</code>, <code>startswith</code>, <code>endswith</code>, <code>split(",")</code>, <code>partition</code> (5.2) are faster and clearer.</li><li><strong>Structured formats:</strong> JSON (<code>json.loads</code>), CSV (<code>csv</code>), HTML and XML (an HTML parser such as BeautifulSoup, or <code>xml.etree</code>), URLs (<code>urllib.parse</code>), dates (<code>datetime.strptime</code>). Regex cannot correctly handle nesting or quoting in general, and every hand-written HTML regex eventually meets an input that breaks it.</li><li><strong>LLM output:</strong> ask the model for JSON (structured output or JSON mode) and validate it with a schema (Module 11). Use regex to <strong>locate</strong> the JSON in a messy reply, then a real parser to read it (problem 5).</li></ul>
+<p>Regex is the right tool for <strong>patterns in free text</strong>: ids, codes, dates and amounts inside sentences, log lines, light tokenisation, cleaning whitespace and punctuation, and redacting personal data before text is sent to an LLM or a log (problem 9).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">9</span>Warm-up</h2>
+<article class="prob" id="p-search-match-and-fullmatch" data-pid="m5-5-search-match-and-fullmatch" data-type="predict" data-level="easy" data-answer="1042 [&#x27;1042&#x27;, &#x27;77&#x27;]
+None Order
+True False
+[&#x27;1042&#x27;, &#x27;77&#x27;] None">
+<header class="prob-head"><h3>1. search, match and fullmatch</h3></header>
+<div class="code"><pre><code class="py">import re
+
+s = &quot;Order 1042 shipped; order 77 pending&quot;
+print(re.search(r&quot;\d+&quot;, s).group(), re.findall(r&quot;\d+&quot;, s))
+print(re.match(r&quot;\d+&quot;, s), re.match(r&quot;Order&quot;, s).group())
+print(re.fullmatch(r&quot;[A-Za-z]+ \d+&quot;, &quot;Order 1042&quot;) is not None, re.fullmatch(r&quot;\d+&quot;, &quot;1042 &quot;) is not None)
+print(re.findall(r&quot;[Oo]rder (\d+)&quot;, s), re.search(r&quot;cancel&quot;, s))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>match</code> only looks at the start of the string; <code>fullmatch</code> requires the whole string to match.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1042 [&#x27;1042&#x27;, &#x27;77&#x27;]
+None Order
+True False
+[&#x27;1042&#x27;, &#x27;77&#x27;] None</pre></div><p><code>search</code> finds the first number anywhere, <code>findall</code> all of them. <code>match</code> fails because the string does not start with a digit, so it returns <code>None</code>. <code>fullmatch</code> fails on <code>"1042 "</code> because of the trailing space, which is exactly why it is the right tool for validation: <code>search</code> would accept anything that <strong>contains</strong> a valid value. With a group, <code>findall</code> returns just the numbers. No match gives <code>None</code>, not an exception.</p></div></details>
+</article>
+<article class="prob" id="p-extract-ticket-ids" data-pid="m5-5-extract-ticket-ids" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Extract ticket ids</h3></header>
+<div class="prob-q"><p>Write <code>ticket_ids(text)</code> returning the ticket ids in a text, in order and without repeats. An id is <code>TKT-</code> followed by 4 to 6 digits, upper-case, as a whole word (not part of a longer token such as <code>XTKT-1234</code> or <code>TKT-1234567</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import re
+
+def ticket_ids(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = "Merge TKT-0417 into TKT-88812. Also TKT-0417 again, not tkt-1234, XTKT-9999 or TKT-12."
+assert ticket_ids(t) == ["TKT-0417", "TKT-88812"]
+assert ticket_ids("TKT-1234567 TKT-123456") == ["TKT-123456"]
+assert ticket_ids("") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = &quot;Merge TKT-0417 into TKT-88812. Also TKT-0417 again, not tkt-1234, XTKT-9999 or TKT-12.&quot;
+assert ticket_ids(t) == [&quot;TKT-0417&quot;, &quot;TKT-88812&quot;]
+assert ticket_ids(&quot;TKT-1234567 TKT-123456&quot;) == [&quot;TKT-123456&quot;]
+assert ticket_ids(&quot;&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>\b</code> on both sides makes it a whole word; <code>\d{4,6}</code> limits the digits.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Deduplicate in order with <code>dict.fromkeys</code> (4.5).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def ticket_ids(text):
+    return list(dict.fromkeys(re.findall(r&quot;\bTKT-\d{4,6}\b&quot;, text)))</code></pre></div><p>Word boundaries do two jobs: <code>\b</code> before <code>TKT</code> rejects <code>XTKT-9999</code> (no boundary between <code>X</code> and <code>T</code>), and <code>\b</code> after the digits rejects <code>TKT-1234567</code>, because <code>\d{4,6}</code> cannot stop in the middle of a run of digits and still find a boundary. Without the second <code>\b</code>, the pattern would happily return <code>TKT-123456</code> from inside the seven-digit id. Case-sensitivity is the default, so <code>tkt-1234</code> is ignored; add <code>re.I</code> if lower case should count.</p></div></details>
+</article>
+<article class="prob" id="p-a-word-boundary-that-does-not-work" data-pid="m5-5-a-word-boundary-that-does-not-work" data-type="fix" data-level="easy">
+<header class="prob-head"><h3>3. A word boundary that does not work</h3></header>
+<div class="prob-q"><p><code>count_word(text, word)</code> should count whole-word occurrences. It always returns 0. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import re
+
+def count_word(text, word):
+    return len(re.findall(&quot;\b&quot; + word + &quot;\b&quot;, text))
+</textarea>
+<script type="text/plain" class="prob-tests">assert count_word("refund the refund; refunds are slow", "refund") == 2
+assert count_word("a+b and a+b", "a+b") == 2
+assert count_word("nothing here", "refund") == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert count_word(&quot;refund the refund; refunds are slow&quot;, &quot;refund&quot;) == 2
+assert count_word(&quot;a+b and a+b&quot;, &quot;a+b&quot;) == 2
+assert count_word(&quot;nothing here&quot;, &quot;refund&quot;) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In a normal string, <code>\b</code> is the backspace character, not a word boundary. Use a raw string.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The word itself may contain regex specials like <code>+</code>. Escape it with <code>re.escape</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def count_word(text, word):
+    return len(re.findall(rf&quot;(?&lt;!\w){re.escape(word)}(?!\w)&quot;, text))</code></pre></div><p>Bug one: <code>"\b"</code> without <code>r</code> is the backspace character (ASCII 8), so the pattern looked for backspaces. Raw strings keep the backslash. Bug two: <code>word</code> is data, and <code>"a+b"</code> as a pattern means "one or more a's, then b"; <code>re.escape</code> makes it literal. That second test also needs more than <code>\b</code>: there is no word boundary between <code>+</code> and a space, so the solution uses lookarounds, <code>(?&lt;!\w)</code> and <code>(?!\w)</code>, meaning "not preceded / not followed by a word character", which works for any word. <code>rf"..."</code> is a raw f-string.</p></div></details>
+</article>
+<article class="prob" id="p-greedy-versus-lazy" data-pid="m5-5-greedy-versus-lazy" data-type="predict" data-level="easy" data-answer="[&#x27;[1] Refunds [2] take [3]&#x27;]
+[&#x27;[1]&#x27;, &#x27;[2]&#x27;, &#x27;[3]&#x27;]
+[&#x27;1&#x27;, &#x27;2&#x27;, &#x27;3&#x27;]
+12 b 34 c 56 12 b 34">
+<header class="prob-head"><h3>4. Greedy versus lazy</h3></header>
+<div class="code"><pre><code class="py">import re
+
+s = &quot;[1] Refunds [2] take [3] days&quot;
+print(re.findall(r&quot;\[.*\]&quot;, s))
+print(re.findall(r&quot;\[.*?\]&quot;, s))
+print(re.findall(r&quot;\[(\d+)\]&quot;, s))
+print(re.search(r&quot;\d+.*\d+&quot;, &quot;a 12 b 34 c 56&quot;).group(), re.search(r&quot;\d+.*?\d+&quot;, &quot;a 12 b 34 c 56&quot;).group())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>.*</code> takes as much as possible and then backs off until the rest matches. <code>.*?</code> takes as little as possible.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;[1] Refunds [2] take [3]&#x27;]
+[&#x27;[1]&#x27;, &#x27;[2]&#x27;, &#x27;[3]&#x27;]
+[&#x27;1&#x27;, &#x27;2&#x27;, &#x27;3&#x27;]
+12 b 34 c 56 12 b 34</pre></div><p>The greedy <code>\[.*\]</code> runs to the <strong>last</strong> <code>]</code>, so it returns one long match. The lazy version stops at the first <code>]</code>, giving each citation. A specific pattern, <code>\[(\d+)\]</code>, says exactly what is inside, and with a group <code>findall</code> returns only the numbers. Greedy <code>\d+.*\d+</code> spans from the first to the last number; lazy stops at the second.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">10</span>Medium</h2>
+<article class="prob" id="p-find-the-json-in-a-model-s-reply" data-pid="m5-5-find-the-json-in-a-model-s-reply" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Find the JSON in a model's reply</h3></header>
+<div class="prob-q"><p>Models often wrap JSON in a Markdown code fence and add commentary. Write <code>extract_json(reply)</code> that returns the parsed object from the <strong>first</strong> fenced block marked <code>json</code> (three backticks, <code>json</code>, a newline, the JSON, three backticks). If there is no such block, try the text from the first <code>{</code> to the last <code>}</code>. Return <code>None</code> if nothing parses.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import json, re
+
+def extract_json(reply):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">fence = "`" * 3
+r1 = f'Sure! Here it is:\n{fence}json\n{{"label": "spam", "confidence": 0.93}}\n{fence}\nAnything else?'
+assert extract_json(r1) == {"label": "spam", "confidence": 0.93}
+r2 = 'The answer is {"label": "ham", "tags": ["a", "b"]} as requested.'
+assert extract_json(r2) == {"label": "ham", "tags": ["a", "b"]}
+assert extract_json("no json here") is None
+assert extract_json("{not: valid}") is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">fence = &quot;`&quot; * 3
+r1 = f&#x27;Sure! Here it is:\n{fence}json\n{{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.93}}\n{fence}\nAnything else?&#x27;
+assert extract_json(r1) == {&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.93}
+r2 = &#x27;The answer is {&quot;label&quot;: &quot;ham&quot;, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;]} as requested.&#x27;
+assert extract_json(r2) == {&quot;label&quot;: &quot;ham&quot;, &quot;tags&quot;: [&quot;a&quot;, &quot;b&quot;]}
+assert extract_json(&quot;no json here&quot;) is None
+assert extract_json(&quot;{not: valid}&quot;) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Search with <code>re.DOTALL</code> and a lazy group <code>(.*?)</code> between the opening fence (three backticks, then the word json and a newline) and the closing fence.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the fallback, <code>find("{")</code> and <code>rfind("}")</code>. Parse with <code>json.loads</code> inside <code>try</code> / <code>except json.JSONDecodeError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json, re
+
+FENCE = re.compile(r&quot;`{3}json\s*\n(.*?)\n`{3}&quot;, re.DOTALL)
+
+def extract_json(reply):
+    m = FENCE.search(reply)
+    if m:
+        candidate = m.group(1)
+    else:
+        start, end = reply.find(&quot;{&quot;), reply.rfind(&quot;}&quot;)
+        if start == -1 or end &lt; start:
+            return None
+        candidate = reply[start:end + 1]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None</code></pre></div><p>The regex only <strong>locates</strong> the JSON; <code>json.loads</code> does the actual parsing, because regex cannot reliably match nested braces and quoted strings. <code>re.DOTALL</code> lets <code>.</code> cross newlines, and the lazy <code>.*?</code> stops at the first closing fence, so a reply with two code blocks returns the first. The <code>{</code>...<code>}</code> fallback uses the outermost braces, which works for one object with nesting. Returning <code>None</code> instead of raising lets the caller retry the model with an error message. With structured output or JSON mode in the API, most of this becomes unnecessary, but replies from other tools still need it.</p></div></details>
+</article>
+<article class="prob" id="p-findall-returns-only-the-currency" data-pid="m5-5-findall-returns-only-the-currency" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. findall returns only the currency</h3></header>
+<div class="prob-q"><p><code>amounts(text)</code> should return every amount with its currency, like <code>"USD 120"</code>. It returns only <code>["USD", "EUR"]</code>. Fix the pattern.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import re
+
+def amounts(text):
+    return re.findall(r&quot;(USD|EUR|GBP) \d+(\.\d{2})?&quot;, text)
+</textarea>
+<script type="text/plain" class="prob-tests">assert amounts("Paid USD 120 and EUR 80.50, refund GBP 5") == ["USD 120", "EUR 80.50", "GBP 5"]
+assert amounts("none") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert amounts(&quot;Paid USD 120 and EUR 80.50, refund GBP 5&quot;) == [&quot;USD 120&quot;, &quot;EUR 80.50&quot;, &quot;GBP 5&quot;]
+assert amounts(&quot;none&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When a pattern has groups, <code>findall</code> returns the groups. Make them non-capturing with <code>(?:...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def amounts(text):
+    return re.findall(r&quot;(?:USD|EUR|GBP) \d+(?:\.\d{2})?&quot;, text)</code></pre></div><p>The parentheses were only meant to group the alternatives and the optional decimals, but every <code>(...)</code> captures, and <code>findall</code> with two groups returns a tuple of the two groups per match. Non-capturing groups keep the grouping without changing what <code>findall</code> returns. If you do want both the whole match and parts of it, use <code>finditer</code> and read <code>m.group(0)</code> and <code>m.group(1)</code>.</p></div></details>
+</article>
+<article class="prob" id="p-parse-log-lines-with-named-groups" data-pid="m5-5-parse-log-lines-with-named-groups" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Parse log lines with named groups</h3></header>
+<div class="prob-q"><p>Write <code>parse_line(line)</code> for lines like <code>"2025-06-01 09:05:07 ERROR [auth] Token expired"</code>. Return a dict with keys <code>date</code>, <code>time</code>, <code>level</code>, <code>service</code> and <code>message</code>, using <strong>named groups</strong> and <code>fullmatch</code>. Return <code>None</code> for lines that do not have this format.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import re
+
+def parse_line(line):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_line("2025-06-01 09:05:07 ERROR [auth] Token expired") == {
+    "date": "2025-06-01", "time": "09:05:07", "level": "ERROR", "service": "auth", "message": "Token expired"}
+assert parse_line("2025-06-01 09:05:07 INFO [rag-api] ok")["service"] == "rag-api"
+assert parse_line("garbage") is None
+assert parse_line("2025-06-01 09:05:07 ERROR [auth]") is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_line(&quot;2025-06-01 09:05:07 ERROR [auth] Token expired&quot;) == {
+    &quot;date&quot;: &quot;2025-06-01&quot;, &quot;time&quot;: &quot;09:05:07&quot;, &quot;level&quot;: &quot;ERROR&quot;, &quot;service&quot;: &quot;auth&quot;, &quot;message&quot;: &quot;Token expired&quot;}
+assert parse_line(&quot;2025-06-01 09:05:07 INFO [rag-api] ok&quot;)[&quot;service&quot;] == &quot;rag-api&quot;
+assert parse_line(&quot;garbage&quot;) is None
+assert parse_line(&quot;2025-06-01 09:05:07 ERROR [auth]&quot;) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>(?P&lt;date&gt;\d{4}-\d{2}-\d{2}) (?P&lt;time&gt;\d{2}:\d{2}:\d{2}) (?P&lt;level&gt;[A-Z]+) \[(?P&lt;service&gt;[\w-]+)\] (?P&lt;message&gt;.+)</code></p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>m.groupdict()</code> builds the dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+LINE = re.compile(
+    r&quot;(?P&lt;date&gt;\d{4}-\d{2}-\d{2}) (?P&lt;time&gt;\d{2}:\d{2}:\d{2}) &quot;
+    r&quot;(?P&lt;level&gt;[A-Z]+) \[(?P&lt;service&gt;[\w-]+)\] (?P&lt;message&gt;.+)&quot;
+)
+
+def parse_line(line):
+    m = LINE.fullmatch(line)
+    return m.groupdict() if m else None</code></pre></div><p>Named groups make the pattern readable and give you the dict for free. <code>fullmatch</code> rejects partial lines (the last test has no message), where <code>search</code> would accept a line that merely <strong>contains</strong> the format. <code>[\w-]+</code> allows service names with dashes, which <code>\w</code> alone does not. Splitting the pattern over two adjacent raw strings uses implicit concatenation (5.1) on purpose. This is how log shippers like Logstash's grok patterns work, with a library of named sub-patterns.</p></div></details>
+</article>
+<article class="prob" id="p-a-fixed-word-in-or-a-regex" data-pid="m5-5-a-fixed-word-in-or-a-regex" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. A fixed word: <code>in</code> or a regex</h3></header>
+<div class="prob-q"><p>Both count the log lines that mention "error" in any case, over 200,000 lines. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import re
+lines = [&quot;2025-06-01 09:05:07 INFO [api] request ok&quot;] * 190_000 + [&quot;2025-06-01 09:05:07 ERROR [api] timeout&quot;] * 10_000</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">n = sum(1 for line in lines if re.search(&quot;error&quot;, line, re.IGNORECASE))</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">n = sum(1 for line in lines if &quot;error&quot; in line.lower())</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does each line cost: a call into the regex engine with case-folding, or one lowering and a substring search?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>356.64 ms</td></tr><tr><td>B</td><td>43.22 ms</td></tr></table></div><p>For a fixed string, <code>in</code> is a tight C loop. The regex call has to look up the compiled pattern, set up a match with case-insensitive rules and run the engine for every line, which costs more even though the pattern is trivial. Both are correct; reach for regex when you need a <strong>pattern</strong> (digits, alternatives, boundaries), not a literal word. (If you also needed whole words only, <code>\berror\b</code> would be a good reason to use the regex.)</p></div></details>
+</article>
+<article class="prob" id="p-redact-personal-data-before-sending-text" data-pid="m5-5-redact-personal-data-before-sending-text" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Redact personal data before sending text to an LLM</h3></header>
+<div class="prob-q"><p>Write <code>redact(text)</code> that replaces email addresses with <code>[EMAIL]</code>, phone numbers with <code>[PHONE]</code>, and card numbers (13 to 16 digits, optionally in groups separated by spaces or dashes) with <code>[CARD]</code>. Phone numbers here are an optional <code>+</code> and country code, then 9 to 12 digits possibly separated by spaces or dashes. Replace cards <strong>before</strong> phones, since a card number would also look like a phone number.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import re
+
+def redact(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = "Contact ana.lopez@example.co.uk or +44 20 7946 0958. Card 4111 1111 1111 1111 was charged twice."
+assert redact(t) == "Contact [EMAIL] or [PHONE]. Card [CARD] was charged twice."
+assert redact("call 555-123-4567 now") == "call [PHONE] now"
+assert redact("order 42 shipped") == "order 42 shipped"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = &quot;Contact ana.lopez@example.co.uk or +44 20 7946 0958. Card 4111 1111 1111 1111 was charged twice.&quot;
+assert redact(t) == &quot;Contact [EMAIL] or [PHONE]. Card [CARD] was charged twice.&quot;
+assert redact(&quot;call 555-123-4567 now&quot;) == &quot;call [PHONE] now&quot;
+assert redact(&quot;order 42 shipped&quot;) == &quot;order 42 shipped&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Email: <code>[\w.+-]+@[\w-]+(?:\.[\w-]+)+</code>. Card: <code>\b(?:\d[ -]?){12,15}\d\b</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Phone: <code>\+?\d[\d -]{7,14}\d</code>. Apply the three <code>re.sub</code> calls in the order email, card, phone.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+EMAIL = re.compile(r&quot;[\w.+-]+@[\w-]+(?:\.[\w-]+)+&quot;)
+CARD = re.compile(r&quot;\b(?:\d[ -]?){12,15}\d\b&quot;)
+PHONE = re.compile(r&quot;\+?\d[\d -]{7,14}\d&quot;)
+
+def redact(text):
+    text = EMAIL.sub(&quot;[EMAIL]&quot;, text)
+    text = CARD.sub(&quot;[CARD]&quot;, text)
+    return PHONE.sub(&quot;[PHONE]&quot;, text)</code></pre></div><p>Order matters because the patterns overlap: a card number also matches the phone pattern, so cards go first, and once they are <code>[CARD]</code> the phone pattern can no longer see their digits. <code>(?:\d[ -]?){12,15}\d</code> means "13 to 16 digits, each optionally followed by a space or dash". These patterns are deliberately simple and will miss some formats and catch some non-PII numbers; production systems use dedicated PII detectors (such as Microsoft Presidio) and validate card numbers with the Luhn check (1.P). Redacting before text leaves your system (to an LLM API, a log or a vendor) is often a compliance requirement.</p></div></details>
+</article>
+<article class="prob" id="p-regex-results-step-by-step" data-pid="m5-5-regex-results-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>10. Regex results step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import re
+s = &quot;id=7; name=Ana; id=12&quot;
+r = re.findall(r&quot;id=(\d+)&quot;, s)
+r = re.sub(r&quot;id=(\d+)&quot;, r&quot;#\1&quot;, s)
+r = re.split(r&quot;;\s*&quot;, s)
+r = re.split(r&quot;(;)\s*&quot;, s)
+r = [m.span() for m in re.finditer(r&quot;\d+&quot;, s)]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>findall ids</td><td><input class="cell" data-a="[&#x27;7&#x27;, &#x27;12&#x27;]" data-s="[&#x27;7&#x27;, &#x27;12&#x27;]" aria-label="r at findall ids" autocomplete="off"></td></tr><tr><td>sub with a group</td><td><input class="cell" data-a="&#x27;#7; name=Ana; #12&#x27;" data-s="#7; name=Ana; #12" aria-label="r at sub with a group" autocomplete="off"></td></tr><tr><td>split on ; and spaces</td><td><input class="cell" data-a="[&#x27;id=7&#x27;, &#x27;name=Ana&#x27;, &#x27;id=12&#x27;]" data-s="[&#x27;id=7&#x27;, &#x27;name=Ana&#x27;, &#x27;id=12&#x27;]" aria-label="r at split on ; and spaces" autocomplete="off"></td></tr><tr><td>split with a captured separator</td><td><input class="cell" data-a="[&#x27;id=7&#x27;, &#x27;;&#x27;, &#x27;name=Ana&#x27;, &#x27;;&#x27;, &#x27;id=12&#x27;]" data-s="[&#x27;id=7&#x27;, &#x27;;&#x27;, &#x27;name=Ana&#x27;, &#x27;;&#x27;, &#x27;id=12&#x27;]" aria-label="r at split with a captured separator" autocomplete="off"></td></tr><tr><td>spans of numbers</td><td><input class="cell" data-a="[(3, 4), (19, 21)]" data-s="[(3, 4), (19, 21)]" aria-label="r at spans of numbers" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With a group, <code>findall</code> returns group text and <code>split</code> keeps the separators. <code>\1</code> in the replacement inserts group 1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>findall ids</td><td><code>[&#x27;7&#x27;, &#x27;12&#x27;]</code></td></tr><tr><td>sub with a group</td><td><code>&#x27;#7; name=Ana; #12&#x27;</code></td></tr><tr><td>split on ; and spaces</td><td><code>[&#x27;id=7&#x27;, &#x27;name=Ana&#x27;, &#x27;id=12&#x27;]</code></td></tr><tr><td>split with a captured separator</td><td><code>[&#x27;id=7&#x27;, &#x27;;&#x27;, &#x27;name=Ana&#x27;, &#x27;;&#x27;, &#x27;id=12&#x27;]</code></td></tr><tr><td>spans of numbers</td><td><code>[(3, 4), (19, 21)]</code></td></tr></table></div><p><code>findall</code> returns only the captured digits. <code>sub</code> rewrites each <code>id=N</code> as <code>#N</code> by reinserting group 1. <code>split</code> on <code>;\s*</code> drops the separators; with the separator in a group, it is kept as its own item. <code>finditer</code> gives match objects, and <code>span()</code> their start and end positions, which is what you need to highlight matches or cut the text around them.</p></div></details>
+</article>
+<article class="prob" id="p-string-cleanup-in-one-regex-pass" data-pid="m5-5-string-cleanup-in-one-regex-pass" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. String cleanup in one regex pass</h3></header>
+<div class="prob-q"><p>Replace the loops with <code>re.sub</code>, same output. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def clean(text):
+    out = &quot;&quot;
+    for ch in text:
+        if ch.isalnum():
+            out += ch
+        else:
+            out += &quot; &quot;
+    while &quot;  &quot; in out:
+        out = out.replace(&quot;  &quot;, &quot; &quot;)
+    return out.strip().lower()
+</textarea>
+<script type="text/plain" class="prob-tests">assert clean("Refund!!  (EU-only)\n--  now?") == "refund eu only now"
+assert clean("") == "" and clean("ok") == "ok"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert clean(&quot;Refund!!  (EU-only)\n--  now?&quot;) == &quot;refund eu only now&quot;
+assert clean(&quot;&quot;) == &quot;&quot; and clean(&quot;ok&quot;) == &quot;ok&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[^\w\s]</code> is "neither a word character nor whitespace"; <code>\s+</code> is any run of whitespace. Note <code>\w</code> also allows <code>_</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def clean(text):
+    text = re.sub(r&quot;[^\w\s]|_&quot;, &quot; &quot;, text)
+    return re.sub(r&quot;\s+&quot;, &quot; &quot;, text).strip().lower()</code></pre></div><p>Two substitutions replace a character loop (with quadratic string building) and a <code>while</code> loop that rescans the whole text each time. <code>\w</code> includes the underscore, which <code>isalnum</code> does not, so <code>|_</code> keeps the behaviour identical. <code>\s+</code> collapses any run of whitespace, including the newline, in one pass. Cleaning like this is a typical preprocessing step before bag-of-words features; for LLMs, keep punctuation, since models use it.</p></div></details>
+</article>
+<article class="prob" id="p-a-tokenizer-that-breaks-numbers-and-cont" data-pid="m5-5-a-tokenizer-that-breaks-numbers-and-cont" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. A tokenizer that breaks numbers and contractions</h3></header>
+<div class="prob-q"><p><code>tokens(text)</code> uses <code>\w+</code>, which splits <code>3.5</code> into <code>3</code> and <code>5</code> and <code>don't</code> into <code>don</code> and <code>t</code>. Fix the pattern so decimals and contractions stay whole, and other words still split as before.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import re
+
+def tokens(text):
+    return re.findall(r&quot;\w+&quot;, text.lower())
+</textarea>
+<script type="text/plain" class="prob-tests">assert tokens("Don't refund 3.5 or 10 units, it's late") == ["don't", "refund", "3.5", "or", "10", "units", "it's", "late"]
+assert tokens("v2.0 rocks") == ["v2", "0", "rocks"]
+assert tokens("") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert tokens(&quot;Don&#x27;t refund 3.5 or 10 units, it&#x27;s late&quot;) == [&quot;don&#x27;t&quot;, &quot;refund&quot;, &quot;3.5&quot;, &quot;or&quot;, &quot;10&quot;, &quot;units&quot;, &quot;it&#x27;s&quot;, &quot;late&quot;]
+assert tokens(&quot;v2.0 rocks&quot;) == [&quot;v2&quot;, &quot;0&quot;, &quot;rocks&quot;]
+assert tokens(&quot;&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use alternatives, the most specific first: a decimal number <code>\d+\.\d+</code>, then a word with an optional <code>'</code> part <code>\w+(?:'\w+)?</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Alternatives are tried left to right at each position, so order matters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def tokens(text):
+    return re.findall(r&quot;\b\d+\.\d+\b|\w+(?:&#x27;\w+)?&quot;, text.lower())</code></pre></div><p>At each position the engine tries the alternatives left to right and takes the first that matches, so the decimal alternative must come before the general word one, or <code>\w+</code> would grab <code>3</code> first. The <code>\b</code> around the decimal keeps <code>v2.0</code> from being read as a number. <code>(?:'\w+)?</code> attaches an apostrophe part to a word without capturing (so <code>findall</code> still returns whole tokens). Real tokenizers (spaCy, NLTK, or the subword tokenizers of LLMs) handle far more cases; this is the classic first step of a bag-of-words model.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">11</span>Hard</h2>
+<article class="prob" id="p-a-natural-sort-key" data-pid="m5-5-a-natural-sort-key" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. A natural sort key</h3></header>
+<div class="prob-q"><p>Write <code>natural_key(s)</code> so that <code>sorted(names, key=natural_key)</code> orders embedded numbers numerically and text case-insensitively: <code>doc2</code> before <code>doc10</code>, <code>Chapter 9</code> before <code>chapter 10</code>. Split the string into digit runs and non-digit runs with <code>re.split</code>, convert digit runs to <code>int</code>, and lower-case the rest.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import re
+
+def natural_key(s):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">files = ["doc10.txt", "doc2.txt", "Doc1.txt", "doc2b.txt", "doc02.txt"]
+assert sorted(files, key=natural_key) == ["Doc1.txt", "doc2.txt", "doc02.txt", "doc2b.txt", "doc10.txt"]
+assert sorted(["v1.10", "v1.9", "v1.2"], key=natural_key) == ["v1.2", "v1.9", "v1.10"]
+assert natural_key("abc") == ("abc",)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">files = [&quot;doc10.txt&quot;, &quot;doc2.txt&quot;, &quot;Doc1.txt&quot;, &quot;doc2b.txt&quot;, &quot;doc02.txt&quot;]
+assert sorted(files, key=natural_key) == [&quot;Doc1.txt&quot;, &quot;doc2.txt&quot;, &quot;doc02.txt&quot;, &quot;doc2b.txt&quot;, &quot;doc10.txt&quot;]
+assert sorted([&quot;v1.10&quot;, &quot;v1.9&quot;, &quot;v1.2&quot;], key=natural_key) == [&quot;v1.2&quot;, &quot;v1.9&quot;, &quot;v1.10&quot;]
+assert natural_key(&quot;abc&quot;) == (&quot;abc&quot;,)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>re.split(r"(\d+)", s)</code> keeps the digit runs because of the group, and alternates text, number, text, ...</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a tuple: <code>int(p)</code> for digit parts, <code>p.casefold()</code> for the others.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+def natural_key(s):
+    parts = re.split(r&quot;(\d+)&quot;, s)
+    return tuple(int(p) if p.isdigit() else p.casefold() for p in parts if p)</code></pre></div><p>With a capturing group, <code>re.split</code> keeps the separators, so <code>"doc10.txt"</code> becomes <code>["doc", "10", ".txt"]</code>, and the key <code>("doc", 10, ".txt")</code> compares the number as a number. Tuples compare element by element (4.3), and because the parts alternate text and numbers in the same positions, comparing <code>int</code> with <code>str</code> never happens for names of the same shape. <code>doc2</code> and <code>doc02</code> get equal keys, and the stable sort keeps their input order. This is what file managers call "natural" order; the <code>natsort</code> library covers more edge cases.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-citation-checker" data-pid="m5-5-read-the-code-a-citation-checker" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>14. Read the code: a citation checker</h3></header>
+<div class="prob-q"><p>A RAG app asks the model to cite sources as <code>[1]</code> or <code>[1, 3]</code>. This checker should return the cited source names, in first-cited order, plus any citation numbers that point to no source. It crashes on <code>[1, 3]</code>, and a greedy pattern swallows text between brackets. Read it, find the bugs, and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import re
+
+
+def check_citations(answer, sources):
+    numbers = []
+    for group in re.findall(r&quot;\[(.*)\]&quot;, answer):
+        numbers.append(int(group))
+    cited, unknown = [], []
+    for n in numbers:
+        name = sources[n - 1]
+        if name not in cited:
+            cited.append(name)
+    return cited, unknown
+</textarea>
+<script type="text/plain" class="prob-tests">sources = ["faq.md", "terms.md", "policy.md"]
+a = "Refunds take 5 days [1]. After 30 days there are none [2, 3]. See [1] again."
+assert check_citations(a, sources) == (["faq.md", "terms.md", "policy.md"], [])
+assert check_citations("Wrong [4] and [0].", sources) == ([], [4, 0])
+assert check_citations("No citations.", sources) == ([], [])
+assert check_citations("Odd [2,1] spacing", sources) == (["terms.md", "faq.md"], [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sources = [&quot;faq.md&quot;, &quot;terms.md&quot;, &quot;policy.md&quot;]
+a = &quot;Refunds take 5 days [1]. After 30 days there are none [2, 3]. See [1] again.&quot;
+assert check_citations(a, sources) == ([&quot;faq.md&quot;, &quot;terms.md&quot;, &quot;policy.md&quot;], [])
+assert check_citations(&quot;Wrong [4] and [0].&quot;, sources) == ([], [4, 0])
+assert check_citations(&quot;No citations.&quot;, sources) == ([], [])
+assert check_citations(&quot;Odd [2,1] spacing&quot;, sources) == ([&quot;terms.md&quot;, &quot;faq.md&quot;], [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>\[(.*)\]</code> is greedy: on the first answer it captures from the first <code>[</code> to the last <code>]</code>. Match only digits and commas inside the brackets.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A citation group like <code>"2, 3"</code> must be split on commas (<code>re.split(r"\s*,\s*", ...)</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A number outside <code>1..len(sources)</code> should go to <code>unknown</code>. Note that <code>sources[0 - 1]</code> would silently return the <strong>last</strong> source.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+CITATION = re.compile(r&quot;\[(\d+(?:\s*,\s*\d+)*)\]&quot;)
+
+
+def check_citations(answer, sources):
+    numbers = []
+    for group in CITATION.findall(answer):
+        numbers.extend(int(n) for n in re.split(r&quot;\s*,\s*&quot;, group))
+    cited, unknown = [], []
+    for n in numbers:
+        if 1 &lt;= n &lt;= len(sources):
+            name = sources[n - 1]
+            if name not in cited:
+                cited.append(name)
+        elif n not in unknown:
+            unknown.append(n)
+    return cited, unknown</code></pre></div><p>Three bugs. The greedy <code>.*</code> captured from the first <code>[</code> to the last <code>]</code> ("1]. After 30 days ... See [1"), which <code>int</code> cannot parse. The specific pattern <code>\d+(?:\s*,\s*\d+)*</code> matches exactly "a number, then any number of comma-separated numbers", so it cannot run across text. Lists like <code>2, 3</code> then need splitting. And <code>sources[n - 1]</code> was unchecked: <code>[4]</code> raises <code>IndexError</code>, while <code>[0]</code> is worse, because <code>sources[-1]</code> silently returns the <strong>last</strong> source, a wrong citation with no error. Checking that citations point to real retrieved sources is a cheap, useful guard against hallucinated references.</p></div></details>
+</article>
+<article class="prob" id="p-find-template-variables-ignoring-escaped" data-pid="m5-5-find-template-variables-ignoring-escaped" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Find template variables, ignoring escaped braces</h3></header>
+<div class="prob-q"><p>Prompt templates use <code>{name}</code> placeholders and <code>{{</code> / <code>}}</code> for literal braces, as <code>str.format</code> does. Write <code>template_vars(template)</code> returning the distinct placeholder names in first-seen order, ignoring anything inside doubled braces. Names are word characters. Use lookarounds.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import re
+
+def template_vars(template):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = "Hi {name}! Reply as JSON: {{\"label\": \"...\"}}. Q: {question} ({name})"
+assert template_vars(t) == ["name", "question"]
+assert template_vars("{{literal}} only") == []
+assert template_vars("{a}{b}{a}") == ["a", "b"]
+assert template_vars("") == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = &quot;Hi {name}! Reply as JSON: {{\&quot;label\&quot;: \&quot;...\&quot;}}. Q: {question} ({name})&quot;
+assert template_vars(t) == [&quot;name&quot;, &quot;question&quot;]
+assert template_vars(&quot;{{literal}} only&quot;) == []
+assert template_vars(&quot;{a}{b}{a}&quot;) == [&quot;a&quot;, &quot;b&quot;]
+assert template_vars(&quot;&quot;) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>(?&lt;!\{)\{(\w+)\}(?!\})</code> means: a <code>{</code> not preceded by <code>{</code>, a name, a <code>}</code> not followed by <code>}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Deduplicate while keeping order with <code>dict.fromkeys</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+
+PLACEHOLDER = re.compile(r&quot;(?&lt;!\{)\{(\w+)\}(?!\})&quot;)
+
+def template_vars(template):
+    return list(dict.fromkeys(PLACEHOLDER.findall(template)))</code></pre></div><p>A <strong>lookbehind</strong> <code>(?&lt;!\{)</code> and a <strong>lookahead</strong> <code>(?!\})</code> check what is before and after the match without consuming characters, so <code>{{literal}}</code> is skipped (its inner braces are preceded by <code>{</code> and followed by <code>}</code>) while <code>{name}</code> is found. Knowing a template's variables lets you validate it before use: compare them with the values you have, and fail early on a missing variable instead of sending a half-filled prompt (5.2). For full fidelity with <code>str.format</code> (format specs, attribute access), <code>string.Formatter().parse(template)</code> returns the fields exactly as <code>format</code> sees them, and is the better tool in production.</p></div></details>
+</article>
+<article class="prob" id="p-unicode-classes-and-flags" data-pid="m5-5-unicode-classes-and-flags" data-type="predict" data-level="hard" data-answer="[&#x27;٤٢&#x27;] []
+[&#x27;Zoë_1&#x27;, &#x27;x&#x27;] [&#x27;Zo&#x27;, &#x27;_1&#x27;, &#x27;x&#x27;]
+[] [&#x27;line one&#x27;, &#x27;line two&#x27;]
+None True">
+<header class="prob-head"><h3>16. Unicode classes and flags</h3></header>
+<div class="code"><pre><code class="py">import re
+
+text = &quot;Prix: ٤٢€ for Zoë; ok&quot;
+print(re.findall(r&quot;\d+&quot;, text), re.findall(r&quot;\d+&quot;, text, flags=re.ASCII))
+print(re.findall(r&quot;\w+&quot;, &quot;Zoë_1 x&quot;), re.findall(r&quot;\w+&quot;, &quot;Zoë_1 x&quot;, flags=re.ASCII))
+notes = &quot;line one\nline two&quot;
+print(re.findall(r&quot;^line \w+$&quot;, notes), re.findall(r&quot;^line \w+$&quot;, notes, flags=re.M))
+print(re.search(r&quot;one.line&quot;, notes), re.search(r&quot;one.line&quot;, notes, flags=re.S).group() == &quot;one\nline&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In Python 3, <code>\d</code> and <code>\w</code> are Unicode-aware unless you pass <code>re.ASCII</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>re.M</code>, <code>^</code> and <code>$</code> refer to the whole string; without <code>re.S</code>, <code>.</code> does not match a newline.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;٤٢&#x27;] []
+[&#x27;Zoë_1&#x27;, &#x27;x&#x27;] [&#x27;Zo&#x27;, &#x27;_1&#x27;, &#x27;x&#x27;]
+[] [&#x27;line one&#x27;, &#x27;line two&#x27;]
+None True</pre></div><p><code>\d</code> matches the Arabic-Indic digits <code>٤٢</code>, and <code>re.ASCII</code> restricts it to <code>0-9</code>, so for validating ASCII ids you need <code>[0-9]</code> or the flag. <code>\w</code> includes <code>ë</code> and the underscore; with <code>re.ASCII</code> the <code>ë</code> splits the word. Without <code>re.M</code>, the pattern must match the whole string from start to end, which fails; with it, each line matches. Without <code>re.S</code>, <code>.</code> refuses the newline, so the search returns <code>None</code>. These defaults explain many "the regex works in the online tester but not in Python" reports: testers often default to different flags or engines.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">12</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-greedy-an" data-pid="m5-5-what-is-the-difference-between-greedy-an" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between greedy and lazy quantifiers, and what is catastrophic backtracking?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Greedy quantifiers (<code>*</code>, <code>+</code>, <code>?</code>, <code>{m,n}</code>) match as much as possible and then backtrack, giving characters back, until the rest of the pattern matches; lazy ones (<code>*?</code>, <code>+?</code>) match as little as possible and expand only when needed. So <code>&lt;.*&gt;</code> spans from the first <code>&lt;</code> to the last <code>&gt;</code>, while <code>&lt;.*?&gt;</code> matches one tag. Catastrophic backtracking happens when a pattern can match the same text in exponentially many ways, typically nested quantifiers like <code>(a+)+</code> or <code>(\w+\s?)*$</code>, and the input almost matches but fails at the end: the engine tries every split. It can freeze a server (a regular expression denial of service, ReDoS). Prevent it with specific patterns (negated classes like <code>[^&lt;]*</code>), no nested repeats of overlapping things, anchors, input length limits, timeouts, or a linear-time engine such as RE2 for untrusted patterns.</p></div></details>
+</article>
+<article class="prob" id="p-when-should-you-not-use-a-regular-expres" data-pid="m5-5-when-should-you-not-use-a-regular-expres" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When should you not use a regular expression?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When the text is a literal (use <code>in</code>, <code>startswith</code>, <code>split</code>, <code>partition</code>, which are faster and clearer), and when the data has real structure: JSON, CSV, HTML, XML, URLs, dates, email headers. Those have parsers in the standard library or well known packages that handle nesting, quoting and escaping correctly, which regular expressions fundamentally cannot do for nested structures. Also avoid one huge clever pattern that nobody can maintain: several small steps, <code>re.VERBOSE</code> with comments, or a small parser are easier to test. Regex is right for patterns inside free text: ids, dates and amounts in sentences, log lines, cleanup, light tokenisation, and redaction.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-reliably-extract-structured-d" data-pid="m5-5-how-do-you-reliably-extract-structured-d" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How do you reliably extract structured data from an LLM's free-text reply?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Prefer not to: ask for structure at the source. Use the API's structured output or JSON mode, or tool calling with a JSON schema, so the model's output is constrained to valid JSON. Then <strong>validate</strong> it against a schema (Pydantic, Module 11), because valid JSON can still have wrong types or missing fields. When you must parse free text (older models, third-party tools), use regex only to <strong>locate</strong> the payload (a fenced code block, the outermost braces), parse it with a real parser (<code>json.loads</code>), validate, and on failure retry with the error message included so the model can correct itself, with a limit on retries. Log failures with the raw reply for debugging, and add evaluation tests with tricky replies (extra commentary, two code blocks, trailing commas) to catch regressions.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Write patterns as raw strings. <code>search</code> finds anywhere, <code>match</code> only at the start, <code>fullmatch</code> validates the whole string.</li><li>Quantifiers are greedy; add <code>?</code> for lazy, or better, use a specific class like <code>[^&lt;]*</code>. Avoid nested quantifiers.</li><li>With groups, <code>findall</code> returns the groups. Use <code>(?:...)</code> to group without capturing, named groups for readable extraction.</li><li><code>re.sub</code> accepts a function for computed replacements; <code>re.split</code> keeps captured separators. Know <code>re.I</code>, <code>re.M</code>, <code>re.S</code>, <code>re.X</code>, <code>re.ASCII</code>.</li><li>Regex is for patterns in free text. For literals use <code>in</code> and <code>split</code>; for JSON, CSV, HTML and URLs use a parser.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -195,6 +195,8 @@
   // ---------- problem cards ----------
   const TYPES = { write: 'Write the code', fix: 'Find and fix the bug', refactor: 'Refactor', predict: 'Predict the output',
     trace: 'Trace the variables', choose: 'Pick the faster approach', explain: 'Explain' };
+  // a str repr like 'abc' may also be typed with double quotes
+  const dq = a => /^'[^'"\\]*'$/.test(a) ? '"' + a.slice(1, -1) + '"' : a;
   const norm = s => s.replace(/\r/g, '').split('\n').map(l => l.trimEnd()).join('\n').trim();
 
   function setStatus(card, st) {
@@ -275,7 +277,7 @@
       card.querySelector('.check').onclick = () => {
         let all = true;
         card.querySelectorAll('input.cell').forEach(i => {
-          const v = norm(i.value), ok = v === norm(i.dataset.a) || v === norm(i.dataset.s || i.dataset.a);
+          const v = norm(i.value), ok = v === norm(i.dataset.a) || v === dq(norm(i.dataset.a)) || v === norm(i.dataset.s || i.dataset.a);
           i.classList.toggle('ok', ok); i.classList.toggle('no', !ok); all = all && ok;
           ok ? pop(i, .25) : shake(i);
         });

@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5.2 · String methods</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m5-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 5 · Strings and text</span></div>
+  <h1>5.2 String methods</h1>
+  <p>The methods you use daily for cleaning and parsing text, with the exact rules that cause bugs: <code>split()</code> versus <code>split(" ")</code>, <code>strip</code> removing a set of characters rather than a prefix, <code>partition</code>, case methods that change length, the digit tests, <code>translate</code>, and building aligned text.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="split">
+<h2><span class="n">1</span>Splitting and joining</h2>
+<p><code>split</code> is the workhorse of text parsing, and its two modes behave differently in a way that matters:</p>
+<ul><li><strong><code>s.split()</code></strong> with no argument splits on <strong>any run of whitespace</strong> (spaces, tabs, newlines), ignores leading and trailing whitespace, and never returns empty strings. It is the right choice for "the words of this text".</li><li><strong><code>s.split(sep)</code></strong> splits on <strong>exactly</strong> <code>sep</code>, and keeps the empty strings between consecutive separators and at the ends. It is the right choice for formats with a fixed delimiter, where an empty field is meaningful.</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">split.py</span><button class="copy">Copy</button></div><pre><code class="py">line = &quot;  refund   policy\tEU  &quot;
+print(line.split())                    # words
+print(line.split(&quot; &quot;))                 # every single space is a separator
+print(&quot;a,,b,&quot;.split(&quot;,&quot;))              # empty fields are kept
+print(&quot;k=v=w&quot;.split(&quot;=&quot;, 1), &quot;a/b/c&quot;.rsplit(&quot;/&quot;, 1))   # maxsplit: split only so many times
+print(&quot;one\ntwo\r\nthree\n&quot;.splitlines(), &quot;one\ntwo\n&quot;.split(&quot;\n&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;refund&#x27;, &#x27;policy&#x27;, &#x27;EU&#x27;]
+[&#x27;&#x27;, &#x27;&#x27;, &#x27;refund&#x27;, &#x27;&#x27;, &#x27;&#x27;, &#x27;policy\tEU&#x27;, &#x27;&#x27;, &#x27;&#x27;]
+[&#x27;a&#x27;, &#x27;&#x27;, &#x27;b&#x27;, &#x27;&#x27;]
+[&#x27;k&#x27;, &#x27;v=w&#x27;] [&#x27;a/b&#x27;, &#x27;c&#x27;]
+[&#x27;one&#x27;, &#x27;two&#x27;, &#x27;three&#x27;] [&#x27;one&#x27;, &#x27;two&#x27;, &#x27;&#x27;]</pre></div></div>
+<p><code>maxsplit</code> limits the number of splits, which keeps any later separators inside the last part: <code>"k=v=w".split("=", 1)</code> gives a key and a value that may itself contain <code>=</code>. <code>rsplit</code> splits from the right, so <code>rsplit("/", 1)</code> separates a file name from its directory. <code>splitlines()</code> splits on every kind of line break (<code>\n</code>, <code>\r\n</code> and others) and does not produce a trailing empty string, which <code>split("\n")</code> does when the text ends with a newline.</p>
+<p><code>sep.join(iterable)</code> is the inverse: it puts <code>sep</code> <strong>between</strong> the items, which must all be strings (a number in the list raises <code>TypeError</code>; convert with <code>map(str, ...)</code>). It is the efficient way to build text (5.1).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p><code>split(",")</code> is SQL Server's <code>STRING_SPLIT(s, ',')</code> and Power Query's "Split column by delimiter"; <code>",".join(values)</code> is <code>STRING_AGG(value, ',')</code> or DAX <code>CONCATENATEX</code>. Power Query's "Trim" and "Clean" steps correspond to <code>strip()</code> and removing control characters.</p></div></div>
+</section>
+<section class="sec" id="partition">
+<h2><span class="n">2</span><code>partition</code>: split once, never fail</h2>
+<p><code>s.partition(sep)</code> splits at the <strong>first</strong> <code>sep</code> and always returns three parts: the text before, the separator itself, and the text after. If <code>sep</code> is not present, you get <code>(s, "", "")</code>: the middle part being empty tells you it was missing. <code>rpartition</code> does the same at the <strong>last</strong> occurrence. Because it always returns three items, it unpacks safely, which makes it ideal for "key: value" lines, URLs and file names.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">partition.py</span><button class="copy">Copy</button></div><pre><code class="py">key, sep, value = &quot;Authorization: Bearer abc:123&quot;.partition(&quot;: &quot;)
+print(key, &quot;|&quot;, value)
+print(&quot;no separator here&quot;.partition(&quot;=&quot;))
+base, dot, ext = &quot;report.final.pdf&quot;.rpartition(&quot;.&quot;)
+print(base, ext, &quot;README&quot;.rpartition(&quot;.&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>Authorization | Bearer abc:123
+(&#x27;no separator here&#x27;, &#x27;&#x27;, &#x27;&#x27;)
+report.final pdf (&#x27;&#x27;, &#x27;&#x27;, &#x27;README&#x27;)</pre></div></div>
+</section>
+<section class="sec" id="strip">
+<h2><span class="n">3</span>Trimming: <code>strip</code> removes characters, <code>removeprefix</code> removes a prefix</h2>
+<p><code>strip()</code>, <code>lstrip()</code> and <code>rstrip()</code> with no argument remove whitespace from the ends. With an argument, they remove <strong>any of those characters</strong>, in any order and any number of times, until they meet a character not in the set. They do <strong>not</strong> remove a prefix or suffix as a unit. That is a famous bug: <code>url.lstrip("https://")</code> removes every leading <code>h</code>, <code>t</code>, <code>p</code>, <code>s</code>, <code>:</code> and <code>/</code>, which also eats the start of a domain such as <code>"shop.example.com"</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">strip.py</span><button class="copy">Copy</button></div><pre><code class="py">print(&quot;xxhixx&quot;.strip(&quot;x&quot;), &quot;  hi \n&quot;.strip(), &quot;--==hi==--&quot;.strip(&quot;-=&quot;))
+url = &quot;https://shop.example.com/refunds&quot;
+print(url.lstrip(&quot;https://&quot;))                 # removes characters: &#x27;shop&#x27; loses its letters too
+print(url.removeprefix(&quot;https://&quot;))           # removes the prefix once, exactly
+print(&quot;report.csv.csv&quot;.removesuffix(&quot;.csv&quot;), &quot;data.json&quot;.rstrip(&quot;.json&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>hi hi hi
+op.example.com/refunds
+shop.example.com/refunds
+report.csv data</pre></div></div>
+<p>Use <code>removeprefix</code> and <code>removesuffix</code> (Python 3.9+) to remove a known prefix or suffix exactly once; they return the string unchanged if it does not start or end with it. Keep <code>strip(chars)</code> for its real purpose: trimming a <strong>set</strong> of padding characters such as quotes, punctuation or zero-width spaces.</p>
+</section>
+<section class="sec" id="case">
+<h2><span class="n">4</span>Case, replacing and testing</h2>
+<p><code>upper</code>, <code>lower</code>, <code>casefold</code>, <code>title</code>, <code>capitalize</code> and <code>swapcase</code> all return new strings. Two warnings. <code>title()</code> upper-cases the first letter after <strong>any</strong> non-letter, so <code>"o'neil's"</code> becomes <code>"O'Neil'S"</code>; it is meant for simple words, not names or headlines. And case mapping can change the <strong>length</strong> of a string, because some characters map to several (<code>"ß".upper()</code> is <code>"SS"</code>), so never assume <code>len(s.upper()) == len(s)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">case.py</span><button class="copy">Copy</button></div><pre><code class="py">print(&quot;o&#x27;neil&#x27;s refund&quot;.title(), &quot;it&#x27;s fine&quot;.capitalize())
+print(&quot;ß&quot;.upper(), len(&quot;Straße&quot;.upper()), &quot;ﬁle&quot;.upper())
+print(&quot;refund refund refund&quot;.replace(&quot;refund&quot;, &quot;return&quot;, 2))</code></pre><div class="out"><span class="ol">Output</span><pre>O&#x27;Neil&#x27;S Refund It&#x27;s fine
+SS 7 FILE
+return return refund</pre></div></div>
+<p><code>replace(old, new, count)</code> replaces non-overlapping occurrences, left to right, optionally only the first <code>count</code>. The <code>is...</code> tests check that <strong>every</strong> character is of a kind, and return <code>False</code> for the empty string. The digit tests differ in what they accept, which matters for user input:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">is_tests.py</span><button class="copy">Copy</button></div><pre><code class="py">for s in [&quot;42&quot;, &quot;-5&quot;, &quot;3.2&quot;, &quot;²&quot;, &quot;½&quot;, &quot;٤٢&quot;, &quot;&quot;, &quot; 7&quot;]:
+    print(f&quot;{s!r:6} isdecimal={s.isdecimal()!s:5} isdigit={s.isdigit()!s:5} isnumeric={s.isnumeric()!s:5}&quot;)
+print(&quot;Refund&quot;.isalpha(), &quot;café&quot;.isalpha(), &quot;abc123&quot;.isalnum(), &quot; \t\n&quot;.isspace())</code></pre><div class="out"><span class="ol">Output</span><pre>&#x27;42&#x27;   isdecimal=True  isdigit=True  isnumeric=True 
+&#x27;-5&#x27;   isdecimal=False isdigit=False isnumeric=False
+&#x27;3.2&#x27;  isdecimal=False isdigit=False isnumeric=False
+&#x27;²&#x27;    isdecimal=False isdigit=True  isnumeric=True 
+&#x27;½&#x27;    isdecimal=False isdigit=False isnumeric=True 
+&#x27;٤٢&#x27;   isdecimal=True  isdigit=True  isnumeric=True 
+&#x27;&#x27;     isdecimal=False isdigit=False isnumeric=False
+&#x27; 7&#x27;   isdecimal=False isdigit=False isnumeric=False
+True True True True</pre></div></div>
+<p>None of them recognise <code>"-5"</code> or <code>"3.2"</code>, and <code>isdigit</code> accepts <code>"²"</code>, which <code>int()</code> rejects. To check whether text is a number, the reliable test is to <strong>try converting it</strong> (<code>int(s)</code> or <code>float(s)</code> inside <code>try</code>, Module 8). <code>isdecimal</code> is the closest match to "characters <code>int()</code> accepts"; note that it accepts digits from other scripts, such as Arabic-Indic <code>"٤٢"</code>, which <code>int</code> also converts to 42.</p>
+</section>
+<section class="sec" id="translate">
+<h2><span class="n">5</span><code>translate</code> and alignment</h2>
+<p>For mapping or deleting <strong>many characters at once</strong>, <code>str.maketrans</code> builds a table and <code>translate</code> applies it in a single pass in C: much faster and clearer than a chain of <code>replace</code> calls. <code>maketrans</code> takes either a dict from characters to replacements (or <code>None</code> to delete), or two equal-length strings to map, plus an optional third string of characters to delete.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">translate.py</span><button class="copy">Copy</button></div><pre><code class="py">import string
+
+no_punct = str.maketrans(&quot;&quot;, &quot;&quot;, string.punctuation)
+print(&quot;Refund?! (EU-only), see: faq.&quot;.translate(no_punct))
+smart = str.maketrans({&quot;\u2018&quot;: &quot;&#x27;&quot;, &quot;\u2019&quot;: &quot;&#x27;&quot;, &quot;\u201c&quot;: &#x27;&quot;&#x27;, &quot;\u201d&quot;: &#x27;&quot;&#x27;, &quot;\u00a0&quot;: &quot; &quot;})
+print(&quot;\u201cIt\u2019s\u00a0fine\u201d&quot;.translate(smart))</code></pre><div class="out"><span class="ol">Output</span><pre>Refund EUonly see faq
+&quot;It&#x27;s fine&quot;</pre></div></div>
+<p>For fixed-width text such as console tables and logs, <code>ljust(width)</code>, <code>rjust(width)</code> and <code>center(width)</code> pad a string to a width (with spaces or a fill character), and <code>zfill(width)</code> pads a number string with zeros, keeping a sign in front. f-strings can do the same with format specs (5.3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">align.py</span><button class="copy">Copy</button></div><pre><code class="py">rows = [(&quot;faq.md&quot;, 0.913), (&quot;terms-and-conditions.md&quot;, 0.4), (&quot;api.md&quot;, 0.75)]
+width = max(len(name) for name, _ in rows)
+for name, score in rows:
+    print(name.ljust(width), str(round(score, 2)).rjust(5))
+print(&quot;7&quot;.zfill(3), &quot;-7&quot;.zfill(4))</code></pre><div class="out"><span class="ol">Output</span><pre>faq.md                   0.91
+terms-and-conditions.md   0.4
+api.md                   0.75
+007 -007</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-split-with-and-without-a-separator" data-pid="m5-2-split-with-and-without-a-separator" data-type="predict" data-level="easy" data-answer="[&#x27;a&#x27;, &#x27;b,c&#x27;, &#x27;,,&#x27;, &#x27;d&#x27;]
+[&#x27;&#x27;, &#x27;a&#x27;, &#x27;&#x27;, &#x27;b,c&#x27;, &#x27;,,&#x27;, &#x27;d&#x27;, &#x27;&#x27;]
+[&#x27; a  b&#x27;, &#x27;c &#x27;, &#x27;&#x27;, &#x27; d &#x27;]
+[&#x27;a  b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;]">
+<header class="prob-head"><h3>1. split with and without a separator</h3></header>
+<div class="code"><pre><code class="py">s = &quot; a  b,c ,, d &quot;
+print(s.split())
+print(s.split(&quot; &quot;))
+print(s.split(&quot;,&quot;))
+print([p.strip() for p in s.split(&quot;,&quot;) if p.strip()])
+print(&quot;a\nb\n&quot;.split(&quot;\n&quot;), &quot;a\nb\n&quot;.splitlines())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>split()</code> merges runs of whitespace and drops empties; <code>split(" ")</code> treats each single space as a separator.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;a&#x27;, &#x27;b,c&#x27;, &#x27;,,&#x27;, &#x27;d&#x27;]
+[&#x27;&#x27;, &#x27;a&#x27;, &#x27;&#x27;, &#x27;b,c&#x27;, &#x27;,,&#x27;, &#x27;d&#x27;, &#x27;&#x27;]
+[&#x27; a  b&#x27;, &#x27;c &#x27;, &#x27;&#x27;, &#x27; d &#x27;]
+[&#x27;a  b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;]
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;&#x27;] [&#x27;a&#x27;, &#x27;b&#x27;]</pre></div><p><code>split()</code> gives the "words": runs of whitespace collapse and the ends are ignored. <code>split(" ")</code> keeps an empty string for every extra space. <code>split(",")</code> keeps the empty field between <code>,,</code>, which for a CSV-like format is correct. The cleaning comprehension strips each field and drops empty ones, a common one-liner. <code>split("\n")</code> leaves a trailing empty string when the text ends with a newline; <code>splitlines()</code> does not.</p></div></details>
+</article>
+<article class="prob" id="p-stripping-a-url-prefix-eats-the-domain" data-pid="m5-2-stripping-a-url-prefix-eats-the-domain" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Stripping a URL prefix eats the domain</h3></header>
+<div class="prob-q"><p><code>domain(url)</code> should return the host of an <code>https://</code> or <code>http://</code> URL. For <code>"https://shop.example.com/x"</code> it returns <code>"op.example.com"</code>. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def domain(url):
+    return url.lstrip(&quot;https://&quot;).lstrip(&quot;http://&quot;).split(&quot;/&quot;)[0]
+</textarea>
+<script type="text/plain" class="prob-tests">assert domain("https://shop.example.com/refunds") == "shop.example.com"
+assert domain("http://help.site.io") == "help.site.io"
+assert domain("https://www.x.com/a/b") == "www.x.com"
+assert domain("sftp.host.org/file") == "sftp.host.org"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert domain(&quot;https://shop.example.com/refunds&quot;) == &quot;shop.example.com&quot;
+assert domain(&quot;http://help.site.io&quot;) == &quot;help.site.io&quot;
+assert domain(&quot;https://www.x.com/a/b&quot;) == &quot;www.x.com&quot;
+assert domain(&quot;sftp.host.org/file&quot;) == &quot;sftp.host.org&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>lstrip("https://")</code> removes any of the characters h, t, p, s, : and / from the start, not the prefix.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>removeprefix</code> removes an exact prefix once, and does nothing if it is not there.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def domain(url):
+    rest = url.removeprefix(&quot;https://&quot;).removeprefix(&quot;http://&quot;)
+    return rest.partition(&quot;/&quot;)[0]</code></pre></div><p><code>lstrip</code> treats its argument as a <strong>set</strong> of characters and keeps removing while the next character is in the set, so <code>"shop"</code> loses <code>s</code> and <code>h</code> too. <code>removeprefix</code> removes the exact prefix or nothing. <code>partition("/")[0]</code> is the part before the first slash, or the whole string when there is none. For real URLs use <code>urllib.parse.urlsplit(url).hostname</code>, which also handles ports, credentials and upper-case schemes.</p></div></details>
+</article>
+<article class="prob" id="p-a-url-slug-without-regex" data-pid="m5-2-a-url-slug-without-regex" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A URL slug without regex</h3></header>
+<div class="prob-q"><p>Write <code>slugify(title)</code> that lower-cases the title, turns every run of characters that are not letters or digits into a single <code>-</code>, and removes <code>-</code> at the ends. Use <code>isalnum</code> and <code>join</code>, not regex.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def slugify(title):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert slugify("Refund Policy (EU) — 2025!") == "refund-policy-eu-2025"
+assert slugify("  Hello,   World  ") == "hello-world"
+assert slugify("---") == ""
+assert slugify("Café Ünique") == "café-ünique"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert slugify(&quot;Refund Policy (EU) — 2025!&quot;) == &quot;refund-policy-eu-2025&quot;
+assert slugify(&quot;  Hello,   World  &quot;) == &quot;hello-world&quot;
+assert slugify(&quot;---&quot;) == &quot;&quot;
+assert slugify(&quot;Café Ünique&quot;) == &quot;café-ünique&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Replace each non-alphanumeric character with a space, then <code>"-".join(text.split())</code> collapses runs and drops the ends.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def slugify(title):
+    spaced = &quot;&quot;.join(ch if ch.isalnum() else &quot; &quot; for ch in title.lower())
+    return &quot;-&quot;.join(spaced.split())</code></pre></div><p>Turning separators into spaces and then using <code>split()</code> reuses its two best properties: runs collapse into one break, and the ends disappear, so <code>join</code> with <code>-</code> produces exactly one dash between words and none at the edges. <code>isalnum</code> is Unicode-aware, so accented letters stay. Many systems also remove accents for slugs (normalise to NFKD and drop combining marks, 5.4) so URLs stay ASCII.</p></div></details>
+</article>
+<article class="prob" id="p-what-the-digit-tests-accept" data-pid="m5-2-what-the-digit-tests-accept" data-type="predict" data-level="easy" data-answer="[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;٧&#x27;]
+[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;²&#x27;, &#x27;٧&#x27;]
+[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;²&#x27;, &#x27;½&#x27;, &#x27;٧&#x27;]
+7 7 7">
+<header class="prob-head"><h3>4. What the digit tests accept</h3></header>
+<div class="code"><pre><code class="py">tests = [&quot;7&quot;, &quot;007&quot;, &quot;-7&quot;, &quot;7.5&quot;, &quot;²&quot;, &quot;½&quot;, &quot;٧&quot;, &quot;&quot;]
+print([t for t in tests if t.isdecimal()])
+print([t for t in tests if t.isdigit()])
+print([t for t in tests if t.isnumeric()])
+print(int(&quot;007&quot;), int(&quot;٧&quot;), int(&quot; 7 &quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each test is stricter than the next: <code>isdecimal</code> ⊂ <code>isdigit</code> ⊂ <code>isnumeric</code>. None accept signs or decimal points.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;٧&#x27;]
+[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;²&#x27;, &#x27;٧&#x27;]
+[&#x27;7&#x27;, &#x27;007&#x27;, &#x27;²&#x27;, &#x27;½&#x27;, &#x27;٧&#x27;]
+7 7 7</pre></div><p><code>isdecimal</code> accepts only characters that are decimal digits in some script, including the Arabic-Indic <code>"٧"</code>. <code>isdigit</code> also accepts superscripts like <code>"²"</code>, and <code>isnumeric</code> also accepts fractions like <code>"½"</code>. All three reject the sign and the decimal point, and are <code>False</code> for the empty string. <code>int</code> accepts leading zeros, other scripts' digits and surrounding whitespace. So "is this a number?" is best answered by attempting the conversion.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-parse-key-value-lines" data-pid="m5-2-parse-key-value-lines" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Parse <code>key: value</code> lines</h3></header>
+<div class="prob-q"><p>An LLM was asked to answer as lines of <code>key: value</code>. Write <code>parse_fields(text)</code> that returns a dict from lower-cased, stripped keys to stripped values. Skip blank lines and lines starting with <code>#</code>. Values may themselves contain <code>:</code>. A line without <code>:</code> raises <code>ValueError</code> naming the line.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def parse_fields(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+out = parse_fields("Title: Refund delayed\n\n# model notes\nPriority : high\nURL: https://x.io/a")
+assert out == {"title": "Refund delayed", "priority": "high", "url": "https://x.io/a"}
+assert parse_fields("") == {}
+msg = raises(ValueError, parse_fields, "title: ok\nnot a field")
+assert msg and "not a field" in msg</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc as e:
+        return str(e)
+    return False
+out = parse_fields(&quot;Title: Refund delayed\n\n# model notes\nPriority : high\nURL: https://x.io/a&quot;)
+assert out == {&quot;title&quot;: &quot;Refund delayed&quot;, &quot;priority&quot;: &quot;high&quot;, &quot;url&quot;: &quot;https://x.io/a&quot;}
+assert parse_fields(&quot;&quot;) == {}
+msg = raises(ValueError, parse_fields, &quot;title: ok\nnot a field&quot;)
+assert msg and &quot;not a field&quot; in msg</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>text.splitlines()</code>, then <code>key, sep, value = line.partition(":")</code>. An empty <code>sep</code> means the line had no colon.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_fields(text):
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(&quot;#&quot;):
+            continue
+        key, sep, value = line.partition(&quot;:&quot;)
+        if not sep:
+            raise ValueError(f&quot;not a key: value line: {line!r}&quot;)
+        out[key.strip().lower()] = value.strip()
+    return out</code></pre></div><p><code>partition(":")</code> splits only at the <strong>first</strong> colon, so the URL keeps its own colon, and its empty middle part is a clean signal for a malformed line. <code>split(":")</code> would cut the URL into pieces. Raising with the offending line in the message makes the error useful to log or to send back to the model for a retry. For anything nested or typed, ask the model for JSON instead and parse it with <code>json.loads</code> (Module 12).</p></div></details>
+</article>
+<article class="prob" id="p-title-case-that-mangles-names" data-pid="m5-2-title-case-that-mangles-names" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Title case that mangles names</h3></header>
+<div class="prob-q"><p><code>display_name</code> formats names from a CRM: the first letter of each <strong>space-separated</strong> word upper-case, the rest lower-case, and extra spaces removed. <code>title()</code> gets it wrong: <code>"mcdonald's"</code> becomes <code>"Mcdonald'S"</code>. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def display_name(name):
+    return name.title()
+</textarea>
+<script type="text/plain" class="prob-tests">assert display_name("mcdonald's pub") == "Mcdonald's Pub"
+assert display_name("  ana   lopez ") == "Ana Lopez"
+assert display_name("o'neil") == "O'neil"
+assert display_name("") == ""</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert display_name(&quot;mcdonald&#x27;s pub&quot;) == &quot;Mcdonald&#x27;s Pub&quot;
+assert display_name(&quot;  ana   lopez &quot;) == &quot;Ana Lopez&quot;
+assert display_name(&quot;o&#x27;neil&quot;) == &quot;O&#x27;neil&quot;
+assert display_name(&quot;&quot;) == &quot;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Split on whitespace, then build each word as <code>w[:1].upper() + w[1:].lower()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def display_name(name):
+    return &quot; &quot;.join(w[:1].upper() + w[1:].lower() for w in name.split())</code></pre></div><p><code>title()</code> treats every non-letter, including an apostrophe, as a word boundary, so the <code>s</code> after <code>'</code> is capitalised. Splitting on whitespace gives the words you actually mean, and <code>w[:1]</code> (not <code>w[0]</code>) is safe even for an empty string. <code>str.capitalize</code> per word would do the same. Note that this rule is still wrong for names like "McDonald" or "van der Berg": real name formatting is cultural, which is why systems should store names as typed rather than re-case them.</p></div></details>
+</article>
+<article class="prob" id="p-taking-a-path-apart" data-pid="m5-2-taking-a-path-apart" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Taking a path apart</h3></header>
+<div class="prob-q"><p>Fill in <code>head</code> and <code>tail</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">path = &quot;data/raw/2025/report.final.tar.gz&quot;
+head, _, tail = path.rpartition(&quot;/&quot;)
+head, _, tail = tail.partition(&quot;.&quot;)
+head, _, tail = path.rpartition(&quot;.&quot;)
+head, tail = path.split(&quot;/&quot;, 1)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>head</code></th><th><code>tail</code></th></tr><tr><td>rpartition(&#x27;/&#x27;)</td><td><input class="cell" data-a="&#x27;data/raw/2025&#x27;" data-s="data/raw/2025" aria-label="head at rpartition(&#x27;/&#x27;)" autocomplete="off"></td><td><input class="cell" data-a="&#x27;report.final.tar.gz&#x27;" data-s="report.final.tar.gz" aria-label="tail at rpartition(&#x27;/&#x27;)" autocomplete="off"></td></tr><tr><td>partition(&#x27;.&#x27;)</td><td><input class="cell" data-a="&#x27;report&#x27;" data-s="report" aria-label="head at partition(&#x27;.&#x27;)" autocomplete="off"></td><td><input class="cell" data-a="&#x27;final.tar.gz&#x27;" data-s="final.tar.gz" aria-label="tail at partition(&#x27;.&#x27;)" autocomplete="off"></td></tr><tr><td>rpartition(&#x27;.&#x27;)</td><td><input class="cell" data-a="&#x27;data/raw/2025/report.final.tar&#x27;" data-s="data/raw/2025/report.final.tar" aria-label="head at rpartition(&#x27;.&#x27;)" autocomplete="off"></td><td><input class="cell" data-a="&#x27;gz&#x27;" data-s="gz" aria-label="tail at rpartition(&#x27;.&#x27;)" autocomplete="off"></td></tr><tr><td>split(&#x27;/&#x27;, 1)</td><td><input class="cell" data-a="&#x27;data&#x27;" data-s="data" aria-label="head at split(&#x27;/&#x27;, 1)" autocomplete="off"></td><td><input class="cell" data-a="&#x27;raw/2025/report.final.tar.gz&#x27;" data-s="raw/2025/report.final.tar.gz" aria-label="tail at split(&#x27;/&#x27;, 1)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>partition</code> uses the first separator, <code>rpartition</code> the last; <code>split(sep, 1)</code> splits once from the left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>head</code></th><th><code>tail</code></th></tr><tr><td>rpartition(&#x27;/&#x27;)</td><td><code>&#x27;data/raw/2025&#x27;</code></td><td><code>&#x27;report.final.tar.gz&#x27;</code></td></tr><tr><td>partition(&#x27;.&#x27;)</td><td><code>&#x27;report&#x27;</code></td><td><code>&#x27;final.tar.gz&#x27;</code></td></tr><tr><td>rpartition(&#x27;.&#x27;)</td><td><code>&#x27;data/raw/2025/report.final.tar&#x27;</code></td><td><code>&#x27;gz&#x27;</code></td></tr><tr><td>split(&#x27;/&#x27;, 1)</td><td><code>&#x27;data&#x27;</code></td><td><code>&#x27;raw/2025/report.final.tar.gz&#x27;</code></td></tr></table></div><p>The last <code>/</code> separates the directory from the file name. The first <code>.</code> of the file name splits off the stem <code>"report"</code> and leaves <code>"final.tar.gz"</code>. The last <code>.</code> gives the final extension only, <code>"gz"</code>, which is why "the extension" of <code>.tar.gz</code> files is ambiguous. <code>split("/", 1)</code> separates the first directory from the rest. For real paths use <code>pathlib.Path</code> (Module 12), whose <code>.name</code>, <code>.stem</code>, <code>.suffix</code> and <code>.suffixes</code> encode these exact rules.</p></div></details>
+</article>
+<article class="prob" id="p-removing-punctuation-replace-loop-or-tra" data-pid="m5-2-removing-punctuation-replace-loop-or-tra" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Removing punctuation: replace loop or translate</h3></header>
+<div class="prob-q"><p>Both remove all ASCII punctuation from 2,000 reviews before tokenising. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import string
+reviews = [&quot;Great!!! Refund came fast, thanks; 10/10 (would buy again)... :-)&quot;] * 2000
+table = str.maketrans(&quot;&quot;, &quot;&quot;, string.punctuation)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = []
+for r in reviews:
+    for p in string.punctuation:
+        r = r.replace(p, &quot;&quot;)
+    out.append(r)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = [r.translate(table) for r in reviews]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>string.punctuation</code> has 32 characters. How many passes over each review does A make?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>10.18 ms</td></tr><tr><td>B</td><td>3.52 ms</td></tr></table></div><p>A makes 32 passes over every review, one <code>replace</code> per punctuation character, and builds a new string each time. B makes <strong>one</strong> pass per review, looking each character up in the table. <code>replace</code> is fast C code too, so the measured gap is a few times rather than 32 times, but A still pays for 32 passes and up to 32 new strings per review, and the gap grows with the number of characters to replace. The same reasoning applies whenever you chain many <code>replace</code> calls for single characters.</p></div></details>
+</article>
+<article class="prob" id="p-an-aligned-text-table" data-pid="m5-2-an-aligned-text-table" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. An aligned text table</h3></header>
+<div class="prob-q"><p>Write <code>format_table(header, rows)</code> that returns the table as a string: one line per row, columns separated by two spaces, each column as wide as its widest cell (header included). Text columns are left-aligned; columns whose cells are all numbers (<code>int</code> or <code>float</code>) are right-aligned. Lines must have no trailing spaces.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def format_table(header, rows):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">out = format_table(["doc", "score", "tokens"], [["faq.md", 0.91, 120], ["terms-and-conditions.md", 0.4, 2300]])
+assert out == (
+    "doc                      score  tokens\n"
+    "faq.md                    0.91     120\n"
+    "terms-and-conditions.md    0.4    2300"
+)
+assert format_table(["a"], []) == "a"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">out = format_table([&quot;doc&quot;, &quot;score&quot;, &quot;tokens&quot;], [[&quot;faq.md&quot;, 0.91, 120], [&quot;terms-and-conditions.md&quot;, 0.4, 2300]])
+assert out == (
+    &quot;doc                      score  tokens\n&quot;
+    &quot;faq.md                    0.91     120\n&quot;
+    &quot;terms-and-conditions.md    0.4    2300&quot;
+)
+assert format_table([&quot;a&quot;], []) == &quot;a&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert every cell with <code>str</code>, then compute each column's width with <code>max(len(...))</code> over the header and the cells.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A column is numeric when every row's value in it is an <code>int</code> or <code>float</code>. Join the padded cells with two spaces and <code>rstrip</code> each line.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def format_table(header, rows):
+    cols = list(zip(*([header] + rows)))
+    widths = [max(len(str(c)) for c in col) for col in cols]
+    numeric = [bool(rows) and all(isinstance(r[i], (int, float)) for r in rows) for i in range(len(header))]
+    lines = []
+    for row in [header] + rows:
+        cells = [str(c).rjust(w) if num else str(c).ljust(w) for c, w, num in zip(row, widths, numeric)]
+        lines.append(&quot;  &quot;.join(cells).rstrip())
+    return &quot;\n&quot;.join(lines)</code></pre></div><p>Transposing with <code>zip(*...)</code> (4.3) gives each column, so widths are one <code>max</code> per column. Right-aligning numbers makes their digits line up, the convention in every spreadsheet and report; the header of a numeric column is right-aligned too, so it sits over its numbers. <code>rstrip</code> removes the padding after the last column, which would otherwise make tests and diffs noisy. Libraries such as <code>tabulate</code> and <code>rich</code> do this (with borders and colours); pandas does it in <code>DataFrame.to_string</code>.</p></div></details>
+</article>
+<article class="prob" id="p-labels-that-look-the-same-but-do-not-mat" data-pid="m5-2-labels-that-look-the-same-but-do-not-mat" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Labels that look the same but do not match</h3></header>
+<div class="prob-q"><p>Annotators typed labels by hand. <code>clean_label</code> should map variants such as <code>" New  York "</code>, <code>"new york\t"</code> and <code>"NEW\u00a0YORK"</code> (with a non-breaking space) to the same value, <code>"new york"</code>. It still produces three different labels. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def clean_label(label):
+    return label.strip().lower()
+</textarea>
+<script type="text/plain" class="prob-tests">variants = [" New  York ", "new york\t", "NEW\u00a0YORK", "New\nYork"]
+assert {clean_label(v) for v in variants} == {"new york"}
+assert clean_label("  Spam ") == "spam" and clean_label("") == ""</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">variants = [&quot; New  York &quot;, &quot;new york\t&quot;, &quot;NEW\u00a0YORK&quot;, &quot;New\nYork&quot;]
+assert {clean_label(v) for v in variants} == {&quot;new york&quot;}
+assert clean_label(&quot;  Spam &quot;) == &quot;spam&quot; and clean_label(&quot;&quot;) == &quot;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>strip</code> only trims the ends. Internal runs of whitespace (including a non-breaking space) need to be collapsed too.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>split()</code> with no argument splits on all Unicode whitespace, <code>\u00a0</code> included.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def clean_label(label):
+    return &quot; &quot;.join(label.split()).casefold()</code></pre></div><p>The variants differ <strong>inside</strong> the string: two spaces, a tab, a non-breaking space, a newline. <code>" ".join(label.split())</code> collapses every run of any whitespace into one space and trims the ends in one step, because <code>split()</code> recognises all Unicode whitespace. <code>casefold</code> handles case more thoroughly than <code>lower</code>. Inconsistent labels like these silently split one class into several in training data, which shows up as a model "confusing" classes that are actually identical.</p></div></details>
+</article>
+<article class="prob" id="p-a-chain-of-replace-calls" data-pid="m5-2-a-chain-of-replace-calls" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. A chain of replace calls</h3></header>
+<div class="prob-q"><p>Replace the chain with one translation table, same output. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def normalise_quotes(text):
+    text = text.replace(&quot;\u2018&quot;, &quot;&#x27;&quot;)
+    text = text.replace(&quot;\u2019&quot;, &quot;&#x27;&quot;)
+    text = text.replace(&quot;\u201c&quot;, &#x27;&quot;&#x27;)
+    text = text.replace(&quot;\u201d&quot;, &#x27;&quot;&#x27;)
+    text = text.replace(&quot;\u2013&quot;, &quot;-&quot;)
+    text = text.replace(&quot;\u2014&quot;, &quot;-&quot;)
+    text = text.replace(&quot;\u00a0&quot;, &quot; &quot;)
+    return text
+</textarea>
+<script type="text/plain" class="prob-tests">assert normalise_quotes("\u201cIt\u2019s\u00a0fine\u201d \u2014 ok") == '"It\'s fine" - ok'
+assert normalise_quotes("plain") == "plain"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert normalise_quotes(&quot;\u201cIt\u2019s\u00a0fine\u201d \u2014 ok&quot;) == &#x27;&quot;It\&#x27;s fine&quot; - ok&#x27;
+assert normalise_quotes(&quot;plain&quot;) == &quot;plain&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the table once at module level with <code>str.maketrans({...})</code>, from each character to its replacement.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">TYPOGRAPHY = str.maketrans({
+    &quot;\u2018&quot;: &quot;&#x27;&quot;, &quot;\u2019&quot;: &quot;&#x27;&quot;, &quot;\u201c&quot;: &#x27;&quot;&#x27;, &quot;\u201d&quot;: &#x27;&quot;&#x27;,
+    &quot;\u2013&quot;: &quot;-&quot;, &quot;\u2014&quot;: &quot;-&quot;, &quot;\u00a0&quot;: &quot; &quot;,
+})
+
+def normalise_quotes(text):
+    return text.translate(TYPOGRAPHY)</code></pre></div><p>Seven passes over the text become one, and the mapping becomes <strong>data</strong> that is easy to read and extend. Building the table once at module level avoids rebuilding it per call. Normalising "smart" punctuation like this is a common step before matching or deduplicating text copied from documents and web pages, and before comparing LLM outputs with expected answers.</p></div></details>
+</article>
+<article class="prob" id="p-splitting-model-output-into-lines" data-pid="m5-2-splitting-model-output-into-lines" data-type="predict" data-level="medium" data-answer="5 &#x27;1. Check the order\r&#x27;
+[&#x27;1. Check the order&#x27;, &#x27;2. Refund&#x27;, &#x27;&#x27;, &#x27;3. Close ticket&#x27;]
+3 [&#x27;Check the order&#x27;, &#x27;Refund&#x27;, &#x27;Close ticket&#x27;]">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Splitting model output into lines</h3></header>
+<div class="code"><pre><code class="py">reply = &quot;1. Check the order\r\n2. Refund\r\n\r\n3. Close ticket\r\n&quot;
+print(len(reply.split(&quot;\n&quot;)), repr(reply.split(&quot;\n&quot;)[0]))
+print(reply.splitlines())
+steps = [line for line in reply.splitlines() if line.strip()]
+print(len(steps), [s.partition(&quot;. &quot;)[2] for s in steps])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>\r\n</code> is a Windows line break. <code>split("\n")</code> leaves the <code>\r</code> at the end of each line.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5 &#x27;1. Check the order\r&#x27;
+[&#x27;1. Check the order&#x27;, &#x27;2. Refund&#x27;, &#x27;&#x27;, &#x27;3. Close ticket&#x27;]
+3 [&#x27;Check the order&#x27;, &#x27;Refund&#x27;, &#x27;Close ticket&#x27;]</pre></div><p>Splitting on <code>"\n"</code> keeps a <code>\r</code> at the end of every line, plus empty strings for the blank line and the trailing break, so line-based comparisons quietly fail (<code>"2. Refund\r" != "2. Refund"</code>). <code>splitlines()</code> understands <code>\r\n</code> and drops the trailing break. Filtering with <code>line.strip()</code> removes blank lines, and <code>partition(". ")</code> strips the numbering. Model output, HTTP bodies and files from Windows all produce <code>\r\n</code>, so prefer <code>splitlines()</code> for text.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-greedy-word-wrap" data-pid="m5-2-greedy-word-wrap" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Greedy word wrap</h3></header>
+<div class="prob-q"><p>Write <code>wrap(text, width)</code> that returns a list of lines, each at most <code>width</code> characters, filled greedily with whole words separated by single spaces. A word longer than <code>width</code> goes on its own line, unbroken. Whitespace in the input is normalised.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def wrap(text, width):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = "Refunds are processed within five business days of the request"
+assert wrap(t, 20) == ["Refunds are", "processed within", "five business days", "of the request"]
+assert wrap("a supercalifragilistic word", 10) == ["a", "supercalifragilistic", "word"]
+assert wrap("", 10) == [] and wrap("  one  ", 3) == ["one"]
+assert all(len(l) <= 20 for l in wrap(t, 20))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = &quot;Refunds are processed within five business days of the request&quot;
+assert wrap(t, 20) == [&quot;Refunds are&quot;, &quot;processed within&quot;, &quot;five business days&quot;, &quot;of the request&quot;]
+assert wrap(&quot;a supercalifragilistic word&quot;, 10) == [&quot;a&quot;, &quot;supercalifragilistic&quot;, &quot;word&quot;]
+assert wrap(&quot;&quot;, 10) == [] and wrap(&quot;  one  &quot;, 3) == [&quot;one&quot;]
+assert all(len(l) &lt;= 20 for l in wrap(t, 20))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk the words with a <code>current</code> list and its length. Adding a word costs <code>len(word)</code> plus one space if the line is not empty.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the next word does not fit, finish the current line with <code>" ".join(current)</code> and start a new one with that word.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def wrap(text, width):
+    lines, current, length = [], [], 0
+    for word in text.split():
+        extra = len(word) + (1 if current else 0)
+        if current and length + extra &gt; width:
+            lines.append(&quot; &quot;.join(current))
+            current, length = [word], len(word)
+        else:
+            current.append(word)
+            length += extra
+    if current:
+        lines.append(&quot; &quot;.join(current))
+    return lines</code></pre></div><p>Tracking the current length avoids re-measuring the joined line for every word, so the function is O(n). The <code>if current</code> checks handle two edge cases at once: the first word on a line needs no space, and a word longer than the width is accepted onto an empty line instead of looping forever. The final <code>if current</code> flushes the last line, the classic thing to forget (1.2, run lengths). <code>textwrap.wrap</code> in the standard library does this with more options, including breaking long words.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-prompt-renderer-that-can" data-pid="m5-2-read-the-code-a-prompt-renderer-that-can" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a prompt renderer that can be hijacked</h3></header>
+<div class="prob-q"><p>This renders prompt templates with <code>{placeholders}</code> by repeated <code>replace</code>. Two problems: <code>{name}</code> also eats the start of <code>{name_full}</code>, and a user who types <code>{system}</code> into their question gets the system text injected into their prompt. Rewrite <code>render</code> so each placeholder is replaced exactly once, by name, and values are never re-scanned.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def render(template, values):
+    out = template
+    for key, value in values.items():
+        out = out.replace(&quot;{&quot; + key, str(value))
+    return out.replace(&quot;}&quot;, &quot;&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">tpl = "Hi {name} ({name_full}). Q: {question}"
+vals = {"name": "Ana", "name_full": "Ana Lopez", "question": "What is {system}?", "system": "SECRET RULES"}
+assert render(tpl, vals) == "Hi Ana (Ana Lopez). Q: What is {system}?"
+assert render("{a}{b}", {"a": 1, "b": 2}) == "12"
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert raises(KeyError, render, "{missing}", {})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tpl = &quot;Hi {name} ({name_full}). Q: {question}&quot;
+vals = {&quot;name&quot;: &quot;Ana&quot;, &quot;name_full&quot;: &quot;Ana Lopez&quot;, &quot;question&quot;: &quot;What is {system}?&quot;, &quot;system&quot;: &quot;SECRET RULES&quot;}
+assert render(tpl, vals) == &quot;Hi Ana (Ana Lopez). Q: What is {system}?&quot;
+assert render(&quot;{a}{b}&quot;, {&quot;a&quot;: 1, &quot;b&quot;: 2}) == &quot;12&quot;
+def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert raises(KeyError, render, &quot;{missing}&quot;, {})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>str.format_map(values)</code> parses the template once and inserts each value as plain text, without looking for placeholders inside it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>It raises <code>KeyError</code> for a placeholder with no value, which is what the last test wants.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def render(template, values):
+    return template.format_map(values)</code></pre></div><p>The replace loop has two classic flaws. Replacing <code>"{name"</code> (without the closing brace) also matches the start of <code>"{name_full"</code>, and the order of the dict decides which wins. Worse, each replacement is applied to text that already contains user values, so a value like <code>"{system}"</code> becomes a placeholder and gets filled with secret instructions: a template injection, the string-level cousin of prompt injection. <code>format_map</code> parses the template once, substitutes by exact field name, and never re-scans inserted values, so user text appears literally. (Templates themselves must come from you, not users: <code>format</code> can read attributes of the values, for example <code>{obj.__class__}</code>.)</p></div></details>
+</article>
+<article class="prob" id="p-split-a-line-with-quoted-fields" data-pid="m5-2-split-a-line-with-quoted-fields" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. Split a line with quoted fields</h3></header>
+<div class="prob-q"><p>Write <code>split_fields(line, sep=",")</code> that splits on <code>sep</code> except inside double quotes, removes the quotes from quoted fields, and keeps empty fields. Quotes inside a quoted field are written twice (<code>""</code>), as in CSV. Do it with a single loop over the characters, not the <code>csv</code> module.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def split_fields(line, sep=&quot;,&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert split_fields('a,b,c') == ["a", "b", "c"]
+assert split_fields('1,"Lopez, Ana",ana@x.io') == ["1", "Lopez, Ana", "ana@x.io"]
+assert split_fields('x,,"",y') == ["x", "", "", "y"]
+assert split_fields('"He said ""hi""",2') == ['He said "hi"', "2"]
+assert split_fields("") == [""]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert split_fields(&#x27;a,b,c&#x27;) == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+assert split_fields(&#x27;1,&quot;Lopez, Ana&quot;,ana@x.io&#x27;) == [&quot;1&quot;, &quot;Lopez, Ana&quot;, &quot;ana@x.io&quot;]
+assert split_fields(&#x27;x,,&quot;&quot;,y&#x27;) == [&quot;x&quot;, &quot;&quot;, &quot;&quot;, &quot;y&quot;]
+assert split_fields(&#x27;&quot;He said &quot;&quot;hi&quot;&quot;&quot;,2&#x27;) == [&#x27;He said &quot;hi&quot;&#x27;, &quot;2&quot;]
+assert split_fields(&quot;&quot;) == [&quot;&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>fields</code>, the characters of the current field, and a flag <code>in_quotes</code>. A <code>sep</code> ends a field only when not in quotes.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>"</code> inside quotes followed by another <code>"</code> is a literal quote; otherwise it closes the quotes. Use an index loop so you can look one character ahead.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def split_fields(line, sep=&quot;,&quot;):
+    fields, current, in_quotes = [], [], False
+    i = 0
+    while i &lt; len(line):
+        ch = line[i]
+        if in_quotes:
+            if ch == &#x27;&quot;&#x27; and i + 1 &lt; len(line) and line[i + 1] == &#x27;&quot;&#x27;:
+                current.append(&#x27;&quot;&#x27;)
+                i += 1
+            elif ch == &#x27;&quot;&#x27;:
+                in_quotes = False
+            else:
+                current.append(ch)
+        elif ch == &#x27;&quot;&#x27;:
+            in_quotes = True
+        elif ch == sep:
+            fields.append(&quot;&quot;.join(current))
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+    fields.append(&quot;&quot;.join(current))
+    return fields</code></pre></div><p><code>line.split(",")</code> breaks <code>"Lopez, Ana"</code> into two fields, which shifts every later column by one: the most common bug in hand-rolled CSV parsing. A small state machine (inside or outside quotes) fixes it, with one look-ahead for the doubled quote. Characters are collected in a list and joined per field (5.1). The final <code>append</code> keeps the last field even when it is empty. In real code use the <code>csv</code> module (Module 12), which implements exactly these rules plus newlines inside quoted fields and other dialects.</p></div></details>
+</article>
+<article class="prob" id="p-case-mapping-can-change-length" data-pid="m5-2-case-mapping-can-change-length" data-type="predict" data-level="hard" data-answer="straße 6 STRASSE 7 straße 6
+ﬁle 3 FILE 4 ﬁle 3
+İstanbul 8 İSTANBUL 8 i̇stanbul 9
+ǅemal 5 ǄEMAL 5 ǆemal 5
+False True
+False True Ǆ ǆ">
+<header class="prob-head"><h3>16. Case mapping can change length</h3></header>
+<div class="code"><pre><code class="py">words = [&quot;straße&quot;, &quot;ﬁle&quot;, &quot;İstanbul&quot;, &quot;ǅemal&quot;]
+for w in words:
+    print(w, len(w), w.upper(), len(w.upper()), w.lower(), len(w.lower()))
+print(&quot;STRASSE&quot;.lower() == &quot;straße&quot;.lower(), &quot;STRASSE&quot;.casefold() == &quot;straße&quot;.casefold())
+print(&quot;ǅ&quot;.isupper(), &quot;ǅ&quot;.istitle(), &quot;ǅ&quot;.upper(), &quot;ǅ&quot;.lower())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Some characters have no single upper- or lower-case form, so they map to two code points.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ǅ</code> is a title-case letter: neither upper nor lower.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>straße 6 STRASSE 7 straße 6
+ﬁle 3 FILE 4 ﬁle 3
+İstanbul 8 İSTANBUL 8 i̇stanbul 9
+ǅemal 5 ǄEMAL 5 ǆemal 5
+False True
+False True Ǆ ǆ</pre></div><p><code>ß</code> upper-cases to <code>SS</code> and the <code>ﬁ</code> ligature to <code>FI</code>, so the strings get longer. Lower-casing <code>İ</code> (capital I with a dot) gives <code>i</code> plus a combining dot, also longer. <code>ǅ</code> is one of the rare title-case letters, which is why <code>isupper</code> is <code>False</code>. Two lessons follow. Code that indexes into <code>s.upper()</code> using positions from <code>s</code> can be off. And for case-insensitive matching, compare <code>casefold()</code> forms, which map <code>ß</code> and <code>SS</code> to the same thing; <code>lower()</code> does not.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-s-split-a" data-pid="m5-2-what-is-the-difference-between-s-split-a" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between <code>s.split()</code> and <code>s.split(" ")</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>split()</code> with no argument splits on any run of whitespace (spaces, tabs, newlines, and Unicode spaces such as a non-breaking space), ignores leading and trailing whitespace and never returns empty strings: it gives the words. <code>split(" ")</code> splits on each single space character only: consecutive spaces produce empty strings, tabs and newlines are not separators, and leading or trailing spaces produce empty strings at the ends. Use <code>split()</code> for natural text and <code>split(sep)</code> for delimited formats where empty fields matter. Mention <code>maxsplit</code>, <code>rsplit</code>, <code>partition</code> for "split once" and <code>splitlines</code> for line breaks.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-https-shop-com-lstrip-https-giv" data-pid="m5-2-why-does-https-shop-com-lstrip-https-giv" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why does <code>"https://shop.com".lstrip("https://")</code> give <code>"op.com"</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>lstrip</code> (like <code>strip</code> and <code>rstrip</code>) treats its argument as a <strong>set of characters</strong>, not as a prefix: it removes characters from the left as long as each one is in <code>{"h", "t", "p", "s", ":", "/"}</code>. After <code>https://</code> it continues through <code>s</code> and <code>h</code> of <code>shop</code> and stops at <code>o</code>. To remove an exact prefix or suffix once, use <code>removeprefix</code> / <code>removesuffix</code> (Python 3.9+) or slice after a <code>startswith</code> check. The same trap applies to <code>rstrip(".json")</code>, which would also eat a trailing <code>n</code> or <code>o</code> of the name. Use <code>strip(chars)</code> only for trimming a set of padding characters.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-normalise-text-before-matc" data-pid="m5-2-how-would-you-normalise-text-before-matc" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you normalise text before matching or deduplicating it, and what can go wrong?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A typical pipeline: Unicode-normalise (NFC to unify composed and decomposed accents, or NFKC to also fold compatibility forms such as ligatures and full-width letters), <code>casefold</code> for case, collapse whitespace with <code>" ".join(s.split())</code>, map typographic quotes and dashes with a translation table, and optionally remove punctuation or accents. What can go wrong: each step loses information, so normalise a <strong>copy</strong> for matching and keep the original for display; NFKC changes meaning in some cases (<code>"²"</code> becomes <code>"2"</code>); removing accents merges different words in some languages; and normalising one side of a comparison but not the other silently breaks matches. Apply the same function to both sides, and test it with real messy examples.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>split()</code> gives words (any whitespace, no empties); <code>split(sep)</code> follows a delimiter exactly and keeps empty fields. <code>splitlines()</code> handles <code>\r\n</code>.</li><li><code>partition</code> and <code>rpartition</code> split once and always return three parts: the safe way to parse <code>key: value</code>, URLs and file names.</li><li><code>strip(chars)</code> removes a set of characters. Use <code>removeprefix</code> / <code>removesuffix</code> for an exact prefix or suffix.</li><li>Case mapping can change length; compare with <code>casefold()</code>. The <code>is...</code> digit tests do not answer "is this a number?": try converting.</li><li>Use <code>translate</code> for many single-character replacements, <code>join</code> to build, and <code>format_map</code> (not repeated <code>replace</code>) to fill templates.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

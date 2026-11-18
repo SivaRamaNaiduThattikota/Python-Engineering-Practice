@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5.1 · Strings: indexing, slicing, immutability</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m5-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 5 · Strings and text</span></div>
+  <h1>5.1 Strings: indexing, slicing, immutability</h1>
+  <p>A string is an immutable sequence of Unicode code points. What that means for indexing, slicing, comparing and building text, the literal syntax that hides real bugs (a missing comma, a stray backslash), and why <code>len</code> is neither "characters on screen" nor "LLM tokens".</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What a string is</h2>
+<p>A Python <code>str</code> is an <strong>immutable sequence of Unicode code points</strong>. A code point is one number from the Unicode table (<code>"A"</code> is 65, <code>"é"</code> is 233, <code>"€"</code> is 8364), and <code>ord</code> and <code>chr</code> convert between a one-character string and its number. There is no separate "char" type: indexing a string gives you another string, of length 1. Because a string is a sequence, everything from 4.1 applies: <code>len</code>, indexing, slicing, <code>in</code>, iteration, <code>count</code> and <code>index</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">str_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">s = &quot;Refund €20&quot;
+print(len(s), s[0], s[-3:], type(s[0]).__name__, len(s[0]))
+print(ord(&quot;R&quot;), ord(&quot;€&quot;), chr(8364), s[0][0][0])
+for ch in &quot;ab€&quot;:
+    print(ch, ord(ch), end=&quot; | &quot;)
+print()</code></pre><div class="out"><span class="ol">Output</span><pre>10 R €20 str 1
+82 8364 € R
+a 97 | b 98 | € 8364 | </pre></div></div>
+<p>A string is <strong>not</strong> a sequence of bytes. How a code point is stored as bytes (UTF-8, UTF-16 and so on) is a separate question that only matters when text crosses a boundary: a file, a network socket, a database. Lesson 5.4 covers encodings; for now, think of a string as a list of Unicode numbers that cannot change.</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A Python <code>str</code> is like SQL Server's <code>NVARCHAR</code> (Unicode text), not <code>VARCHAR</code> with a code page. <code>s[0]</code> is <code>LEFT(s, 1)</code>, <code>s[-3:]</code> is <code>RIGHT(s, 3)</code>, <code>s[2:5]</code> is <code>SUBSTRING(s, 3, 3)</code> (SQL counts from 1, Python from 0) and <code>len(s)</code> is <code>LEN(s)</code> (which, unlike Python, ignores trailing spaces in SQL Server).</p></div></div>
+</section>
+<section class="sec" id="slicing">
+<h2><span class="n">2</span>Indexing and slicing strings</h2>
+<p>Strings follow exactly the list rules from 4.1: positions start at 0, negative positions count from the end, <code>stop</code> is never included, slices are clamped and never raise, a step can skip or reverse. Two things are specific to strings: every slice is a <strong>new string</strong>, and a string reversed with <code>[::-1]</code> is reversed <strong>by code point</strong>, which can break text that uses several code points for one visible character (the last section).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">slicing.py</span><button class="copy">Copy</button></div><pre><code class="py">ref = &quot;INV-2025-000731&quot;
+print(ref[:3], ref[4:8], ref[-6:], ref[::-1][:6])
+print(ref[100:], ref[-100:3], &quot;abc&quot;[1:1] == &quot;&quot;)
+try:
+    ref[50]
+except IndexError as e:
+    print(&quot;IndexError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>INV 2025 000731 137000
+ INV True
+IndexError: string index out of range</pre></div></div>
+<p>Fixed positions such as <code>ref[4:8]</code> are only safe for strings whose format you control, like your own ids. For text from users, files or LLMs, the positions move, and code that slices at fixed offsets silently returns the wrong field (problem 15). Splitting on a separator (5.2) or a regex (5.5) is more robust.</p>
+</section>
+<section class="sec" id="immutable">
+<h2><span class="n">3</span>Immutability, and building strings efficiently</h2>
+<p>You cannot change a string in place: <code>s[0] = "r"</code> raises <code>TypeError</code>. Every method that seems to change a string, <code>upper</code>, <code>replace</code>, <code>strip</code>, returns a <strong>new</strong> string and leaves the original alone, so you must use the return value (<code>s.strip()</code> on its own line does nothing useful). The benefits are the ones from Module 2: strings can be shared freely, used as dict keys and set members, and cached.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">immutable.py</span><button class="copy">Copy</button></div><pre><code class="py">s = &quot;refund&quot;
+try:
+    s[0] = &quot;R&quot;
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+s.upper()                # returns a new string, which is thrown away here
+print(s)
+s = s.upper()            # rebinding the name to the new string
+print(s, s.replace(&quot;F&quot;, &quot;f&quot;), s)</code></pre><div class="out"><span class="ol">Output</span><pre>TypeError: &#x27;str&#x27; object does not support item assignment
+refund
+REFUND REfUND REFUND</pre></div></div>
+<p>Building a long string from many pieces is where immutability costs. Each <code>a + b</code> creates a new string and copies both sides, so adding pieces one at a time in a loop copies the growing text again and again: O(n²) characters in the worst case. The idiomatic fix is to collect the pieces in a list and join once: <code>"".join(pieces)</code> computes the total length, allocates one string and copies each piece exactly once, O(n).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">join.py</span><button class="copy">Copy</button></div><pre><code class="py">lines = [f&quot;[{i}] chunk {i}&quot; for i in range(5)]
+context = &quot;\n&quot;.join(lines)           # one allocation, one copy of each piece
+print(context)
+print(len(context), context.count(&quot;\n&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>[0] chunk 0
+[1] chunk 1
+[2] chunk 2
+[3] chunk 3
+[4] chunk 4
+59 4</pre></div></div>
+<div class="callout c-note"><div class="ci">•</div><div><div class="ct">Why <code>+=</code> sometimes looks fast</div><p>CPython has an optimisation: when a string has no other references, <code>s += piece</code> may grow it in place instead of copying. So a <code>+=</code> loop can be fast in one program and slow in another (for example as soon as another name points at the string, or with f-strings, or on other Python implementations). Do not rely on it: <code>join</code> is fast everywhere (problem 8).</p></div></div>
+</section>
+<section class="sec" id="compare">
+<h2><span class="n">4</span>Comparing and searching</h2>
+<p><code>==</code> compares strings code point by code point, exactly and case-sensitively. <code>&lt;</code> and <code>&gt;</code> compare <strong>lexicographically by code point</strong>, the dictionary order of the Unicode numbers, which is not human alphabetical order: all uppercase letters (65 to 90) come before all lowercase ones (97 to 122), and digits compare as characters, so <code>"10" &lt; "9"</code>. For case-insensitive comparison, use <code>casefold()</code>, a stronger <code>lower()</code> designed for exactly this (it maps the German <code>"ß"</code> to <code>"ss"</code>, for example).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">compare.py</span><button class="copy">Copy</button></div><pre><code class="py">print(&quot;Zebra&quot; &lt; &quot;apple&quot;, &quot;10&quot; &lt; &quot;9&quot;, &quot;apple&quot; &lt; &quot;apples&quot;)
+print(sorted([&quot;banana&quot;, &quot;Apple&quot;, &quot;cherry&quot;]), sorted([&quot;banana&quot;, &quot;Apple&quot;, &quot;cherry&quot;], key=str.casefold))
+print(&quot;Straße&quot;.lower() == &quot;STRASSE&quot;.lower(), &quot;Straße&quot;.casefold() == &quot;STRASSE&quot;.casefold())</code></pre><div class="out"><span class="ol">Output</span><pre>True True True
+[&#x27;Apple&#x27;, &#x27;banana&#x27;, &#x27;cherry&#x27;] [&#x27;Apple&#x27;, &#x27;banana&#x27;, &#x27;cherry&#x27;]
+False True</pre></div></div>
+<p>Searching: <code>sub in s</code> tests for a substring. <code>s.find(sub)</code> returns the first position or <strong>-1</strong>, while <code>s.index(sub)</code> returns the position or raises <code>ValueError</code>; choose <code>find</code> when absence is normal and <code>index</code> when absence is a bug. <code>s.count(sub)</code> counts <strong>non-overlapping</strong> occurrences, and <code>startswith</code> / <code>endswith</code> accept a tuple of options.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">search.py</span><button class="copy">Copy</button></div><pre><code class="py">log = &quot;ERROR 2025-06-01 timeout after 30s; retry; ERROR again&quot;
+print(&quot;timeout&quot; in log, log.find(&quot;ERROR&quot;), log.find(&quot;ERROR&quot;, 1), log.find(&quot;WARN&quot;))
+print(log.count(&quot;ERROR&quot;), &quot;aaaa&quot;.count(&quot;aa&quot;), log.startswith((&quot;ERROR&quot;, &quot;WARN&quot;)))
+try:
+    log.index(&quot;WARN&quot;)
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>True 0 43 -1
+2 2 True
+ValueError: substring not found</pre></div></div>
+</section>
+<section class="sec" id="literals">
+<h2><span class="n">5</span>String literals and their traps</h2>
+<p>Single and double quotes are the same; triple quotes (<code>"""..."""</code>) allow line breaks, which is how long prompts are usually written. Inside normal quotes, a backslash starts an <strong>escape sequence</strong>: <code>\n</code> is a newline, <code>\t</code> a tab, <code>\\</code> one backslash. A <strong>raw string</strong>, <code>r"..."</code>, keeps backslashes as they are, which is what you want for regex patterns (5.5) and Windows paths.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">escapes.py</span><button class="copy">Copy</button></div><pre><code class="py">print(len(&quot;a\tb&quot;), len(r&quot;a\tb&quot;), &quot;C:\\data\\new.csv&quot;, r&quot;C:\data\new.csv&quot;)
+print(repr(&quot;line1\nline2&quot;), &quot;it&#x27;s&quot;, &#x27;say &quot;hi&quot;&#x27;)</code></pre><div class="out"><span class="ol">Output</span><pre>3 4 C:\data\new.csv C:\data\new.csv
+&#x27;line1\nline2&#x27; it&#x27;s say &quot;hi&quot;</pre></div></div>
+<p><strong>Implicit concatenation</strong>: Python joins adjacent string literals at compile time, so <code>"Hello " "world"</code> is one string. It is handy for splitting a long literal over lines, and a source of silent bugs in lists of strings: a missing comma merges two items into one, the list is one item shorter, and nothing raises (problem 2).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">implicit_concat.py</span><button class="copy">Copy</button></div><pre><code class="py">stop_sequences = [
+    &quot;###&quot;,
+    &quot;END&quot;          # missing comma
+    &quot;Human:&quot;,
+]
+print(len(stop_sequences), stop_sequences)
+
+long_prompt = (
+    &quot;You are a support assistant. &quot;
+    &quot;Answer only from the provided context.&quot;
+)
+print(long_prompt)</code></pre><div class="out"><span class="ol">Output</span><pre>2 [&#x27;###&#x27;, &#x27;ENDHuman:&#x27;]
+You are a support assistant. Answer only from the provided context.</pre></div></div>
+</section>
+<section class="sec" id="length">
+<h2><span class="n">6</span>What <code>len</code> counts, and what it does not</h2>
+<p><code>len(s)</code> counts <strong>code points</strong>. That is often, but not always, what a person would call characters. A visible character can be several code points: <code>"é"</code> can be stored as one code point (U+00E9) or as <code>"e"</code> plus a combining accent (U+0301), and an emoji with a skin tone is two code points. Those strings look identical but have different lengths, and reversing one with <code>[::-1]</code> can move the accent onto the wrong letter.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">length.py</span><button class="copy">Copy</button></div><pre><code class="py">precomposed = &quot;café&quot;
+decomposed = &quot;cafe\u0301&quot;          # e + combining acute accent: looks the same
+print(precomposed, decomposed, len(precomposed), len(decomposed), precomposed == decomposed)
+import unicodedata
+print(unicodedata.normalize(&quot;NFC&quot;, decomposed) == precomposed)
+thumbs = &quot;\U0001F44D\U0001F3FD&quot;    # thumbs up + medium skin tone
+print(len(thumbs), len(thumbs.encode(&quot;utf-8&quot;)))</code></pre><div class="out"><span class="ol">Output</span><pre>café café 4 5 False
+True
+2 8</pre></div></div>
+<p>So there are at least four different "lengths" of a text: <strong>code points</strong> (<code>len</code>), <strong>bytes</strong> in an encoding (what a database column limit or an HTTP size limit counts, 5.4), <strong>graphemes</strong> (what a reader sees), and <strong>tokens</strong> (what an LLM counts and bills: roughly 3 to 4 characters of English per token, more for other languages and code). Normalise text with <code>unicodedata.normalize("NFC", s)</code> before comparing or deduplicating it, and count tokens with the model's own tokenizer, never with <code>len</code>.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-indexing-and-slicing-text" data-pid="m5-1-indexing-and-slicing-text" data-type="predict" data-level="easy" data-answer="T d 4821 refund
+dnufer  True
+7 4821
+str True">
+<header class="prob-head"><h3>1. Indexing and slicing text</h3></header>
+<div class="code"><pre><code class="py">s = &quot;Ticket #4821: refund&quot;
+print(s[0], s[-1], s[8:12], s[-6:])
+print(s[::-1][:6], s[100:], s[:0] == &quot;&quot;)
+print(s.find(&quot;#&quot;), s[s.find(&quot;#&quot;) + 1:s.find(&quot;:&quot;)])
+print(type(s[3]).__name__, s[3] == s[3:4])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A single character is a string of length 1, so <code>s[3]</code> equals the one-character slice <code>s[3:4]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>T d 4821 refund
+dnufer  True
+7 4821
+str True</pre></div><p>Slices of strings follow the list rules: <code>s[8:12]</code> is positions 8 to 11, the digits. Reversing and taking six gives the last six characters backwards. <code>find</code> locates the <code>#</code> and the <code>:</code>, and slicing between them extracts the number without knowing its length in advance, which is more robust than fixed positions.</p></div></details>
+</article>
+<article class="prob" id="p-a-list-of-stop-words-that-is-one-short" data-pid="m5-1-a-list-of-stop-words-that-is-one-short" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A list of stop words that is one short</h3></header>
+<div class="prob-q"><p><code>STOPWORDS</code> should contain six words, and <code>is_stop</code> should recognise all of them. <code>"and"</code> and <code>"or"</code> are not recognised. Fix the list.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">STOPWORDS = [
+    &quot;the&quot;,
+    &quot;a&quot;,
+    &quot;and&quot;
+    &quot;or&quot;,
+    &quot;of&quot;,
+    &quot;to&quot;,
+]
+
+def is_stop(word):
+    return word.lower() in STOPWORDS
+</textarea>
+<script type="text/plain" class="prob-tests">assert len(STOPWORDS) == 6
+assert all(is_stop(w) for w in ["the", "A", "and", "or", "of", "To"])
+assert not is_stop("andor")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert len(STOPWORDS) == 6
+assert all(is_stop(w) for w in [&quot;the&quot;, &quot;A&quot;, &quot;and&quot;, &quot;or&quot;, &quot;of&quot;, &quot;To&quot;])
+assert not is_stop(&quot;andor&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Look for two string literals with no comma between them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">STOPWORDS = frozenset({&quot;the&quot;, &quot;a&quot;, &quot;and&quot;, &quot;or&quot;, &quot;of&quot;, &quot;to&quot;})
+
+def is_stop(word):
+    return word.lower() in STOPWORDS</code></pre></div><p><code>"and" "or"</code> is implicit concatenation: the list contains <code>"andor"</code> and has five items, and nothing raises. Writing the collection as a set literal on one line makes the missing comma much easier to see, and membership becomes O(1) (4.4). Tools help too: Ruff's rule ISC001 flags implicit concatenation on one line, and a trailing comma after the last item in a multi-line list makes adding items safer.</p></div></details>
+</article>
+<article class="prob" id="p-mask-an-api-key-for-logs" data-pid="m5-1-mask-an-api-key-for-logs" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Mask an API key for logs</h3></header>
+<div class="prob-q"><p>Write <code>mask(secret, visible=4)</code> that replaces all but the last <code>visible</code> characters with <code>*</code>, so logs can show which key was used without revealing it. Secrets of <code>visible</code> characters or fewer are fully masked, and an empty string stays empty.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def mask(secret, visible=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert mask("sk-test-1234abcd") == "************abcd"
+assert mask("abc") == "***"
+assert mask("abcd") == "****"
+assert mask("") == ""
+assert mask("token-xyz", visible=2) == "*******yz"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert mask(&quot;sk-test-1234abcd&quot;) == &quot;************abcd&quot;
+assert mask(&quot;abc&quot;) == &quot;***&quot;
+assert mask(&quot;abcd&quot;) == &quot;****&quot;
+assert mask(&quot;&quot;) == &quot;&quot;
+assert mask(&quot;token-xyz&quot;, visible=2) == &quot;*******yz&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>"*" * n</code> repeats a string. Take the tail with a slice, but watch the <code>-0</code> trap from 4.1.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def mask(secret, visible=4):
+    if len(secret) &lt;= visible:
+        return &quot;*&quot; * len(secret)
+    return &quot;*&quot; * (len(secret) - visible) + secret[len(secret) - visible:]</code></pre></div><p>Short secrets are fully masked, because showing the last 4 characters of a 4-character key would reveal all of it. <code>secret[len(secret) - visible:]</code> avoids the <code>-0</code> slice trap if someone passes <code>visible=0</code> (4.1). Masking secrets in logs and traces is a basic requirement for LLM applications, whose tracing tools often log every request header by default (3.2, problem 12).</p></div></details>
+</article>
+<article class="prob" id="p-how-strings-compare" data-pid="m5-1-how-strings-compare" data-type="predict" data-level="easy" data-answer="True True False
+[&#x27;A&#x27;, &#x27;B&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]
+[&#x27;A&#x27;, &#x27;a&#x27;, &#x27;b&#x27;, &#x27;B&#x27;]
+ß ss ß
+refund">
+<header class="prob-head"><h3>4. How strings compare</h3></header>
+<div class="code"><pre><code class="py">print(&quot;Zebra&quot; &lt; &quot;apple&quot;, &quot;10&quot; &lt; &quot;9&quot;, &quot;2&quot; &lt; &quot;10&quot;)
+print(sorted([&quot;b&quot;, &quot;A&quot;, &quot;a&quot;, &quot;B&quot;]))
+print(sorted([&quot;b&quot;, &quot;A&quot;, &quot;a&quot;, &quot;B&quot;], key=str.lower))
+print(&quot;ß&quot;.lower(), &quot;ß&quot;.casefold(), &quot;ẞ&quot;.lower())
+print(max([&quot;refund&quot;, &quot;Refund&quot;, &quot;REFUND&quot;]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Uppercase letters have smaller code points than lowercase ones. Digits compare as characters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True True False
+[&#x27;A&#x27;, &#x27;B&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]
+[&#x27;A&#x27;, &#x27;a&#x27;, &#x27;b&#x27;, &#x27;B&#x27;]
+ß ss ß
+refund</pre></div><p>Comparison uses code points: <code>"Z"</code> (90) is less than <code>"a"</code> (97), and <code>"10" &lt; "9"</code> because <code>"1" &lt; "9"</code> decides it. Sorting without a key puts all capitals first; <code>key=str.lower</code> sorts case-insensitively and, being stable, keeps <code>"A"</code> before <code>"a"</code> as they appeared. <code>casefold</code> maps <code>"ß"</code> to <code>"ss"</code>, which <code>lower</code> does not. <code>max</code> returns the string with the largest code points, the all-lowercase one.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-a-palindrome-check-that-ignores-punctuat" data-pid="m5-1-a-palindrome-check-that-ignores-punctuat" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>5. A palindrome check that ignores punctuation</h3></header>
+<div class="prob-q"><p>Write <code>is_palindrome(text)</code> that returns <code>True</code> if the letters and digits of <code>text</code>, ignoring case, read the same backwards. Spaces and punctuation are ignored. Use two positions moving towards each other, so no cleaned copy of the whole string is built.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">def is_palindrome(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert is_palindrome("A man, a plan, a canal: Panama")
+assert is_palindrome("No 'x' in Nixon")
+assert not is_palindrome("refund")
+assert is_palindrome("") and is_palindrome(".,!")
+assert is_palindrome("12321") and not is_palindrome("123")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert is_palindrome(&quot;A man, a plan, a canal: Panama&quot;)
+assert is_palindrome(&quot;No &#x27;x&#x27; in Nixon&quot;)
+assert not is_palindrome(&quot;refund&quot;)
+assert is_palindrome(&quot;&quot;) and is_palindrome(&quot;.,!&quot;)
+assert is_palindrome(&quot;12321&quot;) and not is_palindrome(&quot;123&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start <code>i</code> at 0 and <code>j</code> at the last position. Skip characters that are not <code>isalnum()</code> on either side, then compare <code>casefold()</code> versions.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Stop when the positions meet.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def is_palindrome(text):
+    i, j = 0, len(text) - 1
+    while i &lt; j:
+        if not text[i].isalnum():
+            i += 1
+        elif not text[j].isalnum():
+            j -= 1
+        elif text[i].casefold() != text[j].casefold():
+            return False
+        else:
+            i += 1
+            j -= 1
+    return True</code></pre></div><p>The two-pointer version uses O(1) extra memory and stops at the first mismatch. The one-liner, <code>cleaned = [c.casefold() for c in text if c.isalnum()]; return cleaned == cleaned[::-1]</code>, is also correct and fine in most code, but builds two copies; interviewers often ask for the pointer version as a follow-up. <code>isalnum</code> is Unicode-aware, so accented letters count as letters. A string with no letters at all is a palindrome by this definition.</p></div></details>
+</article>
+<article class="prob" id="p-a-context-block-with-a-trailing-separato" data-pid="m5-1-a-context-block-with-a-trailing-separato" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>6. A context block with a trailing separator</h3></header>
+<div class="prob-q"><p><code>build_context(chunks)</code> formats retrieved chunks for a prompt as numbered blocks separated by a line with <code>---</code>. It leaves a stray separator at the end and builds the string by repeated concatenation. Fix both: use <code>join</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def build_context(chunks):
+    context = &quot;&quot;
+    for i, chunk in enumerate(chunks, start=1):
+        context += f&quot;[{i}] {chunk[&#x27;source&#x27;]}\n{chunk[&#x27;text&#x27;]}\n---\n&quot;
+    return context
+</textarea>
+<script type="text/plain" class="prob-tests">chunks = [{"source": "faq.md", "text": "Refunds take 5 days."}, {"source": "terms.md", "text": "No refunds after 30 days."}]
+assert build_context(chunks) == "[1] faq.md\nRefunds take 5 days.\n---\n[2] terms.md\nNo refunds after 30 days."
+assert build_context([]) == ""
+assert build_context(chunks[:1]) == "[1] faq.md\nRefunds take 5 days."</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">chunks = [{&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds take 5 days.&quot;}, {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;No refunds after 30 days.&quot;}]
+assert build_context(chunks) == &quot;[1] faq.md\nRefunds take 5 days.\n---\n[2] terms.md\nNo refunds after 30 days.&quot;
+assert build_context([]) == &quot;&quot;
+assert build_context(chunks[:1]) == &quot;[1] faq.md\nRefunds take 5 days.&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a list of blocks without separators, then <code>"\n---\n".join(blocks)</code>: <code>join</code> only puts the separator <strong>between</strong> items.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def build_context(chunks):
+    blocks = [f&quot;[{i}] {c[&#x27;source&#x27;]}\n{c[&#x27;text&#x27;]}&quot; for i, c in enumerate(chunks, start=1)]
+    return &quot;\n---\n&quot;.join(blocks)</code></pre></div><p><code>join</code> places the separator only between items, so there is never a leading or trailing one and the empty case is the empty string, with no special handling. It also builds the result in one allocation. Numbering the chunks <code>[1]</code>, <code>[2]</code> lets the model cite its sources ("according to [2]"), and a clean, consistent format measurably helps models follow citation instructions.</p></div></details>
+</article>
+<article class="prob" id="p-parsing-settings-with-find-and-slices" data-pid="m5-1-parsing-settings-with-find-and-slices" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Parsing settings with find and slices</h3></header>
+<div class="prob-q"><p>Fill in <code>key</code>, <code>value</code> and <code>rest</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">rest = &quot;model=small; temperature=0.2; stop=###&quot;
+key, value = &quot;&quot;, &quot;&quot;
+cut = rest.find(&quot;;&quot;)
+pair, rest = rest[:cut], rest[cut + 1:].lstrip()
+key, value = pair[:pair.find(&quot;=&quot;)], pair[pair.find(&quot;=&quot;) + 1:]
+cut = rest.find(&quot;;&quot;)
+pair, rest = rest[:cut], rest[cut + 1:].lstrip()
+key, value = pair[:pair.find(&quot;=&quot;)], pair[pair.find(&quot;=&quot;) + 1:]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>key</code></th><th><code>value</code></th><th><code>rest</code></th></tr><tr><td>split off the first pair</td><td><input class="cell" data-a="&#x27;&#x27;" data-s="" aria-label="key at split off the first pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;&#x27;" data-s="" aria-label="value at split off the first pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;temperature=0.2; stop=###&#x27;" data-s="temperature=0.2; stop=###" aria-label="rest at split off the first pair" autocomplete="off"></td></tr><tr><td>split the pair</td><td><input class="cell" data-a="&#x27;model&#x27;" data-s="model" aria-label="key at split the pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="value at split the pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;temperature=0.2; stop=###&#x27;" data-s="temperature=0.2; stop=###" aria-label="rest at split the pair" autocomplete="off"></td></tr><tr><td>split off the next pair</td><td><input class="cell" data-a="&#x27;model&#x27;" data-s="model" aria-label="key at split off the next pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="value at split off the next pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;stop=###&#x27;" data-s="stop=###" aria-label="rest at split off the next pair" autocomplete="off"></td></tr><tr><td>split that pair</td><td><input class="cell" data-a="&#x27;temperature&#x27;" data-s="temperature" aria-label="key at split that pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;0.2&#x27;" data-s="0.2" aria-label="value at split that pair" autocomplete="off"></td><td><input class="cell" data-a="&#x27;stop=###&#x27;" data-s="stop=###" aria-label="rest at split that pair" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>find</code> returns the position of the separator; the slices on either side of it are the two parts. <code>lstrip()</code> removes leading spaces only.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>key</code></th><th><code>value</code></th><th><code>rest</code></th></tr><tr><td>split off the first pair</td><td><code>&#x27;&#x27;</code></td><td><code>&#x27;&#x27;</code></td><td><code>&#x27;temperature=0.2; stop=###&#x27;</code></td></tr><tr><td>split the pair</td><td><code>&#x27;model&#x27;</code></td><td><code>&#x27;small&#x27;</code></td><td><code>&#x27;temperature=0.2; stop=###&#x27;</code></td></tr><tr><td>split off the next pair</td><td><code>&#x27;model&#x27;</code></td><td><code>&#x27;small&#x27;</code></td><td><code>&#x27;stop=###&#x27;</code></td></tr><tr><td>split that pair</td><td><code>&#x27;temperature&#x27;</code></td><td><code>&#x27;0.2&#x27;</code></td><td><code>&#x27;stop=###&#x27;</code></td></tr></table></div><p>Each step finds a separator and slices around it: everything before <code>;</code> is the pair, everything after (minus the leading space) is the rest. Inside the pair, the same trick around <code>=</code> gives key and value. Note what would happen on the <strong>last</strong> pair: there is no <code>;</code>, <code>find</code> returns -1, and <code>rest[:-1]</code> silently drops the last character. That is why lesson 5.2's <code>split</code> and <code>partition</code> are the better tools; this trace shows what they do for you.</p></div></details>
+</article>
+<article class="prob" id="p-growing-a-prompt-with-an-f-string-or-joi" data-pid="m5-1-growing-a-prompt-with-an-f-string-or-joi" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Growing a prompt with an f-string or join</h3></header>
+<div class="prob-q"><p>Both build a context string from 4,000 retrieved snippets. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">snippets = [f&quot;snippet number {i:05d}; &quot; for i in range(4000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">text = &quot;&quot;
+for s in snippets:
+    text = f&quot;{text}{s}&quot;</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">text = &quot;&quot;.join(snippets)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each f-string builds a brand-new string. How much text is copied on pass 4,000?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>5.73 ms</td></tr><tr><td>B</td><td>60.90 µs</td></tr></table></div><p>Each pass of A builds a new string containing everything so far plus one snippet, so the total copying is about 1 + 2 + ... + 4,000 snippets: O(n²) characters. CPython's in-place trick for <code>+=</code> cannot apply to an f-string. B measures the total once, allocates once and copies each snippet once: O(n). The difference grows with the number of pieces, which is exactly the situation of a RAG context or a long report.</p></div></details>
+</article>
+<article class="prob" id="p-truncate-at-a-word-boundary" data-pid="m5-1-truncate-at-a-word-boundary" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. Truncate at a word boundary</h3></header>
+<div class="prob-q"><p>Write <code>truncate(text, max_chars, ellipsis="…")</code> that shortens text so the result, <strong>including</strong> the ellipsis, is at most <code>max_chars</code> characters. Cut at the last space that fits, so no word is broken, and strip trailing spaces before adding the ellipsis. Text that already fits is returned unchanged. If even the first word does not fit, cut it hard.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">def truncate(text, max_chars, ellipsis=&quot;…&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = "Refunds are processed within five business days."
+assert truncate(t, 100) == t
+assert truncate(t, 20) == "Refunds are…"
+assert len(truncate(t, 20)) <= 20
+assert truncate(t, 12) == "Refunds are…"
+assert truncate("Supercalifragilistic", 8) == "Superca…"
+assert truncate(t, 25, ellipsis="...") == "Refunds are processed..."</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = &quot;Refunds are processed within five business days.&quot;
+assert truncate(t, 100) == t
+assert truncate(t, 20) == &quot;Refunds are…&quot;
+assert len(truncate(t, 20)) &lt;= 20
+assert truncate(t, 12) == &quot;Refunds are…&quot;
+assert truncate(&quot;Supercalifragilistic&quot;, 8) == &quot;Superca…&quot;
+assert truncate(t, 25, ellipsis=&quot;...&quot;) == &quot;Refunds are processed...&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The text you may keep is <code>text[:limit]</code> with <code>limit = max_chars - len(ellipsis)</code>. Find its last space with <code>rfind</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If the character right after that part is a space, the cut already falls between words: keep it whole.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If there is no space in that part, keep it as it is (a hard cut).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def truncate(text, max_chars, ellipsis=&quot;…&quot;):
+    if len(text) &lt;= max_chars:
+        return text
+    limit = max_chars - len(ellipsis)
+    room = text[:limit]
+    if text[limit] == &quot; &quot;:
+        kept = room
+    else:
+        cut = room.rfind(&quot; &quot;)
+        kept = room[:cut] if cut &gt; 0 else room
+    return kept.rstrip() + ellipsis</code></pre></div><p>Reserving room for the ellipsis first guarantees the length limit, and <code>rfind</code> finds the last space inside that room so the cut lands between words. The check on <code>text[limit]</code> handles the boundary case the tests probe: when the room ends exactly at the end of a word, cutting back to the previous space would throw away a whole word for nothing. <code>cut &gt; 0</code> covers a room whose only space is at position 0. This is how search snippets and previews are made. For LLM context limits you would truncate by <strong>tokens</strong> with the model's tokenizer instead (the last section), because characters and tokens are not proportional.</p></div></details>
+</article>
+<article class="prob" id="p-parsing-a-name-and-an-email" data-pid="m5-1-parsing-a-name-and-an-email" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Parsing a name and an email</h3></header>
+<div class="prob-q"><p><code>parse_contact("Ana Lopez &lt;ana@x.io&gt;")</code> should return <code>("Ana Lopez", "ana@x.io")</code>, and a bare email with no name should return <code>("", email)</code>. It crashes on a bare email with <code>ValueError</code>. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def parse_contact(text):
+    start = text.index(&quot;&lt;&quot;)
+    end = text.index(&quot;&gt;&quot;)
+    return text[:start].strip(), text[start + 1:end].strip()
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_contact("Ana Lopez <ana@x.io>") == ("Ana Lopez", "ana@x.io")
+assert parse_contact("ben@x.io") == ("", "ben@x.io")
+assert parse_contact("  Cy  < cy@x.io > ") == ("Cy", "cy@x.io")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_contact(&quot;Ana Lopez &lt;ana@x.io&gt;&quot;) == (&quot;Ana Lopez&quot;, &quot;ana@x.io&quot;)
+assert parse_contact(&quot;ben@x.io&quot;) == (&quot;&quot;, &quot;ben@x.io&quot;)
+assert parse_contact(&quot;  Cy  &lt; cy@x.io &gt; &quot;) == (&quot;Cy&quot;, &quot;cy@x.io&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>index</code> raises when the character is missing. Use <code>find</code> and check for -1, or check <code>"&lt;" in text</code> first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_contact(text):
+    start = text.find(&quot;&lt;&quot;)
+    end = text.find(&quot;&gt;&quot;, start + 1)
+    if start == -1 or end == -1:
+        return &quot;&quot;, text.strip()
+    return text[:start].strip(), text[start + 1:end].strip()</code></pre></div><p><code>index</code> is the right call when a missing separator is an error, but here the bare-email form is valid input, so absence is normal and <code>find</code> with a -1 check expresses that. Searching for <code>&gt;</code> only after the <code>&lt;</code> avoids matching a <code>&gt;</code> that appears earlier in the name. Real email address parsing has many more rules; the standard library's <code>email.utils.parseaddr</code> handles them.</p></div></details>
+</article>
+<article class="prob" id="p-character-loops-to-string-methods" data-pid="m5-1-character-loops-to-string-methods" data-type="refactor" data-level="medium">
+<header class="prob-head"><h3>11. Character loops to string methods</h3></header>
+<div class="prob-q"><p>Rewrite with slicing and string methods instead of loops. Same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def normalise_code(code):
+    reversed_code = &quot;&quot;
+    for ch in code:
+        reversed_code = ch + reversed_code
+    upper = &quot;&quot;
+    for ch in reversed_code:
+        if ch != &quot; &quot;:
+            upper += ch.upper()
+    return upper
+</textarea>
+<script type="text/plain" class="prob-tests">assert normalise_code("ab 12 c") == "C21BA"
+assert normalise_code("") == ""
+assert normalise_code("x") == "X"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert normalise_code(&quot;ab 12 c&quot;) == &quot;C21BA&quot;
+assert normalise_code(&quot;&quot;) == &quot;&quot;
+assert normalise_code(&quot;x&quot;) == &quot;X&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Reverse with a slice, remove spaces with <code>replace</code>, and upper-case once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def normalise_code(code):
+    return code[::-1].replace(&quot; &quot;, &quot;&quot;).upper()</code></pre></div><p>Each loop rebuilt the string one character at a time, which is O(n²) for the first one (<code>ch + reversed_code</code> copies the growing string). Slicing, <code>replace</code> and <code>upper</code> each make one pass in C and say what they do. Chaining methods works because each one returns a new string, the direct consequence of immutability.</p></div></details>
+</article>
+<article class="prob" id="p-triple-quoted-prompts-and-indentation" data-pid="m5-1-triple-quoted-prompts-and-indentation" data-type="predict" data-level="medium" data-answer="&#x27;\n    Answer &#x27; 3
+&#x27;Answer briefly.\nQuestion: Refund time?&#x27;
+&#x27;    Answer briefly.&#x27;">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Triple-quoted prompts and indentation</h3></header>
+<div class="code"><pre><code class="py">import textwrap
+
+def build_prompt(question):
+    prompt = &quot;&quot;&quot;
+    Answer briefly.
+    Question: {q}
+    &quot;&quot;&quot;
+    return prompt.format(q=question)
+
+p = build_prompt(&quot;Refund time?&quot;)
+print(repr(p[:12]), p.count(&quot;\n&quot;))
+print(repr(textwrap.dedent(p).strip()))
+print(repr(build_prompt(&quot;x&quot;).splitlines()[1]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Everything between the triple quotes is in the string, including the first newline and the indentation of each line.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>&#x27;\n    Answer &#x27; 3
+&#x27;Answer briefly.\nQuestion: Refund time?&#x27;
+&#x27;    Answer briefly.&#x27;</pre></div><p>A triple-quoted string inside an indented function contains the newline right after the opening quotes <strong>and</strong> the indentation spaces of every line, so the model receives a prompt that starts with a blank line and has the function's indentation (four spaces here) before each instruction. That wastes tokens and can change behaviour. <code>textwrap.dedent</code> removes the common indentation and <code>strip()</code> removes the blank first and last lines. <code>inspect.cleandoc</code> does both in one call.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-code-points-bytes-and-what-you-see" data-pid="m5-1-code-points-bytes-and-what-you-see" data-type="predict" data-level="hard" data-answer="False 5 6
+ev̈ian
+True 5
+2 8 2 1">
+<header class="prob-head"><h3>13. Code points, bytes and what you see</h3></header>
+<div class="code"><pre><code class="py">import unicodedata
+
+a = &quot;naïve&quot;
+b = &quot;nai\u0308ve&quot;
+print(a == b, len(a), len(b))
+print(b[::-1])
+nfc = unicodedata.normalize(&quot;NFC&quot;, b)
+print(nfc == a, len(nfc))
+flag = &quot;\U0001F1E9\U0001F1EA&quot;
+print(len(flag), len(flag.encode(&quot;utf-8&quot;)), len(&quot;é&quot;.encode(&quot;utf-8&quot;)), len(&quot;e&quot;.encode(&quot;utf-8&quot;)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>\u0308</code> is a combining diaeresis: it attaches to the letter before it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A flag emoji is two regional-indicator code points; outside the basic range, each takes 4 bytes in UTF-8.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>False 5 6
+ev̈ian
+True 5
+2 8 2 1</pre></div><p>The two spellings of "naïve" render the same, but one uses a precomposed <code>ï</code> (5 code points) and the other <code>i</code> plus a combining mark (6), so they are not equal. Reversing the decomposed form by code point puts the combining mark right after the <code>v</code>, so it attaches to the <code>v</code> instead of the <code>i</code>: the reversed word, <code>ev̈ian</code>, is visibly wrong. NFC normalisation composes <code>i</code> + mark into <code>ï</code>. The German flag is two code points and 8 UTF-8 bytes, <code>é</code> is 2 bytes and <code>e</code> is 1. Normalise before comparing or deduplicating text, and never assume one visible character is one code point or one byte.</p></div></details>
+</article>
+<article class="prob" id="p-longest-common-prefix" data-pid="m5-1-longest-common-prefix" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. Longest common prefix</h3></header>
+<div class="prob-q"><p>Write <code>common_prefix(strings)</code> returning the longest string that every string in the list starts with (<code>""</code> for an empty list). Compare characters position by position across all strings at once, and stop at the first mismatch or at the end of the shortest string.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def common_prefix(strings):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert common_prefix(["refund_policy", "refund_time", "refunds"]) == "refund"
+assert common_prefix(["agent", "rag"]) == ""
+assert common_prefix(["same", "same"]) == "same"
+assert common_prefix(["solo"]) == "solo"
+assert common_prefix([]) == "" and common_prefix(["", "x"]) == ""</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert common_prefix([&quot;refund_policy&quot;, &quot;refund_time&quot;, &quot;refunds&quot;]) == &quot;refund&quot;
+assert common_prefix([&quot;agent&quot;, &quot;rag&quot;]) == &quot;&quot;
+assert common_prefix([&quot;same&quot;, &quot;same&quot;]) == &quot;same&quot;
+assert common_prefix([&quot;solo&quot;]) == &quot;solo&quot;
+assert common_prefix([]) == &quot;&quot; and common_prefix([&quot;&quot;, &quot;x&quot;]) == &quot;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>zip(*strings)</code> yields tuples of the characters at each position, and stops at the shortest string.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A position is common when its tuple has one distinct character: <code>len(set(chars)) == 1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def common_prefix(strings):
+    prefix = []
+    for chars in zip(*strings):
+        if len(set(chars)) != 1:
+            break
+        prefix.append(chars[0])
+    return &quot;&quot;.join(prefix)</code></pre></div><p><code>zip(*strings)</code> transposes the strings into columns of characters (4.3) and stops at the shortest one, so the "end of the shortest string" rule comes for free. A column is common when its set has one element. The work is O(total characters examined), and the prefix is collected in a list and joined once. A neat alternative uses the sort order: the common prefix of a whole list equals the common prefix of its lexicographically smallest and largest strings (<code>min</code> and <code>max</code>), which is a nice follow-up answer. The standard library also has <code>os.path.commonprefix</code>, which does this character by character despite its name.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-log-parser-built-on-fixe" data-pid="m5-1-read-the-code-a-log-parser-built-on-fixe" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. Read the code: a log parser built on fixed positions</h3></header>
+<div class="prob-q"><p>This parses lines from an LLM gateway log. It worked until the gateway started logging longer model names and request ids, and now the fields come out shifted, while lines without a <code>user=</code> field crash. Rewrite <code>parse_line</code> so it does not depend on fixed positions: the fields are separated by spaces, and <code>user=...</code> is optional.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">def parse_line(line):
+    date = line[0:10]
+    level = line[11:16].strip()
+    model = line[17:22]
+    request_id = line[23:31]
+    user = line[line.index(&quot;user=&quot;) + 5:]
+    return {&quot;date&quot;: date, &quot;level&quot;: level, &quot;model&quot;: model, &quot;request_id&quot;: request_id, &quot;user&quot;: user}
+</textarea>
+<script type="text/plain" class="prob-tests">a = parse_line("2025-06-01 INFO  small r-000017 user=ana")
+assert a == {"date": "2025-06-01", "level": "INFO", "model": "small", "request_id": "r-000017", "user": "ana"}
+b = parse_line("2025-06-02 ERROR gpt-large-2 req-0000000921 user=ben")
+assert b == {"date": "2025-06-02", "level": "ERROR", "model": "gpt-large-2", "request_id": "req-0000000921", "user": "ben"}
+c = parse_line("2025-06-03 WARN medium r-9")
+assert c["user"] is None and c["model"] == "medium" and c["request_id"] == "r-9"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = parse_line(&quot;2025-06-01 INFO  small r-000017 user=ana&quot;)
+assert a == {&quot;date&quot;: &quot;2025-06-01&quot;, &quot;level&quot;: &quot;INFO&quot;, &quot;model&quot;: &quot;small&quot;, &quot;request_id&quot;: &quot;r-000017&quot;, &quot;user&quot;: &quot;ana&quot;}
+b = parse_line(&quot;2025-06-02 ERROR gpt-large-2 req-0000000921 user=ben&quot;)
+assert b == {&quot;date&quot;: &quot;2025-06-02&quot;, &quot;level&quot;: &quot;ERROR&quot;, &quot;model&quot;: &quot;gpt-large-2&quot;, &quot;request_id&quot;: &quot;req-0000000921&quot;, &quot;user&quot;: &quot;ben&quot;}
+c = parse_line(&quot;2025-06-03 WARN medium r-9&quot;)
+assert c[&quot;user&quot;] is None and c[&quot;model&quot;] == &quot;medium&quot; and c[&quot;request_id&quot;] == &quot;r-9&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>line.split()</code> splits on any run of spaces, so the double space after <code>INFO</code> does not matter.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The first four parts are fixed fields; look through the remaining parts for one that <code>startswith("user=")</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parse_line(line):
+    date, level, model, request_id, *extra = line.split()
+    user = None
+    for part in extra:
+        if part.startswith(&quot;user=&quot;):
+            user = part[len(&quot;user=&quot;):]
+    return {&quot;date&quot;: date, &quot;level&quot;: level, &quot;model&quot;: model, &quot;request_id&quot;: request_id, &quot;user&quot;: user}</code></pre></div><p>Fixed slices encode assumptions about field <strong>widths</strong>, so any change in a model name or id length shifts every later field without an error: the worst kind of parser bug, because it produces plausible garbage. Splitting on whitespace uses the actual separators, star unpacking (4.3) collects the optional fields, and <code>part[len("user="):]</code> avoids a hard-coded 5. Optional fields become <code>None</code> instead of a crash. For logs you control, write JSON lines instead (Module 12), and the parsing problem disappears.</p></div></details>
+</article>
+<article class="prob" id="p-find-every-occurrence-including-overlaps" data-pid="m5-1-find-every-occurrence-including-overlaps" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Find every occurrence, including overlaps</h3></header>
+<div class="prob-q"><p>Write <code>find_all(text, sub)</code> returning all start positions of <code>sub</code> in <code>text</code>, <strong>including overlapping</strong> ones (<code>find_all("aaaa", "aa")</code> is <code>[0, 1, 2]</code>). Use <code>str.find</code> with a start position in a loop; an empty <code>sub</code> raises <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">def find_all(text, sub):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert find_all("aaaa", "aa") == [0, 1, 2]
+assert find_all("refund refunds", "refund") == [0, 7]
+assert find_all("abc", "x") == []
+assert "aaaa".count("aa") == 2
+assert raises(ValueError, find_all, "abc", "")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def raises(exc, f, *args):
+    try:
+        f(*args)
+    except exc:
+        return True
+    return False
+assert find_all(&quot;aaaa&quot;, &quot;aa&quot;) == [0, 1, 2]
+assert find_all(&quot;refund refunds&quot;, &quot;refund&quot;) == [0, 7]
+assert find_all(&quot;abc&quot;, &quot;x&quot;) == []
+assert &quot;aaaa&quot;.count(&quot;aa&quot;) == 2
+assert raises(ValueError, find_all, &quot;abc&quot;, &quot;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>text.find(sub, start)</code> searches from <code>start</code>. After a match at <code>i</code>, continue from <code>i + 1</code> to allow overlaps.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def find_all(text, sub):
+    if not sub:
+        raise ValueError(&quot;sub must not be empty&quot;)
+    positions = []
+    i = text.find(sub)
+    while i != -1:
+        positions.append(i)
+        i = text.find(sub, i + 1)
+    return positions</code></pre></div><p>Restarting the search at <code>i + 1</code> (rather than <code>i + len(sub)</code>) is what allows overlaps, which <code>str.count</code> and <code>re.finditer</code> do not report: the test shows <code>count</code> finding only 2. The empty-substring guard matters, because <code>""</code> is found at every position and the loop would never end (an infinite-loop bug, the kind 4.2 warned about). Each <code>find</code> is fast C code; for many patterns at once, an Aho-Corasick automaton is the standard algorithm.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-why-are-python-strings-immutable-and-wha" data-pid="m5-1-why-are-python-strings-immutable-and-wha" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why are Python strings immutable, and what does that imply for your code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Immutability makes strings safe to share between names, functions and threads, lets them be hashed once and used as dict keys and set members, and allows Python to intern and cache them. The implications: every operation that "changes" a string returns a new one, so you must use the return value (<code>s = s.strip()</code>); building a long string piece by piece with <code>+</code> copies the growing text again and again, so collect pieces and <code>"".join</code> them; and there is no in-place character assignment, so for heavy character-level editing you would work on a list of characters or an <code>io.StringIO</code>. Mention that CPython's in-place <code>+=</code> optimisation is an implementation detail you should not rely on.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-build-a-large-string-efficien" data-pid="m5-1-how-do-you-build-a-large-string-efficien" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How do you build a large string efficiently, and why can repeated <code>+</code> be slow?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Each <code>a + b</code> allocates a new string and copies both operands, so appending n pieces one at a time copies about n²/2 pieces' worth of characters. <code>"".join(pieces)</code> computes the total size, allocates once and copies each piece once, O(total length). Alternatives: <code>io.StringIO</code> for writing text incrementally, or building lines and writing them to a file directly. CPython sometimes resizes a string in place for <code>s += t</code> when nothing else refers to <code>s</code>, so a <code>+=</code> loop can look fast in a micro-benchmark, but that breaks with f-strings, extra references, or other interpreters such as PyPy, so <code>join</code> is the portable answer.</p></div></details>
+</article>
+<article class="prob" id="p-does-len-text-tell-you-how-long-text-is-" data-pid="m5-1-does-len-text-tell-you-how-long-text-is-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Does <code>len(text)</code> tell you how long text is for a user, a database column or an LLM?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>None of them reliably. <code>len</code> counts Unicode code points. A user sees <strong>graphemes</strong>: an accented letter can be two code points, and emoji with skin tones or flags are several, so visible length and <code>len</code> differ (use the <code>grapheme</code> or <code>regex</code> library's <code>\X</code> to count them). A database or protocol limit usually counts <strong>bytes</strong> in an encoding: UTF-8 uses 1 to 4 bytes per code point, so <code>len(text.encode("utf-8"))</code> is what a <code>VARBINARY</code> limit or a payload size cares about. An LLM counts <strong>tokens</strong> from its own tokenizer (subword pieces, roughly 3 to 4 English characters each, far fewer characters per token for code, numbers or many languages), and both context limits and cost are in tokens, so count with the model's tokenizer (for example <code>tiktoken</code>). Also mention Unicode normalisation (NFC) before comparing text.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A <code>str</code> is an immutable sequence of Unicode code points: indexing gives one-character strings, and every "change" builds a new string.</li><li>Slicing follows the list rules. Prefer separators (<code>split</code>, <code>partition</code>, regex) over fixed positions for text you do not control.</li><li>Build long strings with <code>"".join(pieces)</code>, not repeated <code>+</code> or f-strings in a loop.</li><li>Strings compare by code point: capitals sort first and <code>"10" &lt; "9"</code>. Use <code>casefold</code> for case-insensitive comparison.</li><li>Watch the literal traps: a missing comma concatenates, <code>\</code> starts escapes (use <code>r"..."</code>), triple quotes keep indentation. <code>len</code> counts code points, not graphemes, bytes or tokens.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
