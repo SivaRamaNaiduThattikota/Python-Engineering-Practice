@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m6-4", num="6.4", title="Lazy pipelines",
@@ -14,6 +15,9 @@ term("itertools", "A standard-library module of fast iterator building blocks: `
 term("Consecutive grouping", "What `itertools.groupby` does: it groups runs of adjacent items with the same key, so data must be sorted by that key first.")
 
 section("pipeline", "Building a pipeline from generators",
+    fig(chain(["read lines", "strip, skip blanks", "parse JSON", "keep valid", "batch(32)", ("embed", "accent")],
+        note="each item flows through every stage before the next line is read"),
+        "A lazy pipeline: chained generators, where only one item (or one batch) is in memory at a time."),
     p("""A **pipeline** is a chain of steps where each step takes an iterable and returns a new iterable. When every step is a
     generator, the whole chain is **lazy**: building it does no work at all, and when the consumer at the end asks for one item,
     that request travels back up the chain, each step pulls just enough from the step before it, and one item flows all the way
@@ -109,6 +113,9 @@ section("combine", "Combining and reshaping streams",
 )
 
 section("groupby", "`groupby`: grouping a sorted stream",
+    fig(table(["input to groupby", "groups produced"], [["a a b b a", "a, b, a  (three groups)"], ["sorted: a a a b b", "a, b  (two groups)"]],
+        hl={(0, 1)}, label="groupby groups consecutive items"),
+        "`itertools.groupby` groups runs of equal keys, so sort by the same key first, or use a dict when order does not matter."),
     p("""`itertools.groupby(iterable, key)` yields pairs `(key, group)` for **runs of consecutive items** that have the same key.
     That is different from SQL's `GROUP BY`: it does not collect all items with the same key from anywhere in the input, it only
     groups items that are **next to each other**. On unsorted data, the same key appears several times. So the standard pattern
@@ -162,6 +169,8 @@ section("combinatorics", "Combinatorics: product, combinations, permutations",
 )
 
 section("breaks", "What breaks laziness, and splitting a stream",
+    fig(chain(["a generator", "list(...), sorted(...),|len(list(...))", ("the whole stream|is now in memory", "bad")]),
+        "Anything that needs all items at once ends the laziness; keep such steps for the end, or for data you know is small."),
     p("""Some operations need **all** the data before they can produce anything, and putting one in a pipeline turns everything
     before it into a full read: `sorted`, `reversed` (which needs a sequence), `len`, `list`, `set`, `max` and `min` (which return
     after reading everything, though in constant memory), and the `sorted`-then-`groupby` pattern. That is not wrong; it just

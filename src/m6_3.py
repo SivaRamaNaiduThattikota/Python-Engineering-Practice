@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m6-3", num="6.3", title="Generators and yield",
@@ -15,6 +16,16 @@ term("Generator", "An iterator made by a function that contains `yield`. Each `n
 term("Lazy evaluation", "Computing values only when they are asked for, instead of all up front. Generators are lazy, lists are not.")
 
 section("protocol", "How a `for` loop really works",
+    fig(flowchart({
+        "for": ("start", 1, 0, "for x in obj"),
+        "iter": ("step", 1, 1, "it = iter(obj)"),
+        "next": ("ask", 1, 2, "next(it) gives|a value?"),
+        "body": ("accent", 1, 3, "run the body with x"),
+        "done": ("end", 2, 2, "StopIteration:|loop ends"),
+    }, [("for", "iter"), ("iter", "next"), ("next", "body", "yes"), ("next", "done", "no"),
+        ("body", "next", "repeat", {"route": [(0.4, 3), (0.4, 2)], "style": "a"})], cell=(210, 76),
+        label="what a for loop does with iter and next"),
+        "Every `for` loop calls `iter` once and `next` until `StopIteration`; generators are just an easy way to write that `next`."),
     p("""Every `for` loop in Python runs the same small protocol. An **iterable** is anything you can loop over: a list, a string, a
     dict, a file, a `range`. When the loop starts, Python calls `iter(iterable)`, which returns an **iterator**: an object that
     remembers where it is. Then, for every round, Python calls `next(iterator)` and binds the result to the loop variable. When
@@ -51,6 +62,13 @@ section("protocol", "How a `for` loop really works",
 )
 
 section("yield", "Generator functions: `yield` pauses a function",
+    fig(table(["call", "what runs", "result"], [
+        ["g = gen()", "nothing yet", "a generator object"],
+        ["next(g)", "up to the first yield", "1"],
+        ["next(g)", "up to the second yield", "2"],
+        ["next(g)", "to the end of the function", "StopIteration"],
+    ], hl={(0, 1)}, label="a generator runs only when asked for the next value"),
+        "Calling a generator function runs none of its body; each `next` resumes it until the next `yield`."),
     p("""A **generator function** is a normal `def` with at least one `yield` in its body. The `yield` changes what calling the
     function means. Calling it does **not** run the body; it immediately returns a **generator object**, which is an iterator.
     The body runs only when someone calls `next` on that object: it runs from the top **until the first `yield`**, hands that
@@ -96,6 +114,11 @@ section("yield", "Generator functions: `yield` pauses a function",
 )
 
 section("genexp", "Generator expressions",
+    fig(table(["expression", "builds", "memory"], [
+        ["[x * x for x in range(10**6)]", "a list of a million items", "megabytes, all at once"],
+        ["(x * x for x in range(10**6))", "a generator", "a few hundred bytes"],
+    ], hl={(1, 2)}, label="list comprehension versus generator expression"),
+        "Round brackets make a generator: values are produced one at a time, so memory stays constant however long the stream."),
     p("""A **generator expression** is the lazy version of a list comprehension: the same syntax with parentheses, `(expr for x in
     xs if cond)`. It returns a generator object at once, without computing anything; each value is computed when it is
     requested. When a generator expression is the only argument of a function, the extra parentheses can be dropped:

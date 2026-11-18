@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m6-2", num="6.2", title="Dict, set and nested comprehensions",
@@ -14,6 +15,8 @@ term("Set comprehension", "An expression like `{f(x) for x in xs}` that builds a
 term("Label map", "A pair of dicts, `label2id` and `id2label`, that convert class names to the integer ids a model uses and back.")
 
 section("dict", "Dict comprehensions",
+    fig(chain(["pairs (k, v)", "{k: v for k, v in pairs}", ("a dict; a repeated key|keeps its last value", "warn")]),
+        "A dict comprehension builds keys and values in one pass; duplicate keys silently overwrite earlier ones."),
     p("""A **dict comprehension** has the same shape as a list comprehension, with curly braces and a `key: value` pair in front:
     `{key_expr: value_expr for name in iterable if condition}`. It means exactly this loop: start with an empty dict, and for
     every item that passes the condition, evaluate both expressions and **assign** `d[key] = value`. The word "assign"
@@ -175,6 +178,9 @@ section("nested", "Nested dict comprehensions",
 )
 
 section("ml", "Label maps and vocabularies: comprehensions in model code",
+    fig(table(["label", "id = {lab: i for i, lab in enumerate(labels)}"], [["ham", "0"], ["phish", "1"], ["spam", "2"]],
+        label="a label map built with a comprehension"),
+        "Label maps and vocabularies are dict comprehensions over a sorted list, so the ids are stable from run to run."),
     p("""Models work with integers, people with names. Every classification project therefore has a **label map**: `label2id`
     from class name to integer and `id2label` back. Hugging Face models store exactly these two dicts in their `config.json`.
     Both are one dict comprehension over a **sorted** list of unique labels, and the sorting is what makes the ids the same on

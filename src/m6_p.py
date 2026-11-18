@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m6-p", num="6.P", title="Module 6 practice set and mini project",
@@ -9,6 +10,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(6, "a streaming evaluation harness"), "Module 6 at a glance: comprehensions build collections, generators produce values on demand, and pipelines chain them."),
     p("""For each problem, decide first whether the result must be **stored** or only **streamed**. If you need the result more than
     once, need its length, need to index it, or will return it to a caller who expects a list, build it: a list, dict or set
     comprehension (6.1, 6.2). If it is consumed once, may be large, or may be stopped early, stream it: a generator function or
@@ -407,6 +409,8 @@ tokens = [f"w{i % 600}" for i in range(200_000)]""",
 )
 
 section("project", "Mini project: a streaming evaluation harness",
+    fig(chain(["cases (a stream)", "model answers", "score each case", "update running|metrics", ("final report", "good")]),
+        "The harness never holds all cases in memory: each case is read, answered, scored and folded into the totals."),
     p("""You are evaluating an LLM as a text classifier on a labelled test set stored as JSON Lines. The model is called in batches
     and replies with free text such as `"Label: spam"`. Build the harness. It must stream the file, batch the model calls, parse
     replies, and report metrics. Every rule in the spec maps to a lesson in this module, and the tests check each one."""),

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m6-1", num="6.1", title="List comprehensions",
@@ -14,6 +15,9 @@ term("Conditional expression", "`a if cond else b`: an expression that picks one
 term("Flatten", "Turn a list of lists into one list of their items, for example `[x for row in rows for x in row]`.")
 
 section("what", "What a comprehension is, and the loop it stands for",
+    fig(stage_map(6, "a streaming evaluation harness"), "Module 6 at a glance: comprehensions build collections, generators produce values on demand, and pipelines chain them."),
+    fig(chain(["for x in items", "if condition(x)|(optional)", "collect expr(x)", ("a new list", "good")], note="[expr(x) for x in items if condition(x)]"),
+        "A comprehension is the loop, the filter and the append, written as one expression that builds a new list."),
     p("""A **list comprehension** builds a new list by running an expression for every item of an iterable. The general shape
     is `[expression for name in iterable if condition]`, and it means exactly the same as this loop:"""),
     ex("""
@@ -50,6 +54,11 @@ section("what", "What a comprehension is, and the loop it stands for",
 )
 
 section("ifelse", "Filtering versus transforming: where the `if` goes",
+    fig(table(["comprehension on [3, -1, 2]", "result", "kind"], [
+        ["[x for x in xs if x > 0]", "[3, 2]", "filter: fewer items"],
+        ["[x if x > 0 else 0 for x in xs]", "[3, 0, 2]", "transform: same count"],
+    ], label="where the if goes decides filtering or transforming"),
+        "An `if` at the end filters; an `if ... else` at the front transforms each item and keeps them all."),
     p("""There are two different `if`s, and mixing them up is the most common comprehension mistake. An `if` **at the end** is a
     filter: items that fail it are left out, so the result can be shorter than the input. An `if ... else` **at the front** is
     a conditional expression (`a if cond else b`): every item produces something, so the result has the same length as the
@@ -87,6 +96,9 @@ section("ifelse", "Filtering versus transforming: where the `if` goes",
 )
 
 section("nested", "Several `for` clauses, and comprehensions inside comprehensions",
+    fig(table(["[(a, b) for a in 'AB' for b in '12']", "order"], [["('A', '1')", "1"], ["('A', '2')", "2"], ["('B', '1')", "3"], ["('B', '2')", "4"]],
+        label="the left for clause is the outer loop"),
+        "Several `for` clauses read like nested loops written in the same order: the leftmost is the outermost."),
     p("""A comprehension can have more than one `for`. They nest **left to right, in the same order as written loops**: the first
     `for` is the outer loop, the next one is inside it. So `[(a, b) for a in "xy" for b in "12"]` is the loop `for a in "xy":`
     with `for b in "12":` inside, producing `x1, x2, y1, y2`. A later `for` can use the name of an earlier one, which is how
