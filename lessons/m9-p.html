@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9.P · Module 9 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m9-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 9 · OOP</span></div>
+  <h1>9.P Module 9 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 9: classes and instances, dunder methods, properties, inheritance and super, composition and protocols, class methods and copying. Then a mini project that needs all of it: a small provider layer for LLMs with a registry, validated settings, usage accounting and a caching wrapper.</p>
+  <div class="chips"><span class="chip">14 problems</span><span class="chip">3 easy · 6 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For every class you write or read, check four things. <strong>State:</strong> what the instance owns, created in <code>__init__</code>, never shared through class attributes or mutable defaults (9.1). <strong>Rules:</strong> which invariants hold, guarded by properties and validating methods, with copies instead of internal objects handed out (9.3). <strong>Protocol:</strong> which dunders make it behave like the built-ins it resembles, with <code>__eq__</code> and <code>__hash__</code> consistent and <code>NotImplemented</code> for foreign types (9.2). <strong>Relationships:</strong> "is a" (inherit, honour the contract, call <code>super()</code>) or "has a" (compose and inject), and constructors that build <code>cls(...)</code> (9.4 to 9.6).</p>
+<p>The problems mix the lessons on purpose. The mini project combines all of them in the kind of layer every LLM application ends up writing.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-instances-classes-and-methods" data-pid="m9-p-instances-classes-and-methods" data-type="predict" data-level="easy" data-answer="2 1 3 3 B
+3 100 {&#x27;name&#x27;: &#x27;a&#x27;, &#x27;count&#x27;: 2, &#x27;total&#x27;: 100}">
+<header class="prob-head"><h3>1. Instances, classes and methods</h3></header>
+<div class="code"><pre><code class="py">class Counter:
+    total = 0
+
+    def __init__(self, name):
+        self.name = name
+        self.count = 0
+
+    def hit(self):
+        self.count += 1
+        Counter.total += 1
+        return self
+
+    @classmethod
+    def make(cls, name):
+        return cls(name.upper())
+
+a, b = Counter(&quot;a&quot;), Counter.make(&quot;b&quot;)
+a.hit().hit(); b.hit()
+print(a.count, b.count, Counter.total, a.total, b.name)
+a.total = 100
+print(Counter.total, a.total, vars(a))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Counter.total += 1</code> updates the class attribute; <code>a.total = 100</code> creates an instance attribute.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>2 1 3 3 B
+3 100 {&#x27;name&#x27;: &#x27;a&#x27;, &#x27;count&#x27;: 2, &#x27;total&#x27;: 100}</pre></div><p>Each instance has its own <code>count</code>, while <code>total</code> is updated through the class, so it is shared: 3 hits in total, visible from any instance. <code>make</code> is a classmethod factory that builds <code>cls(...)</code>, here with an upper-cased name. Assigning <code>a.total</code> creates an instance attribute that shadows the class value for <code>a</code> only, which <code>vars(a)</code> shows.</p></div></details>
+</article>
+<article class="prob" id="p-a-time-interval-value" data-pid="m9-p-a-time-interval-value" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A time interval value</h3></header>
+<div class="prob-q"><p>Write a class <code>Interval(start, end)</code> (raise <code>ValueError</code> if <code>start &gt; end</code>) with <code>__repr__</code> (<code>Interval(3, 8)</code>), <code>__len__</code> (the length), <code>__contains__</code> for numbers (<code>start &lt;= x &lt; end</code>), <code>__eq__</code> and <code>__hash__</code> by both ends, and a method <code>overlaps(other)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class Interval:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a, b = Interval(3, 8), Interval(7, 10)
+assert repr(a) == "Interval(3, 8)" and len(a) == 5 and 3 in a and 8 not in a and 7.5 in a
+assert a.overlaps(b) and not a.overlaps(Interval(8, 9)) and a == Interval(3, 8) and len({a, Interval(3, 8), b}) == 2
+assert not Interval(4, 4) and (a == (3, 8)) is False
+try:
+    Interval(5, 1)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a, b = Interval(3, 8), Interval(7, 10)
+assert repr(a) == &quot;Interval(3, 8)&quot; and len(a) == 5 and 3 in a and 8 not in a and 7.5 in a
+assert a.overlaps(b) and not a.overlaps(Interval(8, 9)) and a == Interval(3, 8) and len({a, Interval(3, 8), b}) == 2
+assert not Interval(4, 4) and (a == (3, 8)) is False
+try:
+    Interval(5, 1)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__len__</code> returning 0 makes empty intervals falsy. Two half-open intervals overlap when <code>a.start &lt; b.end and b.start &lt; a.end</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Interval:
+    def __init__(self, start, end):
+        if start &gt; end:
+            raise ValueError(f&quot;start {start} is after end {end}&quot;)
+        self.start, self.end = start, end
+
+    def __repr__(self):
+        return f&quot;Interval({self.start}, {self.end})&quot;
+
+    def __len__(self):
+        return self.end - self.start
+
+    def __contains__(self, x):
+        return self.start &lt;= x &lt; self.end
+
+    def __eq__(self, other):
+        if not isinstance(other, Interval):
+            return NotImplemented
+        return (self.start, self.end) == (other.start, other.end)
+
+    def __hash__(self):
+        return hash((self.start, self.end))
+
+    def overlaps(self, other):
+        return self.start &lt; other.end and other.start &lt; self.end</code></pre></div><p>Each dunder hooks one piece of syntax (9.2): <code>len</code>, <code>in</code> and <code>==</code>, with the hash built from the same fields as equality so intervals work in sets. Half-open intervals (<code>start</code> included, <code>end</code> excluded) make adjacent intervals not overlap and lengths add up, the same convention as <code>range</code> and slicing. <code>__len__</code> returning 0 also makes an empty interval falsy. Note that <code>__len__</code> must return an integer, so this class works for integer ends; a float-based interval would expose a <code>length</code> property instead.</p></div></details>
+</article>
+<article class="prob" id="p-a-repr-that-breaks-printing" data-pid="m9-p-a-repr-that-breaks-printing" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A repr that breaks printing</h3></header>
+<div class="prob-q"><p>Printing a <code>ToolCall</code> or a list of them raises <code>TypeError: __repr__ returned non-string</code>. Fix <code>__repr__</code> to return <code>ToolCall('search', {'q': 'refund'})</code>, and add a <code>__str__</code> returning <code>search(q='refund')</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class ToolCall:
+    def __init__(self, name, args):
+        self.name = name
+        self.args = dict(args)
+
+    def __repr__(self):
+        return (self.name, self.args)
+</textarea>
+<script type="text/plain" class="prob-tests">t = ToolCall("search", {"q": "refund"})
+assert repr(t) == "ToolCall('search', {'q': 'refund'})"
+assert str(t) == "search(q='refund')" and f"{t}" == "search(q='refund')"
+assert repr([t]) == "[ToolCall('search', {'q': 'refund'})]"
+assert str(ToolCall("now", {})) == "now()"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = ToolCall(&quot;search&quot;, {&quot;q&quot;: &quot;refund&quot;})
+assert repr(t) == &quot;ToolCall(&#x27;search&#x27;, {&#x27;q&#x27;: &#x27;refund&#x27;})&quot;
+assert str(t) == &quot;search(q=&#x27;refund&#x27;)&quot; and f&quot;{t}&quot; == &quot;search(q=&#x27;refund&#x27;)&quot;
+assert repr([t]) == &quot;[ToolCall(&#x27;search&#x27;, {&#x27;q&#x27;: &#x27;refund&#x27;})]&quot;
+assert str(ToolCall(&quot;now&quot;, {})) == &quot;now()&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__repr__</code> and <code>__str__</code> must return strings. Build the arguments part with <code>", ".join(f"{k}={v!r}" ...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ToolCall:
+    def __init__(self, name, args):
+        self.name = name
+        self.args = dict(args)
+
+    def __repr__(self):
+        return f&quot;{type(self).__name__}({self.name!r}, {self.args!r})&quot;
+
+    def __str__(self):
+        arguments = &quot;, &quot;.join(f&quot;{k}={v!r}&quot; for k, v in self.args.items())
+        return f&quot;{self.name}({arguments})&quot;</code></pre></div><p>Python checks that <code>__repr__</code> and <code>__str__</code> return <code>str</code>; returning a tuple raises <code>TypeError</code> the first time anything prints the object, which can be deep inside a logging call. The repr shows the constructor form for developers; the str shows the call as a person would read it in an agent trace. <code>type(self).__name__</code> keeps the repr right for subclasses, and <code>!r</code> quotes string values.</p></div></details>
+</article>
+<article class="prob" id="p-a-property-overridden-in-a-subclass" data-pid="m9-p-a-property-overridden-in-a-subclass" data-type="predict" data-level="medium" data-answer="30 30 96
+500 800 property">
+<header class="prob-head"><h3>4. A property overridden in a subclass</h3></header>
+<div class="code"><pre><code class="py">class Plan:
+    def __init__(self, seats):
+        self.seats = seats
+
+    @property
+    def monthly(self):
+        return self.seats * self.price_per_seat()
+
+    def price_per_seat(self):
+        return 10
+
+class Team(Plan):
+    def price_per_seat(self):
+        return 8 if self.seats &gt;= 10 else super().price_per_seat()
+
+class Enterprise(Team):
+    @property
+    def monthly(self):
+        return max(500, super().monthly)
+
+print(Plan(3).monthly, Team(3).monthly, Team(12).monthly)
+print(Enterprise(12).monthly, Enterprise(100).monthly, type(Team.monthly).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The base property calls <code>self.price_per_seat()</code>, which subclasses override. <code>super().monthly</code> reads the parent's property.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>30 30 96
+500 800 property</pre></div><p><code>Plan.monthly</code> is a template that calls an overridable hook: <code>Team</code> changes only the per-seat price, with a volume discount from 10 seats. <code>Enterprise</code> overrides the property itself and uses <code>super().monthly</code>, which evaluates the parent's property on the same instance (so <code>Team</code>'s price applies), then applies a minimum of 500. Properties are inherited and can be overridden like methods, since they are class attributes too.</p></div></details>
+</article>
+<article class="prob" id="p-a-conversation-log-with-the-container-pr" data-pid="m9-p-a-conversation-log-with-the-container-pr" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A conversation log with the container protocol</h3></header>
+<div class="prob-q"><p>Write a class <code>ConversationLog</code> with a classmethod <code>from_messages(messages)</code> (a list of <code>{"role", "content"}</code> dicts, copied), <code>append(role, content)</code>, <code>__len__</code>, <code>__iter__</code> (yielding copies of the dicts), <code>__getitem__</code> (an int gives a copy of one message dict, a slice gives a new <code>ConversationLog</code>), <code>__contains__</code> for a text (true if any message's content contains it, case-insensitive), and a <code>last_user</code> property returning the content of the last user message (or <code>None</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class ConversationLog:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">msgs = [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Refund?"}, {"role": "assistant", "content": "5 days."}]
+log = ConversationLog.from_messages(msgs)
+msgs.append({"role": "user", "content": "late"})
+assert len(log) == 3 and log[1] == {"role": "user", "content": "Refund?"}
+log[1]["content"] = "changed"
+assert log[1]["content"] == "Refund?" and "REFUND" in log and "invoice" not in log
+tail = log[1:]
+assert isinstance(tail, ConversationLog) and len(tail) == 2 and log.last_user == "Refund?"
+log.append("user", "And invoices?")
+assert log.last_user == "And invoices?" and [m["role"] for m in log] == ["system", "user", "assistant", "user"]
+assert ConversationLog().last_user is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">msgs = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}, {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;5 days.&quot;}]
+log = ConversationLog.from_messages(msgs)
+msgs.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;late&quot;})
+assert len(log) == 3 and log[1] == {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;}
+log[1][&quot;content&quot;] = &quot;changed&quot;
+assert log[1][&quot;content&quot;] == &quot;Refund?&quot; and &quot;REFUND&quot; in log and &quot;invoice&quot; not in log
+tail = log[1:]
+assert isinstance(tail, ConversationLog) and len(tail) == 2 and log.last_user == &quot;Refund?&quot;
+log.append(&quot;user&quot;, &quot;And invoices?&quot;)
+assert log.last_user == &quot;And invoices?&quot; and [m[&quot;role&quot;] for m in log] == [&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;user&quot;]
+assert ConversationLog().last_user is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>self._messages</code> as a list of copied dicts; every method that hands out a message hands out <code>dict(m)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ConversationLog:
+    def __init__(self):
+        self._messages = []
+
+    @classmethod
+    def from_messages(cls, messages):
+        log = cls()
+        for m in messages:
+            log.append(m[&quot;role&quot;], m[&quot;content&quot;])
+        return log
+
+    def append(self, role, content):
+        self._messages.append({&quot;role&quot;: role, &quot;content&quot;: content})
+
+    def __len__(self):
+        return len(self._messages)
+
+    def __iter__(self):
+        for m in self._messages:
+            yield dict(m)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return type(self).from_messages(self._messages[key])
+        return dict(self._messages[key])
+
+    def __contains__(self, text):
+        needle = text.lower()
+        return any(needle in m[&quot;content&quot;].lower() for m in self._messages)
+
+    @property
+    def last_user(self):
+        for m in reversed(self._messages):
+            if m[&quot;role&quot;] == &quot;user&quot;:
+                return m[&quot;content&quot;]
+        return None</code></pre></div><p>The class behaves like a read-only sequence of messages (indexing, slicing, iteration, <code>len</code>, <code>in</code>), but every message handed out is a copy, so callers cannot corrupt the history: the encapsulation rule of 9.3 implemented through the container protocol of 9.2. <code>in</code> is given a meaning that fits the domain (a text search) rather than dict equality. The slice builds a new log through the classmethod constructor, using <code>type(self)</code> so subclasses stay subclasses (9.6). <code>from_messages</code> reuses <code>append</code>, so there is one place where messages enter.</p></div></details>
+</article>
+<article class="prob" id="p-a-subclass-that-tramples-the-base-s-inte" data-pid="m9-p-a-subclass-that-tramples-the-base-s-inte" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>6. A subclass that tramples the base's internals</h3></header>
+<div class="prob-q"><p><code>Retriever</code> keeps its own cache in <code>self._cache</code>. <code>LoggingRetriever</code>, written by another team, also uses <code>self._cache</code> for its log of queries, which breaks the base's caching. Fix the <strong>base</strong> class so subclasses cannot clash with its private attributes (use name mangling), without changing <code>LoggingRetriever</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class Retriever:
+    def __init__(self, docs):
+        self.docs = docs
+        self._cache = {}
+
+    def retrieve(self, query):
+        if query not in self._cache:
+            self._cache[query] = [d for d in self.docs if query in d.lower()]
+        return list(self._cache[query])
+
+class LoggingRetriever(Retriever):
+    def __init__(self, docs):
+        super().__init__(docs)
+        self._cache = []
+
+    def retrieve(self, query):
+        self._cache.append(query)
+        return super().retrieve(query)
+</textarea>
+<script type="text/plain" class="prob-tests">r = LoggingRetriever(["refund policy", "reset password"])
+assert r.retrieve("refund") == ["refund policy"] and r.retrieve("refund") == ["refund policy"]
+assert r._cache == ["refund", "refund"]
+assert Retriever(["a"]).retrieve("a") == ["a"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = LoggingRetriever([&quot;refund policy&quot;, &quot;reset password&quot;])
+assert r.retrieve(&quot;refund&quot;) == [&quot;refund policy&quot;] and r.retrieve(&quot;refund&quot;) == [&quot;refund policy&quot;]
+assert r._cache == [&quot;refund&quot;, &quot;refund&quot;]
+assert Retriever([&quot;a&quot;]).retrieve(&quot;a&quot;) == [&quot;a&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Rename the base's attribute to <code>self.__cache</code>; inside <code>Retriever</code>, Python stores it as <code>_Retriever__cache</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Retriever:
+    def __init__(self, docs):
+        self.docs = docs
+        self.__cache = {}
+
+    def retrieve(self, query):
+        if query not in self.__cache:
+            self.__cache[query] = [d for d in self.docs if query in d.lower()]
+        return list(self.__cache[query])
+
+class LoggingRetriever(Retriever):
+    def __init__(self, docs):
+        super().__init__(docs)
+        self._cache = []
+
+    def retrieve(self, query):
+        self._cache.append(query)
+        return super().retrieve(query)</code></pre></div><p>Both classes wrote <code>self._cache</code> on the same instance, so the subclass replaced the base's dict with a list and the base's <code>query not in self._cache</code> then tested list membership, and indexing a list with a string crashed. This is precisely the problem name mangling solves (9.3): inside <code>Retriever</code>, <code>self.__cache</code> becomes <code>self._Retriever__cache</code>, a name no subclass will pick by accident. It is the right tool for base classes meant to be subclassed by other people; the alternative is composition (9.5), where the two objects never share attributes at all.</p></div></details>
+</article>
+<article class="prob" id="p-scalers-with-a-shared-interface" data-pid="m9-p-scalers-with-a-shared-interface" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Scalers with a shared interface</h3></header>
+<div class="prob-q"><p>Write an abstract base class <code>Scaler</code> (use <code>abc</code>) with abstract methods <code>fit(values)</code> and <code>_apply(value)</code>, a concrete <code>transform(values)</code> that raises <code>NotFittedError</code> (define it) if <code>fit</code> was not called, and a concrete <code>fit_transform(values)</code>. <code>fit</code> must return <code>self</code>. Implement <code>StandardScaler</code> (subtract the mean, divide by the population standard deviation, 1 if it is 0) and <code>MinMaxScaler</code> (map to <code>[0, 1]</code>, range 1 if it is 0). Round transformed values to 4 decimals.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from abc import ABC, abstractmethod
+
+class Scaler(ABC):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert StandardScaler().fit_transform([1, 2, 3]) == [-1.2247, 0.0, 1.2247]
+mm = MinMaxScaler().fit([10, 20, 30])
+assert mm.transform([10, 25, 40]) == [0.0, 0.75, 1.5]
+assert StandardScaler().fit([5, 5]).transform([5, 7]) == [0.0, 2.0]
+try:
+    MinMaxScaler().transform([1])
+    assert False
+except NotFittedError:
+    pass
+try:
+    Scaler()
+    assert False
+except TypeError:
+    pass
+assert isinstance(mm, Scaler)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert StandardScaler().fit_transform([1, 2, 3]) == [-1.2247, 0.0, 1.2247]
+mm = MinMaxScaler().fit([10, 20, 30])
+assert mm.transform([10, 25, 40]) == [0.0, 0.75, 1.5]
+assert StandardScaler().fit([5, 5]).transform([5, 7]) == [0.0, 2.0]
+try:
+    MinMaxScaler().transform([1])
+    assert False
+except NotFittedError:
+    pass
+try:
+    Scaler()
+    assert False
+except TypeError:
+    pass
+assert isinstance(mm, Scaler)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Set a flag <code>self._fitted = True</code> at the end of each <code>fit</code>; <code>transform</code> checks it and maps <code>self._apply</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Population standard deviation: <code>sqrt(sum((x - mean) ** 2) / n)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+from abc import ABC, abstractmethod
+
+
+class NotFittedError(Exception):
+    pass
+
+
+class Scaler(ABC):
+    _fitted = False
+
+    @abstractmethod
+    def fit(self, values):
+        ...
+
+    @abstractmethod
+    def _apply(self, value):
+        ...
+
+    def transform(self, values):
+        if not self._fitted:
+            raise NotFittedError(f&quot;{type(self).__name__} must be fitted before transform&quot;)
+        return [round(self._apply(v), 4) for v in values]
+
+    def fit_transform(self, values):
+        return self.fit(values).transform(values)
+
+
+class StandardScaler(Scaler):
+    def fit(self, values):
+        n = len(values)
+        self.mean = sum(values) / n
+        self.std = math.sqrt(sum((v - self.mean) ** 2 for v in values) / n) or 1.0
+        self._fitted = True
+        return self
+
+    def _apply(self, value):
+        return (value - self.mean) / self.std
+
+
+class MinMaxScaler(Scaler):
+    def fit(self, values):
+        self.low = min(values)
+        self.range = (max(values) - self.low) or 1.0
+        self._fitted = True
+        return self
+
+    def _apply(self, value):
+        return (value - self.low) / self.range</code></pre></div><p>The ABC fixes the interface every scaler shares, so pipeline code can call <code>fit</code> and <code>transform</code> on any of them, and it supplies <code>fit_transform</code> and the not-fitted check once. <code>fit</code> returning <code>self</code> allows <code>fit(...).transform(...)</code> chains, scikit-learn's convention. <code>_fitted = False</code> as a class attribute is a safe immutable default that each instance shadows when fitted (9.1). The scalers learn their parameters from training data only; applying them to new data (<code>25</code> and <code>40</code>) uses the stored parameters, which is why fitting on the test set is a leakage bug. scikit-learn's real <code>StandardScaler</code> follows exactly this <code>fit</code>/<code>transform</code> split.</p></div></details>
+</article>
+<article class="prob" id="p-lookup-super-and-class-methods-together" data-pid="m9-p-lookup-super-and-class-methods-together" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Lookup, super and class methods together</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">class Base:
+    tag = &quot;base&quot;
+    def __init__(self, x):
+        self.x = x
+    @classmethod
+    def build(cls, x):
+        return cls(x * 2)
+    def label(self):
+        return f&quot;{self.tag}:{self.x}&quot;
+
+class Mid(Base):
+    tag = &quot;mid&quot;
+    def label(self):
+        return &quot;[&quot; + super().label() + &quot;]&quot;
+
+class Leaf(Mid):
+    def __init__(self, x):
+        super().__init__(x + 1)
+
+r = Base.build(1).label()
+r = Mid.build(1).label()
+r = Leaf.build(1).label()
+r = [c.__name__ for c in Leaf.__mro__][:3]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>Base.build</td><td><input class="cell" data-a="&#x27;base:2&#x27;" data-s="base:2" aria-label="r at Base.build" autocomplete="off"></td></tr><tr><td>Mid.build</td><td><input class="cell" data-a="&#x27;[mid:2]&#x27;" data-s="[mid:2]" aria-label="r at Mid.build" autocomplete="off"></td></tr><tr><td>Leaf.build</td><td><input class="cell" data-a="&#x27;[mid:3]&#x27;" data-s="[mid:3]" aria-label="r at Leaf.build" autocomplete="off"></td></tr><tr><td>Leaf MRO</td><td><input class="cell" data-a="[&#x27;Leaf&#x27;, &#x27;Mid&#x27;, &#x27;Base&#x27;]" data-s="[&#x27;Leaf&#x27;, &#x27;Mid&#x27;, &#x27;Base&#x27;]" aria-label="r at Leaf MRO" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>build</code> constructs <code>cls(x * 2)</code>, so <code>Leaf</code>'s own <code>__init__</code> runs and adds one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>Base.build</td><td><code>&#x27;base:2&#x27;</code></td></tr><tr><td>Mid.build</td><td><code>&#x27;[mid:2]&#x27;</code></td></tr><tr><td>Leaf.build</td><td><code>&#x27;[mid:3]&#x27;</code></td></tr><tr><td>Leaf MRO</td><td><code>[&#x27;Leaf&#x27;, &#x27;Mid&#x27;, &#x27;Base&#x27;]</code></td></tr></table></div><p><code>build</code> doubles the value and constructs whichever class it was called on. <code>Mid</code> inherits <code>build</code> and <code>__init__</code>, and its <code>label</code> wraps the base's result, which reads <code>self.tag</code>, found on <code>Mid</code>. <code>Leaf</code> inherits <code>tag</code> and <code>label</code> from <code>Mid</code>, and its <code>__init__</code> adds one before calling the base initialiser, so <code>build(1)</code> gives 2, then 3. The MRO shows the search order behind all of it.</p></div></details>
+</article>
+<article class="prob" id="p-a-hybrid-retriever-by-composition" data-pid="m9-p-a-hybrid-retriever-by-composition" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. A hybrid retriever by composition</h3></header>
+<div class="prob-q"><p>Write <code>HybridRetriever(keyword, vector, weight=0.5)</code> composed of two retrievers, each an object with <code>search(query, k)</code> returning a list of <code>(doc_id, score)</code> pairs. <code>search(query, k)</code> asks both for <code>2 * k</code> results, normalises each list's scores to <code>[0, 1]</code> by dividing by that list's maximum (a list whose maximum is 0 contributes zeros), combines them as <code>weight * vector + (1 - weight) * keyword</code> (a document missing from one list gets 0 there), and returns the top <code>k</code> <code>(doc_id, combined)</code> pairs, highest first, ties by doc id, scores rounded to 4 decimals. Raise <code>ValueError</code> unless <code>0 &lt;= weight &lt;= 1</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">class HybridRetriever:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">class Fake:
+    def __init__(self, results):
+        self.results = results
+        self.asked = []
+    def search(self, query, k):
+        self.asked.append(k)
+        return self.results[:k]
+
+kw = Fake([("d1", 12.0), ("d2", 6.0), ("d3", 3.0)])
+vec = Fake([("d3", 0.9), ("d1", 0.45), ("d4", 0.3)])
+h = HybridRetriever(kw, vec, weight=0.5)
+assert h.search("refund", 2) == [("d1", 0.75), ("d3", 0.625)]
+assert kw.asked == [4] and vec.asked == [4]
+assert HybridRetriever(kw, vec, weight=1.0).search("x", 1) == [("d3", 1.0)]
+assert HybridRetriever(kw, Fake([]), weight=0.0).search("x", 3) == [("d1", 1.0), ("d2", 0.5), ("d3", 0.25)]
+try:
+    HybridRetriever(kw, vec, weight=1.5)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class Fake:
+    def __init__(self, results):
+        self.results = results
+        self.asked = []
+    def search(self, query, k):
+        self.asked.append(k)
+        return self.results[:k]
+
+kw = Fake([(&quot;d1&quot;, 12.0), (&quot;d2&quot;, 6.0), (&quot;d3&quot;, 3.0)])
+vec = Fake([(&quot;d3&quot;, 0.9), (&quot;d1&quot;, 0.45), (&quot;d4&quot;, 0.3)])
+h = HybridRetriever(kw, vec, weight=0.5)
+assert h.search(&quot;refund&quot;, 2) == [(&quot;d1&quot;, 0.75), (&quot;d3&quot;, 0.625)]
+assert kw.asked == [4] and vec.asked == [4]
+assert HybridRetriever(kw, vec, weight=1.0).search(&quot;x&quot;, 1) == [(&quot;d3&quot;, 1.0)]
+assert HybridRetriever(kw, Fake([]), weight=0.0).search(&quot;x&quot;, 3) == [(&quot;d1&quot;, 1.0), (&quot;d2&quot;, 0.5), (&quot;d3&quot;, 0.25)]
+try:
+    HybridRetriever(kw, vec, weight=1.5)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A helper <code>_normalise(pairs)</code> returns a dict <code>{doc_id: score / max}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Combine over the union of ids; sort with the key <code>(-score, doc_id)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class HybridRetriever:
+    def __init__(self, keyword, vector, weight=0.5):
+        if not 0 &lt;= weight &lt;= 1:
+            raise ValueError(f&quot;weight must be in [0, 1], got {weight}&quot;)
+        self.keyword = keyword
+        self.vector = vector
+        self.weight = weight
+
+    @staticmethod
+    def _normalise(pairs):
+        top = max((s for _, s in pairs), default=0)
+        return {d: (s / top if top else 0.0) for d, s in pairs}
+
+    def search(self, query, k):
+        kw = self._normalise(self.keyword.search(query, 2 * k))
+        vec = self._normalise(self.vector.search(query, 2 * k))
+        combined = {
+            d: round(self.weight * vec.get(d, 0.0) + (1 - self.weight) * kw.get(d, 0.0), 4)
+            for d in kw.keys() | vec.keys()
+        }
+        return sorted(combined.items(), key=lambda p: (-p[1], p[0]))[:k]</code></pre></div><p>The hybrid retriever <strong>has</strong> two retrievers and knows only their <code>search</code> method, so either can be BM25, a vector store, a fake, or another hybrid: composition and duck typing (9.5). The two score scales are incomparable (BM25 scores of 12 versus cosine similarities below 1), so each list is normalised before mixing; real systems also use reciprocal rank fusion, which ignores raw scores entirely. Asking each side for more candidates than needed (<code>2 * k</code>) lets a document that is second in one list and third in the other still win. Sorting by <code>(-score, id)</code> makes ties deterministic. The <code>weight</code> is validated once, at construction (9.3).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-agent-class" data-pid="m9-p-read-the-code-an-agent-class" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Read the code: an agent class</h3></header>
+<div class="prob-q"><p><code>Agent</code> holds a client and a set of tools; <code>SupportAgent</code> adds a greeting. Every agent shares one tool registry, <code>SupportAgent.create</code> returns plain <code>Agent</code>s, its tools are missing, and the repr prints the API key. Read it, find the bugs and fix them: each agent must have its own tools, <code>create</code> must build the class it is called on, <code>SupportAgent</code> must initialise its base, and the repr must mask the key (<code>Agent(model='small', key='sk-t...', tools=['search'])</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class Agent:
+    tools = {}
+
+    def __init__(self, model, api_key):
+        self.model = model
+        self.api_key = api_key
+
+    @classmethod
+    def create(cls, config):
+        return Agent(config[&quot;model&quot;], config[&quot;api_key&quot;])
+
+    def add_tool(self, name, fn):
+        self.tools[name] = fn
+        return self
+
+    def __repr__(self):
+        return f&quot;Agent(model={self.model!r}, key={self.api_key!r}, tools={sorted(self.tools)})&quot;
+
+
+class SupportAgent(Agent):
+    def __init__(self, model, api_key, greeting=&quot;Hi!&quot;):
+        self.greeting = greeting
+
+    def reply(self, text):
+        return f&quot;{self.greeting} You said: {text}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">a = Agent("small", "sk-test-123").add_tool("search", lambda q: [q])
+b = Agent("large", "sk-other-9")
+assert b.tools == {} and sorted(a.tools) == ["search"]
+assert repr(a) == "Agent(model='small', key='sk-t...', tools=['search'])" and "123" not in repr(a)
+s = SupportAgent.create({"model": "small", "api_key": "sk-test-123"})
+assert type(s) is SupportAgent and s.model == "small" and s.reply("refund") == "Hi! You said: refund"
+s.add_tool("faq", lambda q: q)
+assert sorted(s.tools) == ["faq"] and repr(s).startswith("SupportAgent(model='small', key='sk-t...'")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = Agent(&quot;small&quot;, &quot;sk-test-123&quot;).add_tool(&quot;search&quot;, lambda q: [q])
+b = Agent(&quot;large&quot;, &quot;sk-other-9&quot;)
+assert b.tools == {} and sorted(a.tools) == [&quot;search&quot;]
+assert repr(a) == &quot;Agent(model=&#x27;small&#x27;, key=&#x27;sk-t...&#x27;, tools=[&#x27;search&#x27;])&quot; and &quot;123&quot; not in repr(a)
+s = SupportAgent.create({&quot;model&quot;: &quot;small&quot;, &quot;api_key&quot;: &quot;sk-test-123&quot;})
+assert type(s) is SupportAgent and s.model == &quot;small&quot; and s.reply(&quot;refund&quot;) == &quot;Hi! You said: refund&quot;
+s.add_tool(&quot;faq&quot;, lambda q: q)
+assert sorted(s.tools) == [&quot;faq&quot;] and repr(s).startswith(&quot;SupportAgent(model=&#x27;small&#x27;, key=&#x27;sk-t...&#x27;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tools = {}</code> is a mutable class attribute; create it in <code>__init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>create</code> must return <code>cls(...)</code>; <code>SupportAgent.__init__</code> must call <code>super().__init__(model, api_key)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Mask with <code>self.api_key[:4] + "..."</code>, and use <code>type(self).__name__</code> in the repr.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Agent:
+    def __init__(self, model, api_key):
+        self.model = model
+        self.api_key = api_key
+        self.tools = {}
+
+    @classmethod
+    def create(cls, config):
+        return cls(config[&quot;model&quot;], config[&quot;api_key&quot;])
+
+    def add_tool(self, name, fn):
+        self.tools[name] = fn
+        return self
+
+    def __repr__(self):
+        masked = self.api_key[:4] + &quot;...&quot;
+        return f&quot;{type(self).__name__}(model={self.model!r}, key={masked!r}, tools={sorted(self.tools)})&quot;
+
+
+class SupportAgent(Agent):
+    def __init__(self, model, api_key, greeting=&quot;Hi!&quot;):
+        super().__init__(model, api_key)
+        self.greeting = greeting
+
+    def reply(self, text):
+        return f&quot;{self.greeting} You said: {text}&quot;</code></pre></div><p>Four bugs, one from each part of the module. The class-level <code>tools = {}</code> was one dict for every agent (9.1), so a tool added to one agent appeared on all of them: in a multi-tenant system, one customer's tools would be available to another's agent. <code>create</code> hard-coded <code>Agent(...)</code>, so the subclass's factory returned the base class (9.6). <code>SupportAgent.__init__</code> never called <code>super().__init__</code>, so <code>model</code> and <code>api_key</code> were never set (9.4). And the repr printed the full API key, which would end up in logs and tracebacks (9.3); the fixed repr masks it and uses the real class name. Each fix is small; together they are the difference between a toy and code you can deploy.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-make-an-object-immutable-" data-pid="m9-p-when-would-you-make-an-object-immutable-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>11. When would you make an object immutable, and how do you do it in Python?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Make an object immutable when it represents a <strong>value</strong>: money, a version, an interval, a label, a configuration snapshot, a cache key. Immutable objects can be shared freely without defensive copies, used as dict keys and set members (their hash cannot change), compared by value, and reasoned about easily, including across threads; "changes" return new objects, as with strings and tuples. In Python, use <code>@dataclass(frozen=True)</code> (11.3) or a <code>NamedTuple</code> for the common case; by hand, store values in <code>__slots__</code> or private attributes, expose read-only properties, block <code>__setattr__</code>, and define <code>__eq__</code> and <code>__hash__</code> from the fields. Remember that immutability is shallow: a frozen object holding a list can still have that list changed, so use tuples and frozensets inside. Keep mutable objects for things with identity and changing state: sessions, caches, connections, accumulators.</p></div></details>
+</article>
+<article class="prob" id="p-walk-through-exactly-what-happens-when-p" data-pid="m9-p-walk-through-exactly-what-happens-when-p" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>12. Walk through exactly what happens when Python evaluates <code>obj.attr</code>.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Python calls <code>type(obj).__getattribute__(obj, "attr")</code>, which for normal classes does the following. It searches the class's MRO for <code>attr</code>; if it finds a <strong>data descriptor</strong> there (an object with <code>__set__</code> or <code>__delete__</code>, such as a <code>property</code>), it calls its <code>__get__</code> and returns the result, so properties win over instance attributes. Otherwise it looks in the instance's <code>__dict__</code> (or its slots) and returns the value if present. Otherwise, if the class attribute found earlier is a <strong>non-data descriptor</strong> (a function, <code>classmethod</code>, <code>staticmethod</code>, <code>cached_property</code>), it calls its <code>__get__</code>, which for a function produces a bound method; if it is a plain class attribute, it returns it. If nothing was found, <code>__getattribute__</code> raises <code>AttributeError</code>, and Python then calls <code>__getattr__</code> if the class defines it, which is how proxies forward missing attributes. Dunder methods used by syntax (<code>len</code>, <code>+</code>) skip the instance entirely and are looked up on the type. Understanding this chain explains bound methods, property validation, <code>cached_property</code>, shadowing of class attributes and delegation.</p></div></details>
+</article>
+<article class="prob" id="p-everything-at-once" data-pid="m9-p-everything-at-once" data-type="predict" data-level="hard" data-answer="[Rect(2), Square(9), Rect(10)] Rect(10) [&#x27;rect&#x27;, &#x27;square&#x27;]
+Square(9) Square(16) True Square">
+<header class="prob-head"><h3>13. Everything at once</h3></header>
+<div class="code"><pre><code class="py">import copy
+from abc import ABC, abstractmethod
+
+class Shape(ABC):
+    registry = {}
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        Shape.registry[cls.__name__.lower()] = cls
+    @abstractmethod
+    def area(self): ...
+    def __lt__(self, other):
+        return self.area() &lt; other.area()
+    def __repr__(self):
+        return f&quot;{type(self).__name__}({self.area()})&quot;
+
+class Square(Shape):
+    def __init__(self, side):
+        self.side = side
+    def area(self):
+        return self.side ** 2
+
+class Rect(Square):
+    def __init__(self, w, h):
+        super().__init__(w)
+        self.h = h
+    def area(self):
+        return self.side * self.h
+
+shapes = [Rect(2, 5), Square(3), Rect(1, 2)]
+print(sorted(shapes), max(shapes), sorted(Shape.registry))
+c = copy.copy(shapes[1]); c.side = 4
+print(shapes[1], c, isinstance(c, Shape), Shape.registry[&quot;rect&quot;].__mro__[1].__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted</code> and <code>max</code> use <code>__lt__</code>; the registry fills when each subclass is defined; a shallow copy has its own <code>__dict__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[Rect(2), Square(9), Rect(10)] Rect(10) [&#x27;rect&#x27;, &#x27;square&#x27;]
+Square(9) Square(16) True Square</pre></div><p><code>__init_subclass__</code> registered both subclasses at definition time. Sorting uses <code>__lt__</code>, which compares areas: 2, 9 and 10, and <code>max</code> returns the largest. <code>Rect</code> inherits from <code>Square</code> and overrides <code>area</code>, so the repr (defined once in the ABC) shows each class's own area. The shallow copy of the square has its own attribute dict, so changing <code>side</code> on the copy leaves the original at 9. <code>Rect</code>'s MRO continues with <code>Square</code>, its direct base.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a provider layer for LLMs</h2>
+<p>Every LLM application ends up with a thin layer between its business logic and the providers' SDKs: one interface for every model, validated settings, usage accounting, a way to choose a provider from configuration, and wrappers such as caching. Build that layer. Every rule in the spec maps to a lesson in this module, and the tests check each one.</p>
+<article class="prob" id="p-provider-layer" data-pid="m9-p-provider-layer" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>14. Build the provider layer</h3></header>
+<div class="prob-q"><p>Implement the following.</p>
+<ul><li><strong><code>Usage(prompt=0, completion=0)</code></strong>: <code>__repr__</code> (<code>Usage(prompt=3, completion=2)</code>), <code>total</code> property, <code>__add__</code> and <code>__radd__</code> (so <code>sum()</code> works), and <code>__eq__</code>.</li><li><strong><code>Response(text, usage, provider)</code></strong>: a plain class with those three attributes.</li><li><strong><code>Provider</code></strong>, an abstract base class. Subclasses register themselves with a name in the class line, <code>class EchoProvider(Provider, name="echo")</code>, into <code>Provider.registry</code> (duplicates raise <code>ValueError</code>). <code>__init__(self, model, temperature=0.0)</code>; <code>temperature</code> is a property validated to <code>[0, 2]</code> (<code>ValueError</code>), also at construction. <code>complete(prompt)</code> strips the prompt, rejects an empty one with <code>ValueError</code>, calls the abstract <code>_generate(prompt)</code> which returns <code>(text, usage)</code>, adds the usage to a per-instance <code>usage_total</code>, and returns a <code>Response</code> with the provider's registered name. The classmethod <code>from_config(config)</code> builds the registered class named by <code>config["provider"]</code> (unknown names raise <code>KeyError</code>) with the remaining keys as keyword arguments.</li><li><strong><code>EchoProvider</code></strong> (name <code>"echo"</code>): replies with the prompt; usage counts the words of the prompt and of the reply.</li><li><strong><code>ReverseProvider</code></strong> (name <code>"reverse"</code>): replies with the prompt's words reversed; same usage rule.</li><li><strong><code>CachedProvider(inner)</code></strong>: composition, not inheritance. Its <code>complete(prompt)</code> returns the cached <code>Response</code> for a prompt already seen (after stripping), and otherwise delegates to <code>inner.complete</code>. It counts <code>hits</code> and <code>misses</code>, and exposes <code>usage_total</code> as a read-only property that forwards to the inner provider.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">from abc import ABC, abstractmethod
+
+
+class Usage:
+    pass
+
+
+class Response:
+    pass
+
+
+class Provider(ABC):
+    pass
+
+
+class EchoProvider(Provider, name=&quot;echo&quot;):
+    pass
+
+
+class ReverseProvider(Provider, name=&quot;reverse&quot;):
+    pass
+
+
+class CachedProvider:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert sorted(Provider.registry) == ["echo", "reverse"] and Provider.registry["echo"] is EchoProvider
+u = Usage(3, 2) + Usage(1, 1)
+assert u == Usage(4, 3) and u.total == 7 and repr(u) == "Usage(prompt=4, completion=3)"
+assert sum([Usage(1, 2), Usage(3, 4)]) == Usage(4, 6)
+
+echo = Provider.from_config({"provider": "echo", "model": "e-1", "temperature": 0.5})
+assert type(echo) is EchoProvider and echo.temperature == 0.5 and echo.model == "e-1"
+r = echo.complete("  refund policy please ")
+assert (r.text, r.usage, r.provider) == ("refund policy please", Usage(3, 3), "echo")
+rev = ReverseProvider("r-1")
+assert rev.complete("one two three").text == "three two one"
+echo.complete("hi")
+assert echo.usage_total == Usage(4, 4) and rev.usage_total == Usage(3, 3)
+
+for bad in [lambda: echo.complete("   "), lambda: EchoProvider("x", temperature=3)]:
+    try:
+        bad()
+        assert False
+    except ValueError:
+        pass
+try:
+    echo.temperature = -1
+    assert False
+except ValueError:
+    assert echo.temperature == 0.5
+try:
+    Provider.from_config({"provider": "nope", "model": "x"})
+    assert False
+except KeyError:
+    pass
+try:
+    Provider("x")
+    assert False
+except TypeError:
+    pass
+try:
+    class AnotherEcho(Provider, name="echo"):
+        def _generate(self, prompt):
+            return prompt, Usage()
+    assert False
+except ValueError:
+    pass
+
+cached = CachedProvider(EchoProvider("e-2"))
+first = cached.complete("refund?")
+again = cached.complete(" refund? ")
+assert again is first and (cached.hits, cached.misses) == (1, 1) and cached.usage_total == Usage(1, 1)
+cached.complete("other")
+assert cached.misses == 2 and cached.usage_total == Usage(2, 2)
+try:
+    cached.usage_total = Usage()
+    assert False
+except AttributeError:
+    pass
+assert not isinstance(cached, Provider)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 10 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert sorted(Provider.registry) == [&quot;echo&quot;, &quot;reverse&quot;] and Provider.registry[&quot;echo&quot;] is EchoProvider
+u = Usage(3, 2) + Usage(1, 1)
+assert u == Usage(4, 3) and u.total == 7 and repr(u) == &quot;Usage(prompt=4, completion=3)&quot;
+assert sum([Usage(1, 2), Usage(3, 4)]) == Usage(4, 6)
+
+echo = Provider.from_config({&quot;provider&quot;: &quot;echo&quot;, &quot;model&quot;: &quot;e-1&quot;, &quot;temperature&quot;: 0.5})
+assert type(echo) is EchoProvider and echo.temperature == 0.5 and echo.model == &quot;e-1&quot;
+r = echo.complete(&quot;  refund policy please &quot;)
+assert (r.text, r.usage, r.provider) == (&quot;refund policy please&quot;, Usage(3, 3), &quot;echo&quot;)
+rev = ReverseProvider(&quot;r-1&quot;)
+assert rev.complete(&quot;one two three&quot;).text == &quot;three two one&quot;
+echo.complete(&quot;hi&quot;)
+assert echo.usage_total == Usage(4, 4) and rev.usage_total == Usage(3, 3)
+
+for bad in [lambda: echo.complete(&quot;   &quot;), lambda: EchoProvider(&quot;x&quot;, temperature=3)]:
+    try:
+        bad()
+        assert False
+    except ValueError:
+        pass
+try:
+    echo.temperature = -1
+    assert False
+except ValueError:
+    assert echo.temperature == 0.5
+try:
+    Provider.from_config({&quot;provider&quot;: &quot;nope&quot;, &quot;model&quot;: &quot;x&quot;})
+    assert False
+except KeyError:
+    pass
+try:
+    Provider(&quot;x&quot;)
+    assert False
+except TypeError:
+    pass
+try:
+    class AnotherEcho(Provider, name=&quot;echo&quot;):
+        def _generate(self, prompt):
+            return prompt, Usage()
+    assert False
+except ValueError:
+    pass
+
+cached = CachedProvider(EchoProvider(&quot;e-2&quot;))
+first = cached.complete(&quot;refund?&quot;)
+again = cached.complete(&quot; refund? &quot;)
+assert again is first and (cached.hits, cached.misses) == (1, 1) and cached.usage_total == Usage(1, 1)
+cached.complete(&quot;other&quot;)
+assert cached.misses == 2 and cached.usage_total == Usage(2, 2)
+try:
+    cached.usage_total = Usage()
+    assert False
+except AttributeError:
+    pass
+assert not isinstance(cached, Provider)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__init_subclass__(cls, *, name, **kwargs)</code> registers each provider; check for duplicates before storing.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>__init__</code>, assign <code>self.temperature = temperature</code> so the property's setter validates; set <code>self.usage_total = Usage()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from_config</code> copies the dict, pops <code>"provider"</code>, looks up the class, and returns <code>cls_found(**rest)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 4</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>CachedProvider</code> stores the inner provider and a dict from stripped prompt to <code>Response</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from abc import ABC, abstractmethod
+
+
+class Usage:
+    def __init__(self, prompt=0, completion=0):
+        self.prompt = prompt
+        self.completion = completion
+
+    def __repr__(self):
+        return f&quot;Usage(prompt={self.prompt}, completion={self.completion})&quot;
+
+    @property
+    def total(self):
+        return self.prompt + self.completion
+
+    def __add__(self, other):
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return Usage(self.prompt + other.prompt, self.completion + other.completion)
+
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __eq__(self, other):
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return (self.prompt, self.completion) == (other.prompt, other.completion)
+
+
+class Response:
+    def __init__(self, text, usage, provider):
+        self.text = text
+        self.usage = usage
+        self.provider = provider
+
+
+class Provider(ABC):
+    registry = {}
+
+    def __init_subclass__(cls, *, name, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if name in Provider.registry:
+            raise ValueError(f&quot;provider {name!r} is already registered&quot;)
+        cls.provider_name = name
+        Provider.registry[name] = cls
+
+    def __init__(self, model, temperature=0.0):
+        self.model = model
+        self.temperature = temperature
+        self.usage_total = Usage()
+
+    @property
+    def temperature(self):
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value):
+        if not 0 &lt;= value &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {value}&quot;)
+        self._temperature = value
+
+    @abstractmethod
+    def _generate(self, prompt):
+        ...
+
+    def complete(self, prompt):
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError(&quot;prompt must not be empty&quot;)
+        text, usage = self._generate(prompt)
+        self.usage_total = self.usage_total + usage
+        return Response(text, usage, self.provider_name)
+
+    @classmethod
+    def from_config(cls, config):
+        options = dict(config)
+        name = options.pop(&quot;provider&quot;)
+        return cls.registry[name](**options)
+
+
+class EchoProvider(Provider, name=&quot;echo&quot;):
+    def _generate(self, prompt):
+        return prompt, Usage(len(prompt.split()), len(prompt.split()))
+
+
+class ReverseProvider(Provider, name=&quot;reverse&quot;):
+    def _generate(self, prompt):
+        text = &quot; &quot;.join(reversed(prompt.split()))
+        return text, Usage(len(prompt.split()), len(text.split()))
+
+
+class CachedProvider:
+    def __init__(self, inner):
+        self.inner = inner
+        self._cache = {}
+        self.hits = 0
+        self.misses = 0
+
+    def complete(self, prompt):
+        key = prompt.strip()
+        if key in self._cache:
+            self.hits += 1
+            return self._cache[key]
+        self.misses += 1
+        response = self.inner.complete(prompt)
+        self._cache[key] = response
+        return response
+
+    @property
+    def usage_total(self):
+        return self.inner.usage_total</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Classes and instances (9.1):</strong> each provider owns its <code>usage_total</code>, created in <code>__init__</code>; the only shared mutable state is the registry, written deliberately through <code>Provider.registry</code>.</li><li><strong>Dunder methods (9.2):</strong> <code>Usage</code> behaves like a number: <code>+</code>, <code>sum()</code> (thanks to <code>__radd__</code>), equality and a readable repr.</li><li><strong>Properties (9.3):</strong> <code>temperature</code> is validated on assignment <strong>and</strong> at construction, and a failed assignment keeps the old value; <code>total</code> and the cache's <code>usage_total</code> are read-only views.</li><li><strong>Inheritance (9.4):</strong> <code>complete</code> is a template method; providers implement only <code>_generate</code>; <code>__init_subclass__</code> registers each one by the name given in its class line and rejects duplicates.</li><li><strong>Composition and ABCs (9.5):</strong> <code>Provider</code> cannot be instantiated without <code>_generate</code>; <code>CachedProvider</code> is not a <code>Provider</code> subclass but has the same <code>complete</code> method, so it wraps any provider.</li><li><strong>Class methods (9.6):</strong> <code>from_config</code> picks the class from configuration and builds it, the way a settings file selects a model.</li></ul>
+<p>Real layers add streaming, tool calling and async methods, but they keep this shape: one small interface, implementations registered by name, shared behaviour in the base, and cross-cutting features as wrappers (and Module 11 will let type checkers verify the whole structure).</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Own your state: create it in <code>__init__</code>, never in class attributes or mutable defaults, and hand out copies, not internals.</li><li>Make objects feel native with dunders; keep <code>__eq__</code> and <code>__hash__</code> consistent; return <code>NotImplemented</code> for foreign types.</li><li>Guard invariants with properties and validating methods, including in <code>__init__</code>.</li><li>Inherit for real "is a" relationships with template methods and <code>super()</code>; compose and inject for everything else.</li><li>Alternative constructors and registries are classmethods (or <code>__init_subclass__</code>) that build <code>cls(...)</code>; copy objects according to what they mean.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

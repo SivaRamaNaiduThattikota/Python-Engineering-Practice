@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9.2 · Dunder methods</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m9-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 9 · OOP</span></div>
+  <h1>9.2 Dunder methods</h1>
+  <p>Double-underscore methods are the hooks that make your objects work with Python's syntax and built-ins: <code>print</code>, <code>==</code>, <code>len</code>, <code>in</code>, <code>[]</code>, <code>+</code>, <code>sorted</code>, <code>if</code>, and calling. <code>__repr__</code> and <code>__str__</code>, equality and hashing and the rule that links them, ordering, the container protocol, arithmetic with <code>NotImplemented</code>, and callable objects. Applied to money, token usage, versions, batches and vectors.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="hooks">
+<h2><span class="n">1</span>Hooks for syntax and built-ins</h2>
+<p>Python's syntax and built-in functions are translated into method calls on your objects. <code>len(x)</code> calls <code>x.__len__()</code>; <code>x == y</code> calls <code>x.__eq__(y)</code>; <code>x + y</code> calls <code>x.__add__(y)</code>; <code>x[i]</code> calls <code>x.__getitem__(i)</code>; <code>str(x)</code> calls <code>x.__str__()</code>; <code>if x:</code> calls <code>x.__bool__()</code>. These methods are called <strong>dunder</strong> methods ("double underscore") or "special methods", and together they form Python's <strong>data model</strong>. Defining them in your class makes your objects behave like built-in ones, with the same syntax.</p>
+<p>This is how libraries feel native. A NumPy array supports <code>a + b</code> and <code>a[1:3]</code> because it defines <code>__add__</code> and <code>__getitem__</code>; a pandas DataFrame supports <code>df["col"]</code> and <code>len(df)</code>; a PyTorch model is called like a function, <code>model(x)</code>, because it defines <code>__call__</code>. The rule for your own code: implement the dunders that match what your object <strong>is</strong> (a container, a number, a value), and you almost never call them directly; you use the syntax, and Python calls them.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">hooks.py</span><button class="copy">Copy</button></div><pre><code class="py">class Playlist:
+    def __init__(self, songs):
+        self.songs = list(songs)
+
+    def __len__(self):
+        return len(self.songs)
+
+    def __getitem__(self, i):
+        return self.songs[i]
+
+    def __contains__(self, song):
+        return song in self.songs
+
+p = Playlist([&quot;intro&quot;, &quot;verse&quot;, &quot;outro&quot;])
+print(len(p), p[0], p[-1], &quot;verse&quot; in p, p[1:])
+print([s.upper() for s in p])        # iteration works through __getitem__ (10.1)
+print(len(p) == p.__len__())</code></pre><div class="out"><span class="ol">Output</span><pre>3 intro outro True [&#x27;verse&#x27;, &#x27;outro&#x27;]
+[&#x27;INTRO&#x27;, &#x27;VERSE&#x27;, &#x27;OUTRO&#x27;]
+True</pre></div></div>
+<p>Defining <code>__getitem__</code> with integer indexes already makes the object iterable: a <code>for</code> loop falls back to calling <code>p[0]</code>, <code>p[1]</code>, ... until <code>IndexError</code>. Lesson 10.1 shows the proper iteration protocol, <code>__iter__</code>. Note that dunder methods are looked up on the <strong>class</strong>, not the instance: assigning <code>p.__len__ = ...</code> on one object does not change what <code>len(p)</code> does (problem 16).</p>
+</section>
+<section class="sec" id="repr">
+<h2><span class="n">2</span><code>__repr__</code> and <code>__str__</code>: how an object prints</h2>
+<p>Without help, an object prints as <code>&lt;__main__.Money object at 0x7f...&gt;</code>, which tells you nothing in a log or a debugger. Two methods control the text. <strong><code>__repr__</code></strong> is for developers: it should be unambiguous and, ideally, look like the code that would recreate the object, <code>Money(12.5, 'EUR')</code>. <strong><code>__str__</code></strong> is for end users: readable, <code>12.50 EUR</code>. <code>print(x)</code> and <code>str(x)</code> use <code>__str__</code>; the REPL, debuggers, <code>repr(x)</code>, the <code>!r</code> conversion in f-strings and the display of objects <strong>inside containers</strong> use <code>__repr__</code>. If you define only one, define <code>__repr__</code>: <code>str</code> falls back to it, but not the other way round.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">repr_str.py</span><button class="copy">Copy</button></div><pre><code class="py">class Money:
+    def __init__(self, amount, currency):
+        self.amount = amount
+        self.currency = currency
+
+    def __repr__(self):
+        return f&quot;Money({self.amount!r}, {self.currency!r})&quot;
+
+    def __str__(self):
+        return f&quot;{self.amount:.2f} {self.currency}&quot;
+
+m = Money(12.5, &quot;EUR&quot;)
+print(m)
+print(repr(m), f&quot;{m} | {m!r}&quot;)
+print([m, Money(3, &quot;USD&quot;)])           # containers show the repr of their items</code></pre><div class="out"><span class="ol">Output</span><pre>12.50 EUR
+Money(12.5, &#x27;EUR&#x27;) 12.50 EUR | Money(12.5, &#x27;EUR&#x27;)
+[Money(12.5, &#x27;EUR&#x27;), Money(3, &#x27;USD&#x27;)]</pre></div></div>
+<p>Use <code>!r</code> for the fields inside <code>__repr__</code>, so strings show their quotes and <code>Money('12.5', 'EUR')</code> (a string amount, probably a bug) is distinguishable from <code>Money(12.5, 'EUR')</code>. A good repr pays for itself the first time you print a list of objects while debugging, and logging libraries and test failure messages rely on it. Keep it free of secrets: an API client's repr should not show its key.</p>
+</section>
+<section class="sec" id="eq">
+<h2><span class="n">3</span>Equality and hashing</h2>
+<p>By default, <code>==</code> between two instances of your class compares <strong>identity</strong>: two separate <code>Money(12.5, "EUR")</code> objects are not equal (2.1). Defining <strong><code>__eq__(self, other)</code></strong> lets you decide what equality means, usually "all the fields that define the value are equal". If <code>other</code> is not something you know how to compare, return the special value <strong><code>NotImplemented</code></strong> (not <code>False</code>, and do not raise): Python then tries the other operand's <code>__eq__</code>, and if that also gives up, falls back to identity. Returning <code>NotImplemented</code> keeps <code>m == "text"</code> working and <code>False</code>, instead of crashing with an <code>AttributeError</code> (problem 6).</p>
+<p>Equality is tied to <strong>hashing</strong>. Sets and dict keys find objects by their <code>__hash__</code> value first and then confirm with <code>__eq__</code>, so the rule is: <strong>objects that compare equal must have equal hashes</strong>. To protect you, Python sets <code>__hash__</code> to <code>None</code> as soon as a class defines <code>__eq__</code> without <code>__hash__</code>, which makes instances <strong>unhashable</strong>: putting one in a set raises <code>TypeError</code> (problem 3). If your objects are values that should work in sets and as keys, define <code>__hash__</code> from the <strong>same fields</strong> as <code>__eq__</code>, typically <code>hash((self.a, self.b))</code>, and treat those fields as immutable: if a field changes while the object is in a set, the set can no longer find it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">eq_hash.py</span><button class="copy">Copy</button></div><pre><code class="py">class Money:
+    def __init__(self, amount, currency):
+        self.amount = amount
+        self.currency = currency
+
+    def __repr__(self):
+        return f&quot;Money({self.amount!r}, {self.currency!r})&quot;
+
+    def __eq__(self, other):
+        if not isinstance(other, Money):
+            return NotImplemented
+        return (self.amount, self.currency) == (other.amount, other.currency)
+
+    def __hash__(self):
+        return hash((self.amount, self.currency))
+
+a, b = Money(5, &quot;EUR&quot;), Money(5, &quot;EUR&quot;)
+print(a == b, a is b, a == &quot;5 EUR&quot;, a != Money(5, &quot;USD&quot;))
+print(len({a, b, Money(5, &quot;USD&quot;)}), {a: &quot;price&quot;}[b])     # 2 distinct values; b finds a&#x27;s entry
+
+class NoHash:
+    def __eq__(self, other):
+        return True
+try:
+    {NoHash()}
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>True False False True
+2 price
+TypeError: cannot use &#x27;NoHash&#x27; as a set element (unhashable type: &#x27;NoHash&#x27;)</pre></div></div>
+<p><code>!=</code> uses <code>__ne__</code>, which by default inverts <code>__eq__</code>, so you rarely define it. Mutable objects whose equality depends on changing state (a conversation, a cache) should usually stay unhashable: equal now does not mean equal later. Dataclasses (11.3) generate <code>__eq__</code> for you, and <code>@dataclass(frozen=True)</code> generates a matching <code>__hash__</code> too.</p>
+</section>
+<section class="sec" id="order">
+<h2><span class="n">4</span>Ordering</h2>
+<p><code>sorted</code>, <code>min</code>, <code>max</code> and <code>&lt;</code> use <strong><code>__lt__</code></strong> ("less than"), and the other comparisons use <code>__le__</code>, <code>__gt__</code> and <code>__ge__</code>. Without them, sorting your objects raises <code>TypeError: '&lt;' not supported</code>. The decorator <code>functools.total_ordering</code> fills in the other three from <code>__eq__</code> and <code>__lt__</code>. As with equality, return <code>NotImplemented</code> for types you cannot compare. For a value type with a natural order (versions, money in one currency, dates), define the ordering by comparing <strong>tuples</strong> of fields, which compare element by element (4.3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">ordering.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+@functools.total_ordering
+class Version:
+    def __init__(self, text):
+        self.parts = tuple(int(p) for p in text.split(&quot;.&quot;))
+
+    def __repr__(self):
+        return f&quot;Version({&#x27;.&#x27;.join(map(str, self.parts))!r})&quot;
+
+    def __eq__(self, other):
+        return self.parts == other.parts if isinstance(other, Version) else NotImplemented
+
+    def __lt__(self, other):
+        return self.parts &lt; other.parts if isinstance(other, Version) else NotImplemented
+
+    def __hash__(self):
+        return hash(self.parts)
+
+versions = [Version(v) for v in [&quot;1.10.0&quot;, &quot;1.9.2&quot;, &quot;2.0&quot;, &quot;1.9.10&quot;]]
+print(sorted(versions), max(versions))
+print(Version(&quot;1.10&quot;) &gt; Version(&quot;1.9&quot;), &quot;1.10&quot; &gt; &quot;1.9&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>[Version(&#x27;1.9.2&#x27;), Version(&#x27;1.9.10&#x27;), Version(&#x27;1.10.0&#x27;), Version(&#x27;2.0&#x27;)] Version(&#x27;2.0&#x27;)
+True False</pre></div></div>
+<p>The last line shows why ordering by the right representation matters: as strings, <code>"1.10"</code> sorts before <code>"1.9"</code>, because strings compare character by character (5.1). Comparing tuples of integers gives the order people expect (problem 10). When objects have no single natural order (documents by score, by date, by length), do not define <code>__lt__</code> at all; pass a <code>key</code> function to <code>sorted</code> instead, which is clearer at the call site.</p>
+</section>
+<section class="sec" id="containers">
+<h2><span class="n">5</span>Containers and truthiness</h2>
+<p>An object that holds items can implement the <strong>container</strong> methods: <code>__len__</code> for <code>len</code>, <code>__getitem__</code> for <code>obj[key]</code> (an integer, a slice or a dict-like key: the method receives exactly what is inside the brackets), <code>__setitem__</code> and <code>__delitem__</code> for assignment and <code>del</code>, <code>__contains__</code> for <code>in</code>, and <code>__iter__</code> for loops (10.1). Each is optional; implement the ones your object should support. When <code>obj[1:3]</code> is used, <code>__getitem__</code> receives a <code>slice</code> object; returning an instance of your own class keeps the type, as lists and DataFrames do.</p>
+<p><strong>Truthiness</strong> (<code>if obj:</code>, <code>while obj:</code>, <code>bool(obj)</code>) calls <code>__bool__</code>, and if there is no <code>__bool__</code>, falls back to <code>__len__</code> (empty means false). Without either, every instance is truthy. Defining <code>__len__</code> on a container therefore makes empty containers falsy, exactly like lists, which is usually what you want, but can surprise: <code>if result:</code> on an empty result object is false even though the object exists. Use <code>if result is not None:</code> when you mean existence (1.2).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">containers.py</span><button class="copy">Copy</button></div><pre><code class="py">class Batch:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def __repr__(self):
+        return f&quot;Batch({self.items!r})&quot;
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return Batch(self.items[key])       # slicing keeps the type
+        return self.items[key]
+
+    def __contains__(self, item):
+        return item in self.items
+
+b = Batch([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;])
+print(len(b), b[0], b[1:3], &quot;c&quot; in b, bool(b), bool(Batch([])))
+empty = Batch([])
+print(&quot;empty is falsy&quot; if not empty else &quot;truthy&quot;, empty is not None)</code></pre><div class="out"><span class="ol">Output</span><pre>4 a Batch([&#x27;b&#x27;, &#x27;c&#x27;]) True True False
+empty is falsy True</pre></div></div>
+</section>
+<section class="sec" id="arith">
+<h2><span class="n">6</span>Arithmetic, <code>NotImplemented</code> and calling</h2>
+<p>Operators map to methods too: <code>+</code> to <code>__add__</code>, <code>-</code> to <code>__sub__</code>, <code>*</code> to <code>__mul__</code>, <code>@</code> to <code>__matmul__</code> (matrix product), <code>abs()</code> to <code>__abs__</code>, unary <code>-</code> to <code>__neg__</code>. For <code>x + y</code>, Python first calls <code>x.__add__(y)</code>; if that returns <code>NotImplemented</code> (or does not exist), it calls the <strong>reflected</strong> method <code>y.__radd__(x)</code>. That second chance is what makes <code>2 * vector</code> work when only the vector knows how to multiply, and it is why <code>sum()</code> needs <code>__radd__</code>: <code>sum</code> starts from <code>0</code>, so its first step is <code>0 + first_item</code>, and <code>int</code> does not know your type (problem 12).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">arithmetic.py</span><button class="copy">Copy</button></div><pre><code class="py">class Usage:
+    def __init__(self, prompt=0, completion=0):
+        self.prompt = prompt
+        self.completion = completion
+
+    def __repr__(self):
+        return f&quot;Usage(prompt={self.prompt}, completion={self.completion})&quot;
+
+    def __add__(self, other):
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return Usage(self.prompt + other.prompt, self.completion + other.completion)
+
+    def __radd__(self, other):
+        if other == 0:                      # sum() starts with 0
+            return self
+        return self.__add__(other)
+
+calls = [Usage(120, 40), Usage(300, 80), Usage(50, 10)]
+print(calls[0] + calls[1], sum(calls))
+try:
+    calls[0] + 5
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>Usage(prompt=420, completion=120) Usage(prompt=470, completion=130)
+TypeError: unsupported operand type(s) for +: &#x27;Usage&#x27; and &#x27;int&#x27;</pre></div></div>
+<p>Operators should return <strong>new</strong> objects and leave the operands unchanged, as numbers do; in-place versions (<code>__iadd__</code> for <code>+=</code>, 2.2) may modify <code>self</code> and return it. Finally, <strong><code>__call__</code></strong> makes instances callable like functions: <code>scorer(text)</code> runs <code>scorer.__call__(text)</code>. A callable object is a function with state and configuration: a scorer with weights, a decorator class that keeps statistics, a PyTorch module (<code>model(x)</code> calls <code>__call__</code>, which runs hooks and then <code>forward</code>).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">callable.py</span><button class="copy">Copy</button></div><pre><code class="py">class KeywordScorer:
+    def __init__(self, weights):
+        self.weights = dict(weights)
+        self.calls = 0
+
+    def __call__(self, text):
+        self.calls += 1
+        words = text.lower().split()
+        return sum(self.weights.get(w, 0) for w in words)
+
+    def __repr__(self):
+        return f&quot;KeywordScorer({len(self.weights)} weights, {self.calls} calls)&quot;
+
+score = KeywordScorer({&quot;refund&quot;: 2, &quot;urgent&quot;: 3, &quot;thanks&quot;: -1})
+docs = [&quot;Thanks for the help&quot;, &quot;URGENT refund needed&quot;, &quot;refund status&quot;]
+print(sorted(docs, key=score, reverse=True), score, callable(score))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;URGENT refund needed&#x27;, &#x27;refund status&#x27;, &#x27;Thanks for the help&#x27;] KeywordScorer(3 weights, 3 calls) True</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-how-objects-print" data-pid="m9-2-how-objects-print" data-type="predict" data-level="easy" data-answer="Tag(&#x27;eu&#x27;) #vip
+[Tag(&#x27;eu&#x27;), Tag(&#x27;vip&#x27;)] #vip Tag(&#x27;vip&#x27;) Tag(&#x27;eu&#x27;)
+#vip Tag(&#x27;vip&#x27;)">
+<header class="prob-head"><h3>1. How objects print</h3></header>
+<div class="code"><pre><code class="py">class Tag:
+    def __init__(self, name):
+        self.name = name
+    def __repr__(self):
+        return f&quot;Tag({self.name!r})&quot;
+
+class Label(Tag):
+    def __str__(self):
+        return f&quot;#{self.name}&quot;
+
+t, l = Tag(&quot;eu&quot;), Label(&quot;vip&quot;)
+print(t, l)
+print([t, l], f&quot;{l} {l!r}&quot;, str(t))
+print(&quot;{}&quot;.format(l), repr(l))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>print</code> and <code>str</code> use <code>__str__</code>, falling back to <code>__repr__</code>. Containers and <code>!r</code> always use <code>__repr__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Tag(&#x27;eu&#x27;) #vip
+[Tag(&#x27;eu&#x27;), Tag(&#x27;vip&#x27;)] #vip Tag(&#x27;vip&#x27;) Tag(&#x27;eu&#x27;)
+#vip Tag(&#x27;vip&#x27;)</pre></div><p><code>Tag</code> defines only <code>__repr__</code>, so <code>print(t)</code> and <code>str(t)</code> fall back to it. <code>Label</code> inherits that <code>__repr__</code> and adds a <code>__str__</code>, so printing it shows <code>#vip</code>, while the list display and <code>!r</code> use the repr. <code>format</code> uses <code>__str__</code> as well (through <code>__format__</code>'s default).</p></div></details>
+</article>
+<article class="prob" id="p-a-money-value" data-pid="m9-2-a-money-value" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A money value</h3></header>
+<div class="prob-q"><p>Write a class <code>Money(amount, currency)</code> with <code>__repr__</code> returning <code>Money(12.5, 'EUR')</code>, <code>__str__</code> returning <code>"12.50 EUR"</code>, <code>__eq__</code> comparing amount and currency (and returning <code>NotImplemented</code> for other types), and a matching <code>__hash__</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class Money:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">m = Money(12.5, "EUR")
+assert repr(m) == "Money(12.5, 'EUR')" and str(m) == "12.50 EUR" and f"{m}" == "12.50 EUR"
+assert m == Money(12.5, "EUR") and m != Money(12.5, "USD") and m != Money(10, "EUR")
+assert (m == "12.50 EUR") is False
+assert len({m, Money(12.5, "EUR"), Money(3, "EUR")}) == 2
+assert [Money(1, "USD")] == [Money(1, "USD")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">m = Money(12.5, &quot;EUR&quot;)
+assert repr(m) == &quot;Money(12.5, &#x27;EUR&#x27;)&quot; and str(m) == &quot;12.50 EUR&quot; and f&quot;{m}&quot; == &quot;12.50 EUR&quot;
+assert m == Money(12.5, &quot;EUR&quot;) and m != Money(12.5, &quot;USD&quot;) and m != Money(10, &quot;EUR&quot;)
+assert (m == &quot;12.50 EUR&quot;) is False
+assert len({m, Money(12.5, &quot;EUR&quot;), Money(3, &quot;EUR&quot;)}) == 2
+assert [Money(1, &quot;USD&quot;)] == [Money(1, &quot;USD&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare tuples of the fields in <code>__eq__</code>, and hash the same tuple in <code>__hash__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Money:
+    def __init__(self, amount, currency):
+        self.amount = amount
+        self.currency = currency
+
+    def __repr__(self):
+        return f&quot;Money({self.amount!r}, {self.currency!r})&quot;
+
+    def __str__(self):
+        return f&quot;{self.amount:.2f} {self.currency}&quot;
+
+    def __eq__(self, other):
+        if not isinstance(other, Money):
+            return NotImplemented
+        return (self.amount, self.currency) == (other.amount, other.currency)
+
+    def __hash__(self):
+        return hash((self.amount, self.currency))</code></pre></div><p>The repr uses <code>!r</code> so the currency appears with quotes and the output looks like the call that builds it. Equality and hashing use the same tuple of fields, which satisfies the rule "equal objects have equal hashes", so the set keeps one of the two equal values. Comparing with a string returns <code>NotImplemented</code>, Python tries the string's comparison, which also declines, and the result falls back to <code>False</code>, with no error. List equality compares items with <code>==</code>, so it works through your <code>__eq__</code>. Real money code would use <code>decimal.Decimal</code> for amounts (1.1).</p></div></details>
+</article>
+<article class="prob" id="p-equal-objects-that-cannot-go-in-a-set" data-pid="m9-2-equal-objects-that-cannot-go-in-a-set" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>3. Equal objects that cannot go in a set</h3></header>
+<div class="prob-q"><p><code>Chunk</code> defines equality by document id and position so duplicate chunks can be removed with a set, but building the set raises <code>TypeError: unhashable type</code>. Fix the class.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Chunk:
+    def __init__(self, doc_id, position, text):
+        self.doc_id = doc_id
+        self.position = position
+        self.text = text
+
+    def __eq__(self, other):
+        if not isinstance(other, Chunk):
+            return NotImplemented
+        return (self.doc_id, self.position) == (other.doc_id, other.position)
+</textarea>
+<script type="text/plain" class="prob-tests">chunks = [Chunk("faq", 0, "Refunds take 5 days."), Chunk("faq", 1, "Contact us."), Chunk("faq", 0, "Refunds take 5 days.")]
+unique = set(chunks)
+assert len(unique) == 2
+assert Chunk("faq", 0, "edited text") in unique
+assert {Chunk("a", 1, "x"): "seen"}[Chunk("a", 1, "y")] == "seen"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">chunks = [Chunk(&quot;faq&quot;, 0, &quot;Refunds take 5 days.&quot;), Chunk(&quot;faq&quot;, 1, &quot;Contact us.&quot;), Chunk(&quot;faq&quot;, 0, &quot;Refunds take 5 days.&quot;)]
+unique = set(chunks)
+assert len(unique) == 2
+assert Chunk(&quot;faq&quot;, 0, &quot;edited text&quot;) in unique
+assert {Chunk(&quot;a&quot;, 1, &quot;x&quot;): &quot;seen&quot;}[Chunk(&quot;a&quot;, 1, &quot;y&quot;)] == &quot;seen&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Defining <code>__eq__</code> sets <code>__hash__</code> to <code>None</code>. Add a <code>__hash__</code> built from the same fields that <code>__eq__</code> compares.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Chunk:
+    def __init__(self, doc_id, position, text):
+        self.doc_id = doc_id
+        self.position = position
+        self.text = text
+
+    def __eq__(self, other):
+        if not isinstance(other, Chunk):
+            return NotImplemented
+        return (self.doc_id, self.position) == (other.doc_id, other.position)
+
+    def __hash__(self):
+        return hash((self.doc_id, self.position))</code></pre></div><p>When a class defines <code>__eq__</code>, Python removes the inherited identity-based hash, because it would violate "equal objects must hash equally": two equal chunks would land in different places in a set. Hashing exactly the fields that <code>__eq__</code> compares restores the guarantee. The text is deliberately left out of both, so an edited chunk at the same position counts as the same chunk, which is the identity a vector store uses for upserts. Those identity fields should not be changed while the object is in a set or used as a key.</p></div></details>
+</article>
+<article class="prob" id="p-length-truth-and-existence" data-pid="m9-2-length-truth-and-existence" data-type="predict" data-level="easy" data-answer="False True 1
+nothing True
+False True True
+fallback">
+<header class="prob-head"><h3>4. Length, truth and existence</h3></header>
+<div class="code"><pre><code class="py">class Results:
+    def __init__(self, hits):
+        self.hits = list(hits)
+    def __len__(self):
+        return len(self.hits)
+
+class Flag:
+    def __init__(self, on):
+        self.on = on
+    def __bool__(self):
+        return self.on
+
+r_empty, r_full = Results([]), Results([&quot;a&quot;])
+print(bool(r_empty), bool(r_full), len(r_full))
+print(&quot;found&quot; if r_empty else &quot;nothing&quot;, r_empty is not None)
+print(bool(Flag(False)), bool(Flag(True)), bool(object()))
+x = Results([]) or &quot;fallback&quot;
+print(x)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>__bool__</code>, truthiness falls back to <code>__len__</code>; without either, objects are truthy.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>False True 1
+nothing True
+False True True
+fallback</pre></div><p><code>Results</code> has no <code>__bool__</code>, so <code>bool</code> uses <code>__len__</code>: empty results are falsy, like an empty list, even though the object exists, which <code>is not None</code> confirms. <code>Flag</code> decides truthiness explicitly. A plain <code>object()</code> is truthy. <code>or</code> returns its first truthy operand (1.2), so an empty <code>Results</code> is skipped in favour of the fallback, a subtle effect of defining <code>__len__</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-token-usage-that-adds-up" data-pid="m9-2-token-usage-that-adds-up" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Token usage that adds up</h3></header>
+<div class="prob-q"><p>Write a class <code>Usage(prompt=0, completion=0, cost=0.0)</code> with <code>__repr__</code> (<code>Usage(prompt=120, completion=40, cost=0.002)</code>), <code>__add__</code> returning a new <code>Usage</code> with summed fields (and <code>NotImplemented</code> for other types), <code>__radd__</code> so <code>sum(usages)</code> works, <code>__eq__</code>, a method <code>total()</code> returning prompt + completion tokens, and <code>__bool__</code> that is false only when all fields are zero.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class Usage:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a = Usage(120, 40, 0.002)
+b = Usage(300, 80, 0.005)
+assert repr(a) == "Usage(prompt=120, completion=40, cost=0.002)"
+s = a + b
+assert (s.prompt, s.completion, round(s.cost, 6)) == (420, 120, 0.007) and a.prompt == 120
+total = sum([a, b, Usage(5, 5)])
+assert total == Usage(425, 125, 0.007) and total.total() == 550
+assert not Usage() and bool(Usage(cost=0.1))
+try:
+    a + 1
+    assert False
+except TypeError:
+    pass
+assert sum([]) == 0 and sum([], Usage()) == Usage()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = Usage(120, 40, 0.002)
+b = Usage(300, 80, 0.005)
+assert repr(a) == &quot;Usage(prompt=120, completion=40, cost=0.002)&quot;
+s = a + b
+assert (s.prompt, s.completion, round(s.cost, 6)) == (420, 120, 0.007) and a.prompt == 120
+total = sum([a, b, Usage(5, 5)])
+assert total == Usage(425, 125, 0.007) and total.total() == 550
+assert not Usage() and bool(Usage(cost=0.1))
+try:
+    a + 1
+    assert False
+except TypeError:
+    pass
+assert sum([]) == 0 and sum([], Usage()) == Usage()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sum</code> starts with <code>0</code>, so <code>__radd__</code> must accept <code>0</code> and return <code>self</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare costs with <code>round</code> in <code>__eq__</code> to avoid float noise: <code>round(self.cost - other.cost, 9) == 0</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Usage:
+    def __init__(self, prompt=0, completion=0, cost=0.0):
+        self.prompt = prompt
+        self.completion = completion
+        self.cost = cost
+
+    def __repr__(self):
+        return f&quot;Usage(prompt={self.prompt}, completion={self.completion}, cost={self.cost})&quot;
+
+    def __add__(self, other):
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return Usage(self.prompt + other.prompt, self.completion + other.completion, self.cost + other.cost)
+
+    def __radd__(self, other):
+        if other == 0:
+            return self
+        return self.__add__(other)
+
+    def __eq__(self, other):
+        if not isinstance(other, Usage):
+            return NotImplemented
+        return (self.prompt, self.completion) == (other.prompt, other.completion) and round(self.cost - other.cost, 9) == 0
+
+    def total(self):
+        return self.prompt + self.completion
+
+    def __bool__(self):
+        return bool(self.prompt or self.completion or self.cost)</code></pre></div><p><code>sum([a, b, c])</code> computes <code>((0 + a) + b) + c</code>. The first step calls <code>int.__add__(0, a)</code>, which returns <code>NotImplemented</code>, so Python tries <code>a.__radd__(0)</code>; returning <code>self</code> for 0 lets the rest use <code>__add__</code>. Every addition builds a new <code>Usage</code>, leaving <code>a</code> and <code>b</code> unchanged, as numbers behave. Floats such as <code>0.002 + 0.005</code> are not exactly <code>0.007</code> (1.1), so the cost comparison tolerates tiny differences. With <code>__bool__</code>, an empty usage is falsy, convenient for "skip if nothing was spent". This is the kind of object SDKs return as <code>response.usage</code>, and summing it over a run gives the total bill.</p></div></details>
+</article>
+<article class="prob" id="p-equality-that-crashes-on-other-types" data-pid="m9-2-equality-that-crashes-on-other-types" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Equality that crashes on other types</h3></header>
+<div class="prob-q"><p><code>Version.__eq__</code> raises <code>AttributeError</code> when a version is compared with anything that is not a <code>Version</code>, which breaks <code>in</code> checks on mixed lists and comparisons with <code>None</code>. Fix <code>__eq__</code> (and <code>__lt__</code>) to cooperate with other types.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class Version:
+    def __init__(self, text):
+        self.parts = tuple(int(p) for p in text.split(&quot;.&quot;))
+
+    def __eq__(self, other):
+        return self.parts == other.parts
+
+    def __lt__(self, other):
+        return self.parts &lt; other.parts
+
+    def __hash__(self):
+        return hash(self.parts)
+</textarea>
+<script type="text/plain" class="prob-tests">v = Version("1.2.0")
+assert v == Version("1.2.0") and v < Version("1.10")
+assert (v == "1.2.0") is False and (v == None) is False and v != 3
+assert v in [None, "1.2.0", Version("1.2.0")]
+try:
+    v < "2.0"
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">v = Version(&quot;1.2.0&quot;)
+assert v == Version(&quot;1.2.0&quot;) and v &lt; Version(&quot;1.10&quot;)
+assert (v == &quot;1.2.0&quot;) is False and (v == None) is False and v != 3
+assert v in [None, &quot;1.2.0&quot;, Version(&quot;1.2.0&quot;)]
+try:
+    v &lt; &quot;2.0&quot;
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return <code>NotImplemented</code> when <code>other</code> is not a <code>Version</code>. Python then handles the fallback.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Version:
+    def __init__(self, text):
+        self.parts = tuple(int(p) for p in text.split(&quot;.&quot;))
+
+    def __eq__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts == other.parts
+
+    def __lt__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self.parts &lt; other.parts
+
+    def __hash__(self):
+        return hash(self.parts)</code></pre></div><p>Python calls <code>__eq__</code> in many places you do not see: <code>in</code> on a list compares the item with every element, dict lookups compare keys, <code>x == None</code> happens in old code. Assuming <code>other</code> has <code>.parts</code> turned those into <code>AttributeError</code>s. Returning <code>NotImplemented</code> lets Python try the other operand and then fall back: for <code>==</code> the fallback is identity (so <code>False</code>), and for <code>&lt;</code> there is no fallback, so Python raises the proper <code>TypeError: '&lt;' not supported between instances</code>. Returning <code>False</code> from <code>__lt__</code> instead would make sorting mixed lists silently wrong rather than failing.</p></div></details>
+</article>
+<article class="prob" id="p-a-batch-container" data-pid="m9-2-a-batch-container" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. A batch container</h3></header>
+<div class="prob-q"><p>Write a class <code>Batch(items)</code> for training data: <code>__len__</code>; <code>__getitem__</code> that returns one item for an integer index and a new <code>Batch</code> for a slice; <code>__iter__</code> (yield the items); <code>__contains__</code>; <code>__repr__</code> showing the count, <code>Batch(3 items)</code>; and a method <code>split(n)</code> returning a list of batches of at most <code>n</code> items. A batch must not be affected by later changes to the list it was created from.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class Batch:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">data = [{"x": i} for i in range(5)]
+b = Batch(data)
+data.append({"x": 99})
+assert len(b) == 5 and b[0] == {"x": 0} and b[-1] == {"x": 4}
+s = b[1:3]
+assert isinstance(s, Batch) and len(s) == 2 and s[0] == {"x": 1}
+assert [row["x"] for row in b] == [0, 1, 2, 3, 4] and {"x": 2} in b and {"x": 99} not in b
+assert repr(b) == "Batch(5 items)" and [len(p) for p in b.split(2)] == [2, 2, 1]
+assert not Batch([]) and bool(b)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = [{&quot;x&quot;: i} for i in range(5)]
+b = Batch(data)
+data.append({&quot;x&quot;: 99})
+assert len(b) == 5 and b[0] == {&quot;x&quot;: 0} and b[-1] == {&quot;x&quot;: 4}
+s = b[1:3]
+assert isinstance(s, Batch) and len(s) == 2 and s[0] == {&quot;x&quot;: 1}
+assert [row[&quot;x&quot;] for row in b] == [0, 1, 2, 3, 4] and {&quot;x&quot;: 2} in b and {&quot;x&quot;: 99} not in b
+assert repr(b) == &quot;Batch(5 items)&quot; and [len(p) for p in b.split(2)] == [2, 2, 1]
+assert not Batch([]) and bool(b)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Copy the input with <code>list(items)</code> in <code>__init__</code>. <code>__getitem__</code> receives a <code>slice</code> object for <code>b[1:3]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__iter__</code> can simply <code>yield from self._items</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Batch:
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return Batch(self._items[key])
+        return self._items[key]
+
+    def __iter__(self):
+        yield from self._items
+
+    def __contains__(self, item):
+        return item in self._items
+
+    def __repr__(self):
+        return f&quot;Batch({len(self)} items)&quot;
+
+    def split(self, n):
+        return [self[i:i + n] for i in range(0, len(self), n)]</code></pre></div><p>Each dunder connects one piece of syntax to the internal list: <code>len</code>, indexing, slicing, <code>for</code> and <code>in</code> all work as they would on a list, and slicing returns a <code>Batch</code> so the type survives, like slicing a DataFrame returns a DataFrame. <code>split</code> is written with the class's own slicing, a small sign that the protocol is complete. Copying the input list protects the batch from later appends, though the dicts inside are still shared (2.3). <code>__len__</code> also makes an empty batch falsy. PyTorch's <code>Dataset</code> is this same idea: <code>__len__</code> plus <code>__getitem__</code>, which is all a <code>DataLoader</code> needs.</p></div></details>
+</article>
+<article class="prob" id="p-membership-scan-or-set" data-pid="m9-2-membership-scan-or-set" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">RAG</span><h3>8. Membership: scan or set</h3></header>
+<div class="prob-q"><p>Both classes hold 20,000 document ids; the code checks 2,000 ids with <code>in</code>. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">class ScanIds:
+    def __init__(self, ids):
+        self._ids = list(ids)
+    def __getitem__(self, i):
+        return self._ids[i]
+
+class SetIds:
+    def __init__(self, ids):
+        self._ids = list(ids)
+        self._lookup = set(ids)
+    def __getitem__(self, i):
+        return self._ids[i]
+    def __contains__(self, x):
+        return x in self._lookup
+
+ids = [f&quot;doc{i}&quot; for i in range(20_000)]
+a, b = ScanIds(ids), SetIds(ids)
+queries = [f&quot;doc{i * 7}&quot; for i in range(2_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">found = sum(q in a for q in queries)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">found = sum(q in b for q in queries)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>__contains__</code>, how does <code>in</code> decide?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>3.32 s</td></tr><tr><td>B</td><td>614.34 µs</td></tr></table></div><p><code>ScanIds</code> has no <code>__contains__</code>, so <code>in</code> falls back to iterating: it calls <code>__getitem__(0)</code>, <code>__getitem__(1)</code>, ... in Python, comparing each id until it finds a match, thousands of Python-level calls per query. <code>SetIds</code> answers with one hash lookup (4.4). Defining <code>__contains__</code> lets a container choose the right data structure for membership while keeping its order for iteration and indexing. Python's fallbacks make protocols easy to start with, but they are correct rather than fast.</p></div></details>
+</article>
+<article class="prob" id="p-sorting-with-total-ordering" data-pid="m9-2-sorting-with-total-ordering" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Sorting with total_ordering</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import functools
+
+@functools.total_ordering
+class Priority:
+    ORDER = {&quot;low&quot;: 0, &quot;normal&quot;: 1, &quot;high&quot;: 2}
+    def __init__(self, level):
+        self.level = level
+    def __repr__(self):
+        return self.level
+    def __eq__(self, other):
+        return self.ORDER[self.level] == self.ORDER[other.level]
+    def __lt__(self, other):
+        return self.ORDER[self.level] &lt; self.ORDER[other.level]
+
+items = [Priority(x) for x in [&quot;normal&quot;, &quot;high&quot;, &quot;low&quot;, &quot;high&quot;]]
+r = sorted(items)
+r = max(items)
+r = Priority(&quot;low&quot;) &gt;= Priority(&quot;normal&quot;)
+r = sorted(items, reverse=True)[0] == Priority(&quot;high&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>sorted</td><td><input class="cell" data-a="[low, normal, high, high]" data-s="[low, normal, high, high]" aria-label="r at sorted" autocomplete="off"></td></tr><tr><td>max</td><td><input class="cell" data-a="high" data-s="high" aria-label="r at max" autocomplete="off"></td></tr><tr><td>derived &gt;=</td><td><input class="cell" data-a="False" data-s="False" aria-label="r at derived &gt;=" autocomplete="off"></td></tr><tr><td>first of reverse</td><td><input class="cell" data-a="True" data-s="True" aria-label="r at first of reverse" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>total_ordering</code> derives <code>&gt;=</code> from <code>__lt__</code> and <code>__eq__</code>. <code>sorted</code> is stable.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>sorted</td><td><code>[low, normal, high, high]</code></td></tr><tr><td>max</td><td><code>high</code></td></tr><tr><td>derived &gt;=</td><td><code>False</code></td></tr><tr><td>first of reverse</td><td><code>True</code></td></tr></table></div><p>Sorting uses <code>__lt__</code>, which compares the mapped numbers, and the repr shows the level names. <code>max</code> returns the first of the equal maximum elements it meets (the first <code>high</code>). <code>&gt;=</code> was not defined, so <code>total_ordering</code> built it from <code>__lt__</code>: low is not greater than or equal to normal. The reversed sort starts with a <code>high</code>, which equals a new <code>Priority("high")</code> through <code>__eq__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-versions-that-sort-as-text" data-pid="m9-2-versions-that-sort-as-text" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Versions that sort as text</h3></header>
+<div class="prob-q"><p>Model checkpoints are compared by version to find the newest, but <code>max</code> picks <code>v1.9</code> over <code>v1.10</code>. Fix the comparison so versions compare numerically, part by part.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import functools
+
+@functools.total_ordering
+class Checkpoint:
+    def __init__(self, name):
+        self.name = name
+        self.version = name.split(&quot;-v&quot;)[1]
+
+    def __repr__(self):
+        return f&quot;Checkpoint({self.name!r})&quot;
+
+    def __eq__(self, other):
+        if not isinstance(other, Checkpoint):
+            return NotImplemented
+        return self.version == other.version
+
+    def __lt__(self, other):
+        if not isinstance(other, Checkpoint):
+            return NotImplemented
+        return self.version &lt; other.version
+
+    def __hash__(self):
+        return hash(self.version)
+</textarea>
+<script type="text/plain" class="prob-tests">cps = [Checkpoint(n) for n in ["ranker-v1.9", "ranker-v1.10", "ranker-v1.2.3", "ranker-v2.0"]]
+assert max(cps).name == "ranker-v2.0"
+assert [c.name for c in sorted(cps)] == ["ranker-v1.2.3", "ranker-v1.9", "ranker-v1.10", "ranker-v2.0"]
+assert Checkpoint("a-v1.10") > Checkpoint("a-v1.9") and Checkpoint("a-v1.0") == Checkpoint("b-v1.0")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">cps = [Checkpoint(n) for n in [&quot;ranker-v1.9&quot;, &quot;ranker-v1.10&quot;, &quot;ranker-v1.2.3&quot;, &quot;ranker-v2.0&quot;]]
+assert max(cps).name == &quot;ranker-v2.0&quot;
+assert [c.name for c in sorted(cps)] == [&quot;ranker-v1.2.3&quot;, &quot;ranker-v1.9&quot;, &quot;ranker-v1.10&quot;, &quot;ranker-v2.0&quot;]
+assert Checkpoint(&quot;a-v1.10&quot;) &gt; Checkpoint(&quot;a-v1.9&quot;) and Checkpoint(&quot;a-v1.0&quot;) == Checkpoint(&quot;b-v1.0&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the version as a tuple of integers: <code>tuple(int(p) for p in ...split("."))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+@functools.total_ordering
+class Checkpoint:
+    def __init__(self, name):
+        self.name = name
+        self.version = tuple(int(p) for p in name.split(&quot;-v&quot;)[1].split(&quot;.&quot;))
+
+    def __repr__(self):
+        return f&quot;Checkpoint({self.name!r})&quot;
+
+    def __eq__(self, other):
+        if not isinstance(other, Checkpoint):
+            return NotImplemented
+        return self.version == other.version
+
+    def __lt__(self, other):
+        if not isinstance(other, Checkpoint):
+            return NotImplemented
+        return self.version &lt; other.version
+
+    def __hash__(self):
+        return hash(self.version)</code></pre></div><p>Strings compare character by character, so <code>"1.10" &lt; "1.9"</code> because <code>"1"</code> is less than <code>"9"</code> at the third character (5.1). Tuples of integers compare part by part numerically: <code>(1, 10) &gt; (1, 9)</code>, and <code>(1, 2, 3) &lt; (1, 9)</code>. Parsing once in <code>__init__</code> keeps every comparison cheap and makes the representation explicit. Note that <code>(1, 0)</code> and <code>(1, 0, 0)</code> are different tuples; real version libraries (<code>packaging.version</code>) normalise trailing zeros and handle pre-releases like <code>2.0rc1</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-callable-scorer" data-pid="m9-2-a-callable-scorer" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. A callable scorer</h3></header>
+<div class="prob-q"><p>Write a class <code>BoostScorer(base_scores, boosts)</code> where <code>base_scores</code> maps doc id to a retrieval score and <code>boosts</code> maps a source name to a multiplier. Calling an instance with a result dict <code>{"id": ..., "source": ...}</code> returns the base score times the source's boost (default 1.0), rounded to 4 decimals, and counts the calls in <code>self.calls</code>. Give it a <code>__repr__</code> like <code>BoostScorer(2 boosts)</code>. It must work as a <code>key</code> for <code>sorted</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">class BoostScorer:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">results = [{"id": "d1", "source": "forum"}, {"id": "d2", "source": "docs"}, {"id": "d3", "source": "blog"}]
+score = BoostScorer({"d1": 0.9, "d2": 0.7, "d3": 0.8}, {"docs": 1.5, "forum": 0.8})
+ranked = sorted(results, key=score, reverse=True)
+assert [r["id"] for r in ranked] == ["d2", "d3", "d1"]
+assert score({"id": "d2", "source": "docs"}) == 1.05 and score.calls == 4
+assert repr(score) == "BoostScorer(2 boosts)" and callable(score)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">results = [{&quot;id&quot;: &quot;d1&quot;, &quot;source&quot;: &quot;forum&quot;}, {&quot;id&quot;: &quot;d2&quot;, &quot;source&quot;: &quot;docs&quot;}, {&quot;id&quot;: &quot;d3&quot;, &quot;source&quot;: &quot;blog&quot;}]
+score = BoostScorer({&quot;d1&quot;: 0.9, &quot;d2&quot;: 0.7, &quot;d3&quot;: 0.8}, {&quot;docs&quot;: 1.5, &quot;forum&quot;: 0.8})
+ranked = sorted(results, key=score, reverse=True)
+assert [r[&quot;id&quot;] for r in ranked] == [&quot;d2&quot;, &quot;d3&quot;, &quot;d1&quot;]
+assert score({&quot;id&quot;: &quot;d2&quot;, &quot;source&quot;: &quot;docs&quot;}) == 1.05 and score.calls == 4
+assert repr(score) == &quot;BoostScorer(2 boosts)&quot; and callable(score)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store copies of both dicts in <code>__init__</code>; the scoring goes in <code>__call__(self, result)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class BoostScorer:
+    def __init__(self, base_scores, boosts):
+        self.base_scores = dict(base_scores)
+        self.boosts = dict(boosts)
+        self.calls = 0
+
+    def __call__(self, result):
+        self.calls += 1
+        base = self.base_scores[result[&quot;id&quot;]]
+        return round(base * self.boosts.get(result[&quot;source&quot;], 1.0), 4)
+
+    def __repr__(self):
+        return f&quot;BoostScorer({len(self.boosts)} boosts)&quot;</code></pre></div><p><code>sorted</code> only needs something callable as its <code>key</code>, so an object with <code>__call__</code> fits anywhere a function does, while carrying configuration (the scores and boosts) and state (the call count) that a plain function would need globals or a closure for. Boosting scores by source is a common re-ranking step: official docs above forum posts. The <code>sorted</code> call scored each result once (three calls) and the direct call made the fourth. PyTorch modules, scikit-learn transformers used in pipelines and many retriever classes are callable objects in exactly this sense.</p></div></details>
+</article>
+<article class="prob" id="p-reflected-operators-and-sum" data-pid="m9-2-reflected-operators-and-sum" data-type="predict" data-level="medium" data-answer="Tokens(5) Tokens(3)
+  radd with 10
+Tokens(15)
+  radd with 0
+Tokens(3)
+TypeError">
+<header class="prob-head"><h3>12. Reflected operators and sum</h3></header>
+<div class="code"><pre><code class="py">class Tokens:
+    def __init__(self, n):
+        self.n = n
+    def __repr__(self):
+        return f&quot;Tokens({self.n})&quot;
+    def __add__(self, other):
+        if isinstance(other, Tokens):
+            return Tokens(self.n + other.n)
+        if isinstance(other, int):
+            return Tokens(self.n + other)
+        return NotImplemented
+    def __radd__(self, other):
+        print(&quot;  radd with&quot;, other)
+        return self.__add__(other)
+
+print(Tokens(2) + Tokens(3), Tokens(2) + 1)
+print(10 + Tokens(5))
+print(sum([Tokens(1), Tokens(2)]))
+try:
+    Tokens(1) + &quot;x&quot;
+except TypeError as e:
+    print(&quot;TypeError&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>10 + t</code> first tries <code>int.__add__</code>, which returns <code>NotImplemented</code> for a <code>Tokens</code>, then <code>t.__radd__(10)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Tokens(5) Tokens(3)
+  radd with 10
+Tokens(15)
+  radd with 0
+Tokens(3)
+TypeError</pre></div><p>The first two additions are handled by <code>Tokens.__add__</code>. <code>10 + Tokens(5)</code> cannot be handled by <code>int</code>, so Python calls the reflected <code>__radd__</code> with 10. <code>sum</code> starts from 0: <code>0 + Tokens(1)</code> goes through <code>__radd__</code> with 0 (which this <code>__add__</code> accepts as an int), and the next step is <code>Tokens + Tokens</code>. Adding a string: <code>__add__</code> returns <code>NotImplemented</code>, <code>str</code> has no way to add a <code>Tokens</code>, so Python raises <code>TypeError</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-small-vector-type" data-pid="m9-2-a-small-vector-type" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. A small vector type</h3></header>
+<div class="prob-q"><p>Write a class <code>Vector(*components)</code> (floats) with: <code>__repr__</code> (<code>Vector(1.0, 2.0)</code>), <code>__len__</code>, <code>__iter__</code>, <code>__getitem__</code>, <code>__eq__</code>, <code>__add__</code> and <code>__sub__</code> (same length, else <code>ValueError</code>), <code>__mul__</code> and <code>__rmul__</code> for multiplying by a number, <code>__matmul__</code> for the dot product, <code>__abs__</code> for the Euclidean norm, and a method <code>cosine(other)</code> (raise <code>ValueError</code> for a zero vector). Return <code>NotImplemented</code> for unsupported operand types.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import math
+
+class Vector:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a, b = Vector(1, 2, 2), Vector(2, 0, 1)
+assert repr(a) == "Vector(1.0, 2.0, 2.0)" and len(a) == 3 and list(a) == [1.0, 2.0, 2.0] and a[1] == 2.0
+assert a + b == Vector(3, 2, 3) and a - b == Vector(-1, 2, 1) and 2 * a == a * 2 == Vector(2, 4, 4)
+assert a @ b == 4.0 and abs(a) == 3.0 and round(a.cosine(b), 4) == 0.5963
+try:
+    a + Vector(1, 2)
+    assert False
+except ValueError:
+    pass
+try:
+    Vector(0, 0).cosine(a)
+    assert False
+except ValueError:
+    pass
+try:
+    a * "x"
+    assert False
+except TypeError:
+    pass
+assert (a == [1, 2, 2]) is False</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a, b = Vector(1, 2, 2), Vector(2, 0, 1)
+assert repr(a) == &quot;Vector(1.0, 2.0, 2.0)&quot; and len(a) == 3 and list(a) == [1.0, 2.0, 2.0] and a[1] == 2.0
+assert a + b == Vector(3, 2, 3) and a - b == Vector(-1, 2, 1) and 2 * a == a * 2 == Vector(2, 4, 4)
+assert a @ b == 4.0 and abs(a) == 3.0 and round(a.cosine(b), 4) == 0.5963
+try:
+    a + Vector(1, 2)
+    assert False
+except ValueError:
+    pass
+try:
+    Vector(0, 0).cosine(a)
+    assert False
+except ValueError:
+    pass
+try:
+    a * &quot;x&quot;
+    assert False
+except TypeError:
+    pass
+assert (a == [1, 2, 2]) is False</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>self._c = tuple(float(x) for x in components)</code>. A private helper can check lengths for <code>+</code>, <code>-</code> and <code>@</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>__mul__</code>, accept <code>int</code> and <code>float</code> (but not <code>bool</code> is fine either way here); otherwise return <code>NotImplemented</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+class Vector:
+    def __init__(self, *components):
+        self._c = tuple(float(x) for x in components)
+
+    def __repr__(self):
+        return f&quot;Vector({&#x27;, &#x27;.join(map(str, self._c))})&quot;
+
+    def __len__(self):
+        return len(self._c)
+
+    def __iter__(self):
+        return iter(self._c)
+
+    def __getitem__(self, i):
+        return self._c[i]
+
+    def __eq__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        return self._c == other._c
+
+    def __hash__(self):
+        return hash(self._c)
+
+    def _check(self, other):
+        if len(self) != len(other):
+            raise ValueError(f&quot;length mismatch: {len(self)} vs {len(other)}&quot;)
+
+    def __add__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return Vector(*(x + y for x, y in zip(self, other)))
+
+    def __sub__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return Vector(*(x - y for x, y in zip(self, other)))
+
+    def __mul__(self, k):
+        if not isinstance(k, (int, float)):
+            return NotImplemented
+        return Vector(*(x * k for x in self))
+
+    __rmul__ = __mul__
+
+    def __matmul__(self, other):
+        if not isinstance(other, Vector):
+            return NotImplemented
+        self._check(other)
+        return sum(x * y for x, y in zip(self, other))
+
+    def __abs__(self):
+        return math.sqrt(self @ self)
+
+    def cosine(self, other):
+        denom = abs(self) * abs(other)
+        if denom == 0:
+            raise ValueError(&quot;cosine is undefined for a zero vector&quot;)
+        return (self @ other) / denom</code></pre></div><p>Each operator is one dunder, and together they make the class read like the mathematics: <code>a @ b / (abs(a) * abs(b))</code> is the cosine similarity used everywhere in retrieval. <code>__rmul__ = __mul__</code> reuses the same function for <code>2 * a</code>, valid because scalar multiplication is commutative. Storing components in a tuple makes the vector immutable, so a <code>__hash__</code> is safe and every operator returns a new vector. Returning <code>NotImplemented</code> for strings lets Python raise the standard <code>TypeError</code>, while a length mismatch is a value problem and raises <code>ValueError</code>. <code>__iter__</code> makes <code>zip(self, other)</code> work on vectors directly. NumPy does all of this in C on arrays of any shape, which is why real code uses it; implementing it once shows what <code>a @ b</code> means.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-span-objects-for-highlight" data-pid="m9-2-read-the-code-span-objects-for-highlight" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>14. Read the code: span objects for highlighting</h3></header>
+<div class="prob-q"><p><code>Span(start, end, label)</code> marks a highlighted region in a retrieved document. Duplicate spans should be removed with a set, spans should sort by start (then end), and equal spans must be equal on start, end <strong>and</strong> label. Duplicates survive the set, <code>Span(0, 5, "a") == Span(0, 9, "b")</code> is true, and sorting is backwards. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class Span:
+    def __init__(self, start, end, label):
+        if start &gt; end:
+            raise ValueError(&quot;start must not exceed end&quot;)
+        self.start = start
+        self.end = end
+        self.label = label
+
+    def __repr__(self):
+        return f&quot;Span({self.start}, {self.end}, {self.label!r})&quot;
+
+    def __eq__(self, other):
+        return self.start == other.start
+
+    __hash__ = object.__hash__
+
+    def __lt__(self, other):
+        return (self.start, self.end) &gt; (other.start, other.end)
+
+    def __len__(self):
+        return self.end - self.start
+</textarea>
+<script type="text/plain" class="prob-tests">spans = [Span(10, 15, "refund"), Span(0, 5, "policy"), Span(10, 15, "refund"), Span(0, 9, "policy"), Span(0, 5, "date")]
+unique = set(spans)
+assert len(unique) == 4
+assert Span(0, 5, "a") != Span(0, 9, "a") and Span(0, 5, "a") != Span(0, 5, "b")
+assert sorted(set(spans), key=lambda s: (s.start, s.end, s.label)) == [Span(0, 5, "date"), Span(0, 5, "policy"), Span(0, 9, "policy"), Span(10, 15, "refund")]
+assert sorted([Span(10, 15, "x"), Span(0, 9, "x"), Span(0, 5, "x")]) == [Span(0, 5, "x"), Span(0, 9, "x"), Span(10, 15, "x")]
+assert (Span(0, 1, "x") == "x") is False and len(Span(3, 8, "x")) == 5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">spans = [Span(10, 15, &quot;refund&quot;), Span(0, 5, &quot;policy&quot;), Span(10, 15, &quot;refund&quot;), Span(0, 9, &quot;policy&quot;), Span(0, 5, &quot;date&quot;)]
+unique = set(spans)
+assert len(unique) == 4
+assert Span(0, 5, &quot;a&quot;) != Span(0, 9, &quot;a&quot;) and Span(0, 5, &quot;a&quot;) != Span(0, 5, &quot;b&quot;)
+assert sorted(set(spans), key=lambda s: (s.start, s.end, s.label)) == [Span(0, 5, &quot;date&quot;), Span(0, 5, &quot;policy&quot;), Span(0, 9, &quot;policy&quot;), Span(10, 15, &quot;refund&quot;)]
+assert sorted([Span(10, 15, &quot;x&quot;), Span(0, 9, &quot;x&quot;), Span(0, 5, &quot;x&quot;)]) == [Span(0, 5, &quot;x&quot;), Span(0, 9, &quot;x&quot;), Span(10, 15, &quot;x&quot;)]
+assert (Span(0, 1, &quot;x&quot;) == &quot;x&quot;) is False and len(Span(3, 8, &quot;x&quot;)) == 5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__eq__</code> must compare all three fields and return <code>NotImplemented</code> for other types.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>object.__hash__</code> hashes by identity, which breaks the equal-means-equal-hash rule. Hash the same fields as <code>__eq__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__lt__</code> uses <code>&gt;</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Span:
+    def __init__(self, start, end, label):
+        if start &gt; end:
+            raise ValueError(&quot;start must not exceed end&quot;)
+        self.start = start
+        self.end = end
+        self.label = label
+
+    def __repr__(self):
+        return f&quot;Span({self.start}, {self.end}, {self.label!r})&quot;
+
+    def _key(self):
+        return (self.start, self.end, self.label)
+
+    def __eq__(self, other):
+        if not isinstance(other, Span):
+            return NotImplemented
+        return self._key() == other._key()
+
+    def __hash__(self):
+        return hash(self._key())
+
+    def __lt__(self, other):
+        if not isinstance(other, Span):
+            return NotImplemented
+        return (self.start, self.end) &lt; (other.start, other.end)
+
+    def __len__(self):
+        return self.end - self.start</code></pre></div><p>Four bugs. <code>__eq__</code> compared only <code>start</code>, so spans with different ends and labels were "equal". Someone restored hashability with <code>__hash__ = object.__hash__</code>, which hashes by <strong>identity</strong>: two equal spans then usually land in different buckets, so the set kept both duplicates, the exact violation of "equal objects must have equal hashes" that Python tries to prevent by removing the hash. Using one <code>_key()</code> for both <code>__eq__</code> and <code>__hash__</code> keeps them consistent by construction. <code>__lt__</code> used <code>&gt;</code>, sorting backwards, and neither comparison handled other types. Note that sorting by <code>(start, end)</code> alone leaves the order of equal-position spans to the stable sort, which is why the test sorts the set with an explicit key.</p></div></details>
+</article>
+<article class="prob" id="p-a-dict-with-a-size-limit" data-pid="m9-2-a-dict-with-a-size-limit" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. A dict with a size limit</h3></header>
+<div class="prob-q"><p>Write a class <code>LRUDict(maxsize)</code> that behaves like a dict with a size limit: <code>d[key] = value</code> stores (moving the key to "most recent"), <code>d[key]</code> returns the value and marks it most recent (<code>KeyError</code> if missing), <code>del d[key]</code>, <code>key in d</code> (which does <strong>not</strong> count as a use), <code>len(d)</code>, iteration over keys from least to most recent, and <code>__repr__</code> like <code>LRUDict({'a': 1}, maxsize=2)</code>. When a new key would exceed <code>maxsize</code>, evict the least recently used one and record it in <code>self.evicted</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">class LRUDict:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">d = LRUDict(maxsize=2)
+d["a"] = 1; d["b"] = 2
+assert d["a"] == 1
+d["c"] = 3
+assert list(d) == ["a", "c"] and d.evicted == ["b"] and "b" not in d and len(d) == 2
+d["a"] = 10
+d["d"] = 4
+assert list(d) == ["a", "d"] and d.evicted == ["b", "c"]
+assert "a" in d and list(d) == ["a", "d"]
+del d["a"]
+assert list(d) == ["d"] and repr(d) == "LRUDict({'d': 4}, maxsize=2)"
+try:
+    d["zzz"]
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">d = LRUDict(maxsize=2)
+d[&quot;a&quot;] = 1; d[&quot;b&quot;] = 2
+assert d[&quot;a&quot;] == 1
+d[&quot;c&quot;] = 3
+assert list(d) == [&quot;a&quot;, &quot;c&quot;] and d.evicted == [&quot;b&quot;] and &quot;b&quot; not in d and len(d) == 2
+d[&quot;a&quot;] = 10
+d[&quot;d&quot;] = 4
+assert list(d) == [&quot;a&quot;, &quot;d&quot;] and d.evicted == [&quot;b&quot;, &quot;c&quot;]
+assert &quot;a&quot; in d and list(d) == [&quot;a&quot;, &quot;d&quot;]
+del d[&quot;a&quot;]
+assert list(d) == [&quot;d&quot;] and repr(d) == &quot;LRUDict({&#x27;d&#x27;: 4}, maxsize=2)&quot;
+try:
+    d[&quot;zzz&quot;]
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A normal dict keeps insertion order. To mark a key as most recent, <code>pop</code> it and insert it again.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Evict with <code>next(iter(self._data))</code>, the oldest key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LRUDict:
+    def __init__(self, maxsize):
+        if maxsize &lt; 1:
+            raise ValueError(&quot;maxsize must be at least 1&quot;)
+        self.maxsize = maxsize
+        self._data = {}
+        self.evicted = []
+
+    def __getitem__(self, key):
+        value = self._data.pop(key)
+        self._data[key] = value
+        return value
+
+    def __setitem__(self, key, value):
+        if key in self._data:
+            del self._data[key]
+        elif len(self._data) &gt;= self.maxsize:
+            oldest = next(iter(self._data))
+            del self._data[oldest]
+            self.evicted.append(oldest)
+        self._data[key] = value
+
+    def __delitem__(self, key):
+        del self._data[key]
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def __len__(self):
+        return len(self._data)
+
+    def __iter__(self):
+        return iter(list(self._data))
+
+    def __repr__(self):
+        return f&quot;LRUDict({self._data!r}, maxsize={self.maxsize})&quot;</code></pre></div><p>Because dicts preserve insertion order, "most recently used" can be represented as "inserted last": a read pops the key and reinserts it, and the first key in iteration order is always the least recently used one, which is what gets evicted. <code>pop</code> raises <code>KeyError</code> for a missing key, so <code>d["zzz"]</code> behaves exactly like a dict. Updating an existing key removes it first so it moves to the end without triggering an eviction. <code>__contains__</code> deliberately does not reorder, so checking membership does not change what gets evicted. <code>__iter__</code> iterates a snapshot list, so a loop that reads values (and therefore reorders keys) does not break iteration. The standard library offers <code>collections.OrderedDict.move_to_end</code> for the same job, and <code>functools.lru_cache</code> (8.3) uses a linked list internally.</p></div></details>
+</article>
+<article class="prob" id="p-dunders-are-looked-up-on-the-class" data-pid="m9-2-dunders-are-looked-up-on-the-class" data-type="predict" data-level="hard" data-answer="3 99
+42 42
+  A.__eq__
+  B.__eq__
+  A.__eq__
+  A.__eq__
+False True">
+<header class="prob-head"><h3>16. Dunders are looked up on the class</h3></header>
+<div class="code"><pre><code class="py">class Box:
+    def __init__(self, items):
+        self.items = items
+    def __len__(self):
+        return len(self.items)
+
+b = Box([1, 2, 3])
+b.__len__ = lambda: 99
+print(len(b), b.__len__())
+
+Box.__len__ = lambda self: 42
+print(len(b), len(Box([])))
+
+class A:
+    def __eq__(self, other):
+        print(&quot;  A.__eq__&quot;)
+        return NotImplemented
+class B:
+    def __eq__(self, other):
+        print(&quot;  B.__eq__&quot;)
+        return NotImplemented
+a, b2 = A(), B()
+print(a == b2, a == a)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>len(x)</code> calls <code>type(x).__len__(x)</code>, ignoring instance attributes.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When both sides return <code>NotImplemented</code>, <code>==</code> falls back to identity.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>3 99
+42 42
+  A.__eq__
+  B.__eq__
+  A.__eq__
+  A.__eq__
+False True</pre></div><p>Implicit dunder calls (<code>len(b)</code>) look up the method on the <strong>type</strong>, not the instance, so the instance attribute <code>__len__</code> is used only by the explicit call <code>b.__len__()</code>. Changing the class's method changes <code>len</code> for every instance. For <code>a == b2</code>, Python asks <code>A</code>'s <code>__eq__</code>, then the reflected <code>B.__eq__</code>; both decline, so the comparison falls back to identity: <code>False</code>. For <code>a == a</code>, both attempts are again <code>A.__eq__</code> (first normal, then reflected), and the identity fallback gives <code>True</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-repr-and-" data-pid="m9-2-what-is-the-difference-between-repr-and-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between <code>__repr__</code> and <code>__str__</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>__repr__</code> gives the developer-facing representation: unambiguous, ideally valid Python that recreates the object (<code>Money(12.5, 'EUR')</code>), used by the REPL, debuggers, <code>repr()</code>, <code>!r</code> in f-strings, logging of objects and the display of items inside containers. <code>__str__</code> gives the user-facing text (<code>12.50 EUR</code>), used by <code>print</code>, <code>str()</code> and plain f-string interpolation. If only <code>__repr__</code> is defined, <code>str()</code> falls back to it; the reverse is not true, so always define <code>__repr__</code> first. A good repr makes debugging and test failure messages useful; it should never include secrets such as API keys.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-defining-eq-make-a-class-unhash" data-pid="m9-2-why-does-defining-eq-make-a-class-unhash" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why does defining <code>__eq__</code> make a class unhashable, and how should you define <code>__hash__</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Sets and dicts locate objects by hash and then confirm with <code>==</code>, which only works if equal objects have equal hashes. The default <code>__hash__</code> is based on identity, which is consistent with the default identity-based <code>__eq__</code>. Once you define value-based equality, the identity hash would violate the rule (two equal objects in different buckets), so Python sets <code>__hash__ = None</code>, making instances unhashable, rather than letting sets silently misbehave. If the objects are values that belong in sets or as keys, define <code>__hash__</code> from exactly the fields used in <code>__eq__</code>, usually <code>hash((self.a, self.b))</code>, and treat those fields as immutable, since changing them while the object is stored corrupts the container. Mutable objects whose equality changes over time should stay unhashable. <code>@dataclass(frozen=True)</code> generates consistent <code>__eq__</code> and <code>__hash__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-explain-python-s-data-model-and-why-it-m" data-pid="m9-2-explain-python-s-data-model-and-why-it-m" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Explain Python's data model and why it matters for libraries like NumPy, pandas and PyTorch.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The data model is the set of special methods through which syntax and built-ins operate on objects: <code>len()</code> calls <code>__len__</code>, <code>x[k]</code> calls <code>__getitem__</code>, <code>for</code> uses <code>__iter__</code>, <code>in</code> uses <code>__contains__</code>, operators call <code>__add__</code>, <code>__mul__</code>, <code>__matmul__</code> and their reflected and in-place versions, comparisons call <code>__eq__</code> and <code>__lt__</code>, truthiness calls <code>__bool__</code> or <code>__len__</code>, <code>with</code> uses <code>__enter__</code> and <code>__exit__</code>, and calling uses <code>__call__</code>. Operator methods return <code>NotImplemented</code> to let the other operand try, which is how mixed-type arithmetic works. Because these protocols are duck-typed, any object implementing them works with all the code written against them. That is how NumPy arrays support <code>a + b</code>, slicing and broadcasting with plain syntax, how pandas offers <code>df["col"]</code>, <code>len(df)</code> and boolean masks, and how PyTorch tensors overload arithmetic and modules are called as <code>model(x)</code>. It also explains some surprises: <code>if df:</code> raises an error because pandas makes <code>__bool__</code> ambiguous on purpose, and <code>a == b</code> on arrays returns an array rather than a boolean.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Dunder methods connect syntax and built-ins to your objects: <code>len</code> to <code>__len__</code>, <code>[]</code> to <code>__getitem__</code>, <code>+</code> to <code>__add__</code>, <code>==</code> to <code>__eq__</code>, calling to <code>__call__</code>.</li><li>Always define <code>__repr__</code> (developers, containers, <code>!r</code>); add <code>__str__</code> for user-facing text.</li><li><code>__eq__</code> and <code>__hash__</code> go together: hash the same fields you compare, keep them immutable, and return <code>NotImplemented</code> for other types.</li><li>Order with <code>__lt__</code> (plus <code>functools.total_ordering</code>) on the right representation, such as tuples of ints; otherwise sort with a <code>key</code>.</li><li>Containers: <code>__len__</code>, <code>__getitem__</code> (slices included), <code>__contains__</code>, <code>__iter__</code>; truthiness falls back to <code>__len__</code>. <code>__radd__</code> makes <code>sum</code> work.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

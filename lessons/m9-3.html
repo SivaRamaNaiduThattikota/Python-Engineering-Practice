@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9.3 · Properties and encapsulation</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m9-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 9 · OOP</span></div>
+  <h1>9.3 Properties and encapsulation</h1>
+  <p>How Python protects an object's rules without private fields: naming conventions, <code>@property</code> for computed and validated attributes, setters that keep invariants, <code>functools.cached_property</code>, name mangling, and <code>__slots__</code>. How properties work underneath (descriptors), and the bugs they prevent. Applied to model configs, conversations, datasets and API keys.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="conventions">
+<h2><span class="n">1</span>Encapsulation by convention</h2>
+<p>Many languages enforce privacy: a <code>private</code> field cannot be touched from outside. Python does not. Every attribute can be read and changed from anywhere, and the community relies on <strong>conventions</strong> instead, summarised as "we are all consenting adults". A name with <strong>one leading underscore</strong>, <code>self._tokens</code>, means "internal: not part of the public interface, may change without notice, do not touch from outside". Tools respect it: <code>from module import *</code> skips such names, and linters and IDEs warn when you access them on another object. A name without an underscore is public and is a promise to callers.</p>
+<p>Encapsulation is still possible, and it is about <strong>invariants</strong>, not secrecy: rules about the state that must always hold. A token budget's spent amount must never exceed its limit; a config's temperature must stay between 0 and 2; an index's two dicts must agree (9.1). The tools for protecting them are: keep the raw state in underscore attributes, change it only through methods, expose read access through <strong>properties</strong>, validate in setters and in <code>__init__</code>, and never hand out internal mutable objects (return copies or read-only views, 2.2).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>This is the role of a view and of constraints in a database: users query a view (the public interface) instead of the raw tables, and <code>CHECK</code> constraints reject invalid rows at write time. In Power BI, measures are the public interface over hidden columns. Properties and setters play the same parts for an object.</p></div></div>
+</section>
+<section class="sec" id="property">
+<h2><span class="n">2</span><code>@property</code>: methods that look like attributes</h2>
+<p>Decorating a method with <code>@property</code> turns it into an attribute that is <strong>computed when read</strong>: <code>conv.token_count</code> calls the method, with no parentheses. This is ideal for values derived from other state, because they can never be out of date: there is nothing to keep in sync. A property with only a getter is <strong>read-only</strong>: assigning to it raises <code>AttributeError</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">property_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">class Order:
+    def __init__(self, items):
+        self._items = list(items)            # list of (name, price, qty)
+
+    @property
+    def total(self):
+        return round(sum(price * qty for _, price, qty in self._items), 2)
+
+    @property
+    def items(self):
+        return tuple(self._items)             # a read-only view, not the internal list
+
+    def add(self, name, price, qty=1):
+        self._items.append((name, price, qty))
+
+o = Order([(&quot;pen&quot;, 1.5, 4)])
+print(o.total)
+o.add(&quot;book&quot;, 12.0)
+print(o.total, o.items)
+try:
+    o.total = 100
+except AttributeError as e:
+    print(&quot;AttributeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>6.0
+18.0 ((&#x27;pen&#x27;, 1.5, 4), (&#x27;book&#x27;, 12.0, 1))
+AttributeError: property &#x27;total&#x27; of &#x27;Order&#x27; object has no setter</pre></div></div>
+<p>Properties also solve an evolution problem. In Java-style code, every field gets <code>get_x()</code> and <code>set_x()</code> methods "just in case" validation is needed later. In Python, start with a plain public attribute, <code>self.temperature = t</code>. If you later need validation or computation, replace it with a property of the <strong>same name</strong>, and every caller that wrote <code>config.temperature</code> keeps working unchanged. That is why Python code rarely has getter and setter methods: the attribute syntax is the interface, and a property can take over behind it at any time (problem 17).</p>
+</section>
+<section class="sec" id="setter">
+<h2><span class="n">3</span>Setters that keep invariants</h2>
+<p>A property can also control <strong>assignment</strong>. After defining the getter, decorate a second method with <code>@name.setter</code>; it receives the new value and decides what to store, usually after validating it. The value itself lives in an underscore attribute, <code>self._name</code>, because the property has taken over the public name: if the setter assigned <code>self.name = value</code>, it would call itself forever (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setters.py</span><button class="copy">Copy</button></div><pre><code class="py">class GenerationConfig:
+    def __init__(self, temperature=0.7, max_tokens=256):
+        self.temperature = temperature          # goes through the setter: validated from the start
+        self.max_tokens = max_tokens
+
+    @property
+    def temperature(self):
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f&quot;temperature must be a number, got {value!r}&quot;)
+        if not 0 &lt;= value &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {value}&quot;)
+        self._temperature = float(value)
+
+    @property
+    def max_tokens(self):
+        return self._max_tokens
+
+    @max_tokens.setter
+    def max_tokens(self, value):
+        if not isinstance(value, int) or value &lt; 1:
+            raise ValueError(f&quot;max_tokens must be a positive int, got {value!r}&quot;)
+        self._max_tokens = value
+
+cfg = GenerationConfig()
+cfg.temperature = 1
+print(cfg.temperature, type(cfg.temperature).__name__, vars(cfg))
+for bad in [3, &quot;hot&quot;]:
+    try:
+        cfg.temperature = bad
+    except (ValueError, TypeError) as e:
+        print(type(e).__name__, &quot;-&quot;, e, &quot;| still&quot;, cfg.temperature)
+try:
+    GenerationConfig(max_tokens=0)
+except ValueError as e:
+    print(&quot;at creation:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>1.0 float {&#x27;_temperature&#x27;: 1.0, &#x27;_max_tokens&#x27;: 256}
+ValueError - temperature must be in [0, 2], got 3 | still 1.0
+TypeError - temperature must be a number, got &#x27;hot&#x27; | still 1.0
+at creation: max_tokens must be a positive int, got 0</pre></div></div>
+<p>Three details make this robust. <code>__init__</code> assigns through the <strong>public</strong> name, so the same validation runs at construction; assigning <code>self._temperature</code> directly in <code>__init__</code> would let an invalid object be created (problem 14). A failed assignment raises <strong>before</strong> storing, so the object keeps its previous valid value. And the setter can <strong>normalise</strong> (here, storing a float), so the rest of the code can rely on one type. <code>vars(cfg)</code> shows that the instance stores only the underscore attributes: the properties live on the class.</p>
+</section>
+<section class="sec" id="cached">
+<h2><span class="n">4</span>Computing once: <code>functools.cached_property</code></h2>
+<p>A property runs its method on <strong>every</strong> access. That is right when the value is cheap or the underlying state changes, and wasteful when the computation is expensive and the inputs never change after creation: building a vocabulary from a corpus, loading a tokenizer, computing statistics of a fixed dataset. <code>functools.cached_property</code> runs the method on the <strong>first</strong> access and stores the result in the instance's <code>__dict__</code> under the same name; later accesses find it there and never call the method again.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">cached_property.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+class Corpus:
+    def __init__(self, texts):
+        self._texts = list(texts)
+        self.builds = 0
+
+    @functools.cached_property
+    def vocab(self):
+        self.builds += 1
+        return sorted({w for t in self._texts for w in t.lower().split()})
+
+    def add(self, text):
+        self._texts.append(text)
+        self.__dict__.pop(&quot;vocab&quot;, None)          # invalidate the cached value
+
+c = Corpus([&quot;Refund policy&quot;, &quot;refund window&quot;])
+print(c.vocab, c.vocab is c.vocab, c.builds)
+print(&quot;vocab&quot; in vars(c))
+c.add(&quot;Shipping policy&quot;)
+print(c.vocab, c.builds)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;policy&#x27;, &#x27;refund&#x27;, &#x27;window&#x27;] True 1
+True
+[&#x27;policy&#x27;, &#x27;refund&#x27;, &#x27;shipping&#x27;, &#x27;window&#x27;] 2</pre></div></div>
+<p>The cost of caching is <strong>staleness</strong>: if the inputs change, the cached value is now wrong, and nothing recomputes it automatically. Whoever changes the inputs must invalidate the cache, here by removing the stored value from <code>__dict__</code> (<code>del c.vocab</code> also works when it is present). Use <code>cached_property</code> for values derived from state that is fixed after construction, or pair it with a clear invalidation rule in every method that changes that state (problem 7). Unlike <code>lru_cache</code> on a method (8.3), it stores the value on the instance itself, so it disappears with the object and does not keep instances alive.</p>
+</section>
+<section class="sec" id="mangling">
+<h2><span class="n">5</span>Name mangling: <code>__name</code></h2>
+<p>A name with <strong>two</strong> leading underscores (and at most one trailing), such as <code>self.__secret</code>, is <strong>mangled</strong> inside a class body: Python rewrites it to <code>self._ClassName__secret</code>. The purpose is to avoid <strong>accidental clashes in subclasses</strong>: if both a base class and a subclass use <code>self.__cache</code>, each gets its own attribute (<code>_Base__cache</code> and <code>_Sub__cache</code>) instead of overwriting the other's. It is not a security feature: the mangled name is easy to reach from outside, and it makes debugging and testing more awkward.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mangling.py</span><button class="copy">Copy</button></div><pre><code class="py">class Client:
+    def __init__(self, key):
+        self.__key = key                    # stored as _Client__key
+        self._session = &quot;s-1&quot;               # one underscore: internal by convention
+
+    def masked(self):
+        return self.__key[:3] + &quot;...&quot;
+
+c = Client(&quot;sk-12345&quot;)
+print(sorted(vars(c)), c.masked(), c._session)
+try:
+    c.__key
+except AttributeError as e:
+    print(&quot;AttributeError:&quot;, e)
+print(c._Client__key)                       # still reachable: mangling is not protection</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;_Client__key&#x27;, &#x27;_session&#x27;] sk-... s-1
+AttributeError: &#x27;Client&#x27; object has no attribute &#x27;__key&#x27;
+sk-12345</pre></div></div>
+<p>In practice: use <strong>one</strong> underscore for internal attributes, and reserve two underscores for classes designed to be subclassed by people who might pick the same names. Names with two underscores on <strong>both</strong> sides (<code>__init__</code>, <code>__len__</code>) are not mangled; they are the special methods of 9.2, and inventing new ones of your own is discouraged. And secrets such as API keys need real protection (environment variables, a secrets manager, 12.4); within an object, the useful measure is a <code>__repr__</code> that never shows them (problem 11).</p>
+</section>
+<section class="sec" id="slots">
+<h2><span class="n">6</span><code>__slots__</code>: fixed attributes, less memory</h2>
+<p>Normally each instance stores its attributes in its own <code>__dict__</code>, which is flexible (you can add any attribute at any time) but costs memory: a dict per object, typically around a hundred bytes or more on top of the values. A class can instead declare <strong><code>__slots__</code></strong>, a tuple of the attribute names it allows. Instances then have <strong>no</strong> <code>__dict__</code>; the values are stored in fixed slots, each object is smaller, and assigning any attribute not listed raises <code>AttributeError</code>, so a typo such as <code>self.socre = 1</code> fails loudly instead of silently creating a new attribute (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">slots.py</span><button class="copy">Copy</button></div><pre><code class="py">import sys
+
+class PointDict:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+class PointSlots:
+    __slots__ = (&quot;x&quot;, &quot;y&quot;)
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+a, b = PointDict(1, 2), PointSlots(1, 2)
+print(hasattr(a, &quot;__dict__&quot;), hasattr(b, &quot;__dict__&quot;))
+print(sys.getsizeof(a) + sys.getsizeof(a.__dict__) &gt; sys.getsizeof(b))
+a.z = 3                                     # allowed: goes into a.__dict__
+try:
+    b.z = 3
+except AttributeError as e:
+    print(&quot;AttributeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>True False
+True
+AttributeError: &#x27;PointSlots&#x27; object has no attribute &#x27;z&#x27; and no __dict__ for setting new attributes</pre></div></div>
+<p>Use <code>__slots__</code> for classes with <strong>many instances</strong> (millions of tokens, spans, graph nodes or records) where the memory saving is real, or when catching attribute typos matters. The trade-offs: no dynamic attributes, no <code>cached_property</code> (it needs <code>__dict__</code>) unless you add <code>"__dict__"</code> to the slots, class-level default values for slotted names are not allowed, and with inheritance every class in the chain must declare its own <code>__slots__</code> to keep the benefit. <code>@dataclass(slots=True)</code> (11.3) generates them for you.</p>
+</section>
+<section class="sec" id="descriptors">
+<h2><span class="n">7</span>How properties work</h2>
+<p>A <code>property</code> is an object stored <strong>on the class</strong>, under the attribute's name. Objects that define <code>__get__</code> (and optionally <code>__set__</code>) are called <strong>descriptors</strong>, and attribute lookup gives them special treatment: when you read <code>obj.temperature</code>, Python finds the <code>property</code> object on the class and calls its <code>__get__</code>, which calls your getter method with <code>obj</code>. Assignment <code>obj.temperature = v</code> calls its <code>__set__</code>, which calls your setter. That is the whole mechanism; methods themselves work the same way, which is how <code>obj.method</code> becomes a bound method (9.1).</p>
+<p>The lookup order from 9.1 has one refinement because of this. A <strong>data descriptor</strong> (one with <code>__set__</code>, such as <code>property</code>) on the class takes precedence over the instance's <code>__dict__</code>, so a property cannot be bypassed by putting a value in the instance dict. A <strong>non-data descriptor</strong> (only <code>__get__</code>, such as a plain function or <code>cached_property</code>) is overridden by the instance's <code>__dict__</code>, which is exactly how <code>cached_property</code> works: after the first access, the stored value in the instance dict wins and the method is no longer called (problem 16). Frameworks build on descriptors: Django and SQLAlchemy model fields, and Pydantic's validated fields, are descriptors or work alongside them.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">descriptors.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+class Demo:
+    @property
+    def p(self):
+        return &quot;property value&quot;
+
+    @functools.cached_property
+    def c(self):
+        return &quot;computed once&quot;
+
+d = Demo()
+d.__dict__[&quot;p&quot;] = &quot;instance dict value&quot;
+d.__dict__[&quot;c&quot;] = &quot;instance dict value&quot;
+print(d.p, &quot;|&quot;, d.c)
+print(type(Demo.__dict__[&quot;p&quot;]).__name__, hasattr(Demo.__dict__[&quot;p&quot;], &quot;__set__&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>property value | instance dict value
+property True</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">8</span>Warm-up</h2>
+<article class="prob" id="p-computed-and-read-only" data-pid="m9-3-computed-and-read-only" data-type="predict" data-level="easy" data-answer="  computing
+12
+  computing
+13
+read-only
+property False">
+<header class="prob-head"><h3>1. Computed and read-only</h3></header>
+<div class="code"><pre><code class="py">class Cart:
+    def __init__(self):
+        self._items = {}
+
+    def add(self, name, price):
+        self._items[name] = price
+
+    @property
+    def total(self):
+        print(&quot;  computing&quot;)
+        return sum(self._items.values())
+
+c = Cart()
+c.add(&quot;pen&quot;, 2); c.add(&quot;book&quot;, 10)
+print(c.total)
+print(c.total + 1)
+try:
+    c.total = 0
+except AttributeError:
+    print(&quot;read-only&quot;)
+print(type(Cart.total).__name__, &quot;total&quot; in vars(c))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A property runs its method on every read. Without a setter, assignment fails.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  computing
+12
+  computing
+13
+read-only
+property False</pre></div><p>Each read of <code>c.total</code> calls the method, so "computing" prints twice. The property has no setter, so assignment raises <code>AttributeError</code>. The property object lives on the class (<code>type(Cart.total)</code> is <code>property</code>), and the instance stores no <code>total</code> at all: the value is derived from <code>_items</code> every time, so it can never be stale.</p></div></details>
+</article>
+<article class="prob" id="p-a-validated-generation-config" data-pid="m9-3-a-validated-generation-config" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. A validated generation config</h3></header>
+<div class="prob-q"><p>Write a class <code>SamplingConfig(temperature=1.0, top_p=1.0)</code> with properties <code>temperature</code> (a number in <code>[0, 2]</code>) and <code>top_p</code> (a number in <code>(0, 1]</code>, so 0 is not allowed), each with a setter that raises <code>ValueError</code> (with the name and the value in the message) and keeps the old value on failure. Booleans are not numbers here (<code>TypeError</code>). <code>__init__</code> must validate too. Add a read-only property <code>is_greedy</code>, true when temperature is 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class SamplingConfig:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">c = SamplingConfig()
+assert (c.temperature, c.top_p, c.is_greedy) == (1.0, 1.0, False)
+c.temperature = 0
+assert c.is_greedy and c.temperature == 0
+for attr, bad, kind in [("temperature", 2.5, ValueError), ("top_p", 0, ValueError), ("top_p", 1.2, ValueError), ("temperature", True, TypeError)]:
+    try:
+        setattr(c, attr, bad)
+        assert False, (attr, bad)
+    except kind as e:
+        assert attr in str(e)
+assert c.temperature == 0 and c.top_p == 1.0
+try:
+    SamplingConfig(top_p=0)
+    assert False
+except ValueError:
+    pass
+try:
+    c.is_greedy = True
+    assert False
+except AttributeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c = SamplingConfig()
+assert (c.temperature, c.top_p, c.is_greedy) == (1.0, 1.0, False)
+c.temperature = 0
+assert c.is_greedy and c.temperature == 0
+for attr, bad, kind in [(&quot;temperature&quot;, 2.5, ValueError), (&quot;top_p&quot;, 0, ValueError), (&quot;top_p&quot;, 1.2, ValueError), (&quot;temperature&quot;, True, TypeError)]:
+    try:
+        setattr(c, attr, bad)
+        assert False, (attr, bad)
+    except kind as e:
+        assert attr in str(e)
+assert c.temperature == 0 and c.top_p == 1.0
+try:
+    SamplingConfig(top_p=0)
+    assert False
+except ValueError:
+    pass
+try:
+    c.is_greedy = True
+    assert False
+except AttributeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small helper <code>_check_number(name, value)</code> can raise the <code>TypeError</code> for both setters.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>__init__</code>, assign <code>self.temperature = temperature</code> so the setter runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class SamplingConfig:
+    def __init__(self, temperature=1.0, top_p=1.0):
+        self.temperature = temperature
+        self.top_p = top_p
+
+    @staticmethod
+    def _check_number(name, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f&quot;{name} must be a number, got {value!r}&quot;)
+
+    @property
+    def temperature(self):
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value):
+        self._check_number(&quot;temperature&quot;, value)
+        if not 0 &lt;= value &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {value}&quot;)
+        self._temperature = value
+
+    @property
+    def top_p(self):
+        return self._top_p
+
+    @top_p.setter
+    def top_p(self, value):
+        self._check_number(&quot;top_p&quot;, value)
+        if not 0 &lt; value &lt;= 1:
+            raise ValueError(f&quot;top_p must be in (0, 1], got {value}&quot;)
+        self._top_p = value
+
+    @property
+    def is_greedy(self):
+        return self._temperature == 0</code></pre></div><p>Each setter is the single gate for its field, and <code>__init__</code> goes through the gates too, so no <code>SamplingConfig</code> can ever hold invalid values, whichever way it was created or changed. Checks run before storing, so a rejected assignment leaves the old value. The read-only <code>is_greedy</code> is derived from the stored temperature, so it is always correct. The shared type check lives in a static helper (9.6). This is the behaviour Pydantic gives a model field with <code>Field(ge=0, le=2)</code> (11.4), here written by hand so you can see what it does.</p></div></details>
+</article>
+<article class="prob" id="p-a-setter-that-calls-itself" data-pid="m9-3-a-setter-that-calls-itself" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A setter that calls itself</h3></header>
+<div class="prob-q"><p>Setting <code>Account.balance</code> crashes with <code>RecursionError</code>. Fix the property so the value is stored, and negative balances are rejected with <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Account:
+    def __init__(self, balance=0):
+        self.balance = balance
+
+    @property
+    def balance(self):
+        return self.balance
+
+    @balance.setter
+    def balance(self, value):
+        if value &lt; 0:
+            raise ValueError(&quot;balance cannot be negative&quot;)
+        self.balance = value
+</textarea>
+<script type="text/plain" class="prob-tests">import sys
+_old_limit = sys.getrecursionlimit()
+sys.setrecursionlimit(120)          # the browser's stack is small: fail fast on runaway recursion
+a = Account(10)
+a.balance = 25
+assert a.balance == 25
+try:
+    a.balance = -1
+    assert False
+except ValueError:
+    assert a.balance == 25
+assert Account().balance == 0
+sys.setrecursionlimit(_old_limit)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import sys
+_old_limit = sys.getrecursionlimit()
+sys.setrecursionlimit(120)          # the browser&#x27;s stack is small: fail fast on runaway recursion
+a = Account(10)
+a.balance = 25
+assert a.balance == 25
+try:
+    a.balance = -1
+    assert False
+except ValueError:
+    assert a.balance == 25
+assert Account().balance == 0
+sys.setrecursionlimit(_old_limit)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside the property, <code>self.balance</code> <strong>is</strong> the property. Store the value under another name, <code>self._balance</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Account:
+    def __init__(self, balance=0):
+        self.balance = balance
+
+    @property
+    def balance(self):
+        return self._balance
+
+    @balance.setter
+    def balance(self, value):
+        if value &lt; 0:
+            raise ValueError(&quot;balance cannot be negative&quot;)
+        self._balance = value</code></pre></div><p>The property owns the name <code>balance</code> on the class, and data descriptors take precedence over the instance dict, so every <code>self.balance = ...</code> inside the setter called the setter again, and every <code>self.balance</code> inside the getter called the getter again, until Python's recursion limit. The convention is to keep the real value in <code>self._balance</code> and let the property be the public face of it. <code>__init__</code> still assigns <code>self.balance</code>, deliberately, so the initial value is validated too.</p></div></details>
+</article>
+<article class="prob" id="p-mangled-names" data-pid="m9-3-mangled-names" data-type="predict" data-level="easy" data-answer="[&#x27;_Base__token&#x27;, &#x27;_Child__token&#x27;, &#x27;_note&#x27;]
+base child child note
+False base">
+<header class="prob-head"><h3>4. Mangled names</h3></header>
+<div class="code"><pre><code class="py">class Base:
+    def __init__(self):
+        self.__token = &quot;base&quot;
+        self._note = &quot;shared&quot;
+
+    def base_token(self):
+        return self.__token
+
+class Child(Base):
+    def __init__(self):
+        super().__init__()
+        self.__token = &quot;child&quot;
+        self._note = &quot;child note&quot;
+
+    def child_token(self):
+        return self.__token
+
+c = Child()
+print(sorted(vars(c)))
+print(c.base_token(), c.child_token(), c._note)
+print(hasattr(c, &quot;__token&quot;), c._Base__token)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside class <code>Base</code>, <code>self.__token</code> becomes <code>self._Base__token</code>; inside <code>Child</code>, <code>self._Child__token</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;_Base__token&#x27;, &#x27;_Child__token&#x27;, &#x27;_note&#x27;]
+base child child note
+False base</pre></div><p>Each class's <code>__token</code> is mangled with its own class name, so the base and the child keep separate attributes and neither overwrites the other, which is the purpose of mangling. The single-underscore <code>_note</code> is not mangled, so the child's assignment replaces the base's value. From outside, <code>__token</code> does not exist under that name, but the mangled name is perfectly reachable.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">9</span>Medium</h2>
+<article class="prob" id="p-a-conversation-with-computed-properties" data-pid="m9-3-a-conversation-with-computed-properties" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A conversation with computed properties</h3></header>
+<div class="prob-q"><p>Write a class <code>Conversation(system_prompt)</code> with: a <code>system_prompt</code> property whose setter rejects empty or whitespace-only text (<code>ValueError</code>) and stores it stripped; <code>add(role, content)</code>; a read-only <code>messages</code> property returning a <strong>tuple</strong> of new dicts, system message first; a read-only <code>token_count</code> property (words in all messages, <code>len(text.split())</code>); and a read-only <code>turns</code> property (number of non-system messages).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class Conversation:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">c = Conversation("  Be brief. ")
+c.add("user", "What is the refund window?")
+c.add("assistant", "Thirty days.")
+assert c.system_prompt == "Be brief." and c.turns == 2 and c.token_count == 2 + 5 + 2
+msgs = c.messages
+assert isinstance(msgs, tuple) and msgs[0] == {"role": "system", "content": "Be brief."}
+msgs[1]["content"] = "changed"
+assert c.messages[1]["content"] == "What is the refund window?"
+c.system_prompt = "Be formal and brief."
+assert c.messages[0]["content"] == "Be formal and brief." and c.token_count == 11
+try:
+    c.system_prompt = "   "
+    assert False
+except ValueError:
+    assert c.system_prompt == "Be formal and brief."
+try:
+    c.turns = 0
+    assert False
+except AttributeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c = Conversation(&quot;  Be brief. &quot;)
+c.add(&quot;user&quot;, &quot;What is the refund window?&quot;)
+c.add(&quot;assistant&quot;, &quot;Thirty days.&quot;)
+assert c.system_prompt == &quot;Be brief.&quot; and c.turns == 2 and c.token_count == 2 + 5 + 2
+msgs = c.messages
+assert isinstance(msgs, tuple) and msgs[0] == {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}
+msgs[1][&quot;content&quot;] = &quot;changed&quot;
+assert c.messages[1][&quot;content&quot;] == &quot;What is the refund window?&quot;
+c.system_prompt = &quot;Be formal and brief.&quot;
+assert c.messages[0][&quot;content&quot;] == &quot;Be formal and brief.&quot; and c.token_count == 11
+try:
+    c.system_prompt = &quot;   &quot;
+    assert False
+except ValueError:
+    assert c.system_prompt == &quot;Be formal and brief.&quot;
+try:
+    c.turns = 0
+    assert False
+except AttributeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the turns in <code>self._turns</code> (a list) and the prompt in <code>self._system_prompt</code>; build <code>messages</code> from both on each read.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Conversation:
+    def __init__(self, system_prompt):
+        self.system_prompt = system_prompt
+        self._turns = []
+
+    @property
+    def system_prompt(self):
+        return self._system_prompt
+
+    @system_prompt.setter
+    def system_prompt(self, text):
+        text = text.strip()
+        if not text:
+            raise ValueError(&quot;system prompt must not be empty&quot;)
+        self._system_prompt = text
+
+    def add(self, role, content):
+        self._turns.append({&quot;role&quot;: role, &quot;content&quot;: content})
+
+    @property
+    def messages(self):
+        system = {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: self._system_prompt}
+        return (system, *(dict(m) for m in self._turns))
+
+    @property
+    def token_count(self):
+        return sum(len(m[&quot;content&quot;].split()) for m in self.messages)
+
+    @property
+    def turns(self):
+        return len(self._turns)</code></pre></div><p>Everything a caller can see is either validated (<code>system_prompt</code>) or derived (<code>messages</code>, <code>token_count</code>, <code>turns</code>), so there is no state that can drift out of sync: changing the system prompt immediately changes the messages and the token count. The <code>messages</code> property returns a tuple of copied dicts, so callers can read the history and pass it to an API, but cannot alter the conversation by accident (2.3). Because these are properties, the call sites read naturally, <code>client.send(conv.messages)</code>, and if <code>token_count</code> later needs a real tokenizer or caching, its callers do not change.</p></div></details>
+</article>
+<article class="prob" id="p-a-method-used-as-if-it-were-a-property" data-pid="m9-3-a-method-used-as-if-it-were-a-property" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A method used as if it were a property</h3></header>
+<div class="prob-q"><p><code>Metrics.accuracy</code> is meant to be read as an attribute, but code such as <code>if m.accuracy &gt; 0.9</code> behaves strangely and the report prints <code>&lt;bound method ...&gt;</code>. Fix the class so <code>accuracy</code> and <code>error_rate</code> are read-only computed attributes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class Metrics:
+    def __init__(self, correct, total):
+        self.correct = correct
+        self.total = total
+
+    def accuracy(self):
+        return self.correct / self.total if self.total else 0.0
+
+    def error_rate(self):
+        return 1 - self.accuracy
+
+    def report(self):
+        return f&quot;accuracy={self.accuracy:.3f}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">m = Metrics(45, 50)
+assert m.accuracy == 0.9 and round(m.error_rate, 3) == 0.1
+assert m.report() == "accuracy=0.900"
+m.correct = 50
+assert m.accuracy == 1.0
+assert Metrics(0, 0).accuracy == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">m = Metrics(45, 50)
+assert m.accuracy == 0.9 and round(m.error_rate, 3) == 0.1
+assert m.report() == &quot;accuracy=0.900&quot;
+m.correct = 50
+assert m.accuracy == 1.0
+assert Metrics(0, 0).accuracy == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>@property</code>, <code>self.accuracy</code> is a bound method object, not a number.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Metrics:
+    def __init__(self, correct, total):
+        self.correct = correct
+        self.total = total
+
+    @property
+    def accuracy(self):
+        return self.correct / self.total if self.total else 0.0
+
+    @property
+    def error_rate(self):
+        return 1 - self.accuracy
+
+    def report(self):
+        return f&quot;accuracy={self.accuracy:.3f}&quot;</code></pre></div><p>Without the decorator, <code>self.accuracy</code> evaluates to a bound method, so <code>1 - self.accuracy</code> raises <code>TypeError</code>, the f-string format <code>:.3f</code> fails, and in code that does not crash, <code>m.accuracy &gt; 0.9</code> raises a <code>TypeError</code> too. <code>@property</code> makes reading the name call the method. Because the value is computed on each read, it follows changes to <code>correct</code> immediately. Deciding between a property and a method: use a property for cheap, side-effect-free values that feel like data, and a method for anything slow, with side effects, or needing arguments.</p></div></details>
+</article>
+<article class="prob" id="p-cache-a-vocabulary-and-invalidate-it" data-pid="m9-3-cache-a-vocabulary-and-invalidate-it" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Cache a vocabulary, and invalidate it</h3></header>
+<div class="prob-q"><p>Write a class <code>TextDataset(texts)</code> with a <code>functools.cached_property</code> <code>vocab</code> (sorted list of distinct lower-cased words), a <code>cached_property</code> <code>word_counts</code> (a <code>Counter</code> of all words), a counter attribute <code>builds</code> incremented each time either is computed, and methods <code>add(text)</code> and <code>remove(index)</code> that change the texts <strong>and invalidate both cached values</strong>. <code>len(dataset)</code> returns the number of texts.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools
+from collections import Counter
+
+class TextDataset:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">d = TextDataset(["Refund policy", "refund window"])
+assert d.vocab == ["policy", "refund", "window"] and d.vocab is d.vocab
+assert d.word_counts["refund"] == 2 and d.builds == 2
+d.vocab; d.word_counts
+assert d.builds == 2
+d.add("Shipping policy")
+assert d.vocab == ["policy", "refund", "shipping", "window"] and d.word_counts["policy"] == 2 and d.builds == 4
+d.remove(0)
+assert d.word_counts["policy"] == 1 and "policy" in d.vocab and len(d) == 2 and d.builds == 6</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">d = TextDataset([&quot;Refund policy&quot;, &quot;refund window&quot;])
+assert d.vocab == [&quot;policy&quot;, &quot;refund&quot;, &quot;window&quot;] and d.vocab is d.vocab
+assert d.word_counts[&quot;refund&quot;] == 2 and d.builds == 2
+d.vocab; d.word_counts
+assert d.builds == 2
+d.add(&quot;Shipping policy&quot;)
+assert d.vocab == [&quot;policy&quot;, &quot;refund&quot;, &quot;shipping&quot;, &quot;window&quot;] and d.word_counts[&quot;policy&quot;] == 2 and d.builds == 4
+d.remove(0)
+assert d.word_counts[&quot;policy&quot;] == 1 and &quot;policy&quot; in d.vocab and len(d) == 2 and d.builds == 6</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Invalidate with <code>self.__dict__.pop("vocab", None)</code> (and the same for <code>word_counts</code>), which works whether or not the value was computed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+from collections import Counter
+
+class TextDataset:
+    _CACHED = (&quot;vocab&quot;, &quot;word_counts&quot;)
+
+    def __init__(self, texts):
+        self._texts = list(texts)
+        self.builds = 0
+
+    def __len__(self):
+        return len(self._texts)
+
+    @functools.cached_property
+    def word_counts(self):
+        self.builds += 1
+        return Counter(w for t in self._texts for w in t.lower().split())
+
+    @functools.cached_property
+    def vocab(self):
+        self.builds += 1
+        return sorted({w for t in self._texts for w in t.lower().split()})
+
+    def _invalidate(self):
+        for name in self._CACHED:
+            self.__dict__.pop(name, None)
+
+    def add(self, text):
+        self._texts.append(text)
+        self._invalidate()
+
+    def remove(self, index):
+        del self._texts[index]
+        self._invalidate()</code></pre></div><p>Each cached value is computed on first access and stored in the instance dict, so repeated reads are free, which the unchanged <code>builds</code> count shows. Every method that changes <code>_texts</code> calls one <code>_invalidate</code> helper, so there is exactly one place that knows which values depend on the texts; forgetting it in a new method is the classic stale-cache bug. Popping with a default makes invalidation safe whether or not the value has been computed yet. For a dataset that changes constantly, plain properties (or updating the counts incrementally) may be better than caching at all.</p></div></details>
+</article>
+<article class="prob" id="p-recompute-on-every-read-or-cache" data-pid="m9-3-recompute-on-every-read-or-cache" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">RAG</span><h3>8. Recompute on every read or cache</h3></header>
+<div class="prob-q"><p>Both classes expose the average document length of a fixed corpus of 5,000 texts; the code reads it 100 times. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+texts = [f&quot;refund request {i} about order {i % 97} &quot; * 3 for i in range(5_000)]
+
+class Live:
+    def __init__(self, texts):
+        self.texts = texts
+    @property
+    def avg_len(self):
+        return sum(len(t.split()) for t in self.texts) / len(self.texts)
+
+class Cached:
+    def __init__(self, texts):
+        self.texts = texts
+    @functools.cached_property
+    def avg_len(self):
+        return sum(len(t.split()) for t in self.texts) / len(self.texts)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">c = Live(texts)
+values = [c.avg_len for _ in range(100)]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">c = Cached(texts)
+values = [c.avg_len for _ in range(100)]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many times does each version split 5,000 texts?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.06 s</td></tr><tr><td>B</td><td>11.23 ms</td></tr></table></div><p>The plain property splits every text on every read: 100 passes over the corpus. The cached version does it once and then returns the value stored in the instance dict, a plain attribute read. Caching is correct here because the corpus does not change after construction; if texts could be added, the cached value would need invalidation, and the live property would be the safe default.</p></div></details>
+</article>
+<article class="prob" id="p-setters-that-guard-the-state" data-pid="m9-3-setters-that-guard-the-state" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Setters that guard the state</h3></header>
+<div class="prob-q"><p>Fill in <code>value</code> and <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">class Threshold:
+    def __init__(self, value):
+        self.log = []
+        self.value = value
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, v):
+        if not 0 &lt;= v &lt;= 1:
+            self.log.append(f&quot;rejected {v}&quot;)
+            raise ValueError(v)
+        self._value = round(v, 2)
+        self.log.append(f&quot;set {self._value}&quot;)
+
+t = Threshold(0.5)
+value, log = t.value, list(t.log)
+t.value = 0.756
+value, log = t.value, list(t.log)
+try:
+    t.value = 1.5
+except ValueError:
+    pass
+value, log = t.value, list(t.log)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>value</code></th><th><code>log</code></th></tr><tr><td>created</td><td><input class="cell" data-a="0.5" data-s="0.5" aria-label="value at created" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;set 0.5&#x27;]" data-s="[&#x27;set 0.5&#x27;]" aria-label="log at created" autocomplete="off"></td></tr><tr><td>set 0.756</td><td><input class="cell" data-a="0.76" data-s="0.76" aria-label="value at set 0.756" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;]" data-s="[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;]" aria-label="log at set 0.756" autocomplete="off"></td></tr><tr><td>rejected 1.5</td><td><input class="cell" data-a="0.76" data-s="0.76" aria-label="value at rejected 1.5" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;, &#x27;rejected 1.5&#x27;]" data-s="[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;, &#x27;rejected 1.5&#x27;]" aria-label="log at rejected 1.5" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__init__</code> assigns through the property. A rejected value raises before <code>_value</code> changes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>value</code></th><th><code>log</code></th></tr><tr><td>created</td><td><code>0.5</code></td><td><code>[&#x27;set 0.5&#x27;]</code></td></tr><tr><td>set 0.756</td><td><code>0.76</code></td><td><code>[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;]</code></td></tr><tr><td>rejected 1.5</td><td><code>0.76</code></td><td><code>[&#x27;set 0.5&#x27;, &#x27;set 0.76&#x27;, &#x27;rejected 1.5&#x27;]</code></td></tr></table></div><p>Construction goes through the setter, so the first log entry comes from <code>__init__</code>. The setter normalises by rounding to two decimals, so 0.756 is stored as 0.76. The invalid 1.5 is logged and rejected before <code>_value</code> is touched, so the threshold keeps 0.76: the invariant "between 0 and 1" holds at every moment.</p></div></details>
+</article>
+<article class="prob" id="p-a-typo-that-silently-creates-a-new-attri" data-pid="m9-3-a-typo-that-silently-creates-a-new-attri" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. A typo that silently creates a new attribute</h3></header>
+<div class="prob-q"><p><code>TrainingState.step()</code> misspells an attribute, so the loss never updates and no error is raised. Make the class reject unknown attributes with <code>AttributeError</code> (so the typo fails loudly), and fix the typo.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class TrainingState:
+    def __init__(self):
+        self.epoch = 0
+        self.best_loss = float(&quot;inf&quot;)
+
+    def step(self, loss):
+        self.epoch += 1
+        if loss &lt; self.best_loss:
+            self.best_los = loss
+        return self.best_loss
+</textarea>
+<script type="text/plain" class="prob-tests">s = TrainingState()
+assert s.step(0.9) == 0.9 and s.step(1.2) == 0.9 and s.step(0.5) == 0.5 and s.epoch == 3
+try:
+    s.best_los = 0.1
+    assert False, "unknown attributes must be rejected"
+except AttributeError:
+    pass
+assert not hasattr(s, "__dict__")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = TrainingState()
+assert s.step(0.9) == 0.9 and s.step(1.2) == 0.9 and s.step(0.5) == 0.5 and s.epoch == 3
+try:
+    s.best_los = 0.1
+    assert False, &quot;unknown attributes must be rejected&quot;
+except AttributeError:
+    pass
+assert not hasattr(s, &quot;__dict__&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__slots__ = ("epoch", "best_loss")</code> removes <code>__dict__</code>, so only the listed names can be assigned.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class TrainingState:
+    __slots__ = (&quot;epoch&quot;, &quot;best_loss&quot;)
+
+    def __init__(self):
+        self.epoch = 0
+        self.best_loss = float(&quot;inf&quot;)
+
+    def step(self, loss):
+        self.epoch += 1
+        if loss &lt; self.best_loss:
+            self.best_loss = loss
+        return self.best_loss</code></pre></div><p>With a normal <code>__dict__</code>, <code>self.best_los = loss</code> is a valid assignment that creates a new attribute, so the bug was invisible: training "worked" and the best loss stayed infinite, which might make early stopping or checkpointing never trigger. <code>__slots__</code> fixes the set of attributes, so any misspelt assignment raises <code>AttributeError</code> at the exact line. Linters and type checkers (11.1) catch many such typos statically too. Saving memory is the other benefit of slots, irrelevant for one training state but large for millions of small objects.</p></div></details>
+</article>
+<article class="prob" id="p-an-api-key-that-never-leaks" data-pid="m9-3-an-api-key-that-never-leaks" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. An API key that never leaks</h3></header>
+<div class="prob-q"><p>Write a class <code>Secret(value)</code> for API keys: <code>__repr__</code> and <code>__str__</code> both return <code>Secret('sk-1...')</code> style masking (first 4 characters, then <code>...</code>; for values of 4 characters or fewer, just <code>Secret('***')</code>); a method <code>reveal()</code> returning the real value; a read-only property <code>fingerprint</code> returning the first 8 hex characters of the SHA-256 of the value; equality by value (and a matching hash). Reject empty values with <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import hashlib
+
+class Secret:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">k = Secret("sk-live-1234567890")
+assert repr(k) == "Secret('sk-l...')" and str(k) == repr(k) and f"{k}" == "Secret('sk-l...')"
+assert k.reveal() == "sk-live-1234567890" and "1234567890" not in repr([k, {"key": k}])
+assert k.fingerprint == hashlib.sha256(b"sk-live-1234567890").hexdigest()[:8]
+assert k == Secret("sk-live-1234567890") and len({k, Secret("sk-live-1234567890")}) == 1
+assert repr(Secret("abc")) == "Secret('***')"
+try:
+    k.fingerprint = "x"
+    assert False
+except AttributeError:
+    pass
+try:
+    Secret("")
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">k = Secret(&quot;sk-live-1234567890&quot;)
+assert repr(k) == &quot;Secret(&#x27;sk-l...&#x27;)&quot; and str(k) == repr(k) and f&quot;{k}&quot; == &quot;Secret(&#x27;sk-l...&#x27;)&quot;
+assert k.reveal() == &quot;sk-live-1234567890&quot; and &quot;1234567890&quot; not in repr([k, {&quot;key&quot;: k}])
+assert k.fingerprint == hashlib.sha256(b&quot;sk-live-1234567890&quot;).hexdigest()[:8]
+assert k == Secret(&quot;sk-live-1234567890&quot;) and len({k, Secret(&quot;sk-live-1234567890&quot;)}) == 1
+assert repr(Secret(&quot;abc&quot;)) == &quot;Secret(&#x27;***&#x27;)&quot;
+try:
+    k.fingerprint = &quot;x&quot;
+    assert False
+except AttributeError:
+    pass
+try:
+    Secret(&quot;&quot;)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store the value in <code>self._value</code>; <code>__str__</code> can return <code>repr(self)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hashlib.sha256(value.encode()).hexdigest()[:8]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import hashlib
+
+class Secret:
+    def __init__(self, value):
+        if not value:
+            raise ValueError(&quot;secret must not be empty&quot;)
+        self._value = value
+
+    def __repr__(self):
+        shown = self._value[:4] + &quot;...&quot; if len(self._value) &gt; 4 else &quot;***&quot;
+        return f&quot;Secret({shown!r})&quot;
+
+    __str__ = __repr__
+
+    def reveal(self):
+        return self._value
+
+    @property
+    def fingerprint(self):
+        return hashlib.sha256(self._value.encode()).hexdigest()[:8]
+
+    def __eq__(self, other):
+        if not isinstance(other, Secret):
+            return NotImplemented
+        return self._value == other._value
+
+    def __hash__(self):
+        return hash(self._value)</code></pre></div><p>Keys leak most often through logs, error messages and debug prints: an exception that shows a config dict, a log line with a client object, a test failure message. Making both <code>repr</code> and <code>str</code> masked means the key cannot appear by accident, even inside containers; reading the real value requires an explicit <code>reveal()</code> call that is easy to search for in code review. The fingerprint lets you log <strong>which</strong> key was used (for example after a rotation) without exposing it. Pydantic has <code>SecretStr</code> with the same idea, and this only protects against accidents: anyone with access to the process can still read <code>_value</code>.</p></div></details>
+</article>
+<article class="prob" id="p-cached-property-lives-in-the-instance" data-pid="m9-3-cached-property-lives-in-the-instance" data-type="predict" data-level="medium" data-answer="model-1 model-1 1 True
+model-2 2
+model-1 model-2
+patched model-1">
+<header class="prob-head"><h3>12. cached_property lives in the instance</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+class Loader:
+    def __init__(self):
+        self.calls = 0
+
+    @functools.cached_property
+    def model(self):
+        self.calls += 1
+        return f&quot;model-{self.calls}&quot;
+
+a = Loader()
+print(a.model, a.model, a.calls, &quot;model&quot; in vars(a))
+del a.model
+print(a.model, a.calls)
+b = Loader()
+print(b.model, a.model)
+a.model = &quot;patched&quot;
+print(a.model, b.model)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The first access stores the result in <code>vars(a)</code>; deleting it makes the next access compute again.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>model-1 model-1 1 True
+model-2 2
+model-1 model-2
+patched model-1</pre></div><p>The first access computes and stores <code>"model-1"</code> in the instance dict, so the second access just reads it and <code>calls</code> stays 1. <code>del a.model</code> removes the stored value, so the next access computes <code>"model-2"</code>. Each instance caches separately: <code>b</code> computes its own. Because <code>cached_property</code> is a non-data descriptor, assigning <code>a.model</code> simply writes the instance dict, which is handy for injecting a fake model in tests.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">10</span>Hard</h2>
+<article class="prob" id="p-linked-properties-that-keep-an-invariant" data-pid="m9-3-linked-properties-that-keep-an-invariant" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. Linked properties that keep an invariant</h3></header>
+<div class="prob-q"><p>Write a class <code>Window(start, end)</code> for a time range in seconds with properties <code>start</code>, <code>end</code> and <code>length</code>. Invariant: <code>0 &lt;= start &lt;= end</code>. Setting <code>start</code> or <code>end</code> to a value that breaks the invariant raises <code>ValueError</code> and changes nothing. Setting <code>length</code> keeps <code>start</code> and moves <code>end</code> (negative lengths are rejected). Add <code>shift(delta)</code> that moves both ends, rejected as a whole if it would make <code>start</code> negative, and <code>__repr__</code> like <code>Window(10, 25)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">class Window:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">w = Window(10, 25)
+assert (w.start, w.end, w.length, repr(w)) == (10, 25, 15, "Window(10, 25)")
+w.length = 5
+assert (w.start, w.end) == (10, 15)
+w.end = 40
+w.start = 30
+assert (w.start, w.end, w.length) == (30, 40, 10)
+for attr, bad in [("start", 41), ("end", 29), ("start", -1), ("length", -2)]:
+    try:
+        setattr(w, attr, bad)
+        assert False, (attr, bad)
+    except ValueError:
+        assert (w.start, w.end) == (30, 40)
+w.shift(-25)
+assert (w.start, w.end) == (5, 15)
+try:
+    w.shift(-6)
+    assert False
+except ValueError:
+    assert (w.start, w.end) == (5, 15)
+try:
+    Window(5, 1)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">w = Window(10, 25)
+assert (w.start, w.end, w.length, repr(w)) == (10, 25, 15, &quot;Window(10, 25)&quot;)
+w.length = 5
+assert (w.start, w.end) == (10, 15)
+w.end = 40
+w.start = 30
+assert (w.start, w.end, w.length) == (30, 40, 10)
+for attr, bad in [(&quot;start&quot;, 41), (&quot;end&quot;, 29), (&quot;start&quot;, -1), (&quot;length&quot;, -2)]:
+    try:
+        setattr(w, attr, bad)
+        assert False, (attr, bad)
+    except ValueError:
+        assert (w.start, w.end) == (30, 40)
+w.shift(-25)
+assert (w.start, w.end) == (5, 15)
+try:
+    w.shift(-6)
+    assert False
+except ValueError:
+    assert (w.start, w.end) == (5, 15)
+try:
+    Window(5, 1)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate a candidate pair with one private method, <code>_set(start, end)</code>, that checks and then assigns both. Every setter and <code>shift</code> goes through it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Window:
+    def __init__(self, start, end):
+        self._set(start, end)
+
+    def _set(self, start, end):
+        if not 0 &lt;= start &lt;= end:
+            raise ValueError(f&quot;need 0 &lt;= start &lt;= end, got start={start}, end={end}&quot;)
+        self._start, self._end = start, end
+
+    def __repr__(self):
+        return f&quot;Window({self._start}, {self._end})&quot;
+
+    @property
+    def start(self):
+        return self._start
+
+    @start.setter
+    def start(self, value):
+        self._set(value, self._end)
+
+    @property
+    def end(self):
+        return self._end
+
+    @end.setter
+    def end(self, value):
+        self._set(self._start, value)
+
+    @property
+    def length(self):
+        return self._end - self._start
+
+    @length.setter
+    def length(self, value):
+        if value &lt; 0:
+            raise ValueError(f&quot;length must not be negative, got {value}&quot;)
+        self._set(self._start, self._start + value)
+
+    def shift(self, delta):
+        self._set(self._start + delta, self._end + delta)</code></pre></div><p>All changes funnel through <code>_set</code>, which validates the <strong>complete</strong> new state before assigning anything, so no sequence of property assignments can leave the window invalid, even halfway. That is why setting <code>end = 40</code> before <code>start = 30</code> works but the opposite order (start 30 first) would be rejected while <code>end</code> was still 15: invariants that span several fields constrain the order of updates, and a method that sets both at once (like <code>shift</code>, or a <code>move_to(start, end)</code>) is often friendlier. <code>length</code> is not stored at all, so it can never disagree with <code>start</code> and <code>end</code>. This is the pattern for any object with related fields: one validating method, and properties as its public face.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-model-config" data-pid="m9-3-read-the-code-a-model-config" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a model config</h3></header>
+<div class="prob-q"><p><code>ModelConfig</code> should validate <code>temperature</code> (0 to 2) at creation and on assignment, never let callers modify its stop sequences except through <code>add_stop</code>, and report a <code>prompt_tokens</code> count that always matches the current <code>prompt</code>. Invalid configs can be created, <code>cfg.stop.append(...)</code> changes the config, and <code>prompt_tokens</code> is stale after the prompt changes. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import functools
+
+
+class ModelConfig:
+    def __init__(self, prompt, temperature=0.7, stop=None):
+        self.prompt = prompt
+        self._temperature = temperature
+        self._stop = stop if stop is not None else []
+
+    @property
+    def temperature(self):
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value):
+        if not 0 &lt;= value &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {value}&quot;)
+        self._temperature = value
+
+    @property
+    def stop(self):
+        return self._stop
+
+    def add_stop(self, seq):
+        if seq and seq not in self._stop:
+            self._stop.append(seq)
+
+    @functools.cached_property
+    def prompt_tokens(self):
+        return len(self.prompt.split())
+</textarea>
+<script type="text/plain" class="prob-tests">try:
+    ModelConfig("hi", temperature=5)
+    assert False, "invalid temperature at creation"
+except ValueError:
+    pass
+caller_stops = ["\n\n"]
+cfg = ModelConfig("Summarise the refund policy", stop=caller_stops)
+cfg.add_stop("User:")
+assert cfg.stop == ("\n\n", "User:") and caller_stops == ["\n\n"]
+try:
+    cfg.stop.append("x")
+    assert False, "stop must be read-only"
+except AttributeError:
+    pass
+assert cfg.prompt_tokens == 4
+cfg.prompt = "Summarise the refund policy in three bullet points"
+assert cfg.prompt_tokens == 8
+cfg.temperature = 1.5
+assert cfg.temperature == 1.5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">try:
+    ModelConfig(&quot;hi&quot;, temperature=5)
+    assert False, &quot;invalid temperature at creation&quot;
+except ValueError:
+    pass
+caller_stops = [&quot;\n\n&quot;]
+cfg = ModelConfig(&quot;Summarise the refund policy&quot;, stop=caller_stops)
+cfg.add_stop(&quot;User:&quot;)
+assert cfg.stop == (&quot;\n\n&quot;, &quot;User:&quot;) and caller_stops == [&quot;\n\n&quot;]
+try:
+    cfg.stop.append(&quot;x&quot;)
+    assert False, &quot;stop must be read-only&quot;
+except AttributeError:
+    pass
+assert cfg.prompt_tokens == 4
+cfg.prompt = &quot;Summarise the refund policy in three bullet points&quot;
+assert cfg.prompt_tokens == 8
+cfg.temperature = 1.5
+assert cfg.temperature == 1.5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__init__</code> bypasses the setter by assigning <code>_temperature</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>stop</code> returns the internal list; return a tuple, and copy the caller's list in <code>__init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A cached value of a mutable input goes stale. A plain property (it is cheap) is the simplest fix.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ModelConfig:
+    def __init__(self, prompt, temperature=0.7, stop=None):
+        self.prompt = prompt
+        self.temperature = temperature
+        self._stop = list(stop) if stop is not None else []
+
+    @property
+    def temperature(self):
+        return self._temperature
+
+    @temperature.setter
+    def temperature(self, value):
+        if not 0 &lt;= value &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {value}&quot;)
+        self._temperature = value
+
+    @property
+    def stop(self):
+        return tuple(self._stop)
+
+    def add_stop(self, seq):
+        if seq and seq not in self._stop:
+            self._stop.append(seq)
+
+    @property
+    def prompt_tokens(self):
+        return len(self.prompt.split())</code></pre></div><p>Four bugs from this lesson. <code>__init__</code> assigned <code>self._temperature</code> directly, skipping the validation, so <code>temperature=5</code> created an invalid config; assigning through <code>self.temperature</code> makes construction obey the same rule as every later change. The <code>stop</code> property returned the internal list, so <code>cfg.stop.append(...)</code> bypassed <code>add_stop</code>; returning a tuple makes the public view read-only. <code>__init__</code> also stored the <strong>caller's</strong> list, so <code>add_stop</code> would have modified the caller's <code>caller_stops</code> (2.4); copying with <code>list(stop)</code> gives the config its own. And <code>prompt_tokens</code> was a <code>cached_property</code> over a mutable public attribute, so changing <code>prompt</code> left the count at the old value; counting words is cheap, so a plain property is both correct and simple. Caching is only safe when the inputs cannot change, or every change invalidates the cache.</p></div></details>
+</article>
+<article class="prob" id="p-an-immutable-value-object" data-pid="m9-3-an-immutable-value-object" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. An immutable value object</h3></header>
+<div class="prob-q"><p>Write a class <code>Price(amount, currency)</code> that is <strong>immutable</strong>: use <code>__slots__</code>, store the values in private slots, expose read-only properties <code>amount</code> and <code>currency</code>, and make <strong>any</strong> attribute assignment after construction raise <code>AttributeError</code> (override <code>__setattr__</code>). Normalise <code>currency</code> to upper case and reject negative amounts. Add <code>with_discount(pct)</code> returning a <strong>new</strong> <code>Price</code>, <code>__repr__</code> (<code>Price(19.99, 'EUR')</code>), and <code>__eq__</code>/<code>__hash__</code> by value.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">class Price:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">p = Price(20.0, "eur")
+assert (p.amount, p.currency, repr(p)) == (20.0, "EUR", "Price(20.0, 'EUR')")
+q = p.with_discount(25)
+assert q == Price(15.0, "EUR") and p.amount == 20.0 and q is not p
+for attr in ["amount", "currency", "_amount", "anything"]:
+    try:
+        setattr(p, attr, 1)
+        assert False, attr
+    except AttributeError:
+        pass
+assert p == Price(20, "EUR") and len({p, Price(20.0, "EUR"), q}) == 2 and not hasattr(p, "__dict__")
+try:
+    Price(-1, "EUR")
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">p = Price(20.0, &quot;eur&quot;)
+assert (p.amount, p.currency, repr(p)) == (20.0, &quot;EUR&quot;, &quot;Price(20.0, &#x27;EUR&#x27;)&quot;)
+q = p.with_discount(25)
+assert q == Price(15.0, &quot;EUR&quot;) and p.amount == 20.0 and q is not p
+for attr in [&quot;amount&quot;, &quot;currency&quot;, &quot;_amount&quot;, &quot;anything&quot;]:
+    try:
+        setattr(p, attr, 1)
+        assert False, attr
+    except AttributeError:
+        pass
+assert p == Price(20, &quot;EUR&quot;) and len({p, Price(20.0, &quot;EUR&quot;), q}) == 2 and not hasattr(p, &quot;__dict__&quot;)
+try:
+    Price(-1, &quot;EUR&quot;)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__setattr__</code> runs for <strong>every</strong> assignment, including those in <code>__init__</code>. Inside <code>__init__</code>, set the slots with <code>object.__setattr__(self, "_amount", value)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>with_discount</code> builds a new object with <code>Price(...)</code>; it never changes <code>self</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Price:
+    __slots__ = (&quot;_amount&quot;, &quot;_currency&quot;)
+
+    def __init__(self, amount, currency):
+        if amount &lt; 0:
+            raise ValueError(f&quot;amount must not be negative, got {amount}&quot;)
+        object.__setattr__(self, &quot;_amount&quot;, float(amount))
+        object.__setattr__(self, &quot;_currency&quot;, currency.upper())
+
+    def __setattr__(self, name, value):
+        raise AttributeError(f&quot;Price is immutable: cannot set {name!r}&quot;)
+
+    @property
+    def amount(self):
+        return self._amount
+
+    @property
+    def currency(self):
+        return self._currency
+
+    def with_discount(self, pct):
+        return Price(round(self._amount * (1 - pct / 100), 2), self._currency)
+
+    def __repr__(self):
+        return f&quot;Price({self._amount!r}, {self._currency!r})&quot;
+
+    def __eq__(self, other):
+        if not isinstance(other, Price):
+            return NotImplemented
+        return (self._amount, self._currency) == (other._amount, other._currency)
+
+    def __hash__(self):
+        return hash((self._amount, self._currency))</code></pre></div><p>Immutability makes a value object safe to share and to use as a dict key or set member: the hash can never change, and no caller can alter a price another part of the program is relying on (2.2). <code>__setattr__</code> intercepts every assignment, so even the private slots cannot be changed from outside; construction uses <code>object.__setattr__</code>, the underlying mechanism, to set them once. Operations that "change" the value return a new object, like <code>str.upper()</code> or <code>int + int</code>. Storing <code>float(amount)</code> normalises <code>20</code> and <code>20.0</code> to one representation, so they compare and hash equal. <code>@dataclass(frozen=True, slots=True)</code> (11.3) generates almost exactly this class from two lines of field declarations.</p></div></details>
+</article>
+<article class="prob" id="p-data-and-non-data-descriptors" data-pid="m9-3-data-and-non-data-descriptors" data-type="predict" data-level="hard" data-answer="safe:10
+safe 99 safe:99
+replaced safe:99">
+<header class="prob-head"><h3>16. Data and non-data descriptors</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+class Settings:
+    def __init__(self):
+        self._mode = &quot;safe&quot;
+
+    @property
+    def mode(self):
+        return self._mode
+
+    @functools.cached_property
+    def limits(self):
+        return {&quot;safe&quot;: 10}[self._mode]
+
+    def describe(self):
+        return f&quot;{self.mode}:{self.limits}&quot;
+
+s = Settings()
+print(s.describe())
+s.__dict__[&quot;mode&quot;] = &quot;fast&quot;
+s.__dict__[&quot;limits&quot;] = 99
+print(s.mode, s.limits, s.describe())
+s.describe = lambda: &quot;replaced&quot;
+print(s.describe(), Settings.describe(s))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>property</code> defines <code>__set__</code>, so it wins over the instance dict. <code>cached_property</code> and plain functions do not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>safe:10
+safe 99 safe:99
+replaced safe:99</pre></div><p><code>property</code> is a data descriptor, so it takes precedence over the instance's <code>__dict__</code>: the entry <code>"mode"</code> placed there is ignored, and <code>s.mode</code> still calls the getter. <code>cached_property</code> and plain methods are non-data descriptors: an entry in the instance dict wins, so <code>s.limits</code> returns 99 and assigning <code>s.describe</code> replaces the method for that instance only, while calling it through the class still runs the original. This precedence rule is what makes properties reliable gates and cached properties cheap after the first access.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">11</span>Interview questions</h2>
+<article class="prob" id="p-why-does-python-code-use-properties-inst" data-pid="m9-3-why-does-python-code-use-properties-inst" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Why does Python code use properties instead of getter and setter methods?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Because attribute access is the interface, and a property can take it over later without changing callers. You start with a plain public attribute; if you later need validation, normalisation, a computed value or lazy loading, you replace it with a <code>@property</code> of the same name, and <code>obj.x</code> and <code>obj.x = v</code> keep working everywhere. Writing <code>get_x()</code> and <code>set_x()</code> up front, as in Java, adds boilerplate for flexibility Python already gives you. Properties are for cheap, side-effect-free operations that feel like reading data; anything slow, with side effects or needing arguments should remain a method, so callers are not surprised by an attribute read that hits the network.</p></div></details>
+</article>
+<article class="prob" id="p-how-does-privacy-work-in-python-no-under" data-pid="m9-3-how-does-privacy-work-in-python-no-under" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How does privacy work in Python: no underscore, one underscore, two underscores?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Nothing is truly private; privacy is a convention. A plain name is public API. A single leading underscore (<code>_cache</code>) marks an internal detail: callers should not use it, it can change without notice, <code>import *</code> skips it, and tools warn about outside access. Two leading underscores (<code>__cache</code>) trigger name mangling inside the class body, renaming it to <code>_ClassName__cache</code>, which prevents accidental collisions with attributes of the same name in subclasses; it does not prevent access, and it complicates testing, so it is used sparingly. Dunder names with underscores on both sides are special methods, not private. Real protection of invariants comes from properties, validating methods and returning copies, and real protection of secrets comes from keeping them out of the code and out of <code>repr</code>.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-property-and-functools-cached-pro" data-pid="m9-3-how-do-property-and-functools-cached-pro" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How do <code>property</code> and <code>functools.cached_property</code> work under the hood, and why does the difference matter?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Both are descriptors: objects stored on the class that customise attribute access via <code>__get__</code>. When you read <code>obj.name</code>, Python checks the class for a descriptor under that name. A <strong>data descriptor</strong> (one that defines <code>__set__</code> or <code>__delete__</code>, like <code>property</code>) takes precedence over the instance <code>__dict__</code>, so every read and write goes through the getter and setter, and nothing in the instance can bypass it: that is why properties work as validation gates. A <strong>non-data descriptor</strong> (only <code>__get__</code>, like functions and <code>cached_property</code>) is used only if the instance <code>__dict__</code> has no entry with that name. <code>cached_property</code> exploits this: its <code>__get__</code> computes the value and stores it in the instance dict, so later reads find the dict entry and never call the descriptor again, making them as fast as a normal attribute. Consequences: cached values can go stale and must be invalidated by deleting the entry, <code>cached_property</code> needs a <code>__dict__</code> (so it does not work with plain <code>__slots__</code>), and tests can override a cached property simply by assigning to it.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Python privacy is a convention: <code>_name</code> means internal. Encapsulation means protecting invariants, not hiding data.</li><li><code>@property</code> gives computed, read-only attributes; <code>@x.setter</code> validates and normalises assignments into <code>self._x</code>. Validate in <code>__init__</code> by assigning through the property.</li><li>Start with plain attributes; switch to a property later without changing callers. Return tuples or copies, never internal mutable objects.</li><li><code>functools.cached_property</code> computes once and stores in the instance dict; invalidate it whenever its inputs change.</li><li><code>__name</code> is mangled to <code>_Class__name</code> (clash avoidance, not security). <code>__slots__</code> saves memory and rejects typo attributes. Properties are data descriptors and win over the instance dict.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

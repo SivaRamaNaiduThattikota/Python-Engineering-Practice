@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9.1 · Classes and instances</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m9-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 9 · OOP</span></div>
+  <h1>9.1 Classes and instances</h1>
+  <p>A class bundles data with the functions that work on it. What happens step by step when you create an object and call a method, what <code>self</code> really is, where attributes live and how Python finds them, class attributes and the shared-mutable trap, bound methods, and when a class is the right tool. Applied to conversations, running statistics, token budgets and a small search index.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>Why classes</h2>
+<p>You have used objects from the first lesson: a list holds items <strong>and</strong> has methods such as <code>append</code> and <code>sort</code> that work on those items; a string has <code>split</code> and <code>upper</code>. A <strong>class</strong> lets you define your own kind of object in the same way: some <strong>data</strong> (attributes) and the <strong>functions that work on that data</strong> (methods), kept together. The class is the blueprint; each object made from it is an <strong>instance</strong>, with its own data but the same methods.</p>
+<p>Without classes, the same program is a dict plus loose functions that all take the dict as their first argument: <code>add_message(conv, role, text)</code>, <code>last_messages(conv, n)</code>. That works, and for small scripts it is fine. Classes become worth it when the data has <strong>rules</strong> that must always hold (a role must be valid, a budget must not go negative), when several functions share and change the same state, and when you want many independent objects of the same kind. The class puts the rules in one place, and code that uses it can only change the data through its methods.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">first_class.py</span><button class="copy">Copy</button></div><pre><code class="py">class Conversation:
+    def __init__(self, system_prompt):
+        self.messages = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system_prompt}]
+
+    def add(self, role, content):
+        if role not in (&quot;user&quot;, &quot;assistant&quot;):
+            raise ValueError(f&quot;bad role {role!r}&quot;)
+        self.messages.append({&quot;role&quot;: role, &quot;content&quot;: content})
+
+    def last(self, n):
+        return self.messages[-n:]
+
+chat = Conversation(&quot;Be brief.&quot;)
+chat.add(&quot;user&quot;, &quot;Refund?&quot;)
+chat.add(&quot;assistant&quot;, &quot;5 days.&quot;)
+print(len(chat.messages), chat.last(1))
+other = Conversation(&quot;Be formal.&quot;)
+print(len(other.messages), type(chat).__name__, isinstance(chat, Conversation))</code></pre><div class="out"><span class="ol">Output</span><pre>3 [{&#x27;role&#x27;: &#x27;assistant&#x27;, &#x27;content&#x27;: &#x27;5 days.&#x27;}]
+1 Conversation True</pre></div></div>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A class is like a table definition and its instances are rows: the definition says which columns exist (attributes) and the rules they follow (constraints), and every row has its own values. Methods are like stored procedures bound to the table: the only sanctioned way to change the data, so the rules are always applied.</p></div></div>
+</section>
+<section class="sec" id="steps">
+<h2><span class="n">2</span>What happens when you create an object and call a method</h2>
+<p>The <code>class</code> statement runs once, like <code>def</code>: it executes the class body and creates a <strong>class object</strong> (here <code>Conversation</code>) that holds the functions defined inside it. Calling the class, <code>Conversation("Be brief.")</code>, then does three things in order. First Python creates a new, <strong>empty</strong> instance. Then it calls <code>__init__</code> with that instance as the first argument, followed by the arguments you passed: <code>Conversation.__init__(new_object, "Be brief.")</code>. <code>__init__</code> sets up the instance's attributes and must return <code>None</code>. Finally the call returns the new instance. <code>__init__</code> is often called the constructor; strictly it is the <strong>initialiser</strong>, since the object already exists when it runs.</p>
+<p><strong><code>self</code></strong> is simply the name, by convention, of that first parameter: the instance the method is working on. When you call a method on an instance, <code>chat.add("user", "Hi")</code>, Python looks up <code>add</code> on the class and calls it with the instance inserted as the first argument: <code>Conversation.add(chat, "user", "Hi")</code>. That is the whole mechanism. Inside the method, <code>self.messages</code> means "the <code>messages</code> attribute of whichever instance this call is for", which is how one method serves every instance.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">self.py</span><button class="copy">Copy</button></div><pre><code class="py">class Counter:
+    def __init__(self, start=0):
+        print(&quot;  __init__ with&quot;, start)
+        self.value = start
+
+    def bump(self, by=1):
+        self.value += by
+        return self.value
+
+c = Counter(10)
+print(c.bump(), Counter.bump(c, 5), c.value)     # the two calls are the same thing
+d = Counter()
+print(d.bump(), c.value)                          # separate instances, separate state
+try:
+    Counter.bump()
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>  __init__ with 10
+11 16 16
+  __init__ with 0
+1 16
+TypeError: Counter.bump() missing 1 required positional argument: &#x27;self&#x27;</pre></div></div>
+<p>The <code>TypeError</code> at the end is what happens when the instance is missing: calling the function through the class without one leaves <code>self</code> unfilled. You will also see the reverse mistake, a method defined without <code>self</code>, which fails with "takes 0 positional arguments but 1 was given" because Python always passes the instance (problem 3).</p>
+</section>
+<section class="sec" id="attributes">
+<h2><span class="n">3</span>Where attributes live, and how Python finds them</h2>
+<p>Instance attributes are stored in a dict on each instance, <code>obj.__dict__</code> (also available as <code>vars(obj)</code>). Assigning <code>self.messages = [...]</code> in <code>__init__</code> adds the key <code>"messages"</code> to that dict. Methods are <strong>not</strong> stored on the instance; they live in the class's own namespace, <code>Conversation.__dict__</code>, shared by every instance. So each instance carries only its own data.</p>
+<p>Reading <code>obj.name</code> follows a fixed <strong>lookup order</strong>: first the instance's <code>__dict__</code>, then the class (and then the class's base classes, 9.4). The first place that has the name wins; if none has it, Python raises <code>AttributeError</code>. <strong>Assigning</strong> <code>obj.name = value</code> is different: it always writes to the <strong>instance's</strong> dict, never to the class. That asymmetry explains most of the surprises with class attributes, below.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lookup.py</span><button class="copy">Copy</button></div><pre><code class="py">class Model:
+    provider = &quot;acme&quot;                     # a class attribute: stored on the class
+
+    def __init__(self, name):
+        self.name = name                  # an instance attribute: stored on the instance
+
+m = Model(&quot;small&quot;)
+print(vars(m), &quot;provider&quot; in vars(m), m.provider)
+print(sorted(k for k in vars(Model) if not k.startswith(&quot;__&quot;)))
+m.provider = &quot;other&quot;                      # writes to the instance, shadowing the class attribute
+print(m.provider, Model.provider, Model(&quot;large&quot;).provider)
+del m.provider                            # remove the instance&#x27;s copy: the class value shows again
+print(m.provider)
+try:
+    m.temperature
+except AttributeError as e:
+    print(&quot;AttributeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;name&#x27;: &#x27;small&#x27;} False acme
+[&#x27;provider&#x27;]
+other acme acme
+acme
+AttributeError: &#x27;Model&#x27; object has no attribute &#x27;temperature&#x27;</pre></div></div>
+<p>Python also lets you add attributes to an instance anywhere, <code>m.anything = 1</code>, even outside the class. That flexibility is useful occasionally, but it also means a typo such as <code>self.mesages = []</code> silently creates a new attribute instead of raising an error. A good habit is to create <strong>every</strong> instance attribute in <code>__init__</code>, even if only as <code>None</code>, so a reader can see the complete state of the object in one place. (<code>__slots__</code>, 9.3, can enforce it.)</p>
+</section>
+<section class="sec" id="classattrs">
+<h2><span class="n">4</span>Class attributes and the shared-mutable trap</h2>
+<p>A name assigned in the class body, outside any method, is a <strong>class attribute</strong>: one value stored on the class and shared by all instances. Class attributes are right for <strong>constants</strong> that belong to the type (<code>VALID_ROLES</code>, <code>DEFAULT_MODEL</code>) and for data that is genuinely shared (a count of instances created). Reading them through <code>self</code> works because of the lookup order; changing a shared value deliberately is done through the class, <code>Counter.created += 1</code>.</p>
+<p>The trap is a <strong>mutable</strong> class attribute used as if it were per instance. <code>history = []</code> in the class body creates <strong>one</strong> list, and <code>self.history.append(x)</code> does not assign anything, it <strong>reads</strong> <code>self.history</code>, which finds the class's list, and changes it in place. Every instance appends to the same list (2.2). Assignment would have created an instance attribute; mutation does not. The fix is to create mutable state in <code>__init__</code>, so each instance gets its own (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">shared_mutable.py</span><button class="copy">Copy</button></div><pre><code class="py">class Bad:
+    history = []                          # ONE list, shared by every instance
+    def record(self, x):
+        self.history.append(x)            # reads the class list and mutates it
+
+class Good:
+    MAX = 3                               # an immutable class constant: fine to share
+    def __init__(self):
+        self.history = []                 # a new list per instance
+    def record(self, x):
+        self.history.append(x)
+        del self.history[:-self.MAX]      # keep the last MAX items
+
+a, b = Bad(), Bad()
+a.record(&quot;a1&quot;); b.record(&quot;b1&quot;)
+print(a.history, b.history, a.history is Bad.history)
+
+g, h = Good(), Good()
+for i in range(5):
+    g.record(i)
+h.record(&quot;only&quot;)
+print(g.history, h.history)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;a1&#x27;, &#x27;b1&#x27;] [&#x27;a1&#x27;, &#x27;b1&#x27;] True
+[2, 3, 4] [&#x27;only&#x27;]</pre></div></div>
+<p><code>del self.history[:-self.MAX]</code> deletes everything except the last <code>MAX</code> items, in place, keeping the same list. Notice <code>self.MAX</code> reads the class constant through the instance; a subclass could override <code>MAX</code> (9.4) and the method would follow. The same trap exists for default argument values (2.4): <code>def __init__(self, tags=[])</code> shares one list between all instances created without <code>tags</code> (problem 9).</p>
+</section>
+<section class="sec" id="methods">
+<h2><span class="n">5</span>Methods are functions, bound to an instance</h2>
+<p>A method is an ordinary function stored on the class. Accessing it through an instance, <code>chat.add</code>, produces a <strong>bound method</strong>: a small object that remembers both the function (<code>__func__</code>) and the instance (<code>__self__</code>), so calling it later inserts the instance automatically. You can store a bound method in a variable, pass it as a callback, or put it in a list, and it keeps working on its instance. That is why <code>sorted(items, key=obj.score)</code> or <code>button.on_click(handler.save)</code> style code works.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">bound_methods.py</span><button class="copy">Copy</button></div><pre><code class="py">class Scorer:
+    def __init__(self, keywords):
+        self.keywords = set(keywords)
+
+    def score(self, text):
+        return len(self.keywords &amp; set(text.lower().split()))
+
+refunds = Scorer([&quot;refund&quot;, &quot;money&quot;, &quot;return&quot;])
+s = refunds.score                          # a bound method: remembers refunds
+docs = [&quot;How to reset a password&quot;, &quot;Refund your money&quot;, &quot;Return and refund policy&quot;]
+print(sorted(docs, key=s, reverse=True))
+print(s.__self__ is refunds, s.__func__ is Scorer.score, s(&quot;refund refund&quot;))
+print([refunds.score(d) for d in docs] == list(map(refunds.score, docs)))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Refund your money&#x27;, &#x27;Return and refund policy&#x27;, &#x27;How to reset a password&#x27;]
+True True 1
+True</pre></div></div>
+<p>Methods call each other through <code>self</code> (<code>self.validate(x)</code> inside <code>add</code>), which also means a subclass can replace one of them and the others will use the new version (9.4). A method that does not use <code>self</code> at all is a hint that it might be a plain function, or a <code>staticmethod</code> (9.6).</p>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">6</span>When a class is the right tool</h2>
+<p>Use a class when you have <strong>state plus rules</strong>: data that must stay consistent and several operations that change it (a conversation history with a token limit, a cache with statistics, a rate limiter, a client holding a connection and settings). Use a class when you need <strong>many independent objects</strong> of the same kind with the same behaviour. And use one when a library expects it: PyTorch models are classes with a <code>forward</code> method, scikit-learn estimators are classes with <code>fit</code> and <code>predict</code>, and Pydantic models are classes (11.4).</p>
+<p>Do not use a class just to group functions that share no state: a module does that. Do not write a class with only <code>__init__</code> and one method: that is a function, or a closure (3.4), in disguise. And for objects that are mainly <strong>data</strong> with little behaviour (a record, a config, an API response), a <code>dataclass</code> (11.3) writes <code>__init__</code>, <code>__repr__</code> and <code>__eq__</code> for you. The closures of 7.3 and 7.4 (the circuit breaker, the token bucket) are a good test: they are state plus operations, and as classes they become easier to read, inspect and extend (problem 14).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">running_mean.py</span><button class="copy">Copy</button></div><pre><code class="py">class RunningMean:
+    &quot;&quot;&quot;Mean of a stream of numbers, without storing them.&quot;&quot;&quot;
+
+    def __init__(self):
+        self.count = 0
+        self.total = 0.0
+
+    def update(self, x):
+        self.count += 1
+        self.total += x
+        return self
+
+    def mean(self):
+        return self.total / self.count if self.count else 0.0
+
+latency = RunningMean()
+for ms in [120, 95, 300]:
+    latency.update(ms)
+print(round(latency.mean(), 2), latency.count, vars(latency))
+print(RunningMean().update(1).update(3).mean())     # update returns self, so calls chain</code></pre><div class="out"><span class="ol">Output</span><pre>171.67 3 {&#x27;count&#x27;: 3, &#x27;total&#x27;: 515.0}
+2.0</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-objects-and-their-state" data-pid="m9-1-objects-and-their-state" data-type="predict" data-level="easy" data-answer="7 3 4
+7 1 USD USD
+{&#x27;limit&#x27;: 5, &#x27;spent&#x27;: 3} 2">
+<header class="prob-head"><h3>1. Objects and their state</h3></header>
+<div class="code"><pre><code class="py">class Budget:
+    currency = &quot;USD&quot;
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.spent = 0
+
+    def spend(self, amount):
+        self.spent += amount
+        return self.limit - self.spent
+
+a = Budget(10)
+b = Budget(5)
+print(a.spend(3), a.spend(4), b.spend(1))
+print(a.spent, b.spent, a.currency, Budget.currency)
+print(vars(b), Budget.spend(b, 2))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each instance has its own <code>limit</code> and <code>spent</code>; <code>currency</code> lives on the class.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>7 3 4
+7 1 USD USD
+{&#x27;limit&#x27;: 5, &#x27;spent&#x27;: 3} 2</pre></div><p><code>a</code> and <code>b</code> keep separate <code>spent</code> values in their own <code>__dict__</code>, so <code>a</code> goes 7 then 3, while <code>b</code> goes to 4. <code>currency</code> is found on the class through either name. <code>vars(b)</code> shows only the instance attributes, and <code>Budget.spend(b, 2)</code> is the explicit form of <code>b.spend(2)</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-conversation-with-rules" data-pid="m9-1-a-conversation-with-rules" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. A conversation with rules</h3></header>
+<div class="prob-q"><p>Write a class <code>Conversation</code> with <code>__init__(self, system_prompt)</code> storing the messages as a list of dicts, starting with the system message. Methods: <code>add(role, content)</code> appends a message, raising <code>ValueError</code> for roles other than <code>"user"</code> and <code>"assistant"</code> and for empty or whitespace-only content (stored stripped); <code>turns()</code> returns the number of non-system messages; <code>last(n)</code> returns a <strong>new list</strong> of the last <code>n</code> non-system messages.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class Conversation:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">c = Conversation("Be brief.")
+c.add("user", "  Refund? ")
+c.add("assistant", "Within 5 days.")
+assert c.turns() == 2 and c.messages[0] == {"role": "system", "content": "Be brief."}
+assert c.last(1) == [{"role": "assistant", "content": "Within 5 days."}]
+assert c.last(5) == [{"role": "user", "content": "Refund?"}, {"role": "assistant", "content": "Within 5 days."}]
+c.last(1).clear()
+assert c.turns() == 2
+for role, content in [("system", "x"), ("bot", "x"), ("user", "   ")]:
+    try:
+        c.add(role, content)
+        assert False, role
+    except ValueError:
+        pass
+assert Conversation("Other").turns() == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c = Conversation(&quot;Be brief.&quot;)
+c.add(&quot;user&quot;, &quot;  Refund? &quot;)
+c.add(&quot;assistant&quot;, &quot;Within 5 days.&quot;)
+assert c.turns() == 2 and c.messages[0] == {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;Be brief.&quot;}
+assert c.last(1) == [{&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Within 5 days.&quot;}]
+assert c.last(5) == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;}, {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;Within 5 days.&quot;}]
+c.last(1).clear()
+assert c.turns() == 2
+for role, content in [(&quot;system&quot;, &quot;x&quot;), (&quot;bot&quot;, &quot;x&quot;), (&quot;user&quot;, &quot;   &quot;)]:
+    try:
+        c.add(role, content)
+        assert False, role
+    except ValueError:
+        pass
+assert Conversation(&quot;Other&quot;).turns() == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self.messages</code> as the single source of truth; <code>turns</code> and <code>last</code> compute from it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Slicing (<code>[1:]</code>, <code>[-n:]</code>) always builds a new list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Conversation:
+    ROLES = (&quot;user&quot;, &quot;assistant&quot;)
+
+    def __init__(self, system_prompt):
+        self.messages = [{&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system_prompt}]
+
+    def add(self, role, content):
+        if role not in self.ROLES:
+            raise ValueError(f&quot;role must be one of {self.ROLES}, got {role!r}&quot;)
+        text = content.strip()
+        if not text:
+            raise ValueError(&quot;content must not be empty&quot;)
+        self.messages.append({&quot;role&quot;: role, &quot;content&quot;: text})
+
+    def turns(self):
+        return len(self.messages) - 1
+
+    def last(self, n):
+        return self.messages[1:][-n:]</code></pre></div><p>All rules live in <code>add</code>, so no message can get into the history without passing them; code that uses the class cannot forget a check. The valid roles are a class constant, shared and immutable. <code>last</code> returns a slice, a new list, so a caller clearing it cannot damage the conversation; returning <code>self.messages</code> itself would hand out the internal list (2.4), though the dicts inside are still shared, which 9.3 addresses. <code>turns</code> is computed rather than stored, so it can never get out of sync with the messages.</p></div></details>
+</article>
+<article class="prob" id="p-a-method-that-forgets-self" data-pid="m9-1-a-method-that-forgets-self" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A method that forgets self</h3></header>
+<div class="prob-q"><p><code>Inventory</code> fails as soon as <code>add</code> is called. Fix the class so that <code>add(item, qty)</code> and <code>total()</code> work.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Inventory:
+    def __init__(self):
+        self.items = {}
+
+    def add(item, qty):
+        items[item] = items.get(item, 0) + qty
+
+    def total():
+        return sum(self.items.values())
+</textarea>
+<script type="text/plain" class="prob-tests">inv = Inventory()
+inv.add("pen", 3)
+inv.add("pen", 2)
+inv.add("book", 1)
+assert inv.items == {"pen": 5, "book": 1} and inv.total() == 6
+assert Inventory().total() == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">inv = Inventory()
+inv.add(&quot;pen&quot;, 3)
+inv.add(&quot;pen&quot;, 2)
+inv.add(&quot;book&quot;, 1)
+assert inv.items == {&quot;pen&quot;: 5, &quot;book&quot;: 1} and inv.total() == 6
+assert Inventory().total() == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Python passes the instance as the first argument of every method call. Name it <code>self</code>, and reach the attributes through it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Inventory:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, item, qty):
+        self.items[item] = self.items.get(item, 0) + qty
+
+    def total(self):
+        return sum(self.items.values())</code></pre></div><p><code>inv.add("pen", 3)</code> calls <code>Inventory.add(inv, "pen", 3)</code>: three arguments for a function that declared two, hence "takes 2 positional arguments but 3 were given". Even with the parameter added, <code>items</code> inside the method is a local or global name, not the instance's attribute; attributes are always reached through <code>self</code>. Unlike some languages, Python never adds <code>self</code> implicitly, which makes every attribute access visible in the code.</p></div></details>
+</article>
+<article class="prob" id="p-one-list-for-every-instance" data-pid="m9-1-one-list-for-every-instance" data-type="predict" data-level="easy" data-answer="[&#x27;start&#x27;, &#x27;stop&#x27;, &#x27;retry&#x27;] [&#x27;start&#x27;, &#x27;stop&#x27;, &#x27;retry&#x27;] True
+2 1 0 {&#x27;count&#x27;: 2}">
+<header class="prob-head"><h3>4. One list for every instance</h3></header>
+<div class="code"><pre><code class="py">class Tracker:
+    events = []
+    count = 0
+
+    def log(self, e):
+        self.events.append(e)
+        self.count += 1
+
+a, b = Tracker(), Tracker()
+a.log(&quot;start&quot;); b.log(&quot;stop&quot;); a.log(&quot;retry&quot;)
+print(a.events, b.events, Tracker.events is a.events)
+print(a.count, b.count, Tracker.count, vars(a))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>append</code> mutates the object it finds; <code>+=</code> on an int assigns a new value to the instance.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;start&#x27;, &#x27;stop&#x27;, &#x27;retry&#x27;] [&#x27;start&#x27;, &#x27;stop&#x27;, &#x27;retry&#x27;] True
+2 1 0 {&#x27;count&#x27;: 2}</pre></div><p><code>self.events.append(e)</code> reads <code>events</code>, finds the class's single list and mutates it, so all instances see all three events. <code>self.count += 1</code> is different: it reads the class's <code>0</code>, adds one and <strong>assigns</strong> the result to <code>self.count</code>, which creates an instance attribute; so <code>a</code> counts 2, <code>b</code> counts 1, and the class value stays 0. Mutation goes to the shared object; assignment creates a per-instance one.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-running-statistics" data-pid="m9-1-running-statistics" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Running statistics</h3></header>
+<div class="prob-q"><p>Write a class <code>RunningStats</code> that tracks the count, mean and variance of a stream of numbers without storing them, using Welford's method: on each <code>update(x)</code>, <code>count += 1</code>, <code>delta = x - mean</code>, <code>mean += delta / count</code>, <code>m2 += delta * (x - mean)</code>. Provide <code>update(x)</code> (returning <code>self</code> so calls can chain), <code>mean()</code>, <code>variance()</code> (sample variance <code>m2 / (count - 1)</code>, <code>0.0</code> with fewer than two values) and <code>merge(other)</code> returning a <strong>new</strong> <code>RunningStats</code> combining two streams.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class RunningStats:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">s = RunningStats()
+for x in [2, 4, 4, 4, 5, 5, 7, 9]:
+    s.update(x)
+assert s.count == 8 and s.mean() == 5.0 and round(s.variance(), 4) == 4.5714
+a, b = RunningStats(), RunningStats()
+for x in [2, 4, 4, 4]:
+    a.update(x)
+for x in [5, 5, 7, 9]:
+    b.update(x)
+m = a.merge(b)
+assert m.count == 8 and m.mean() == 5.0 and round(m.variance(), 4) == 4.5714 and a.count == 4
+assert RunningStats().update(3).variance() == 0.0 and RunningStats().mean() == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = RunningStats()
+for x in [2, 4, 4, 4, 5, 5, 7, 9]:
+    s.update(x)
+assert s.count == 8 and s.mean() == 5.0 and round(s.variance(), 4) == 4.5714
+a, b = RunningStats(), RunningStats()
+for x in [2, 4, 4, 4]:
+    a.update(x)
+for x in [5, 5, 7, 9]:
+    b.update(x)
+m = a.merge(b)
+assert m.count == 8 and m.mean() == 5.0 and round(m.variance(), 4) == 4.5714 and a.count == 4
+assert RunningStats().update(3).variance() == 0.0 and RunningStats().mean() == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For <code>merge</code>: <code>delta = b.mean - a.mean</code>, <code>n = a.n + b.n</code>, <code>mean = a.mean + delta * b.n / n</code>, <code>m2 = a.m2 + b.m2 + delta**2 * a.n * b.n / n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class RunningStats:
+    def __init__(self):
+        self.count = 0
+        self._mean = 0.0
+        self._m2 = 0.0
+
+    def update(self, x):
+        self.count += 1
+        delta = x - self._mean
+        self._mean += delta / self.count
+        self._m2 += delta * (x - self._mean)
+        return self
+
+    def mean(self):
+        return self._mean
+
+    def variance(self):
+        return self._m2 / (self.count - 1) if self.count &gt; 1 else 0.0
+
+    def merge(self, other):
+        out = RunningStats()
+        out.count = self.count + other.count
+        if out.count == 0:
+            return out
+        delta = other._mean - self._mean
+        out._mean = self._mean + delta * other.count / out.count
+        out._m2 = self._m2 + other._m2 + delta ** 2 * self.count * other.count / out.count
+        return out</code></pre></div><p>The state (<code>count</code>, <code>_mean</code>, <code>_m2</code>) and the rules for updating it belong together, and no caller can update one without the others. Welford's update avoids the cancellation error of the naive <code>sum(x**2) - n * mean**2</code> formula, which loses precision badly for large values with small spread. <code>merge</code> lets you compute statistics per data shard or per worker and combine them exactly, which is how distributed feature statistics are computed. The leading underscore on <code>_mean</code> and <code>_m2</code> is the convention for "internal, do not touch from outside" (9.3). Returning <code>self</code> from <code>update</code> allows chaining, as pandas and query builders do.</p></div></details>
+</article>
+<article class="prob" id="p-every-client-shares-one-history" data-pid="m9-1-every-client-shares-one-history" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Every client shares one history</h3></header>
+<div class="prob-q"><p>Each <code>LLMClient</code> should keep its own request history and its own count. Two clients see each other's requests. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class LLMClient:
+    history = []
+    settings = {&quot;temperature&quot;: 0.0}
+
+    def __init__(self, model):
+        self.model = model
+
+    def ask(self, prompt, **overrides):
+        self.settings.update(overrides)
+        self.history.append((self.model, prompt))
+        return f&quot;{self.model}: {prompt} @ {self.settings[&#x27;temperature&#x27;]}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">small, large = LLMClient("small"), LLMClient("large")
+assert small.ask("hi") == "small: hi @ 0.0"
+assert large.ask("hello", temperature=0.7) == "large: hello @ 0.7"
+assert small.ask("again") == "small: again @ 0.0"
+assert small.history == [("small", "hi"), ("small", "again")] and large.history == [("large", "hello")]
+assert LLMClient("x").settings == {"temperature": 0.0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">small, large = LLMClient(&quot;small&quot;), LLMClient(&quot;large&quot;)
+assert small.ask(&quot;hi&quot;) == &quot;small: hi @ 0.0&quot;
+assert large.ask(&quot;hello&quot;, temperature=0.7) == &quot;large: hello @ 0.7&quot;
+assert small.ask(&quot;again&quot;) == &quot;small: again @ 0.0&quot;
+assert small.history == [(&quot;small&quot;, &quot;hi&quot;), (&quot;small&quot;, &quot;again&quot;)] and large.history == [(&quot;large&quot;, &quot;hello&quot;)]
+assert LLMClient(&quot;x&quot;).settings == {&quot;temperature&quot;: 0.0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Both <code>history</code> and <code>settings</code> are mutable class attributes. Create them in <code>__init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>overrides</code> should apply to one request, not change the client's settings permanently.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMClient:
+    DEFAULTS = {&quot;temperature&quot;: 0.0}
+
+    def __init__(self, model):
+        self.model = model
+        self.history = []
+        self.settings = dict(self.DEFAULTS)
+
+    def ask(self, prompt, **overrides):
+        settings = {**self.settings, **overrides}
+        self.history.append((self.model, prompt))
+        return f&quot;{self.model}: {prompt} @ {settings[&#x27;temperature&#x27;]}&quot;</code></pre></div><p>Two shared mutable class attributes caused two bugs. <code>history</code> was one list for every client, so <code>small.history</code> contained the large model's request too. <code>settings.update(overrides)</code> changed the shared dict, so after <code>large</code> asked with <code>temperature=0.7</code>, <code>small</code> silently used 0.7 as well, a bug that would make an evaluation run non-reproducible. Creating both in <code>__init__</code> gives each client its own; keeping the defaults as an immutable-by-convention class constant (<code>DEFAULTS</code>) and copying them is the usual pattern. The per-request overrides now build a new dict and leave the client's settings alone (2.4).</p></div></details>
+</article>
+<article class="prob" id="p-a-token-budget" data-pid="m9-1-a-token-budget" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A token budget</h3></header>
+<div class="prob-q"><p>Write a class <code>TokenBudget(limit)</code> for capping spend in an agent run. <code>spend(tokens, label)</code> records a charge and raises <code>BudgetExceeded</code> (define it, subclass of <code>Exception</code>) <strong>without recording</strong> if it would take the total over the limit; <code>remaining()</code> returns the tokens left; <code>breakdown()</code> returns a dict of total tokens per label, in first-seen order; <code>reset()</code> clears everything. Reject non-positive or non-integer token counts with <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class TokenBudget:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">b = TokenBudget(1000)
+b.spend(300, "retrieve"); b.spend(450, "generate"); b.spend(100, "retrieve")
+assert b.remaining() == 150 and b.breakdown() == {"retrieve": 400, "generate": 450}
+try:
+    b.spend(200, "generate")
+    assert False
+except BudgetExceeded as e:
+    assert "200" in str(e) and "150" in str(e)
+assert b.remaining() == 150
+for bad in [0, -5, 2.5, True]:
+    try:
+        b.spend(bad, "x")
+        assert False, bad
+    except ValueError:
+        pass
+b.reset()
+assert b.remaining() == 1000 and b.breakdown() == {}
+other = TokenBudget(10)
+assert other.remaining() == 10</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">b = TokenBudget(1000)
+b.spend(300, &quot;retrieve&quot;); b.spend(450, &quot;generate&quot;); b.spend(100, &quot;retrieve&quot;)
+assert b.remaining() == 150 and b.breakdown() == {&quot;retrieve&quot;: 400, &quot;generate&quot;: 450}
+try:
+    b.spend(200, &quot;generate&quot;)
+    assert False
+except BudgetExceeded as e:
+    assert &quot;200&quot; in str(e) and &quot;150&quot; in str(e)
+assert b.remaining() == 150
+for bad in [0, -5, 2.5, True]:
+    try:
+        b.spend(bad, &quot;x&quot;)
+        assert False, bad
+    except ValueError:
+        pass
+b.reset()
+assert b.remaining() == 1000 and b.breakdown() == {}
+other = TokenBudget(10)
+assert other.remaining() == 10</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>self.limit</code> and a list or dict of charges. Check everything before changing anything.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>isinstance(x, bool)</code> first: <code>True</code> is an <code>int</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class BudgetExceeded(Exception):
+    pass
+
+
+class TokenBudget:
+    def __init__(self, limit):
+        self.limit = limit
+        self._by_label = {}
+
+    def spent(self):
+        return sum(self._by_label.values())
+
+    def remaining(self):
+        return self.limit - self.spent()
+
+    def spend(self, tokens, label):
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens &lt;= 0:
+            raise ValueError(f&quot;tokens must be a positive integer, got {tokens!r}&quot;)
+        if tokens &gt; self.remaining():
+            raise BudgetExceeded(f&quot;cannot spend {tokens} tokens on {label!r}: only {self.remaining()} left&quot;)
+        self._by_label[label] = self._by_label.get(label, 0) + tokens
+
+    def breakdown(self):
+        return dict(self._by_label)
+
+    def reset(self):
+        self._by_label = {}</code></pre></div><p>The class enforces its invariant, "spent never exceeds the limit", in the only method that changes the state, and it validates <strong>before</strong> modifying anything, so a rejected charge leaves the budget exactly as it was (the all-or-nothing rule of 7.3). The custom exception tells an agent loop precisely why it must stop, and its message includes both the request and what was left. <code>breakdown</code> returns a copy so callers cannot alter the records. Storing only the per-label totals is enough for this interface; keeping a list of every charge would allow an audit trail, at the cost of memory.</p></div></details>
+</article>
+<article class="prob" id="p-instance-class-and-shadowing" data-pid="m9-1-instance-class-and-shadowing" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Instance, class and shadowing</h3></header>
+<div class="prob-q"><p>Fill in <code>a_model</code>, <code>b_model</code> and <code>cls_model</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">class Agent:
+    model = &quot;small&quot;
+
+a, b = Agent(), Agent()
+a_model, b_model, cls_model = a.model, b.model, Agent.model
+a.model = &quot;large&quot;
+a_model, b_model, cls_model = a.model, b.model, Agent.model
+Agent.model = &quot;medium&quot;
+a_model, b_model, cls_model = a.model, b.model, Agent.model
+del a.model
+a_model, b_model, cls_model = a.model, b.model, Agent.model</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a_model</code></th><th><code>b_model</code></th><th><code>cls_model</code></th></tr><tr><td>start</td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="a_model at start" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="b_model at start" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="cls_model at start" autocomplete="off"></td></tr><tr><td>set on a</td><td><input class="cell" data-a="&#x27;large&#x27;" data-s="large" aria-label="a_model at set on a" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="b_model at set on a" autocomplete="off"></td><td><input class="cell" data-a="&#x27;small&#x27;" data-s="small" aria-label="cls_model at set on a" autocomplete="off"></td></tr><tr><td>set on class</td><td><input class="cell" data-a="&#x27;large&#x27;" data-s="large" aria-label="a_model at set on class" autocomplete="off"></td><td><input class="cell" data-a="&#x27;medium&#x27;" data-s="medium" aria-label="b_model at set on class" autocomplete="off"></td><td><input class="cell" data-a="&#x27;medium&#x27;" data-s="medium" aria-label="cls_model at set on class" autocomplete="off"></td></tr><tr><td>del a.model</td><td><input class="cell" data-a="&#x27;medium&#x27;" data-s="medium" aria-label="a_model at del a.model" autocomplete="off"></td><td><input class="cell" data-a="&#x27;medium&#x27;" data-s="medium" aria-label="b_model at del a.model" autocomplete="off"></td><td><input class="cell" data-a="&#x27;medium&#x27;" data-s="medium" aria-label="cls_model at del a.model" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Reading checks the instance first, then the class. Assigning through an instance writes to the instance.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a_model</code></th><th><code>b_model</code></th><th><code>cls_model</code></th></tr><tr><td>start</td><td><code>&#x27;small&#x27;</code></td><td><code>&#x27;small&#x27;</code></td><td><code>&#x27;small&#x27;</code></td></tr><tr><td>set on a</td><td><code>&#x27;large&#x27;</code></td><td><code>&#x27;small&#x27;</code></td><td><code>&#x27;small&#x27;</code></td></tr><tr><td>set on class</td><td><code>&#x27;large&#x27;</code></td><td><code>&#x27;medium&#x27;</code></td><td><code>&#x27;medium&#x27;</code></td></tr><tr><td>del a.model</td><td><code>&#x27;medium&#x27;</code></td><td><code>&#x27;medium&#x27;</code></td><td><code>&#x27;medium&#x27;</code></td></tr></table></div><p>At first both instances find the class value. <code>a.model = "large"</code> creates an instance attribute that shadows the class one for <code>a</code> only. Changing <code>Agent.model</code> affects every instance that does not have its own value, here <code>b</code>. Deleting <code>a</code>'s attribute makes the lookup fall through to the class again, which now says <code>"medium"</code>.</p></div></details>
+</article>
+<article class="prob" id="p-instances-that-share-a-default-list" data-pid="m9-1-instances-that-share-a-default-list" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. Instances that share a default list</h3></header>
+<div class="prob-q"><p><code>Document(text, tags=[])</code> should give each document its own tags. Tagging one document tags others. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">class Document:
+    def __init__(self, text, tags=[]):
+        self.text = text
+        self.tags = tags
+
+    def tag(self, label):
+        if label not in self.tags:
+            self.tags.append(label)
+        return self
+</textarea>
+<script type="text/plain" class="prob-tests">a = Document("refund policy")
+b = Document("reset password")
+a.tag("billing")
+assert a.tags == ["billing"] and b.tags == []
+shared = ["faq"]
+c = Document("x", tags=shared)
+c.tag("new")
+assert c.tags == ["faq", "new"] and shared == ["faq"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = Document(&quot;refund policy&quot;)
+b = Document(&quot;reset password&quot;)
+a.tag(&quot;billing&quot;)
+assert a.tags == [&quot;billing&quot;] and b.tags == []
+shared = [&quot;faq&quot;]
+c = Document(&quot;x&quot;, tags=shared)
+c.tag(&quot;new&quot;)
+assert c.tags == [&quot;faq&quot;, &quot;new&quot;] and shared == [&quot;faq&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The default list is created once, when <code>def __init__</code> runs (2.4). Use <code>None</code> and copy what the caller passes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Document:
+    def __init__(self, text, tags=None):
+        self.text = text
+        self.tags = list(tags) if tags is not None else []
+
+    def tag(self, label):
+        if label not in self.tags:
+            self.tags.append(label)
+        return self</code></pre></div><p>Methods are functions, so their defaults follow the rule of 2.4: <code>tags=[]</code> is evaluated once and every <code>Document</code> created without tags received <strong>the same</strong> list. The <code>None</code> default plus a new list inside <code>__init__</code> fixes that. Copying a caller's list with <code>list(tags)</code> fixes a second, quieter aliasing bug: without it, <code>c.tag("new")</code> would also have changed the caller's <code>shared</code> list. An object should own its mutable state, which usually means copying mutable inputs at construction.</p></div></details>
+</article>
+<article class="prob" id="p-a-small-inverted-index" data-pid="m9-1-a-small-inverted-index" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>10. A small inverted index</h3></header>
+<div class="prob-q"><p>Write a class <code>KeywordIndex</code> with <code>add(doc_id, text)</code>, <code>remove(doc_id)</code> and <code>search(query)</code>. Words are lower-cased with <code>.,!?</code> stripped. <code>search</code> returns the sorted ids of documents containing <strong>every</strong> query word (an empty query returns <code>[]</code>). Adding an existing id replaces its text. Keep an inverted index (word to set of ids) so search does not scan every document, and remove ids from it correctly, including words that end up with no documents.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class KeywordIndex:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">idx = KeywordIndex()
+idx.add("faq", "Refunds take 5 days.")
+idx.add("terms", "No refunds after 30 days!")
+idx.add("auth", "Reset your password.")
+assert idx.search("refunds days") == ["faq", "terms"] and idx.search("Password") == ["auth"]
+idx.add("faq", "Shipping is free.")
+assert idx.search("refunds") == ["terms"] and idx.search("shipping") == ["faq"]
+idx.remove("terms")
+assert idx.search("refunds") == [] and "refunds" not in idx.postings
+assert idx.search("") == [] and idx.search("unknown") == []
+idx.remove("nope")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">idx = KeywordIndex()
+idx.add(&quot;faq&quot;, &quot;Refunds take 5 days.&quot;)
+idx.add(&quot;terms&quot;, &quot;No refunds after 30 days!&quot;)
+idx.add(&quot;auth&quot;, &quot;Reset your password.&quot;)
+assert idx.search(&quot;refunds days&quot;) == [&quot;faq&quot;, &quot;terms&quot;] and idx.search(&quot;Password&quot;) == [&quot;auth&quot;]
+idx.add(&quot;faq&quot;, &quot;Shipping is free.&quot;)
+assert idx.search(&quot;refunds&quot;) == [&quot;terms&quot;] and idx.search(&quot;shipping&quot;) == [&quot;faq&quot;]
+idx.remove(&quot;terms&quot;)
+assert idx.search(&quot;refunds&quot;) == [] and &quot;refunds&quot; not in idx.postings
+assert idx.search(&quot;&quot;) == [] and idx.search(&quot;unknown&quot;) == []
+idx.remove(&quot;nope&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep two dicts: <code>self.docs</code> (id to set of words) and <code>self.postings</code> (word to set of ids).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Search: intersect the posting sets of the query words; start from the smallest for speed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class KeywordIndex:
+    def __init__(self):
+        self.docs = {}
+        self.postings = {}
+
+    @staticmethod
+    def _words(text):
+        return {w.strip(&quot;.,!?&quot;).lower() for w in text.split()} - {&quot;&quot;}
+
+    def add(self, doc_id, text):
+        self.remove(doc_id)
+        words = self._words(text)
+        self.docs[doc_id] = words
+        for w in words:
+            self.postings.setdefault(w, set()).add(doc_id)
+
+    def remove(self, doc_id):
+        for w in self.docs.pop(doc_id, set()):
+            ids = self.postings[w]
+            ids.discard(doc_id)
+            if not ids:
+                del self.postings[w]
+
+    def search(self, query):
+        words = self._words(query)
+        if not words:
+            return []
+        sets = sorted((self.postings.get(w, set()) for w in words), key=len)
+        return sorted(set.intersection(*sets))</code></pre></div><p>The two dicts must always agree, which is exactly the kind of invariant a class protects: only <code>add</code> and <code>remove</code> change them, and <code>add</code> reuses <code>remove</code> so a replaced document leaves no stale postings. Deleting empty posting sets keeps the index from growing with words that no longer appear anywhere. Search looks up only the query words and intersects their sets, starting from the smallest, so its cost depends on how common the words are, not on how many documents exist; that is the core of a search engine's inverted index (and of BM25 libraries). <code>@staticmethod</code> (9.6) marks <code>_words</code> as a helper that does not need the instance.</p></div></details>
+</article>
+<article class="prob" id="p-bound-methods" data-pid="m9-1-bound-methods" data-type="predict" data-level="medium" data-answer="bo greets cy bo greets dee
+True method function
+EVE True False">
+<header class="prob-head"><h3>11. Bound methods</h3></header>
+<div class="code"><pre><code class="py">class Greeter:
+    def __init__(self, name):
+        self.name = name
+
+    def greet(self, who):
+        return f&quot;{self.name} greets {who}&quot;
+
+g = Greeter(&quot;ana&quot;)
+f = g.greet
+g.name = &quot;bo&quot;
+print(f(&quot;cy&quot;), Greeter.greet(g, &quot;dee&quot;))
+print(f.__self__ is g, type(f).__name__, type(Greeter.greet).__name__)
+g.shout = lambda who: who.upper()
+print(g.shout(&quot;eve&quot;), &quot;shout&quot; in vars(g), hasattr(Greeter, &quot;shout&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A bound method remembers the instance, not a copy of its attributes. A function stored on an instance is not bound.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>bo greets cy bo greets dee
+True method function
+EVE True False</pre></div><p><code>f</code> is bound to the instance <code>g</code>, and it reads <code>self.name</code> when called, after it was changed to "bo". Accessing the function through the class gives the plain function. A lambda stored as an <strong>instance</strong> attribute is just a function in the instance's dict: no <code>self</code> is inserted when it is called, which is why it takes only <code>who</code>, and the class does not know about it.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-chat-session-with-a-token-limit" data-pid="m9-1-a-chat-session-with-a-token-limit" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. A chat session with a token limit</h3></header>
+<div class="prob-q"><p>Write a class <code>ChatSession(system_prompt, max_tokens)</code> that keeps a history for an LLM within a token budget. Estimate tokens as <code>len(content.split())</code> per message. <code>add(role, content)</code> appends a message, then, while the total exceeds <code>max_tokens</code>, drops the <strong>oldest non-system</strong> message (the system message is never dropped). <code>messages()</code> returns the history as a <strong>new list of new dicts</strong>, so callers cannot change the session. <code>dropped</code> counts how many messages were removed. A single message larger than the budget on its own raises <code>ValueError</code> and is not added.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">class ChatSession:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">s = ChatSession("Be brief and kind.", max_tokens=12)
+s.add("user", "What is the refund window?")
+s.add("assistant", "Thirty days.")
+assert s.dropped == 0 and len(s.messages()) == 3
+s.add("user", "And for sale items please?")
+assert [m["content"] for m in s.messages()] == ["Be brief and kind.", "Thirty days.", "And for sale items please?"]
+assert s.dropped == 1
+out = s.messages()
+out[0]["content"] = "hacked"
+out.append({"role": "user", "content": "x"})
+assert s.messages()[0]["content"] == "Be brief and kind." and len(s.messages()) == 3
+try:
+    s.add("user", "one two three four five six seven eight nine")
+    assert False
+except ValueError:
+    assert len(s.messages()) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = ChatSession(&quot;Be brief and kind.&quot;, max_tokens=12)
+s.add(&quot;user&quot;, &quot;What is the refund window?&quot;)
+s.add(&quot;assistant&quot;, &quot;Thirty days.&quot;)
+assert s.dropped == 0 and len(s.messages()) == 3
+s.add(&quot;user&quot;, &quot;And for sale items please?&quot;)
+assert [m[&quot;content&quot;] for m in s.messages()] == [&quot;Be brief and kind.&quot;, &quot;Thirty days.&quot;, &quot;And for sale items please?&quot;]
+assert s.dropped == 1
+out = s.messages()
+out[0][&quot;content&quot;] = &quot;hacked&quot;
+out.append({&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;})
+assert s.messages()[0][&quot;content&quot;] == &quot;Be brief and kind.&quot; and len(s.messages()) == 3
+try:
+    s.add(&quot;user&quot;, &quot;one two three four five six seven eight nine&quot;)
+    assert False
+except ValueError:
+    assert len(s.messages()) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._system</code> separately from <code>self._turns</code> (a list), and compute the total from both.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>messages()</code> builds <code>[dict(m) for m in ...]</code>, copying each dict.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ChatSession:
+    def __init__(self, system_prompt, max_tokens):
+        self._system = {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: system_prompt}
+        self._turns = []
+        self.max_tokens = max_tokens
+        self.dropped = 0
+
+    @staticmethod
+    def _tokens(message):
+        return len(message[&quot;content&quot;].split())
+
+    def total_tokens(self):
+        return self._tokens(self._system) + sum(self._tokens(m) for m in self._turns)
+
+    def add(self, role, content):
+        message = {&quot;role&quot;: role, &quot;content&quot;: content}
+        if self._tokens(self._system) + self._tokens(message) &gt; self.max_tokens:
+            raise ValueError(&quot;message does not fit in the budget even on its own&quot;)
+        self._turns.append(message)
+        while self.total_tokens() &gt; self.max_tokens:
+            self._turns.pop(0)
+            self.dropped += 1
+
+    def messages(self):
+        return [dict(self._system)] + [dict(m) for m in self._turns]</code></pre></div><p>Keeping the system message apart from the turns makes "never drop the system prompt" structural rather than a condition checked in a loop. The window slides by dropping the oldest turns until the total fits, the simplest context-management strategy (others summarise old turns instead). The oversize check happens <strong>before</strong> appending, so a rejected message leaves the session unchanged. <code>messages()</code> returns copies of the list <strong>and</strong> of each dict, because a shallow copy of the list alone would still let callers edit the stored messages (2.3); that is encapsulation in Python: not enforced by the language, but by never handing out your internal mutable objects. Real code counts tokens with the model's tokenizer, and <code>pop(0)</code> on a list is O(n), fine for chat-sized histories (a <code>deque</code> would make it O(1)).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-cache-class" data-pid="m9-1-read-the-code-a-cache-class" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Read the code: a cache class</h3></header>
+<div class="prob-q"><p>Each <code>ResultCache</code> should have its own entries and statistics. Instances share entries, hits are never counted, and callers can corrupt the cache through <code>snapshot()</code>. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">class ResultCache:
+    entries = {}
+
+    def __init__(self, name, max_entries=100):
+        self.name = name
+        self.max_entries = max_entries
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key, compute):
+        if key in self.entries:
+            hits = self.hits + 1
+            return self.entries[key]
+        self.misses += 1
+        value = compute(key)
+        if len(self.entries) &gt;= self.max_entries:
+            oldest = next(iter(self.entries))
+            del self.entries[oldest]
+        self.entries[key] = value
+        return value
+
+    def snapshot(self):
+        return self.entries
+</textarea>
+<script type="text/plain" class="prob-tests">search_cache = ResultCache("search", max_entries=2)
+embed_cache = ResultCache("embed")
+calls = []
+def compute(k):
+    calls.append(k)
+    return [k.upper()]
+
+assert search_cache.get("refund", compute) == ["REFUND"]
+assert search_cache.get("refund", compute) == ["REFUND"]
+assert embed_cache.get("refund", lambda k: [len(k)]) == [6]
+assert (search_cache.hits, search_cache.misses, embed_cache.misses) == (1, 1, 1)
+search_cache.get("reset", compute); search_cache.get("invoice", compute)
+assert list(search_cache.snapshot()) == ["reset", "invoice"]
+snap = search_cache.snapshot()
+snap["reset"].append("junk"); snap.clear()
+assert search_cache.get("reset", compute) == ["RESET"] and calls == ["refund", "reset", "invoice"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">search_cache = ResultCache(&quot;search&quot;, max_entries=2)
+embed_cache = ResultCache(&quot;embed&quot;)
+calls = []
+def compute(k):
+    calls.append(k)
+    return [k.upper()]
+
+assert search_cache.get(&quot;refund&quot;, compute) == [&quot;REFUND&quot;]
+assert search_cache.get(&quot;refund&quot;, compute) == [&quot;REFUND&quot;]
+assert embed_cache.get(&quot;refund&quot;, lambda k: [len(k)]) == [6]
+assert (search_cache.hits, search_cache.misses, embed_cache.misses) == (1, 1, 1)
+search_cache.get(&quot;reset&quot;, compute); search_cache.get(&quot;invoice&quot;, compute)
+assert list(search_cache.snapshot()) == [&quot;reset&quot;, &quot;invoice&quot;]
+snap = search_cache.snapshot()
+snap[&quot;reset&quot;].append(&quot;junk&quot;); snap.clear()
+assert search_cache.get(&quot;reset&quot;, compute) == [&quot;RESET&quot;] and calls == [&quot;refund&quot;, &quot;reset&quot;, &quot;invoice&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>entries = {}</code> at class level is shared by every instance.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hits = self.hits + 1</code> creates a local variable.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>snapshot</code> hands out the internal dict; return copies of the dict and of the cached lists.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ResultCache:
+    def __init__(self, name, max_entries=100):
+        self.name = name
+        self.max_entries = max_entries
+        self.hits = 0
+        self.misses = 0
+        self.entries = {}
+
+    def get(self, key, compute):
+        if key in self.entries:
+            self.hits += 1
+            return self.entries[key]
+        self.misses += 1
+        value = compute(key)
+        if len(self.entries) &gt;= self.max_entries:
+            oldest = next(iter(self.entries))
+            del self.entries[oldest]
+        self.entries[key] = value
+        return value
+
+    def snapshot(self):
+        return {k: list(v) for k, v in self.entries.items()}</code></pre></div><p>Three bugs, each from this lesson. The class-level <code>entries</code> dict was shared, so the embedding cache answered <code>"refund"</code> with the search cache's result (and every cache evicted the others' entries); creating it in <code>__init__</code> gives each instance its own. <code>hits = self.hits + 1</code> assigned a <strong>local</strong> variable that vanished when the method returned, so the hit count stayed 0, a typo-level bug that a metrics dashboard would show as a 0% hit rate; attributes are only changed through <code>self.</code>. And <code>snapshot()</code> returned the internal dict, so a caller's <code>clear()</code> emptied the cache and the appended <code>"junk"</code> corrupted a cached value; returning a copy with copied values protects the cache. Note that <code>get</code> still returns the cached list itself, which a caller could mutate; caching immutable values (tuples) avoids that entirely.</p></div></details>
+</article>
+<article class="prob" id="p-a-rate-limiter-class" data-pid="m9-1-a-rate-limiter-class" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. A rate limiter class</h3></header>
+<div class="prob-q"><p>Rewrite the token bucket of 7.4 as a class <code>TokenBucket(rate, burst, clock)</code>. It starts full. <code>acquire(cost=1)</code> takes <code>cost</code> tokens and returns <code>0.0</code> if they were available, or else returns the seconds to wait <strong>without</strong> taking any; <code>cost</code> larger than <code>burst</code> raises <code>ValueError</code>. Add <code>available()</code> returning the current number of tokens (after refilling), and <code>stats()</code> returning <code>{"granted": g, "denied": d}</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class TokenBucket:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+bucket = TokenBucket(rate=2.0, burst=4, clock=lambda: now[0])
+assert [bucket.acquire() for _ in range(4)] == [0.0] * 4 and bucket.acquire() == 0.5
+now[0] = 1.0
+assert bucket.available() == 2.0 and bucket.acquire(2) == 0.0 and bucket.acquire(3) == 1.5
+now[0] = 100.0
+assert bucket.available() == 4.0
+assert bucket.stats() == {"granted": 5, "denied": 2}
+try:
+    bucket.acquire(5)
+    assert False
+except ValueError:
+    pass
+other = TokenBucket(1.0, 1, clock=lambda: now[0])
+assert other.acquire() == 0.0 and other.acquire() == 1.0 and bucket.available() == 4.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+bucket = TokenBucket(rate=2.0, burst=4, clock=lambda: now[0])
+assert [bucket.acquire() for _ in range(4)] == [0.0] * 4 and bucket.acquire() == 0.5
+now[0] = 1.0
+assert bucket.available() == 2.0 and bucket.acquire(2) == 0.0 and bucket.acquire(3) == 1.5
+now[0] = 100.0
+assert bucket.available() == 4.0
+assert bucket.stats() == {&quot;granted&quot;: 5, &quot;denied&quot;: 2}
+try:
+    bucket.acquire(5)
+    assert False
+except ValueError:
+    pass
+other = TokenBucket(1.0, 1, clock=lambda: now[0])
+assert other.acquire() == 0.0 and other.acquire() == 1.0 and bucket.available() == 4.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>rate</code>, <code>burst</code>, <code>clock</code>, <code>_tokens</code>, <code>_last</code> and the counters in <code>__init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A private <code>_refill()</code> method updates <code>_tokens</code> from the elapsed time; both public methods call it first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class TokenBucket:
+    def __init__(self, rate, burst, clock):
+        if rate &lt;= 0 or burst &lt; 1:
+            raise ValueError(&quot;rate must be positive and burst at least 1&quot;)
+        self.rate = rate
+        self.burst = burst
+        self.clock = clock
+        self._tokens = float(burst)
+        self._last = clock()
+        self._granted = 0
+        self._denied = 0
+
+    def _refill(self):
+        now = self.clock()
+        self._tokens = min(self.burst, self._tokens + (now - self._last) * self.rate)
+        self._last = now
+
+    def available(self):
+        self._refill()
+        return self._tokens
+
+    def acquire(self, cost=1):
+        if cost &gt; self.burst:
+            raise ValueError(f&quot;cost {cost} exceeds burst size {self.burst}&quot;)
+        self._refill()
+        if self._tokens &gt;= cost:
+            self._tokens -= cost
+            self._granted += 1
+            return 0.0
+        self._denied += 1
+        return (cost - self._tokens) / self.rate
+
+    def stats(self):
+        return {&quot;granted&quot;: self._granted, &quot;denied&quot;: self._denied}</code></pre></div><p>The closure version of 7.4 kept its state in <code>nonlocal</code> variables, invisible from outside. As a class, the state is named and inspectable, the shared refill step is one private method used by both public ones, and new operations (<code>available</code>, <code>stats</code>) are added without restructuring anything: this is the usual point at which a closure should become a class. Each instance has its own tokens and counters, so one bucket per provider or per API key is just one object each. The injected clock keeps it testable, and validating <code>rate</code> and <code>burst</code> in <code>__init__</code> means a bucket can never exist in an invalid state.</p></div></details>
+</article>
+<article class="prob" id="p-a-class-body-runs-once" data-pid="m9-1-a-class-body-runs-once" data-type="predict" data-level="hard" data-answer="before class
+  running the class body
+after class small {&#x27;small&#x27;: 100, &#x27;large&#x27;: 200}
+200 100 True
+Config type True">
+<header class="prob-head"><h3>15. A class body runs once</h3></header>
+<div class="code"><pre><code class="py">print(&quot;before class&quot;)
+
+class Config:
+    print(&quot;  running the class body&quot;)
+    models = [&quot;small&quot;, &quot;large&quot;]
+    default = models[0]
+    limits = {m: 100 * (i + 1) for i, m in enumerate(models)}
+
+    def limit(self):
+        return self.limits[self.default]
+
+print(&quot;after class&quot;, Config.default, Config.limits)
+c = Config()
+c.default = &quot;large&quot;
+print(c.limit(), Config().limit(), type(c).limit is Config.limit)
+print(Config.__name__, type(Config).__name__, c.__class__ is Config)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The class body is executed once, top to bottom, when the <code>class</code> statement runs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A class is itself an object, of type <code>type</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>before class
+  running the class body
+after class small {&#x27;small&#x27;: 100, &#x27;large&#x27;: 200}
+200 100 True
+Config type True</pre></div><p>The class body is ordinary code run once at definition time, so its <code>print</code> appears immediately, and later lines can use earlier names (<code>default = models[0]</code>). The dict comprehension in a class body can use <code>models</code> because it is the outermost iterable, which is evaluated in the class scope. <code>c.default = "large"</code> shadows the class attribute for <code>c</code> only. Classes are objects too: their type is <code>type</code>, and every instance knows its class through <code>__class__</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-self-in-python-and-what-exactly-" data-pid="m9-1-what-is-self-in-python-and-what-exactly-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What is <code>self</code> in Python, and what exactly happens when you call a method?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>self</code> is the conventional name for a method's first parameter, which receives the instance the method was called on. It is not a keyword, and Python never adds it implicitly inside the body: every attribute access goes through it explicitly. When you write <code>obj.method(a)</code>, Python looks up <code>method</code> on <code>obj</code>'s class (via the instance first, then the class and its bases), and because it is a function found on the class, the access produces a bound method that remembers <code>obj</code>; calling it runs <code>Class.method(obj, a)</code>. So <code>obj.method(a)</code> and <code>Class.method(obj, a)</code> are the same call. This is why forgetting <code>self</code> in a definition gives "takes 1 positional argument but 2 were given", and why bound methods can be passed around as callbacks that keep working on their instance.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-the-difference-between-class-att" data-pid="m9-1-what-is-the-difference-between-class-att" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is the difference between class attributes and instance attributes, and what is the classic bug?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Instance attributes are stored in each object's <code>__dict__</code>, usually set in <code>__init__</code> via <code>self.x = ...</code>, and are separate per object. Class attributes are assigned in the class body and stored once on the class, shared by all instances. Reading <code>obj.x</code> checks the instance first, then the class; assigning <code>obj.x = ...</code> always writes to the instance, shadowing the class attribute for that object only. The classic bug is a mutable class attribute, such as <code>history = []</code>, used as if it were per instance: <code>self.history.append(...)</code> reads the shared list and mutates it, so every instance appends to the same list. The same happens with a mutable default argument in <code>__init__</code>. Use class attributes for constants and genuinely shared data, and create mutable per-object state in <code>__init__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-in-ml-and-genai-code-when-would-you-use-" data-pid="m9-1-in-ml-and-genai-code-when-would-you-use-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. In ML and GenAI code, when would you use a class, a dataclass, or plain functions and dicts?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Plain functions are best for stateless transformations (cleaning text, computing a metric, building a prompt), since they are the easiest to test and compose. Dicts suit loosely structured data that crosses boundaries, such as parsed JSON, but their keys are not checked, so typos become silent bugs. A dataclass (or a Pydantic model when validation is needed) fits structured data with little behaviour: configs, records, API responses, evaluation results; it gives an <code>__init__</code>, a readable repr, equality and type hints for free. A full class is worth it when there is state plus rules plus operations: a conversation buffer with a token limit, a cache with statistics, a rate limiter, a client holding a session and settings, or when a framework requires it (PyTorch <code>nn.Module</code>, scikit-learn estimators with <code>fit</code>/<code>predict</code>). Signs that a class is too much: it has only <code>__init__</code> and one method, or no state. Signs that a dict should become a class: several functions taking the same dict and maintaining rules about its contents.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A class bundles data (attributes) with the functions that work on it (methods); each instance has its own data and shares the methods.</li><li><code>C(args)</code> creates an empty instance, calls <code>C.__init__(instance, args)</code>, and returns it. <code>obj.m(x)</code> is <code>C.m(obj, x)</code>: <code>self</code> is that instance.</li><li>Instance attributes live in <code>obj.__dict__</code>. Reading looks in the instance, then the class; assigning always writes to the instance.</li><li>Class attributes are shared: fine for constants, a bug for mutable per-object state. Create lists and dicts in <code>__init__</code>, never as class or default values.</li><li>Methods accessed through an instance are bound methods; protect your state by validating in methods and returning copies, not internal objects.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

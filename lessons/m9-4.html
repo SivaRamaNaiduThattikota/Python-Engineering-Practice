@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9.4 · Inheritance and super</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m9-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 9 · OOP</span></div>
+  <h1>9.4 Inheritance and super</h1>
+  <p>A subclass reuses and specialises another class. How attribute lookup walks the class chain, overriding and extending methods with <code>super()</code>, what <code>super()</code> really calls (the method resolution order), the template-method pattern, the substitution rule that keeps hierarchies honest, cooperative multiple inheritance and mixins, <code>__init_subclass__</code>, and why subclassing <code>dict</code> misleads. Applied to retrievers, providers, metrics and loaders.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="basics">
+<h2><span class="n">1</span>Subclasses inherit, and can specialise</h2>
+<p><code>class KeywordRetriever(Retriever):</code> defines a <strong>subclass</strong>: every attribute and method of <code>Retriever</code>, the <strong>base class</strong>, is available on instances of <code>KeywordRetriever</code> without being written again. The subclass can add new methods, and it can <strong>override</strong> inherited ones by defining a method with the same name. The relationship should read as "is a": a keyword retriever <strong>is a</strong> retriever, so anywhere code expects a <code>Retriever</code>, a <code>KeywordRetriever</code> can be used.</p>
+<p>Inheritance works through attribute lookup (9.1). For <code>obj.name</code>, Python searches the instance's <code>__dict__</code>, then the object's class, then that class's base, and so on up the chain, ending at <code>object</code>, the root of every class. The first match wins, which is exactly why overriding works: the subclass is searched before the base.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">inherit.py</span><button class="copy">Copy</button></div><pre><code class="py">class Retriever:
+    def __init__(self, docs):
+        self.docs = list(docs)
+
+    def score(self, query, doc):
+        return 0
+
+    def retrieve(self, query, k=2):
+        ranked = sorted(self.docs, key=lambda d: self.score(query, d), reverse=True)
+        return ranked[:k]
+
+class KeywordRetriever(Retriever):
+    def score(self, query, doc):                      # override
+        return len(set(query.lower().split()) &amp; set(doc.lower().split()))
+
+docs = [&quot;Refund policy for orders&quot;, &quot;Reset your password&quot;, &quot;Refund window is 30 days&quot;]
+kr = KeywordRetriever(docs)
+print(kr.retrieve(&quot;refund window&quot;))
+print(isinstance(kr, Retriever), issubclass(KeywordRetriever, Retriever), type(kr) is Retriever)
+print([c.__name__ for c in KeywordRetriever.__mro__])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Refund window is 30 days&#x27;, &#x27;Refund policy for orders&#x27;]
+True True False
+[&#x27;KeywordRetriever&#x27;, &#x27;Retriever&#x27;, &#x27;object&#x27;]</pre></div></div>
+<p><code>retrieve</code> is defined once, in the base class, and it calls <code>self.score(...)</code>. For a <code>KeywordRetriever</code>, <code>self.score</code> finds the subclass's override first. So the base class's algorithm uses the subclass's scoring without knowing it exists: the base defines the <strong>steps</strong>, the subclass fills in one of them. That is the <strong>template method</strong> pattern, the most useful thing inheritance does (problem 2). <code>isinstance</code> respects the hierarchy, while <code>type(x) is Base</code> does not, which is why <code>isinstance</code> is the right check in almost all code.</p>
+</section>
+<section class="sec" id="super">
+<h2><span class="n">2</span>Extending a method with <code>super()</code></h2>
+<p>Often a subclass wants to <strong>add</strong> to an inherited method rather than replace it: do what the base does, plus something more. <code>super().method(...)</code> calls the next class's version of the method on the same instance. The most important case is <code>__init__</code>: if a subclass defines its own <code>__init__</code>, the base's <code>__init__</code> is <strong>not</strong> called automatically, so the base's attributes are never set unless the subclass calls <code>super().__init__(...)</code>. Forgetting it is the most common inheritance bug, and it fails later, with an <code>AttributeError</code> far from the cause (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">super_extend.py</span><button class="copy">Copy</button></div><pre><code class="py">class Retriever:
+    def __init__(self, docs):
+        self.docs = list(docs)
+        self.calls = 0
+
+    def retrieve(self, query, k=2):
+        self.calls += 1
+        return [d for d in self.docs if query.lower() in d.lower()][:k]
+
+class FilteredRetriever(Retriever):
+    def __init__(self, docs, banned):
+        super().__init__(docs)                 # set up everything the base needs
+        self.banned = set(banned)
+
+    def retrieve(self, query, k=2):
+        results = super().retrieve(query, k=len(self.docs))   # reuse, then extend
+        return [d for d in results if not self.banned &amp; set(d.lower().split())][:k]
+
+fr = FilteredRetriever([&quot;Refund policy&quot;, &quot;Refund scam alert&quot;, &quot;Refund window&quot;], banned=[&quot;scam&quot;])
+print(fr.retrieve(&quot;refund&quot;), fr.calls, sorted(vars(fr)))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Refund policy&#x27;, &#x27;Refund window&#x27;] 1 [&#x27;banned&#x27;, &#x27;calls&#x27;, &#x27;docs&#x27;]</pre></div></div>
+<p><code>super()</code> without arguments works inside methods because Python knows which class the method was defined in and which instance it was called on. The extension pattern is: call <code>super()</code> to get the base behaviour, then add or adjust. Calling <code>Retriever.retrieve(self, ...)</code> by name also works with single inheritance, but it breaks the cooperation that multiple inheritance needs (below), so <code>super()</code> is the habit to build.</p>
+</section>
+<section class="sec" id="mro">
+<h2><span class="n">3</span>What <code>super()</code> really calls: the MRO</h2>
+<p>With single inheritance, <code>super()</code> means "the parent". In general it means something more precise: <strong>the next class in the method resolution order</strong> of the instance's class. The MRO is the list Python searches for attributes, available as <code>Class.__mro__</code>. For multiple inheritance, <code>class D(B, C)</code>, Python computes it with the <strong>C3 linearisation</strong> algorithm, which guarantees that every class appears before its bases, that the order of bases you wrote is respected, and that each class appears exactly once.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mro.py</span><button class="copy">Copy</button></div><pre><code class="py">class Base:
+    def greet(self):
+        return [&quot;Base&quot;]
+
+class Polite(Base):
+    def greet(self):
+        return [&quot;Polite&quot;] + super().greet()
+
+class Brief(Base):
+    def greet(self):
+        return [&quot;Brief&quot;] + super().greet()
+
+class Assistant(Polite, Brief):
+    def greet(self):
+        return [&quot;Assistant&quot;] + super().greet()
+
+print([c.__name__ for c in Assistant.__mro__])
+print(Assistant().greet())
+print(Polite().greet())</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Assistant&#x27;, &#x27;Polite&#x27;, &#x27;Brief&#x27;, &#x27;Base&#x27;, &#x27;object&#x27;]
+[&#x27;Assistant&#x27;, &#x27;Polite&#x27;, &#x27;Brief&#x27;, &#x27;Base&#x27;]
+[&#x27;Polite&#x27;, &#x27;Base&#x27;]</pre></div></div>
+<p>In <code>Assistant</code>, <code>super()</code> inside <code>Polite.greet</code> does <strong>not</strong> go to <code>Base</code>, even though <code>Base</code> is <code>Polite</code>'s parent: it goes to <code>Brief</code>, the next class in <code>Assistant</code>'s MRO. Only <code>Brief</code>'s <code>super()</code> reaches <code>Base</code>. That is how every class in a "diamond" gets called exactly once, in a predictable order. It also means a class using <code>super()</code> does not know which method it will call next; that is decided by the class of the actual instance. For this to work, every method in the chain must call <code>super()</code> and accept the arguments the others might pass, usually through <code>**kwargs</code> (problem 11).</p>
+</section>
+<section class="sec" id="contract">
+<h2><span class="n">4</span>The substitution rule</h2>
+<p>Inheritance is a promise: an instance of the subclass can be used <strong>wherever</strong> the base class is expected, without the caller noticing a difference in the rules. This is the <strong>Liskov substitution principle</strong>. In practice an override must accept the same arguments as the base method (it may accept more, with defaults), return the same kind of result, and not raise errors that callers of the base would not expect, or demand more of its inputs. Breaking the promise makes the base class's own code fail: the template method calls the hook with the base's signature (problem 9).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">substitution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Loader:
+    def load(self, path, encoding=&quot;utf-8&quot;):
+        return f&quot;text of {path}&quot;
+
+    def load_many(self, paths):
+        return [self.load(p, encoding=&quot;utf-8&quot;) for p in paths]
+
+class BrokenPDFLoader(Loader):
+    def load(self, path):                       # dropped the encoding parameter
+        return f&quot;pdf text of {path}&quot;
+
+class PDFLoader(Loader):
+    def load(self, path, encoding=&quot;utf-8&quot;, password=None):   # same contract, plus an optional extra
+        return f&quot;pdf text of {path}&quot;
+
+print(PDFLoader().load_many([&quot;a.pdf&quot;, &quot;b.pdf&quot;]))
+try:
+    BrokenPDFLoader().load_many([&quot;a.pdf&quot;])
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;pdf text of a.pdf&#x27;, &#x27;pdf text of b.pdf&#x27;]
+TypeError: BrokenPDFLoader.load() got an unexpected keyword argument &#x27;encoding&#x27;</pre></div></div>
+<p>A classic violation is a "read-only list" that subclasses <code>list</code> and raises on <code>append</code>: any function that receives a list and appends to it breaks. If the subclass cannot honour the base's interface, it is not an "is a" relationship, and composition (9.5), holding the other object instead of inheriting from it, is the right design.</p>
+</section>
+<section class="sec" id="mixins">
+<h2><span class="n">5</span>Multiple inheritance and mixins</h2>
+<p>Python allows several base classes. The common, safe use is <strong>mixins</strong>: small classes that each add one capability and are combined with a main class: a <code>JsonMixin</code> that adds <code>to_json()</code>, a <code>ReprMixin</code> that adds a generic <code>__repr__</code>, a <code>TimestampMixin</code> that records creation time. Mixins usually have no state of their own, or initialise it cooperatively: their <code>__init__</code> takes <code>**kwargs</code>, picks out what it needs, and passes the rest on with <code>super().__init__(**kwargs)</code>, so that every class in the MRO gets its arguments.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mixins.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+class JsonMixin:
+    def to_json(self):
+        return json.dumps({k: v for k, v in vars(self).items() if not k.startswith(&quot;_&quot;)}, sort_keys=True)
+
+class TaggedMixin:
+    def __init__(self, *, tags=(), **kwargs):
+        super().__init__(**kwargs)
+        self.tags = sorted(set(tags))
+
+class Record:
+    def __init__(self, *, id, text):
+        self.id = id
+        self.text = text
+
+class Document(JsonMixin, TaggedMixin, Record):
+    pass
+
+d = Document(id=7, text=&quot;Refund policy&quot;, tags=[&quot;billing&quot;, &quot;faq&quot;, &quot;billing&quot;])
+print(d.to_json())
+print([c.__name__ for c in Document.__mro__])</code></pre><div class="out"><span class="ol">Output</span><pre>{&quot;id&quot;: 7, &quot;tags&quot;: [&quot;billing&quot;, &quot;faq&quot;], &quot;text&quot;: &quot;Refund policy&quot;}
+[&#x27;Document&#x27;, &#x27;JsonMixin&#x27;, &#x27;TaggedMixin&#x27;, &#x27;Record&#x27;, &#x27;object&#x27;]</pre></div></div>
+<p>Calling <code>Document(...)</code> runs the first <code>__init__</code> found in the MRO, <code>TaggedMixin.__init__</code>, which takes <code>tags</code> and forwards <code>id</code> and <code>text</code> to the next class, <code>Record</code>. Keyword-only arguments make this forwarding safe. Mixins are how frameworks compose behaviour: Django's class-based views, scikit-learn's <code>ClassifierMixin</code> and <code>TransformerMixin</code> (which add <code>score</code> and <code>fit_transform</code>), and <code>socketserver.ThreadingMixIn</code>. Deep or tangled multiple inheritance, with state in several bases, is hard to reason about; keep mixins small and focused.</p>
+</section>
+<section class="sec" id="special">
+<h2><span class="n">6</span>Two specialised tools: <code>__init_subclass__</code> and subclassing built-ins</h2>
+<p>A base class can react whenever a <strong>subclass is defined</strong>, by defining the class method <code>__init_subclass__(cls, **kwargs)</code>. Python calls it at class-creation time with the new subclass. It is the class-based version of registration decorators (8.4): a plugin base class can register every subclass automatically, validate that subclasses define required attributes, or accept keyword arguments in the class line, <code>class EchoProvider(Provider, name="echo"):</code> (problem 13).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">init_subclass.py</span><button class="copy">Copy</button></div><pre><code class="py">class Provider:
+    registry = {}
+
+    def __init_subclass__(cls, *, name, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if name in Provider.registry:
+            raise ValueError(f&quot;duplicate provider {name!r}&quot;)
+        cls.name = name
+        Provider.registry[name] = cls
+
+    def complete(self, prompt):
+        raise NotImplementedError
+
+class Echo(Provider, name=&quot;echo&quot;):
+    def complete(self, prompt):
+        return prompt
+
+class Shout(Provider, name=&quot;shout&quot;):
+    def complete(self, prompt):
+        return prompt.upper()
+
+print(sorted(Provider.registry), Provider.registry[&quot;shout&quot;]().complete(&quot;hi&quot;), Echo.name)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;echo&#x27;, &#x27;shout&#x27;] HI echo</pre></div></div>
+<p>Subclassing <strong>built-in</strong> types needs care. A subclass of <code>dict</code> that overrides <code>__setitem__</code> (to lower-case keys, say) does not affect <code>dict.__init__</code>, <code>update</code> or <code>setdefault</code>, because the C implementation of those methods does not call your <code>__setitem__</code>. The object then holds keys that bypassed your rule (problem 6). The <code>collections</code> module offers <code>UserDict</code>, <code>UserList</code> and <code>UserString</code>, written in Python precisely so that every operation goes through the methods you override.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">builtin_subclass.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import UserDict
+
+class LowerDict(dict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key.lower(), value)
+
+class LowerUserDict(UserDict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key.lower(), value)
+
+a = LowerDict({&quot;Model&quot;: &quot;small&quot;})
+a.update({&quot;TEMP&quot;: 0.2})
+a[&quot;Seed&quot;] = 1
+b = LowerUserDict({&quot;Model&quot;: &quot;small&quot;})
+b.update({&quot;TEMP&quot;: 0.2})
+b[&quot;Seed&quot;] = 1
+print(sorted(a), sorted(b))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;Model&#x27;, &#x27;TEMP&#x27;, &#x27;seed&#x27;] [&#x27;model&#x27;, &#x27;seed&#x27;, &#x27;temp&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">7</span>When not to inherit</h2>
+<p>Inheritance couples the subclass tightly to the base: every change to the base's internals can break subclasses, subclasses depend on which methods the base calls internally, and deep hierarchies make it hard to see where a method comes from. Use it when there is a genuine "is a" relationship, a shared contract, and the base was designed for extension (it documents which methods to override). Typical good uses: exception hierarchies (7.2), a framework's base classes (<code>nn.Module</code>, <code>BaseEstimator</code>, a provider base), and mixins.</p>
+<p>Prefer <strong>composition</strong>, holding another object and calling it, when you want to <strong>reuse</strong> code without promising the whole interface, when the relationship is "has a" or "uses a" (a chat session <strong>has a</strong> client; a cached retriever <strong>uses a</strong> retriever), or when the behaviour should be swappable at run time. Lesson 9.5 shows composition and protocols, which most modern Python code prefers for flexibility. A useful smell test: if you are overriding methods to make them raise or do nothing, inheritance is the wrong tool.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">8</span>Warm-up</h2>
+<article class="prob" id="p-lookup-through-the-chain" data-pid="m9-4-lookup-through-the-chain" data-type="predict" data-level="easy" data-answer="base:B child:C gc+child:C
+[&#x27;GrandChild&#x27;, &#x27;Child&#x27;, &#x27;Base&#x27;, &#x27;object&#x27;]
+True False">
+<header class="prob-head"><h3>1. Lookup through the chain</h3></header>
+<div class="code"><pre><code class="py">class Base:
+    kind = &quot;base&quot;
+    def describe(self):
+        return f&quot;{self.kind}:{self.name()}&quot;
+    def name(self):
+        return &quot;B&quot;
+
+class Child(Base):
+    kind = &quot;child&quot;
+    def name(self):
+        return &quot;C&quot;
+
+class GrandChild(Child):
+    def describe(self):
+        return &quot;gc+&quot; + super().describe()
+
+print(Base().describe(), Child().describe(), GrandChild().describe())
+print([c.__name__ for c in GrandChild.__mro__])
+print(isinstance(GrandChild(), Base), type(GrandChild()) is Child)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>self.kind</code> and <code>self.name()</code> are looked up starting from the instance's own class.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>base:B child:C gc+child:C
+[&#x27;GrandChild&#x27;, &#x27;Child&#x27;, &#x27;Base&#x27;, &#x27;object&#x27;]
+True False</pre></div><p><code>Base.describe</code> uses <code>self.kind</code> and <code>self.name()</code>, which for a <code>Child</code> instance find <code>Child</code>'s versions. <code>GrandChild</code> inherits <code>kind</code> and <code>name</code> from <code>Child</code>, and its <code>describe</code> extends the inherited one through <code>super()</code>. The MRO lists the classes from the most specific to <code>object</code>. <code>isinstance</code> follows the hierarchy; an exact <code>type</code> comparison does not.</p></div></details>
+</article>
+<article class="prob" id="p-a-template-method-for-retrievers" data-pid="m9-4-a-template-method-for-retrievers" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. A template method for retrievers</h3></header>
+<div class="prob-q"><p>Write a base class <code>Retriever(docs)</code> whose <code>retrieve(query, k=3)</code> returns the top <code>k</code> documents ordered by <code>self.score(query, doc)</code> (highest first, ties keep the original order) and <strong>only documents with a positive score</strong>. Its own <code>score</code> raises <code>NotImplementedError</code>. Then write two subclasses: <code>OverlapRetriever</code> (score = number of shared lower-cased words) and <code>PrefixRetriever</code> (score = 1 if the document starts with the query, case-insensitive, else 0).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class Retriever:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">docs = ["Refund policy for orders", "Reset your password", "Refund window is 30 days", "Order status"]
+assert OverlapRetriever(docs).retrieve("refund window", k=2) == ["Refund window is 30 days", "Refund policy for orders"]
+assert OverlapRetriever(docs).retrieve("shipping") == []
+assert PrefixRetriever(docs).retrieve("refund") == ["Refund policy for orders", "Refund window is 30 days"]
+try:
+    Retriever(docs).retrieve("x")
+    assert False
+except NotImplementedError:
+    pass
+assert issubclass(PrefixRetriever, Retriever)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [&quot;Refund policy for orders&quot;, &quot;Reset your password&quot;, &quot;Refund window is 30 days&quot;, &quot;Order status&quot;]
+assert OverlapRetriever(docs).retrieve(&quot;refund window&quot;, k=2) == [&quot;Refund window is 30 days&quot;, &quot;Refund policy for orders&quot;]
+assert OverlapRetriever(docs).retrieve(&quot;shipping&quot;) == []
+assert PrefixRetriever(docs).retrieve(&quot;refund&quot;) == [&quot;Refund policy for orders&quot;, &quot;Refund window is 30 days&quot;]
+try:
+    Retriever(docs).retrieve(&quot;x&quot;)
+    assert False
+except NotImplementedError:
+    pass
+assert issubclass(PrefixRetriever, Retriever)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>sorted</code> is stable, so sorting by score with <code>reverse=True</code> keeps ties in their original order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute each score once: build <code>(score, doc)</code> pairs first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Retriever:
+    def __init__(self, docs):
+        self.docs = list(docs)
+
+    def score(self, query, doc):
+        raise NotImplementedError(f&quot;{type(self).__name__} must implement score()&quot;)
+
+    def retrieve(self, query, k=3):
+        scored = [(self.score(query, d), d) for d in self.docs]
+        ranked = sorted((pair for pair in scored if pair[0] &gt; 0), key=lambda p: p[0], reverse=True)
+        return [d for _, d in ranked[:k]]
+
+
+class OverlapRetriever(Retriever):
+    def score(self, query, doc):
+        return len(set(query.lower().split()) &amp; set(doc.lower().split()))
+
+
+class PrefixRetriever(Retriever):
+    def score(self, query, doc):
+        return int(doc.lower().startswith(query.lower()))</code></pre></div><p>The base owns the algorithm (score, filter, sort, cut), and each subclass supplies only the step that differs. Adding a third strategy means writing one small method. The base's <code>score</code> raises <code>NotImplementedError</code> with the subclass's name, so forgetting to override it fails loudly with a clear message; 9.5 shows how an abstract base class turns this into an error at instantiation. Scoring each document once matters when scoring is expensive (an embedding call), which is also why the scores are computed before sorting rather than inside the sort key.</p></div></details>
+</article>
+<article class="prob" id="p-a-subclass-that-skips-the-base-initialis" data-pid="m9-4-a-subclass-that-skips-the-base-initialis" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A subclass that skips the base initialiser</h3></header>
+<div class="prob-q"><p><code>StreamingClient</code> adds a buffer size to <code>Client</code>, but calling <code>ask</code> fails with <code>AttributeError: ... no attribute 'model'</code>. Fix the subclass.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Client:
+    def __init__(self, model, timeout=30):
+        self.model = model
+        self.timeout = timeout
+
+    def ask(self, prompt):
+        return f&quot;[{self.model}, {self.timeout}s] {prompt}&quot;
+
+class StreamingClient(Client):
+    def __init__(self, model, buffer_size=64, timeout=30):
+        self.buffer_size = buffer_size
+
+    def ask(self, prompt):
+        return super().ask(prompt) + f&quot; (streamed in {self.buffer_size}-char chunks)&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">s = StreamingClient("small", buffer_size=16, timeout=10)
+assert s.ask("hi") == "[small, 10s] hi (streamed in 16-char chunks)"
+assert vars(s) == {"model": "small", "timeout": 10, "buffer_size": 16}
+assert StreamingClient("x").ask("y").startswith("[x, 30s]")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = StreamingClient(&quot;small&quot;, buffer_size=16, timeout=10)
+assert s.ask(&quot;hi&quot;) == &quot;[small, 10s] hi (streamed in 16-char chunks)&quot;
+assert vars(s) == {&quot;model&quot;: &quot;small&quot;, &quot;timeout&quot;: 10, &quot;buffer_size&quot;: 16}
+assert StreamingClient(&quot;x&quot;).ask(&quot;y&quot;).startswith(&quot;[x, 30s]&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Defining <code>__init__</code> in a subclass replaces the base's; call <code>super().__init__(model, timeout)</code> explicitly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Client:
+    def __init__(self, model, timeout=30):
+        self.model = model
+        self.timeout = timeout
+
+    def ask(self, prompt):
+        return f&quot;[{self.model}, {self.timeout}s] {prompt}&quot;
+
+class StreamingClient(Client):
+    def __init__(self, model, buffer_size=64, timeout=30):
+        super().__init__(model, timeout)
+        self.buffer_size = buffer_size
+
+    def ask(self, prompt):
+        return super().ask(prompt) + f&quot; (streamed in {self.buffer_size}-char chunks)&quot;</code></pre></div><p>Python does not call a base <code>__init__</code> automatically when the subclass has its own; the subclass's <code>__init__</code> is simply found first in the MRO and runs alone. So <code>model</code> and <code>timeout</code> were never set, and the error appeared only when an inherited method used them. <code>super().__init__(...)</code> runs the base's setup on the same instance. Calling it first is the usual order, so the subclass can rely on the base's attributes; occasionally a subclass must prepare something before, which is fine as long as it calls it at all.</p></div></details>
+</article>
+<article class="prob" id="p-types-in-a-hierarchy" data-pid="m9-4-types-in-a-hierarchy" data-type="predict" data-level="easy" data-answer="True True True
+False Puppy Dog
+True False True True
+object">
+<header class="prob-head"><h3>4. Types in a hierarchy</h3></header>
+<div class="code"><pre><code class="py">class Animal: pass
+class Dog(Animal): pass
+class Puppy(Dog): pass
+
+p = Puppy()
+print(isinstance(p, Animal), isinstance(p, (int, Dog)), issubclass(Puppy, Animal))
+print(type(p) is Dog, type(p).__name__, Puppy.__bases__[0].__name__)
+print(issubclass(Dog, Dog), issubclass(Animal, Dog), issubclass(bool, int), isinstance(True, int))
+print([c.__name__ for c in Puppy.__mro__][-1])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>issubclass(C, C)</code> is true. <code>bool</code> is a subclass of <code>int</code>. Every MRO ends with <code>object</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True True True
+False Puppy Dog
+True False True True
+object</pre></div><p><code>isinstance</code> and <code>issubclass</code> follow the whole chain, and accept a tuple meaning "any of these". <code>type(p) is Dog</code> asks for the exact class, which is <code>Puppy</code>. A class counts as a subclass of itself. <code>bool</code> really is a subclass of <code>int</code>, which explains several surprises in earlier lessons (booleans accepted where numbers are expected). Every class ultimately inherits from <code>object</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">9</span>Medium</h2>
+<article class="prob" id="p-a-provider-base-class" data-pid="m9-4-a-provider-base-class" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A provider base class</h3></header>
+<div class="prob-q"><p>Write a base class <code>Provider(model)</code> with a public method <code>complete(prompt)</code> that: strips the prompt and raises <code>ValueError</code> for an empty one; calls the hook <code>self._call(prompt)</code>, which subclasses implement (the base raises <code>NotImplementedError</code>); strips the result; increments <code>self.calls</code>; and returns <code>{"model": ..., "text": ...}</code>. Then write <code>EchoProvider</code> (returns the prompt) and <code>ReverseProvider</code> (returns the words in reverse order), each overriding only <code>_call</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class Provider:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">e = EchoProvider("echo-1")
+assert e.complete("  refund policy ") == {"model": "echo-1", "text": "refund policy"}
+r = ReverseProvider("rev")
+assert r.complete("one two three")["text"] == "three two one" and r.calls == 1 and e.calls == 1
+for bad in ["", "   "]:
+    try:
+        e.complete(bad)
+        assert False
+    except ValueError:
+        pass
+assert e.calls == 1
+try:
+    Provider("base").complete("x")
+    assert False
+except NotImplementedError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">e = EchoProvider(&quot;echo-1&quot;)
+assert e.complete(&quot;  refund policy &quot;) == {&quot;model&quot;: &quot;echo-1&quot;, &quot;text&quot;: &quot;refund policy&quot;}
+r = ReverseProvider(&quot;rev&quot;)
+assert r.complete(&quot;one two three&quot;)[&quot;text&quot;] == &quot;three two one&quot; and r.calls == 1 and e.calls == 1
+for bad in [&quot;&quot;, &quot;   &quot;]:
+    try:
+        e.complete(bad)
+        assert False
+    except ValueError:
+        pass
+assert e.calls == 1
+try:
+    Provider(&quot;base&quot;).complete(&quot;x&quot;)
+    assert False
+except NotImplementedError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep validation, counting and post-processing in <code>complete</code>, so every subclass gets them for free.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Provider:
+    def __init__(self, model):
+        self.model = model
+        self.calls = 0
+
+    def complete(self, prompt):
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError(&quot;prompt must not be empty&quot;)
+        text = self._call(prompt).strip()
+        self.calls += 1
+        return {&quot;model&quot;: self.model, &quot;text&quot;: text}
+
+    def _call(self, prompt):
+        raise NotImplementedError(f&quot;{type(self).__name__} must implement _call()&quot;)
+
+
+class EchoProvider(Provider):
+    def _call(self, prompt):
+        return prompt
+
+
+class ReverseProvider(Provider):
+    def _call(self, prompt):
+        return &quot; &quot;.join(reversed(prompt.split()))</code></pre></div><p>The public method is defined once and handles everything that must be the same for every provider (validation, counting, the result shape); subclasses implement only the one step that differs. The underscore on <code>_call</code> marks it as a hook for subclasses, not part of the public interface, so callers always go through <code>complete</code> and its rules. Real client libraries use this split: LangChain's chat models implement <code>_generate</code> while the base class handles callbacks, retries and output formatting; adding a new provider means implementing one method. Rejected prompts never reach <code>_call</code> or the counter.</p></div></details>
+</article>
+<article class="prob" id="p-a-dict-subclass-whose-rule-is-bypassed" data-pid="m9-4-a-dict-subclass-whose-rule-is-bypassed" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A dict subclass whose rule is bypassed</h3></header>
+<div class="prob-q"><p><code>CaseInsensitiveHeaders</code> should store every key lower-cased, however the data arrives. Keys given to the constructor or to <code>update</code> keep their original case, so lookups fail. Fix it by building on <code>collections.UserDict</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class CaseInsensitiveHeaders(dict):
+    def __setitem__(self, key, value):
+        super().__setitem__(key.lower(), value)
+
+    def __getitem__(self, key):
+        return super().__getitem__(key.lower())
+</textarea>
+<script type="text/plain" class="prob-tests">h = CaseInsensitiveHeaders({"Content-Type": "application/json"})
+h.update({"X-Request-ID": "r1"})
+h["Retry-After"] = "2"
+assert h["content-type"] == "application/json" and h["X-REQUEST-ID"] == "r1" and h["retry-after"] == "2"
+assert sorted(h) == ["content-type", "retry-after", "x-request-id"]
+assert "CONTENT-TYPE" in h and h.get("Retry-After") == "2"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">h = CaseInsensitiveHeaders({&quot;Content-Type&quot;: &quot;application/json&quot;})
+h.update({&quot;X-Request-ID&quot;: &quot;r1&quot;})
+h[&quot;Retry-After&quot;] = &quot;2&quot;
+assert h[&quot;content-type&quot;] == &quot;application/json&quot; and h[&quot;X-REQUEST-ID&quot;] == &quot;r1&quot; and h[&quot;retry-after&quot;] == &quot;2&quot;
+assert sorted(h) == [&quot;content-type&quot;, &quot;retry-after&quot;, &quot;x-request-id&quot;]
+assert &quot;CONTENT-TYPE&quot; in h and h.get(&quot;Retry-After&quot;) == &quot;2&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>UserDict</code> keeps the data in <code>self.data</code> and routes <code>__init__</code>, <code>update</code> and <code>setdefault</code> through <code>__setitem__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Also lower-case keys in <code>__contains__</code>; <code>get</code> uses <code>__getitem__</code> in <code>UserDict</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import UserDict
+
+class CaseInsensitiveHeaders(UserDict):
+    def __setitem__(self, key, value):
+        self.data[key.lower()] = value
+
+    def __getitem__(self, key):
+        return self.data[key.lower()]
+
+    def __contains__(self, key):
+        return key.lower() in self.data</code></pre></div><p><code>dict</code>'s constructor and <code>update</code> are implemented in C and write directly into the hash table, so they never call a subclass's <code>__setitem__</code>; the rule "keys are lower-cased" held only for one way of adding data, which is the worst kind of invariant. <code>UserDict</code> is a plain Python class that stores the real dict in <code>self.data</code> and implements every method in terms of a few core ones, so overriding <code>__setitem__</code>, <code>__getitem__</code> and <code>__contains__</code> covers construction, <code>update</code>, <code>get</code> and <code>in</code>. HTTP headers are a real case: <code>requests</code> uses a similar case-insensitive mapping, because header names are case-insensitive by the HTTP standard.</p></div></details>
+</article>
+<article class="prob" id="p-metrics-with-a-shared-interface" data-pid="m9-4-metrics-with-a-shared-interface" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Metrics with a shared interface</h3></header>
+<div class="prob-q"><p>Write a base class <code>Metric</code> with <code>update(y_true, y_pred)</code> (taking lists of equal length, else <code>ValueError</code>), <code>compute()</code>, <code>reset()</code> and a <code>name</code> class attribute. The base's <code>update</code> checks lengths and calls the hook <code>self._update(y_true, y_pred)</code>; <code>reset</code> calls <code>__init__</code> again. Write <code>Accuracy</code> (correct / total, 0.0 if empty) and <code>MeanAbsoluteError</code> (mean of <code>abs(t - p)</code>, 0.0 if empty), each accumulating across several <code>update</code> calls. Write <code>evaluate(metrics, batches)</code> returning <code>{metric.name: rounded 4 value}</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class Metric:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">batches = [([1, 0, 1], [1, 1, 1]), ([0, 0], [0, 0])]
+assert evaluate([Accuracy(), MeanAbsoluteError()], batches) == {"accuracy": 0.8, "mae": 0.2}
+acc = Accuracy()
+acc.update([1], [1]); acc.update([1, 1], [0, 1])
+assert round(acc.compute(), 4) == 0.6667
+acc.reset()
+assert acc.compute() == 0.0
+try:
+    MeanAbsoluteError().update([1, 2], [1])
+    assert False
+except ValueError:
+    pass
+assert isinstance(Accuracy(), Metric)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">batches = [([1, 0, 1], [1, 1, 1]), ([0, 0], [0, 0])]
+assert evaluate([Accuracy(), MeanAbsoluteError()], batches) == {&quot;accuracy&quot;: 0.8, &quot;mae&quot;: 0.2}
+acc = Accuracy()
+acc.update([1], [1]); acc.update([1, 1], [0, 1])
+assert round(acc.compute(), 4) == 0.6667
+acc.reset()
+assert acc.compute() == 0.0
+try:
+    MeanAbsoluteError().update([1, 2], [1])
+    assert False
+except ValueError:
+    pass
+assert isinstance(Accuracy(), Metric)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each subclass's <code>__init__</code> sets its own counters; <code>reset</code> can simply call <code>self.__init__()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>evaluate</code> resets each metric, feeds every batch, then computes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Metric:
+    name = &quot;metric&quot;
+
+    def update(self, y_true, y_pred):
+        if len(y_true) != len(y_pred):
+            raise ValueError(f&quot;length mismatch: {len(y_true)} vs {len(y_pred)}&quot;)
+        self._update(y_true, y_pred)
+
+    def _update(self, y_true, y_pred):
+        raise NotImplementedError
+
+    def compute(self):
+        raise NotImplementedError
+
+    def reset(self):
+        self.__init__()
+
+
+class Accuracy(Metric):
+    name = &quot;accuracy&quot;
+
+    def __init__(self):
+        self.correct = 0
+        self.total = 0
+
+    def _update(self, y_true, y_pred):
+        self.correct += sum(t == p for t, p in zip(y_true, y_pred))
+        self.total += len(y_true)
+
+    def compute(self):
+        return self.correct / self.total if self.total else 0.0
+
+
+class MeanAbsoluteError(Metric):
+    name = &quot;mae&quot;
+
+    def __init__(self):
+        self.error = 0.0
+        self.total = 0
+
+    def _update(self, y_true, y_pred):
+        self.error += sum(abs(t - p) for t, p in zip(y_true, y_pred))
+        self.total += len(y_true)
+
+    def compute(self):
+        return self.error / self.total if self.total else 0.0
+
+
+def evaluate(metrics, batches):
+    for m in metrics:
+        m.reset()
+        for y_true, y_pred in batches:
+            m.update(y_true, y_pred)
+    return {m.name: round(m.compute(), 4) for m in metrics}</code></pre></div><p>Every metric follows the same contract, so <code>evaluate</code> works with any of them, and with metrics not written yet: that is the payoff of a shared base. Validation lives once in the base's <code>update</code>; subclasses implement only accumulation and the final formula. Metrics that accumulate across batches (rather than averaging per-batch values) give the exact result for the whole dataset, which matters when batches have different sizes. <code>reset</code> reusing <code>__init__</code> keeps the initial state defined in one place. <code>torchmetrics</code> and Keras metrics use this exact <code>update</code>/<code>compute</code>/<code>reset</code> design.</p></div></details>
+</article>
+<article class="prob" id="p-the-mro-and-cooperative-super" data-pid="m9-4-the-mro-and-cooperative-super" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. The MRO and cooperative super</h3></header>
+<div class="prob-q"><p>Fill in <code>order</code> and <code>calls</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">calls = []
+
+class A:
+    def setup(self):
+        calls.append(&quot;A&quot;)
+
+class B(A):
+    def setup(self):
+        calls.append(&quot;B&quot;)
+        super().setup()
+
+class C(A):
+    def setup(self):
+        calls.append(&quot;C&quot;)
+        super().setup()
+
+class D(B, C):
+    def setup(self):
+        calls.append(&quot;D&quot;)
+        super().setup()
+
+order = [k.__name__ for k in D.__mro__][:-1]
+D().setup()
+order = order
+calls.clear(); B().setup()
+order = [k.__name__ for k in B.__mro__][:-1]</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>order</code></th><th><code>calls</code></th></tr><tr><td>MRO of D</td><td><input class="cell" data-a="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" data-s="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" aria-label="order at MRO of D" autocomplete="off"></td><td><input class="cell" data-a="[]" data-s="[]" aria-label="calls at MRO of D" autocomplete="off"></td></tr><tr><td>D().setup()</td><td><input class="cell" data-a="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" data-s="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" aria-label="order at D().setup()" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" data-s="[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]" aria-label="calls at D().setup()" autocomplete="off"></td></tr><tr><td>B alone</td><td><input class="cell" data-a="[&#x27;B&#x27;, &#x27;A&#x27;]" data-s="[&#x27;B&#x27;, &#x27;A&#x27;]" aria-label="order at B alone" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;B&#x27;, &#x27;A&#x27;]" data-s="[&#x27;B&#x27;, &#x27;A&#x27;]" aria-label="calls at B alone" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>D</code>'s MRO, the class after <code>B</code> is <code>C</code>, not <code>A</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>order</code></th><th><code>calls</code></th></tr><tr><td>MRO of D</td><td><code>[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]</code></td><td><code>[]</code></td></tr><tr><td>D().setup()</td><td><code>[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]</code></td><td><code>[&#x27;D&#x27;, &#x27;B&#x27;, &#x27;C&#x27;, &#x27;A&#x27;]</code></td></tr><tr><td>B alone</td><td><code>[&#x27;B&#x27;, &#x27;A&#x27;]</code></td><td><code>[&#x27;B&#x27;, &#x27;A&#x27;]</code></td></tr></table></div><p>C3 linearisation puts <code>D</code> first, then its bases in the written order, then their common base <code>A</code>, so the order is D, B, C, A (then <code>object</code>, cut off here). Each <code>super().setup()</code> calls the next class in <strong>D's</strong> MRO, so <code>B</code>'s <code>super()</code> reaches <code>C</code>, and <code>A</code> runs once, last. For a plain <code>B</code> instance, the MRO is B, A, so <code>B</code>'s <code>super()</code> goes straight to <code>A</code>: the same line of code calls a different method depending on the instance's class.</p></div></details>
+</article>
+<article class="prob" id="p-an-override-that-breaks-the-contract" data-pid="m9-4-an-override-that-breaks-the-contract" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. An override that breaks the contract</h3></header>
+<div class="prob-q"><p><code>Chunker.chunk_all</code> calls <code>self.chunk(text, size)</code> for each document. <code>SentenceChunker</code> overrides <code>chunk</code> without the <code>size</code> parameter, so <code>chunk_all</code> fails for it. Fix the override so it honours the base contract: split into sentences on <code>". "</code>, then pack sentences into chunks of at most <code>size</code> characters (joined with <code>". "</code>), never splitting a sentence.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">class Chunker:
+    def chunk(self, text, size):
+        return [text[i:i + size] for i in range(0, len(text), size)]
+
+    def chunk_all(self, texts, size=40):
+        return [c for t in texts for c in self.chunk(t, size)]
+
+class SentenceChunker(Chunker):
+    def chunk(self, text):
+        return [s.strip() for s in text.split(&quot;. &quot;) if s.strip()]
+</textarea>
+<script type="text/plain" class="prob-tests">text = "Refunds take 5 days. Contact support for help. Orders ship in 2 days"
+assert SentenceChunker().chunk_all([text], size=50) == ["Refunds take 5 days. Contact support for help", "Orders ship in 2 days"]
+assert SentenceChunker().chunk_all([text], size=10) == ["Refunds take 5 days", "Contact support for help", "Orders ship in 2 days"]
+assert Chunker().chunk_all(["abcdef"], size=4) == ["abcd", "ef"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = &quot;Refunds take 5 days. Contact support for help. Orders ship in 2 days&quot;
+assert SentenceChunker().chunk_all([text], size=50) == [&quot;Refunds take 5 days. Contact support for help&quot;, &quot;Orders ship in 2 days&quot;]
+assert SentenceChunker().chunk_all([text], size=10) == [&quot;Refunds take 5 days&quot;, &quot;Contact support for help&quot;, &quot;Orders ship in 2 days&quot;]
+assert Chunker().chunk_all([&quot;abcdef&quot;], size=4) == [&quot;abcd&quot;, &quot;ef&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the signature <code>chunk(self, text, size)</code>. Pack greedily: add a sentence to the current chunk if the joined length stays within <code>size</code>, else start a new chunk.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Chunker:
+    def chunk(self, text, size):
+        return [text[i:i + size] for i in range(0, len(text), size)]
+
+    def chunk_all(self, texts, size=40):
+        return [c for t in texts for c in self.chunk(t, size)]
+
+class SentenceChunker(Chunker):
+    def chunk(self, text, size):
+        sentences = [s.strip() for s in text.split(&quot;. &quot;) if s.strip()]
+        chunks, current = [], &quot;&quot;
+        for s in sentences:
+            candidate = f&quot;{current}. {s}&quot; if current else s
+            if current and len(candidate) &gt; size:
+                chunks.append(current)
+                current = s
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks</code></pre></div><p>The base class's <code>chunk_all</code> is written against the base contract, <code>chunk(text, size)</code>; any subclass must accept those arguments, or the base's own code breaks for it, which is the substitution rule in practice. Accepting <code>size</code> and <strong>using</strong> it keeps the meaning too: a chunk never exceeds the limit unless a single sentence is longer than it, in which case it stays whole (the second test), a deliberate choice for sentence-based chunking. This is exactly how LangChain-style text splitters are organised: one base interface, several strategies.</p></div></details>
+</article>
+<article class="prob" id="p-duplicate-classes-into-a-base" data-pid="m9-4-duplicate-classes-into-a-base" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Duplicate classes into a base</h3></header>
+<div class="prob-q"><p>Move the shared code of <code>CsvExporter</code> and <code>TsvExporter</code> into a base class <code>Exporter</code>; keep their behaviour identical. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class CsvExporter:
+    def __init__(self, columns):
+        self.columns = list(columns)
+        self.rows_written = 0
+
+    def export(self, rows):
+        lines = [&quot;,&quot;.join(self.columns)]
+        for row in rows:
+            lines.append(&quot;,&quot;.join(str(row.get(c, &quot;&quot;)) for c in self.columns))
+            self.rows_written += 1
+        return &quot;\n&quot;.join(lines)
+
+class TsvExporter:
+    def __init__(self, columns):
+        self.columns = list(columns)
+        self.rows_written = 0
+
+    def export(self, rows):
+        lines = [&quot;\t&quot;.join(self.columns)]
+        for row in rows:
+            lines.append(&quot;\t&quot;.join(str(row.get(c, &quot;&quot;)) for c in self.columns))
+            self.rows_written += 1
+        return &quot;\n&quot;.join(lines)
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [{"id": 1, "name": "Ana"}, {"id": 2}]
+csv = CsvExporter(["id", "name"])
+assert csv.export(rows) == "id,name\n1,Ana\n2," and csv.rows_written == 2
+tsv = TsvExporter(["id", "name"])
+assert tsv.export(rows[:1]) == "id\tname\n1\tAna" and tsv.rows_written == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [{&quot;id&quot;: 1, &quot;name&quot;: &quot;Ana&quot;}, {&quot;id&quot;: 2}]
+csv = CsvExporter([&quot;id&quot;, &quot;name&quot;])
+assert csv.export(rows) == &quot;id,name\n1,Ana\n2,&quot; and csv.rows_written == 2
+tsv = TsvExporter([&quot;id&quot;, &quot;name&quot;])
+assert tsv.export(rows[:1]) == &quot;id\tname\n1\tAna&quot; and tsv.rows_written == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The only difference is the separator: make it a class attribute <code>sep</code> that each subclass sets.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Exporter:
+    sep = &quot;,&quot;
+
+    def __init__(self, columns):
+        self.columns = list(columns)
+        self.rows_written = 0
+
+    def export(self, rows):
+        lines = [self.sep.join(self.columns)]
+        for row in rows:
+            lines.append(self.sep.join(str(row.get(c, &quot;&quot;)) for c in self.columns))
+            self.rows_written += 1
+        return &quot;\n&quot;.join(lines)
+
+class CsvExporter(Exporter):
+    sep = &quot;,&quot;
+
+class TsvExporter(Exporter):
+    sep = &quot;\t&quot;</code></pre></div><p>The two classes differed in a single value, so the base holds all the logic and each subclass only overrides a class attribute: the lightest possible specialisation, using the lookup rule that <code>self.sep</code> finds the subclass's value first. A bug fix in <code>export</code> now happens once. When the difference is that small, a parameter (<code>Exporter(columns, sep="\t")</code>) would work just as well; subclasses earn their place when they bring different methods, or when other code needs to dispatch on the type. Real CSV output should use the <code>csv</code> module, which handles quoting (12.2).</p></div></details>
+</article>
+<article class="prob" id="p-cooperative-mixins" data-pid="m9-4-cooperative-mixins" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Cooperative mixins</h3></header>
+<div class="prob-q"><p>Write two mixins and a record class that cooperate through <code>super().__init__(**kwargs)</code>: <code>TimestampMixin</code> (takes keyword <code>created_at</code>, default <code>0.0</code>, and stores it), <code>ValidateMixin</code> (no arguments of its own; after the rest of <code>__init__</code> has run, calls <code>self.validate()</code> and raises <code>ValueError</code> if it returns a non-empty list of problems), and <code>Record(*, id, text)</code>. Then define <code>Note(TimestampMixin, ValidateMixin, Record)</code> whose <code>validate()</code> reports <code>"empty text"</code> and <code>"bad id"</code> (id must be a positive int). Add <code>to_dict()</code> on <code>Record</code> returning all instance attributes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">class TimestampMixin:
+    pass
+
+class ValidateMixin:
+    pass
+
+class Record:
+    pass
+
+class Note(TimestampMixin, ValidateMixin, Record):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">n = Note(id=7, text="Call back", created_at=12.5)
+assert n.to_dict() == {"created_at": 12.5, "id": 7, "text": "Call back"}
+assert Note(id=1, text="x").created_at == 0.0
+try:
+    Note(id=0, text=" ")
+    assert False
+except ValueError as e:
+    assert "empty text" in str(e) and "bad id" in str(e)
+assert [c.__name__ for c in Note.__mro__][:4] == ["Note", "TimestampMixin", "ValidateMixin", "Record"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">n = Note(id=7, text=&quot;Call back&quot;, created_at=12.5)
+assert n.to_dict() == {&quot;created_at&quot;: 12.5, &quot;id&quot;: 7, &quot;text&quot;: &quot;Call back&quot;}
+assert Note(id=1, text=&quot;x&quot;).created_at == 0.0
+try:
+    Note(id=0, text=&quot; &quot;)
+    assert False
+except ValueError as e:
+    assert &quot;empty text&quot; in str(e) and &quot;bad id&quot; in str(e)
+assert [c.__name__ for c in Note.__mro__][:4] == [&quot;Note&quot;, &quot;TimestampMixin&quot;, &quot;ValidateMixin&quot;, &quot;Record&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each <code>__init__</code> takes <code>**kwargs</code>, takes out its own arguments, and calls <code>super().__init__(**kwargs)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ValidateMixin.__init__</code> calls <code>super().__init__(**kwargs)</code> <strong>first</strong>, so the record's fields exist, then validates.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class TimestampMixin:
+    def __init__(self, *, created_at=0.0, **kwargs):
+        self.created_at = created_at
+        super().__init__(**kwargs)
+
+class ValidateMixin:
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        problems = self.validate()
+        if problems:
+            raise ValueError(&quot;; &quot;.join(problems))
+
+    def validate(self):
+        return []
+
+class Record:
+    def __init__(self, *, id, text):
+        self.id = id
+        self.text = text
+
+    def to_dict(self):
+        return dict(vars(self))
+
+class Note(TimestampMixin, ValidateMixin, Record):
+    def validate(self):
+        problems = []
+        if not self.text.strip():
+            problems.append(&quot;empty text&quot;)
+        if isinstance(self.id, bool) or not isinstance(self.id, int) or self.id &lt;= 0:
+            problems.append(&quot;bad id&quot;)
+        return problems</code></pre></div><p><code>Note(...)</code> runs <code>TimestampMixin.__init__</code> first (the start of the MRO), which takes <code>created_at</code> and passes the rest along; <code>ValidateMixin</code> passes everything on to <code>Record</code>, which sets the fields; control then returns to <code>ValidateMixin</code>, which can now validate a complete object. Each class handles only its own keyword arguments, and none of them needs to know which classes come next: that is cooperative multiple inheritance. <code>validate</code> is a hook with a harmless default, overridden by <code>Note</code>, and collecting all problems before raising gives a complete error message (7.2). Keyword-only arguments are essential here, since positional arguments cannot be safely forwarded through a chain whose order depends on the final class.</p></div></details>
+</article>
+<article class="prob" id="p-super-follows-the-instance-s-mro" data-pid="m9-4-super-follows-the-instance-s-mro" data-type="predict" data-level="medium" data-answer="[&#x27;redact&#x27;, &#x27;ts&#x27;, &#x27;log:key ***&#x27;]
+[&#x27;ts&#x27;, &#x27;log:key sk-123&#x27;]
+[&#x27;AppLogger&#x27;, &#x27;Redacted&#x27;, &#x27;Timestamped&#x27;, &#x27;Logger&#x27;, &#x27;object&#x27;]">
+<header class="prob-head"><h3>12. super() follows the instance's MRO</h3></header>
+<div class="code"><pre><code class="py">class Logger:
+    def log(self, msg):
+        return [f&quot;log:{msg}&quot;]
+
+class Timestamped(Logger):
+    def log(self, msg):
+        return [&quot;ts&quot;] + super().log(msg)
+
+class Redacted(Logger):
+    def log(self, msg):
+        return [&quot;redact&quot;] + super().log(msg.replace(&quot;sk-123&quot;, &quot;***&quot;))
+
+class AppLogger(Redacted, Timestamped):
+    pass
+
+print(AppLogger().log(&quot;key sk-123&quot;))
+print(Timestamped().log(&quot;key sk-123&quot;))
+print([c.__name__ for c in AppLogger.__mro__])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For an <code>AppLogger</code>, the class after <code>Redacted</code> is <code>Timestamped</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;redact&#x27;, &#x27;ts&#x27;, &#x27;log:key ***&#x27;]
+[&#x27;ts&#x27;, &#x27;log:key sk-123&#x27;]
+[&#x27;AppLogger&#x27;, &#x27;Redacted&#x27;, &#x27;Timestamped&#x27;, &#x27;Logger&#x27;, &#x27;object&#x27;]</pre></div><p><code>AppLogger</code> defines nothing, so <code>log</code> is found on <code>Redacted</code>, which redacts and calls <code>super().log</code>: the next class in <code>AppLogger</code>'s MRO is <code>Timestamped</code>, not <code>Logger</code>. <code>Timestamped</code> adds its marker and calls <code>super()</code>, which reaches <code>Logger</code>. A plain <code>Timestamped</code> instance never involves <code>Redacted</code>, so the key is not redacted there. Composing behaviours this way works only because every override calls <code>super()</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">10</span>Hard</h2>
+<article class="prob" id="p-auto-registering-plugins" data-pid="m9-4-auto-registering-plugins" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Auto-registering plugins</h3></header>
+<div class="prob-q"><p>Write a base class <code>Tool</code> that registers every subclass in <code>Tool.registry</code> under a <code>name</code> given in the class line (<code>class Search(Tool, name="search")</code>). <code>__init_subclass__</code> must: require <code>name</code> (a <code>TypeError</code> is fine if missing), reject duplicates with <code>ValueError</code>, require subclasses to override <code>run</code> (raise <code>TypeError</code> at class creation if <code>run</code> is still the base's), and store <code>cls.name</code>. Add a class-level function <code>Tool.create(name, **config)</code> returning an instance of the registered class (<code>KeyError</code> for unknown names), where <code>__init__(self, **config)</code> stores <code>config</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">class Tool:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">class Search(Tool, name="search"):
+    def run(self, query):
+        return [f"{query} doc"] * self.config.get("k", 1)
+
+class Calculator(Tool, name="calc"):
+    def run(self, expr):
+        a, b = expr.split("+")
+        return int(a) + int(b)
+
+assert sorted(Tool.registry) == ["calc", "search"] and Tool.registry["search"] is Search
+assert Tool.create("search", k=2).run("refund") == ["refund doc", "refund doc"]
+assert Tool.create("calc").run("2+3") == 5 and Search.name == "search"
+try:
+    class Search2(Tool, name="search"):
+        def run(self, q):
+            return q
+    assert False
+except ValueError:
+    pass
+try:
+    class Lazy(Tool, name="lazy"):
+        pass
+    assert False
+except TypeError:
+    pass
+assert "lazy" not in Tool.registry
+try:
+    Tool.create("nope")
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class Search(Tool, name=&quot;search&quot;):
+    def run(self, query):
+        return [f&quot;{query} doc&quot;] * self.config.get(&quot;k&quot;, 1)
+
+class Calculator(Tool, name=&quot;calc&quot;):
+    def run(self, expr):
+        a, b = expr.split(&quot;+&quot;)
+        return int(a) + int(b)
+
+assert sorted(Tool.registry) == [&quot;calc&quot;, &quot;search&quot;] and Tool.registry[&quot;search&quot;] is Search
+assert Tool.create(&quot;search&quot;, k=2).run(&quot;refund&quot;) == [&quot;refund doc&quot;, &quot;refund doc&quot;]
+assert Tool.create(&quot;calc&quot;).run(&quot;2+3&quot;) == 5 and Search.name == &quot;search&quot;
+try:
+    class Search2(Tool, name=&quot;search&quot;):
+        def run(self, q):
+            return q
+    assert False
+except ValueError:
+    pass
+try:
+    class Lazy(Tool, name=&quot;lazy&quot;):
+        pass
+    assert False
+except TypeError:
+    pass
+assert &quot;lazy&quot; not in Tool.registry
+try:
+    Tool.create(&quot;nope&quot;)
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def __init_subclass__(cls, *, name, **kwargs)</code>; call <code>super().__init_subclass__(**kwargs)</code> first.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare <code>cls.run is Tool.run</code> to detect a missing override. Use <code>@classmethod</code> (9.6) or a <code>staticmethod</code> for <code>create</code>; a classmethod receives <code>cls</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Tool:
+    registry = {}
+
+    def __init_subclass__(cls, *, name, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if name in Tool.registry:
+            raise ValueError(f&quot;tool {name!r} is already registered by {Tool.registry[name].__name__}&quot;)
+        if cls.run is Tool.run:
+            raise TypeError(f&quot;{cls.__name__} must implement run()&quot;)
+        cls.name = name
+        Tool.registry[name] = cls
+
+    def __init__(self, **config):
+        self.config = config
+
+    def run(self, *args, **kwargs):
+        raise NotImplementedError
+
+    @classmethod
+    def create(cls, name, **config):
+        return cls.registry[name](**config)</code></pre></div><p><code>__init_subclass__</code> runs when each <code>class</code> statement finishes, so registration and checks happen at import time, like the registration decorators of 8.4 but without a decorator line: subclassing <strong>is</strong> registering. Checking <code>cls.run is Tool.run</code> catches a subclass that forgot to implement the required method before any instance exists, earlier than the <code>NotImplementedError</code> approach, and the failed classes never enter the registry because the checks come before the assignment. The registry is a class attribute of the base on purpose: shared by all subclasses, which is the one case where a mutable class attribute is the design (always written as <code>Tool.registry</code>, never through <code>self</code>). <code>create</code> builds instances by name, the way configuration files select a component.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-family-of-document-loade" data-pid="m9-4-read-the-code-a-family-of-document-loade" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>14. Read the code: a family of document loaders</h3></header>
+<div class="prob-q"><p><code>BaseLoader.load_all</code> loads many files and records each loaded path in <code>self.loaded</code>. <code>JsonLoader</code> and <code>TextLoader</code> share bugs: loaded paths from one loader appear in the other's list, <code>TextLoader</code> crashes because its base attributes are missing, and <code>JsonLoader.load</code> returns a different type from the base contract (a list of <code>Document</code>s, each a <code>(source, text)</code> tuple). Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+
+
+class BaseLoader:
+    loaded = []
+
+    def __init__(self, encoding=&quot;utf-8&quot;):
+        self.encoding = encoding
+
+    def read(self, path, files):
+        return files[path]
+
+    def load(self, path, files):
+        return [(path, self.read(path, files))]
+
+    def load_all(self, paths, files):
+        docs = []
+        for p in paths:
+            docs.extend(self.load(p, files))
+            self.loaded.append(p)
+        return docs
+
+
+class JsonLoader(BaseLoader):
+    def load(self, path, files):
+        data = json.loads(self.read(path, files))
+        return &quot;\n&quot;.join(item[&quot;text&quot;] for item in data)
+
+
+class TextLoader(BaseLoader):
+    def __init__(self, strip=True):
+        self.strip = strip
+
+    def read(self, path, files):
+        text = super().read(path, files)
+        return text.strip() if self.strip else text
+</textarea>
+<script type="text/plain" class="prob-tests">files = {"a.json": '[{"text": "Refunds take 5 days"}, {"text": "Contact support"}]', "b.txt": "  Reset your password  "}
+jl, tl = JsonLoader(), TextLoader()
+assert jl.load_all(["a.json"], files) == [("a.json", "Refunds take 5 days"), ("a.json", "Contact support")]
+assert tl.load_all(["b.txt"], files) == [("b.txt", "Reset your password")]
+assert jl.loaded == ["a.json"] and tl.loaded == ["b.txt"]
+assert tl.encoding == "utf-8" and TextLoader(strip=False).load("b.txt", files) == [("b.txt", "  Reset your password  ")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">files = {&quot;a.json&quot;: &#x27;[{&quot;text&quot;: &quot;Refunds take 5 days&quot;}, {&quot;text&quot;: &quot;Contact support&quot;}]&#x27;, &quot;b.txt&quot;: &quot;  Reset your password  &quot;}
+jl, tl = JsonLoader(), TextLoader()
+assert jl.load_all([&quot;a.json&quot;], files) == [(&quot;a.json&quot;, &quot;Refunds take 5 days&quot;), (&quot;a.json&quot;, &quot;Contact support&quot;)]
+assert tl.load_all([&quot;b.txt&quot;], files) == [(&quot;b.txt&quot;, &quot;Reset your password&quot;)]
+assert jl.loaded == [&quot;a.json&quot;] and tl.loaded == [&quot;b.txt&quot;]
+assert tl.encoding == &quot;utf-8&quot; and TextLoader(strip=False).load(&quot;b.txt&quot;, files) == [(&quot;b.txt&quot;, &quot;  Reset your password  &quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>loaded = []</code> is a mutable class attribute shared by every loader instance.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>TextLoader.__init__</code> must call <code>super().__init__()</code>, ideally passing <code>encoding</code> through.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>JsonLoader.load</code> must return a list of <code>(source, text)</code> tuples, like the base.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+
+
+class BaseLoader:
+    def __init__(self, encoding=&quot;utf-8&quot;):
+        self.encoding = encoding
+        self.loaded = []
+
+    def read(self, path, files):
+        return files[path]
+
+    def load(self, path, files):
+        return [(path, self.read(path, files))]
+
+    def load_all(self, paths, files):
+        docs = []
+        for p in paths:
+            docs.extend(self.load(p, files))
+            self.loaded.append(p)
+        return docs
+
+
+class JsonLoader(BaseLoader):
+    def load(self, path, files):
+        data = json.loads(self.read(path, files))
+        return [(path, item[&quot;text&quot;]) for item in data]
+
+
+class TextLoader(BaseLoader):
+    def __init__(self, strip=True, encoding=&quot;utf-8&quot;):
+        super().__init__(encoding)
+        self.strip = strip
+
+    def read(self, path, files):
+        text = super().read(path, files)
+        return text.strip() if self.strip else text</code></pre></div><p>Three bugs, all about the base-subclass relationship. <code>loaded = []</code> on the base class was one list shared by <strong>every</strong> loader of every subclass (9.1), so each loader's history included the others'; it belongs in <code>__init__</code>. <code>TextLoader.__init__</code> replaced the base's without calling it, so <code>encoding</code> (and, after the first fix, <code>loaded</code>) never existed; calling <code>super().__init__(encoding)</code> and accepting <code>encoding</code> as a parameter keeps the subclass substitutable. And <code>JsonLoader.load</code> returned a joined string where the base contract promises a list of documents: <code>load_all</code> then extended the result list with individual <strong>characters</strong>, a silent corruption that a substitution check catches immediately. Returning one <code>(source, text)</code> tuple per JSON item honours the contract and keeps each item a separate document for retrieval.</p></div></details>
+</article>
+<article class="prob" id="p-extend-a-method-with-caching" data-pid="m9-4-extend-a-method-with-caching" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>15. Extend a method with caching</h3></header>
+<div class="prob-q"><p>Given the base class <code>Retriever</code> (provided in the starter), write a subclass <code>CachingRetriever(docs, max_entries=128)</code> that overrides <code>retrieve(query, k)</code> to return cached results for repeated <code>(normalised query, k)</code> pairs (normalise: lower-case, collapse spaces), calling <code>super().retrieve</code> only on a miss, evicting the oldest entry when full, and returning a <strong>copy</strong> of the cached list. Track <code>self.hits</code> and <code>self.misses</code>. Adding documents with the base's <code>add(doc)</code> must clear the cache (override <code>add</code> and call <code>super().add</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">class Retriever:
+    def __init__(self, docs):
+        self.docs = list(docs)
+        self.searches = 0
+
+    def add(self, doc):
+        self.docs.append(doc)
+
+    def retrieve(self, query, k=2):
+        self.searches += 1
+        words = set(query.lower().split())
+        scored = [(len(words &amp; set(d.lower().split())), d) for d in self.docs]
+        return [d for s, d in sorted(scored, key=lambda p: -p[0]) if s &gt; 0][:k]
+
+
+class CachingRetriever(Retriever):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">r = CachingRetriever(["Refund policy", "Refund window 30 days", "Reset password"], max_entries=2)
+first = r.retrieve("refund  WINDOW")
+assert first == ["Refund window 30 days", "Refund policy"]
+first.append("junk")
+assert r.retrieve("Refund window") == ["Refund window 30 days", "Refund policy"]
+assert (r.hits, r.misses, r.searches) == (1, 1, 1)
+r.retrieve("reset"); r.retrieve("policy")
+assert r.misses == 3 and r.searches == 3
+r.retrieve("refund window")
+assert r.misses == 4
+r.add("Refund window extended to 60 days")
+assert "Refund window extended to 60 days" in r.retrieve("refund window", k=3)
+assert isinstance(r, Retriever) and r.searches == 5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = CachingRetriever([&quot;Refund policy&quot;, &quot;Refund window 30 days&quot;, &quot;Reset password&quot;], max_entries=2)
+first = r.retrieve(&quot;refund  WINDOW&quot;)
+assert first == [&quot;Refund window 30 days&quot;, &quot;Refund policy&quot;]
+first.append(&quot;junk&quot;)
+assert r.retrieve(&quot;Refund window&quot;) == [&quot;Refund window 30 days&quot;, &quot;Refund policy&quot;]
+assert (r.hits, r.misses, r.searches) == (1, 1, 1)
+r.retrieve(&quot;reset&quot;); r.retrieve(&quot;policy&quot;)
+assert r.misses == 3 and r.searches == 3
+r.retrieve(&quot;refund window&quot;)
+assert r.misses == 4
+r.add(&quot;Refund window extended to 60 days&quot;)
+assert &quot;Refund window extended to 60 days&quot; in r.retrieve(&quot;refund window&quot;, k=3)
+assert isinstance(r, Retriever) and r.searches == 5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Call <code>super().__init__(docs)</code> first, then set up the cache dict and counters.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>retrieve</code>, build the key, check the cache, else <code>result = super().retrieve(query, k)</code>, store it, and return <code>list(...)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Retriever:
+    def __init__(self, docs):
+        self.docs = list(docs)
+        self.searches = 0
+
+    def add(self, doc):
+        self.docs.append(doc)
+
+    def retrieve(self, query, k=2):
+        self.searches += 1
+        words = set(query.lower().split())
+        scored = [(len(words &amp; set(d.lower().split())), d) for d in self.docs]
+        return [d for s, d in sorted(scored, key=lambda p: -p[0]) if s &gt; 0][:k]
+
+
+class CachingRetriever(Retriever):
+    def __init__(self, docs, max_entries=128):
+        super().__init__(docs)
+        self.max_entries = max_entries
+        self._cache = {}
+        self.hits = 0
+        self.misses = 0
+
+    def retrieve(self, query, k=2):
+        key = (&quot; &quot;.join(query.lower().split()), k)
+        if key in self._cache:
+            self.hits += 1
+            return list(self._cache[key])
+        self.misses += 1
+        result = super().retrieve(query, k)
+        if len(self._cache) &gt;= self.max_entries:
+            del self._cache[next(iter(self._cache))]
+        self._cache[key] = list(result)
+        return list(result)
+
+    def add(self, doc):
+        super().add(doc)
+        self._cache.clear()</code></pre></div><p>The subclass extends two methods with <code>super()</code>: <code>retrieve</code> adds a cache around the base's search, and <code>add</code> adds invalidation after the base's update, so a new document is visible immediately. Because it overrides methods with the same signatures and results, a <code>CachingRetriever</code> can replace a <code>Retriever</code> anywhere. Copies on the way in and out protect the cache from callers modifying lists (the <code>junk</code> test). The counters show the cache working: only misses reach <code>super().retrieve</code>, which increments the base's <code>searches</code>. The same behaviour could be built by composition, a <code>CachedRetriever</code> that <strong>holds</strong> any retriever and wraps it, which works for every retriever class at once; 9.5 compares the two.</p></div></details>
+</article>
+<article class="prob" id="p-calling-an-override-from-the-base-initia" data-pid="m9-4-calling-an-override-from-the-base-initia" data-type="predict" data-level="hard" data-answer="Base init, describe() -&gt; child &lt;label not set yet&gt;
+child x
+{&#x27;model&#x27;: &#x27;small&#x27;} {&#x27;model&#x27;: &#x27;large&#x27;} True">
+<header class="prob-head"><h3>16. Calling an override from the base initialiser</h3></header>
+<div class="code"><pre><code class="py">class Base:
+    def __init__(self):
+        print(&quot;Base init, describe() -&gt;&quot;, self.describe())
+
+    def describe(self):
+        return &quot;base&quot;
+
+class Child(Base):
+    def __init__(self, label):
+        super().__init__()
+        self.label = label
+
+    def describe(self):
+        return f&quot;child {getattr(self, &#x27;label&#x27;, &#x27;&lt;label not set yet&gt;&#x27;)}&quot;
+
+c = Child(&quot;x&quot;)
+print(c.describe())
+
+class Config:
+    defaults = {&quot;model&quot;: &quot;small&quot;}
+
+class Prod(Config):
+    defaults = {**Config.defaults, &quot;model&quot;: &quot;large&quot;}
+
+print(Config.defaults, Prod.defaults, Prod().defaults is Prod.defaults)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>Base.__init__</code>, <code>self</code> is already a <code>Child</code>, so <code>self.describe()</code> runs <code>Child.describe</code>, before <code>label</code> exists.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Base init, describe() -&gt; child &lt;label not set yet&gt;
+child x
+{&#x27;model&#x27;: &#x27;small&#x27;} {&#x27;model&#x27;: &#x27;large&#x27;} True</pre></div><p>During <code>Base.__init__</code>, the object is already an instance of <code>Child</code>, so the call <code>self.describe()</code> dispatches to the override, which runs before <code>Child.__init__</code> has set <code>label</code>: the <code>getattr</code> default shows the gap. Calling overridable methods from a base initialiser is a classic trap; with a plain <code>self.label</code> the code would crash with <code>AttributeError</code>. The second part shows the safe way to specialise a class attribute: build a <strong>new</strong> dict in the subclass (<code>{**Config.defaults, ...}</code>) instead of mutating the base's.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">11</span>Interview questions</h2>
+<article class="prob" id="p-what-does-super-do-and-what-is-the-mro" data-pid="m9-4-what-does-super-do-and-what-is-the-mro" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What does <code>super()</code> do, and what is the MRO?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The method resolution order is the sequence of classes Python searches for an attribute: the class itself, then its bases in an order computed by the C3 linearisation algorithm, ending with <code>object</code>; <code>Class.__mro__</code> shows it. C3 guarantees each class comes before its bases, the written order of bases is respected, and each class appears once. <code>super().method()</code> calls the version of <code>method</code> in the <strong>next</strong> class after the current one in the MRO of the instance's actual class, not necessarily the current class's parent. With single inheritance those are the same; with multiple inheritance, it lets every class in a diamond run exactly once in a defined order, provided every method calls <code>super()</code> and passes along arguments it does not use, usually via keyword arguments. The most common use is extending <code>__init__</code>: a subclass that defines <code>__init__</code> must call <code>super().__init__(...)</code>, or the base's setup never runs.</p></div></details>
+</article>
+<article class="prob" id="p-inheritance-versus-composition-when-do-y" data-pid="m9-4-inheritance-versus-composition-when-do-y" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Inheritance versus composition: when do you use each?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Inheritance models "is a": the subclass promises the whole interface of the base and can be substituted for it everywhere, reusing its code and overriding parts. It fits exception hierarchies, framework base classes designed for extension (template methods with documented hooks) and small mixins. Its cost is tight coupling: subclasses depend on the base's internals, deep hierarchies obscure where behaviour comes from, and violating the base's contract breaks code that uses the base. Composition models "has a" or "uses a": an object holds another and delegates to it, so components can be swapped at run time, tested separately with fakes, and combined freely (a retriever wrapped by a cache, a client with a retry policy). Prefer composition by default, and inherit when there is a genuine substitutable relationship or a framework requires it. Overriding methods to disable them is a sign inheritance was wrong.</p></div></details>
+</article>
+<article class="prob" id="p-design-a-class-hierarchy-for-supporting-" data-pid="m9-4-design-a-class-hierarchy-for-supporting-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Design a class hierarchy for supporting several LLM providers. What pitfalls would you avoid?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Define a small base contract (an abstract base class or a protocol, 9.5) with one public method such as <code>complete(messages, **params)</code> returning a provider-neutral response object, and put shared behaviour in the base: input validation, retries and timeouts, usage accounting, tracing. Each provider subclass implements one protected hook that translates to its API and back, and maps its SDK's errors into your exception hierarchy (7.2). Register providers by name (<code>__init_subclass__</code> or a decorator) so configuration can pick one. Pitfalls: subclasses that change the public method's signature or return provider-specific types, which breaks substitutability; forgetting <code>super().__init__</code>; mutable class attributes shared across providers; deep hierarchies built per model version instead of configuration; putting provider-specific features in the base. Often composition is better for cross-cutting features (wrap any provider with a caching or fallback layer) than adding them as subclasses, so the hierarchy stays one level deep.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>class Child(Base)</code> inherits everything; lookup searches instance, class, then bases (the MRO). Overrides win because the subclass is searched first.</li><li>Template method: the base defines the algorithm and calls hooks (<code>self.score</code>); subclasses override only the hooks.</li><li>A subclass <code>__init__</code> must call <code>super().__init__(...)</code>. <code>super()</code> calls the next class in the instance's MRO, which makes cooperative multiple inheritance work.</li><li>Honour the base contract (same arguments, same kind of result): substitutability is the point of inheritance.</li><li>Mixins and <code>__init_subclass__</code> are the specialised tools; subclass <code>UserDict</code> rather than <code>dict</code>; prefer composition when there is no real "is a".</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
