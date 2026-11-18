@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-p", num="5.P", title="Module 5 practice set and mini project",
@@ -9,6 +10,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(5, "prepare documents for a RAG index"), "Module 5 at a glance: from string basics to Unicode and regular expressions, building up to cleaning documents for retrieval."),
     p("""Text problems usually mix several layers, and most bugs come from mixing them up. Before you write code, ask three
     questions. **Bytes or text?** Anything from a file, socket or API arrives as bytes and must be decoded once, at the edge,
     with a known encoding (5.4). **Fixed text or a pattern?** For fixed text, string methods are faster and clearer (5.1,
@@ -404,6 +406,8 @@ lines = [f"DEBUG [tls] handshake {i}" if i % 2 else f"INFO [api] request {i}" fo
 )
 
 section("project", "Mini project: prepare documents for a RAG index",
+    fig(chain(["raw documents", "normalise Unicode|and whitespace", "remove boilerplate|(regex)", "split into chunks", ("records with ids", "good")]),
+        "Document preparation: every step is a string operation from this module, applied in a fixed order."),
     p("""Before documents go into a vector index, they are cleaned and cut into chunks. Raw files arrive as bytes from different
     tools: some have a byte order mark, some contain invalid bytes, full-width characters, invisible characters, personal data
     and messy whitespace. Build the preparation step. Every rule in the spec maps to a lesson in this module, and the tests check

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-1", num="5.1", title="Strings: indexing, slicing, immutability",
@@ -16,6 +17,12 @@ term("Implicit concatenation", "Python joins adjacent string literals: `\"a\" \"
 term("Grapheme", "What a reader sees as one character. It can be several code points, such as a letter plus an accent, or an emoji with a skin tone.")
 
 section("what", "What a string is",
+    fig(stage_map(5, "prepare documents for a RAG index"), "Module 5 at a glance: from string basics to Unicode and regular expressions, building up to cleaning documents for retrieval."),
+    fig(table(["character", "P", "y", "t", "h", "o", "n"], [
+        ["index", "0", "1", "2", "3", "4", "5"],
+        ["negative index", "-6", "-5", "-4", "-3", "-2", "-1"],
+    ], label="indexes of the string Python"),
+        "A string is an immutable sequence of characters, indexed exactly like a list."),
     p("""A Python `str` is an **immutable sequence of Unicode code points**. A code point is one number from the Unicode
     table (`"A"` is 65, `"é"` is 233, `"€"` is 8364), and `ord` and `chr` convert between a one-character string and its
     number. There is no separate "char" type: indexing a string gives you another string, of length 1. Because a string is a
@@ -56,6 +63,11 @@ section("slicing", "Indexing and slicing strings",
 )
 
 section("immutable", "Immutability, and building strings efficiently",
+    fig(table(["building a long string", "what happens", "cost"], [
+        ["s += part, in a loop", "a new string each time", "can be O(n squared)"],
+        ["parts.append(part), then ''.join(parts)", "one final copy", "O(n)"],
+    ], hl={(0, 2), (1, 2)}, label="building strings with += versus join"),
+        "Strings cannot change, so every `+=` may copy everything built so far; collect the pieces and join once."),
     p("""You cannot change a string in place: `s[0] = "r"` raises `TypeError`. Every method that seems to change a string,
     `upper`, `replace`, `strip`, returns a **new** string and leaves the original alone, so you must use the return value
     (`s.strip()` on its own line does nothing useful). The benefits are the ones from Module 2: strings can be shared
@@ -141,6 +153,12 @@ section("literals", "String literals and their traps",
 )
 
 section("length", "What `len` counts, and what it does not",
+    fig(table(["text", "len(text)", "len(text.encode('utf-8'))"], [
+        ["'cafe'", "4", "4"],
+        ["'café' (one é character)", "4", "5"],
+        ["'café' (e + combining accent)", "5", "6"],
+    ], hl={(2, 1)}, label="characters versus bytes"),
+        "`len` counts code points, not what the reader sees and not bytes; the same-looking word can have different lengths."),
     p("""`len(s)` counts **code points**. That is often, but not always, what a person would call characters. A visible
     character can be several code points: `"é"` can be stored as one code point (U+00E9) or as `"e"` plus a combining accent
     (U+0301), and an emoji with a skin tone is two code points. Those strings look identical but have different lengths, and

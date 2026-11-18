@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-4", num="5.4", title="Unicode, bytes and encodings",
@@ -60,6 +61,13 @@ section("model", "Text inside, bytes outside",
 )
 
 section("utf8", "How UTF-8 works",
+    fig(table(["character", "code point", "UTF-8 bytes"], [
+        ["A", "U+0041", "41"],
+        ["é", "U+00E9", "C3 A9"],
+        ["€", "U+20AC", "E2 82 AC"],
+        ["😀", "U+1F600", "F0 9F 98 80"],
+    ], label="UTF-8 uses one to four bytes per character"),
+        "UTF-8 stores ASCII in one byte and everything else in two to four, which is why bytes and characters differ in length."),
     p("""UTF-8 is the encoding to use unless something forces you otherwise: it is the default for the web, JSON, Python
     source files, Linux and macOS, and most databases. It stores each code point in **1 to 4 bytes**:"""),
     html("""<div class="tbl"><table>
@@ -87,6 +95,12 @@ section("utf8", "How UTF-8 works",
 )
 
 section("errors", "Decoding errors and error modes",
+    fig(table(["errors= mode", "decoding bytes 63 61 66 FF"], [
+        ["strict (default)", "UnicodeDecodeError"],
+        ["replace", "'caf' + the replacement character"],
+        ["ignore", "'caf'  (data silently lost)"],
+    ], hl={(2, 1)}, label="decoding error modes"),
+        "Choose an error mode on purpose: `strict` finds bad data, `replace` keeps going visibly, `ignore` hides the problem."),
     p("""Decoding bytes that are not valid in the chosen encoding raises `UnicodeDecodeError`, which reports the encoding, the
     offending byte and its position. Encoding a character the target encoding cannot represent raises `UnicodeEncodeError`.
     The `errors=` argument chooses what to do instead of raising:"""),
@@ -113,6 +127,8 @@ section("errors", "Decoding errors and error modes",
 )
 
 section("mojibake", "Mojibake: decoding with the wrong encoding",
+    fig(chain(["'café'", "encode as UTF-8|63 61 66 C3 A9", "decode as cp1252|(the wrong encoding)", ("'cafÃ©'", "bad")]),
+        "Mojibake is UTF-8 bytes read with a legacy encoding: each multi-byte character turns into two or three wrong ones."),
     p("""The most common encoding bug is not an error at all. Bytes written as UTF-8 and read back as cp1252 (or Latin-1)
     decode without complaint, because those encodings accept any byte, and every non-ASCII character turns into two or three
     wrong ones: `é` becomes `Ã©`, `€` becomes `â‚¬`, a typographic apostrophe `’` becomes `â€™` (a plain `'` is ASCII and survives). This is called **mojibake**, and its

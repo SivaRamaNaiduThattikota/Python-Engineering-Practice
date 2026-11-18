@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-2", num="5.2", title="String methods",
@@ -15,6 +16,13 @@ term("strip(chars)", "Removes any of the given characters from both ends, in any
 term("translate", "`s.translate(table)` maps, replaces or deletes many characters in one pass, using a table from `str.maketrans`.")
 
 section("split", "Splitting and joining",
+    fig(table(["call", "result"], [
+        ["'a,b,,c'.split(',')", "['a', 'b', '', 'c']"],
+        ["'  a   b '.split()", "['a', 'b']"],
+        ["'k=v=w'.split('=', 1)", "['k', 'v=w']"],
+        ["', '.join(['a', 'b'])", "'a, b'"],
+    ], label="split and join"),
+        "With a separator, `split` keeps empty fields; with no argument, it splits on any whitespace and drops the empty ones."),
     p("""`split` is the workhorse of text parsing, and its two modes behave differently in a way that matters:"""),
     p("""- **`s.split()`** with no argument splits on **any run of whitespace** (spaces, tabs, newlines), ignores leading and
       trailing whitespace, and never returns empty strings. It is the right choice for "the words of this text".
@@ -54,6 +62,12 @@ section("partition", "`partition`: split once, never fail",
 )
 
 section("strip", "Trimming: `strip` removes characters, `removeprefix` removes a prefix",
+    fig(table(["call on 'www.site.com'", "result"], [
+        [".strip('w.')", "'site.com'  (removes any of w and .)"],
+        [".removeprefix('www.')", "'site.com'"],
+        ["'wow.site'.strip('w.')", "'ow.site'  (stops at the first o)"],
+    ], hl={(2, 1)}, label="strip removes characters, removeprefix removes a prefix"),
+        "`strip` treats its argument as a set of characters, not a word; use `removeprefix` and `removesuffix` for exact text."),
     p("""`strip()`, `lstrip()` and `rstrip()` with no argument remove whitespace from the ends. With an argument, they remove
     **any of those characters**, in any order and any number of times, until they meet a character not in the set. They do
     **not** remove a prefix or suffix as a unit. That is a famous bug: `url.lstrip("https://")` removes every leading

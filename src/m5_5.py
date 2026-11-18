@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-5", num="5.5", title="Regex basics",
@@ -93,6 +94,8 @@ section("syntax", "The pattern language, piece by piece",
 )
 
 section("engine", "How the engine finds a match, step by step",
+    fig(chain(["start at position 0", "match the pattern|piece by piece", "a piece fails:|backtrack", "no way to match:|start one later", ("first match found|is returned", "good")]),
+        "The regex engine tries each start position from the left and backtracks inside the pattern, so the leftmost match wins."),
     p("""Python's regex engine is a **backtracking** engine, and knowing exactly what it does explains every surprising result
     later in this lesson. For `search`, it tries to match the pattern starting at position 0 of the text. If that fails, it tries
     position 1, then 2, and so on, and it returns the **first position where the whole pattern matches**, not the longest or best
@@ -125,6 +128,9 @@ section("engine", "How the engine finds a match, step by step",
 )
 
 section("greedy", "Greedy and lazy matching",
+    fig(table(["pattern on '<b>x</b>'", "matches"], [["<.*>", "<b>x</b>  (greedy: as much as possible)"], ["<.*?>", "<b>  (lazy: as little as possible)"]],
+        hl={(0, 1)}, label="greedy versus lazy quantifiers"),
+        "Greedy quantifiers take as much as they can and give back only when forced; adding `?` makes them take as little as possible."),
     p("""Quantifiers are **greedy**: `.*` matches as much as it can, then the engine **backtracks**, giving characters back one
     at a time, until the rest of the pattern can match. So `<b>.*</b>` on a string with two bold sections matches from the
     first `<b>` to the **last** `</b>`, swallowing everything between. Adding `?` makes a quantifier **lazy**: `.*?` matches as
@@ -249,6 +255,15 @@ section("sub", "Substitution, splitting and flags",
 )
 
 section("when", "When not to use a regex",
+    fig(flowchart({
+        "fixed": ("ask", 0, 0, "looking for|fixed text?"),
+        "str": ("good", 1, 0, "str methods: in, find,|startswith, split"),
+        "nested": ("ask", 0, 1, "nested structure|(HTML, JSON, code)?"),
+        "parser": ("good", 1, 1, "a real parser"),
+        "regex": ("accent", 0, 2, "a regex"),
+    }, [("fixed", "str", "yes"), ("fixed", "nested", "no"), ("nested", "parser", "yes"), ("nested", "regex", "no")], cell=(250, 86),
+        label="when to use a regex"),
+        "Regex is the right tool for patterns in flat text; plain string methods are clearer for fixed text, and parsers for nested formats."),
     p("""Regex is powerful and easy to overuse. Prefer simpler tools when they fit:"""),
     p("""- **Fixed text:** `"refund" in text`, `startswith`, `endswith`, `split(",")`, `partition` (5.2) are faster and clearer.
     - **Structured formats:** JSON (`json.loads`), CSV (`csv`), HTML and XML (an HTML parser such as BeautifulSoup, or

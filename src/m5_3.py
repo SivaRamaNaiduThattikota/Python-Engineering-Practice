@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m5-3", num="5.3", title="f-strings and formatting",
@@ -43,6 +44,9 @@ section("fstrings", "f-strings: expressions inside text",
 )
 
 section("spec", "The format spec, part by part",
+    fig(chain(["fill *", "align > (right)", "sign +", "width 12", "group ,", "precision .2", ("type f", "accent")],
+        note="f'{x:*>+12,.2f}' gives '***+1,234.57' for x = 1234.567"),
+        "The format spec reads left to right; every part is optional, but their order is fixed."),
     p("""After the colon in a field comes the **format spec**, a small language with a fixed order:
     `[[fill]align][sign][#][0][width][grouping][.precision][type]`. Every part is optional. Reading a spec left to right:"""),
     html("""<div class="tbl"><table>
@@ -73,6 +77,12 @@ section("spec", "The format spec, part by part",
 )
 
 section("rounding", "How formatting rounds",
+    fig(table(["value", "f'{value:.0f}'", "f'{value:.2f}'"], [
+        ["2.5", "2", "2.50"],
+        ["3.5", "4", "3.50"],
+        ["2.675", "3", "2.67"],
+    ], hl={(0, 1), (2, 2)}, label="formatting rounds half to even and uses the stored binary value"),
+        "Formatting uses the same rules as `round`: ties go to the even digit, and 2.675 is really stored as 2.67499..."),
     p("""Precision **rounds** (it never truncates), and it rounds the exact binary value of the float, with ties to even. So
     formatting shows the same surprises as `round` in 1.1: `2.675` is stored as 2.67499999..., so `f"{2.675:.2f}"` is `"2.67"`,
     and exact halves like 0.5 and 2.5 go to the even neighbour. For displaying measurements this is fine. For **money**, where a
