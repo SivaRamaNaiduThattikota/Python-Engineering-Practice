@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m11-2", num="11.2", title="Advanced typing",
@@ -99,6 +100,8 @@ section("callable", "`Callable`: functions as values",
 )
 
 section("generics", "Generics: functions and classes with type parameters",
+    fig(chain(["def first[T](xs: list[T]) -> T", "called with list[int]", ("checker infers|the result is int", "good")]),
+        "A type parameter links the input and output types, so the checker carries precise types through generic code."),
     p("""Some functions work for **any** element type but connect their inputs and outputs: `first(items)` returns an element of the same type as the
     items; a cache maps keys of one type to values of another. Writing `def first(items: list[Any]) -> Any` loses that connection, so the checker no
     longer knows that `first(["a"])` is a string. A **type parameter** keeps it: `def first[T](items: Iterable[T]) -> T | None` says "for some
@@ -171,6 +174,8 @@ section("extras", "`NewType`, `Annotated` and `Final`",
 )
 
 section("exhaustive", "Exhaustiveness with `assert_never`",
+    fig(chain(["Literal['spam', 'ham', 'phish']", "one branch per value", "assert_never(x)|in the final else", ("adding a value makes the|checker flag the gap", "good")]),
+        "Exhaustiveness checking turns a forgotten case into a type error instead of a silent fall-through."),
     p("""When code branches on a `Literal` or a union, you want to know that **every** case is handled, especially when a new case is added later (a new
     finish reason, a new event type). `typing.assert_never(value)` is the tool: put it in the final `else` branch. A type checker narrows the value
     through the earlier branches; if any member remains unhandled, the checker reports an error at `assert_never`, pointing at the forgotten case.

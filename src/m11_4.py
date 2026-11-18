@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m11-4", num="11.4", title="Pydantic models",
@@ -16,6 +17,8 @@ term("Lax mode", "Pydantic's default: compatible values are converted (the strin
 term("JSON Schema", "A standard JSON description of a data shape; `model_json_schema()` generates it, and LLM structured-output APIs accept it.")
 
 section("basics", "Models: validation and conversion from type hints",
+    fig(chain(["raw input|(dict or JSON)", "Pydantic checks and|converts each field", ("a valid model instance", "good")], note="or one ValidationError listing every problem"),
+        "A model is a validator built from type hints: input goes in, a trusted object or a complete error report comes out."),
     p("""A **Pydantic model** looks like a dataclass: a class inheriting from `pydantic.BaseModel` with annotated fields. The difference is what happens at
     construction: Pydantic **validates** every field against its type and **converts** compatible input, so `Ticket(id="42", ...)` stores the integer
     42, and incompatible input raises a `ValidationError` that lists **all** problems at once, each with its location. It is the runtime check that
@@ -87,6 +90,8 @@ section("fields", "Field types and constraints",
 )
 
 section("validators", "Validators: custom rules",
+    fig(chain(["before validators|(raw input)", "type validation|and conversion", "Field constraints", "after validators", ("model validators|(several fields)", "accent")]),
+        "The order Pydantic applies its checks, so you know what each validator receives."),
     p("""Type and constraint checks cover most rules; the rest go into **validators**. `@field_validator("name")` is a class method that receives the value of
     one field and returns the (possibly transformed) value, or raises `ValueError` with a message, which Pydantic turns into a validation error for that
     field. By default it runs **after** Pydantic's own type validation (`mode="after"`), so it receives a value of the declared type; with
@@ -193,6 +198,18 @@ section("config", "Model configuration and `TypeAdapter`",
 )
 
 section("llm", "Pydantic for LLM output",
+    fig(flowchart({
+        "ask": ("start", 0, 0, "ask the model with|the JSON schema"),
+        "parse": ("step", 0, 1, "model_validate_json(reply)"),
+        "ok": ("ask", 0, 2, "valid?"),
+        "ret": ("end", 1, 2, "return the model"),
+        "left": ("ask", 0, 3, "attempts left?"),
+        "fix": ("warn", 1, 3, "send the errors back"),
+        "fail": ("bad", 0, 4, "raise ValueError"),
+    }, [("ask", "parse"), ("parse", "ok"), ("ok", "ret", "yes"), ("ok", "left", "no"), ("left", "fix", "yes"),
+        ("fix", "ask", "", {"route": [(1.42, 3), (1.42, 0)]}), ("left", "fail", "no")], cell=(230, 76),
+        label="structured output with a repair loop"),
+        "Structured output with Pydantic: the model class supplies the schema, validates the reply, and turns failures into precise feedback."),
     p("""Structured output from a model is untrusted input: even with a JSON schema enforced by the provider, values can be out of range, lists empty,
     labels misspelt, or the reply truncated (7.4). The robust loop is: describe the answer as a model, send `model_json_schema()` as the response format
     or tool schema, parse the reply with `model_validate_json`, and on `ValidationError` send the **errors** back to the model in a compact form (location

@@ -13,6 +13,8 @@ Text in boxes can be split onto two lines with "|".
 import html
 import itertools
 
+import re
+
 __all__ = ["flowchart", "chain", "refs", "table", "module_map", "stage_map"]
 
 _ids = itertools.count(1)
@@ -30,9 +32,9 @@ def _open(W, H, aria):
 
 
 def wrap(text, width):
-    """Split text into lines of at most `width` characters, breaking at spaces; "|" forces a break."""
+    """Split text into lines of at most `width` characters, breaking at spaces; "|" forces a break (" | " with spaces stays literal)."""
     lines = []
-    for part in str(text).split("|"):
+    for part in re.split(r"(?<! )\|(?! )", str(text)):
         cur = ""
         for word in part.split():
             if cur and len(cur) + 1 + len(word) > width:

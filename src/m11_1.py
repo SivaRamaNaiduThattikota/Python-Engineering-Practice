@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m11-1", num="11.1", title="Type hints",
@@ -16,6 +17,9 @@ term("Narrowing", "When a check such as `if x is None: return` lets a type check
 term("Generic type", "A type with parameters, such as `list[str]` or `dict[str, float]`, describing what the container holds.")
 
 section("what", "What type hints are, and what they are not",
+    fig(stage_map(11, "a typed evaluation run"), "Module 11 at a glance: type hints for checkers, dataclasses for trusted data, Pydantic for validation at the boundary."),
+    fig(chain(["code with type hints", "a type checker reads it|(mypy, pyright)", "reports mismatches|before running", ("at run time: hints are|not checked at all", "warn")]),
+        "Type hints are checked by tools before the program runs; Python itself ignores them when executing."),
     p("""A **type hint** (or annotation) states the type a value is expected to have: `def chunk(text: str, size: int) -> list[str]:` says that `text`
     is a string, `size` an integer, and that the function returns a list of strings. Hints serve three audiences. **People** read them as precise
     documentation of the interface. **Editors** use them for completion and inline errors. **Type checkers**, such as mypy and pyright, analyse the
@@ -76,6 +80,13 @@ section("syntax", "The syntax: variables, parameters, returns and containers",
 )
 
 section("unions", "Unions, `None` and narrowing",
+    fig(flowchart({
+        "in": ("start", 0, 0, "x: str | None"),
+        "ask": ("ask", 0, 1, "x is None?"),
+        "none": ("warn", 1, 1, "here x is None:|return a default"),
+        "str": ("good", 0, 2, "here x is str:|x.upper() is safe"),
+    }, [("in", "ask"), ("ask", "none", "yes"), ("ask", "str", "no")], cell=(230, 80), label="narrowing an optional value"),
+        "Checking for `None` narrows the type: after the check, the checker knows which branch has a real string."),
     p("""A value that can be one of several types has a **union** type, written `A | B` (Python 3.10+; older code writes `Union[A, B]`). The most common
     union is "a value or nothing": `str | None`, which older code writes as `Optional[str]`. The name `Optional` misleads: it does not mean "an
     optional argument" (that is a default value), it means "**may be `None`**". `def find(q: str) -> Doc | None` warns every caller that the result
@@ -112,6 +123,11 @@ section("unions", "Unions, `None` and narrowing",
 )
 
 section("abstract", "Accept general types, return specific ones",
+    fig(table(["in a signature", "prefer", "because"], [
+        ["parameters", "Iterable[str], Mapping[str, int]", "callers can pass any suitable type"],
+        ["return value", "list[str], dict[str, int]", "callers get a precise type"],
+    ], label="accept general types, return specific ones"),
+        "Accept the most general type that works and return the most specific one you can promise."),
     p("""For parameters, annotate with the **most general type your code actually needs**. A function that only loops over its input needs an
     `Iterable[str]`, so it accepts lists, tuples, sets, generators and files; one that indexes and takes `len` needs a `Sequence[str]`; one that only
     reads keys needs a `Mapping[str, float]`, which also accepts read-only mappings. These come from `collections.abc` (9.5). Annotating

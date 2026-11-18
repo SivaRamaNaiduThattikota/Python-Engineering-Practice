@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m11-p", num="11.P", title="Module 11 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(11, "a typed evaluation run"), "Module 11 at a glance: type hints for checkers, dataclasses for trusted data, Pydantic for validation at the boundary."),
     p("""For every piece of data, ask two questions. **Who creates it?** If your own code does, from values that are already valid, a dataclass (or a
     `TypedDict` for plain dicts) describes it at almost no cost, and the type checker guards it (11.1 to 11.3). If it comes from outside, a file, an
     environment variable, a request or a model's reply, validate it at the boundary with Pydantic (11.4), then pass the validated object inward.
