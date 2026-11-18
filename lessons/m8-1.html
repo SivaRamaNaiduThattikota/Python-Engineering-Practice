@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8.1 · Functions that wrap functions</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m8-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 8 · Decorators</span></div>
+  <h1>8.1 Functions that wrap functions</h1>
+  <p>A decorator is a function that takes a function and returns a replacement for it. What <code>@</code> really does and when it runs, the wrapper pattern with <code>*args</code> and <code>**kwargs</code>, <code>functools.wraps</code> and why frameworks need it, state kept by a decorator, and the traps: lost return values, swallowed errors, generators. Applied to timing, tracing and validating calls, the way LLM observability tools do.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="objects">
+<h2><span class="n">1</span>A function that takes and returns functions</h2>
+<p>Everything in this lesson rests on two facts from Module 3. Functions are <strong>objects</strong>: you can pass them to other functions, return them, and store them in variables and dicts (3.5). And an inner function <strong>remembers</strong> the variables of the function that created it, even after that function has returned: a closure (3.4). Put together, you can write a function that receives a function and returns a new function that calls the original with something extra around it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">wrapping.py</span><button class="copy">Copy</button></div><pre><code class="py">def shout(func):
+    def wrapper(text):
+        return func(text).upper() + &quot;!&quot;      # call the original, then change its result
+    return wrapper
+
+def greet(name):
+    return f&quot;hello {name}&quot;
+
+loud_greet = shout(greet)
+print(greet(&quot;ana&quot;), &quot;|&quot;, loud_greet(&quot;ana&quot;))
+print(loud_greet is greet, loud_greet.__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>hello ana | HELLO ANA!
+False wrapper</pre></div></div>
+<p><code>shout(greet)</code> did not call <code>greet</code>; it built and returned <code>wrapper</code>, a new function that, <strong>when called</strong>, calls <code>greet</code> (which it remembers through the closure) and transforms the result. That pattern, "take a function, return a function that adds behaviour around it", is a <strong>decorator</strong>. Very often you want the new behaviour to replace the old function under the same name, so you write <code>greet = shout(greet)</code>. Python has syntax for exactly that line:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">at_syntax.py</span><button class="copy">Copy</button></div><pre><code class="py">def shout(func):
+    def wrapper(text):
+        return func(text).upper() + &quot;!&quot;
+    return wrapper
+
+@shout
+def greet(name):                 # the same as: greet = shout(greet), right after the def
+    return f&quot;hello {name}&quot;
+
+print(greet(&quot;bo&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>HELLO BO!</pre></div></div>
+<p><code>@shout</code> on the line above a <code>def</code> means: define the function, pass it to <code>shout</code>, and bind the <strong>result</strong> to the name <code>greet</code>. Nothing more. After that line, the name <code>greet</code> refers to <code>wrapper</code>, and the original function is reachable only through the closure. Any expression that evaluates to a callable can follow the <code>@</code>, which is how decorators with arguments work (8.2).</p>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">2</span>When decorator code runs</h2>
+<p>A decorator has two separate moments, and mixing them up causes most decorator bugs. The <strong>decorator function</strong> runs once, at <strong>definition time</strong>: when Python executes the <code>def</code> statement, which for a module-level function is when the module is imported. The <strong>wrapper</strong> runs at <strong>call time</strong>, every time someone calls the decorated name. Code in the decorator's body (outside the wrapper) runs once; code inside the wrapper runs on every call.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">two_moments.py</span><button class="copy">Copy</button></div><pre><code class="py">events = []
+
+def announce(func):
+    events.append(f&quot;decorating {func.__name__}&quot;)      # definition time: once
+    def wrapper(*args, **kwargs):
+        events.append(f&quot;calling {func.__name__}&quot;)     # call time: every call
+        return func(*args, **kwargs)
+    return wrapper
+
+@announce
+def embed(text):
+    return [len(text)]
+
+events.append(&quot;module loaded&quot;)
+embed(&quot;a&quot;); embed(&quot;bc&quot;)
+print(events)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;decorating embed&#x27;, &#x27;module loaded&#x27;, &#x27;calling embed&#x27;, &#x27;calling embed&#x27;]</pre></div></div>
+<p>The decoration happened before the module even finished loading, before any call. Frameworks rely on this: a FastAPI route decorator or an agent's tool registry records the function at import time, so by the time the app starts serving, every route and tool is known (8.4). It also means expensive work in the decorator body (opening a connection, loading a model) happens at import, whether or not the function is ever called, which is usually not what you want.</p>
+</section>
+<section class="sec" id="wrapper">
+<h2><span class="n">3</span>The wrapper pattern</h2>
+<p>Almost every decorator has the same shape. The wrapper accepts <strong>any</strong> arguments with <code>*args</code> and <code>**kwargs</code> (3.2), does something before the call, calls the original with exactly those arguments, does something after, and <strong>returns the result</strong>. Using <code>*args, **kwargs</code> instead of copying the original's parameters is what lets one decorator work on any function: positional and keyword arguments, defaults, and keyword-only parameters all pass straight through (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">wrapper_pattern.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+
+def timed(func):
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)                 # pass everything through, return the result
+        finally:
+            elapsed = time.perf_counter() - start
+            wrapper.timings.append(round(elapsed, 6))    # runs on success and on failure
+    wrapper.timings = []
+    return wrapper
+
+@timed
+def score(text, *, threshold=0.5):
+    if not text:
+        raise ValueError(&quot;empty text&quot;)
+    return len(text) &gt; 10 * threshold
+
+print(score(&quot;refund request&quot;, threshold=0.2), score(&quot;hi&quot;))
+try:
+    score(&quot;&quot;)
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)
+print(len(score.timings), all(t &gt;= 0 for t in score.timings))</code></pre><div class="out"><span class="ol">Output</span><pre>True False
+ValueError: empty text
+3 True</pre></div></div>
+<p>Three details make this wrapper correct, and each one is a common bug when missing. It <strong>returns</strong> what the original returned; a wrapper that forgets <code>return</code> turns every result into <code>None</code> (problem 3). It lets <strong>exceptions pass through</strong>: the <code>try</code>/<code>finally</code> records the time even when the call fails, but does not catch anything, so callers still see the <code>ValueError</code> (problem 10). And it passes the arguments <strong>unchanged</strong>, including keyword-only ones like <code>threshold</code>.</p>
+<p>The <code>wrapper.timings</code> list shows one way to keep <strong>state</strong> in a decorator: functions are objects and can have attributes, so the decorated function carries its own measurements, separate for every function decorated. A closure variable updated with <code>nonlocal</code> works too, but is invisible from outside; an attribute can be read by tests and dashboards.</p>
+</section>
+<section class="sec" id="wraps">
+<h2><span class="n">4</span><code>functools.wraps</code>: keep the original's identity</h2>
+<p>After decoration, the name <code>score</code> refers to <code>wrapper</code>. Unless you do something about it, the decorated function <strong>looks</strong> like <code>wrapper</code>: its <code>__name__</code> is <code>"wrapper"</code>, its docstring is gone, and <code>help()</code> and <code>inspect.signature()</code> describe <code>(*args, **kwargs)</code>. That breaks more than cosmetics. Logs and tracebacks show <code>wrapper</code> for every decorated function, test tools list them all under the same name, and frameworks that read a function's signature to decide what it accepts (FastAPI building an API from parameters, agent frameworks building a tool schema, pytest injecting fixtures) see the wrong one.</p>
+<p><code>functools.wraps(func)</code> is a decorator <strong>for the wrapper</strong>: it copies <code>__name__</code>, <code>__qualname__</code>, <code>__doc__</code>, <code>__module__</code> and the <code>__dict__</code> of the original onto the wrapper, and sets <code>wrapper.__wrapped__ = func</code>. <code>inspect.signature</code> follows <code>__wrapped__</code>, so it reports the original parameters. Write <code>@functools.wraps(func)</code> on every wrapper you write; there is no good reason to leave it out.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">wraps.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, inspect
+
+def plain(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def proper(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def search(query: str, k: int = 3) -&gt; list:
+    &quot;&quot;&quot;Search the knowledge base.&quot;&quot;&quot;
+    return [query] * k
+
+a, b = plain(search), proper(search)
+print(a.__name__, a.__doc__, inspect.signature(a))
+print(b.__name__, b.__doc__, inspect.signature(b))
+print(b.__wrapped__ is search, b(&quot;x&quot;, k=1))</code></pre><div class="out"><span class="ol">Output</span><pre>wrapper None (*args, **kwargs)
+search Search the knowledge base. (query: str, k: int = 3) -&gt; list
+True [&#x27;x&#x27;]</pre></div></div>
+<p><code>__wrapped__</code> also gives you the undecorated function when you need it, for example to test the original logic without the decorator's side effects (no caching, no logging): <code>score.__wrapped__("text")</code>. Note that <code>wraps</code> copies <strong>metadata</strong>; the wrapper still runs its own code, so calling <code>b</code> still goes through the decorator.</p>
+</section>
+<section class="sec" id="traps">
+<h2><span class="n">5</span>Decorator traps</h2>
+<p>Beyond forgetting <code>return</code> and <code>wraps</code>, three traps come up again and again.</p>
+<p><strong>Recursion goes through the wrapper.</strong> Inside a decorated recursive function, the recursive call looks up the function's name at call time (3.3), and that name now refers to the wrapper. So every recursive call is also decorated: a counting decorator counts all of them, a logging decorator logs every level, a timing decorator times each nested call. Sometimes that is exactly what you want (memoization relies on it, 8.3); sometimes it is a flood (problem 16).</p>
+<p><strong>Generators finish later.</strong> A generator function returns its generator immediately (6.3), so a wrapper that times or logs "after the call" measures only the creation of the generator, not the streaming. To wrap a generator properly, the wrapper must itself be a generator that iterates the original and yields each item (problem 15). The same applies to <code>async def</code> functions, whose wrapper must be <code>async</code> too (14.4).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">generator_trap.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def log_after(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        print(f&quot;  {func.__name__} returned {type(result).__name__}&quot;)
+        return result
+    return wrapper
+
+@log_after
+def stream(n):
+    for i in range(n):
+        print(f&quot;  producing {i}&quot;)
+        yield i
+
+g = stream(2)                    # &quot;returned generator&quot; is printed now, before any item exists
+print(list(g))</code></pre><div class="out"><span class="ol">Output</span><pre>  stream returned generator
+  producing 0
+  producing 1
+[0, 1]</pre></div></div>
+<p><strong>Decorating changes the object.</strong> The decorated name is a different function, so <code>is</code> comparisons with the original fail, and attributes set on the original before decoration are only visible if <code>wraps</code> copied them. Decorators that return the original function unchanged (after registering it somewhere) avoid this entirely, which is the pattern of 8.4.</p>
+</section>
+<section class="sec" id="uses">
+<h2><span class="n">6</span>What decorators are used for</h2>
+<p>Decorators are the standard way to add <strong>cross-cutting</strong> behaviour, the kind that is the same for many functions and unrelated to what each one does: timing, logging, tracing, counting, caching (8.3), retrying (8.3), rate limiting, checking permissions, validating arguments, and registering functions (8.4). The function keeps only its real logic, and the decorator line documents the extra behaviour where everyone reads it.</p>
+<p>In GenAI code you meet them constantly. Observability tools trace LLM calls with a decorator: LangSmith's <code>@traceable</code>, Langfuse's <code>@observe</code> and OpenTelemetry's span decorators wrap a function, record its inputs, outputs, duration and errors, and send them to a dashboard. Agent frameworks turn plain functions into tools with <code>@tool</code>. Web frameworks map URLs to functions with <code>@app.get("/path")</code>. And the standard library offers <code>@functools.cache</code>, <code>@property</code>, <code>@classmethod</code>, <code>@staticmethod</code> and <code>@dataclass</code> (Modules 9 and 11), all built on exactly the mechanism of this lesson.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tracing.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+TRACE = []
+
+def traced(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        entry = {&quot;name&quot;: func.__name__, &quot;args&quot;: [repr(a)[:20] for a in args]}
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            entry[&quot;error&quot;] = type(e).__name__
+            raise
+        else:
+            entry[&quot;output&quot;] = repr(result)[:30]
+            return result
+        finally:
+            TRACE.append(entry)
+    return wrapper
+
+@traced
+def retrieve(query):
+    return [&quot;Refunds take 5 days.&quot;, &quot;No refunds after 30 days.&quot;]
+
+@traced
+def generate(query, context):
+    if not context:
+        raise ValueError(&quot;no context&quot;)
+    return f&quot;Answer based on {len(context)} chunks&quot;
+
+generate(&quot;refund time?&quot;, retrieve(&quot;refund time?&quot;))
+try:
+    generate(&quot;x&quot;, [])
+except ValueError:
+    pass
+for entry in TRACE:
+    print(entry)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;name&#x27;: &#x27;retrieve&#x27;, &#x27;args&#x27;: [&quot;&#x27;refund time?&#x27;&quot;], &#x27;output&#x27;: &quot;[&#x27;Refunds take 5 days.&#x27;, &#x27;No r&quot;}
+{&#x27;name&#x27;: &#x27;generate&#x27;, &#x27;args&#x27;: [&quot;&#x27;refund time?&#x27;&quot;, &quot;[&#x27;Refunds take 5 day&quot;], &#x27;output&#x27;: &quot;&#x27;Answer based on 2 chunks&#x27;&quot;}
+{&#x27;name&#x27;: &#x27;generate&#x27;, &#x27;args&#x27;: [&quot;&#x27;x&#x27;&quot;, &#x27;[]&#x27;], &#x27;error&#x27;: &#x27;ValueError&#x27;}</pre></div></div>
+<p>Each entry records the function name (correct thanks to <code>wraps</code>), a shortened view of the inputs (never log full prompts containing personal data without a policy, 7.4), and either the output or the error type. The exception is re-raised, so tracing never changes the program's behaviour, which is the one rule an observability decorator must obey.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-definition-time-and-call-time" data-pid="m8-1-definition-time-and-call-time" data-type="predict" data-level="easy" data-answer="decorating add
+defined
+before (2, 3)
+after 5
+5
+wrapper">
+<header class="prob-head"><h3>1. Definition time and call time</h3></header>
+<div class="code"><pre><code class="py">def deco(func):
+    print(&quot;decorating&quot;, func.__name__)
+    def wrapper(*args):
+        print(&quot;before&quot;, args)
+        result = func(*args)
+        print(&quot;after&quot;, result)
+        return result
+    return wrapper
+
+@deco
+def add(a, b):
+    return a + b
+
+print(&quot;defined&quot;)
+print(add(2, 3))
+print(add.__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The decorator runs once, when the <code>def</code> runs. The wrapper runs on every call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>decorating add
+defined
+before (2, 3)
+after 5
+5
+wrapper</pre></div><p><code>deco</code> is called as soon as the <code>def</code> statement finishes, so "decorating add" prints first, before "defined". The call <code>add(2, 3)</code> runs the wrapper: "before", the original, "after", and only then does the outer <code>print</code> show the returned 5. Without <code>functools.wraps</code>, the decorated name now reports itself as <code>wrapper</code>.</p></div></details>
+</article>
+<article class="prob" id="p-count-the-calls" data-pid="m8-1-count-the-calls" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Count the calls</h3></header>
+<div class="prob-q"><p>Write a decorator <code>count_calls</code> that keeps the number of calls on the decorated function as an attribute <code>calls</code> (starting at 0, counted even when the call raises), passes all arguments through, returns the result, and uses <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import functools
+
+def count_calls(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@count_calls
+def complete(prompt, *, temperature=0.0):
+    """Call the model."""
+    if not prompt:
+        raise ValueError("empty prompt")
+    return f"{prompt}@{temperature}"
+
+assert complete.calls == 0
+assert complete("hi") == "hi@0.0" and complete("hi", temperature=0.5) == "hi@0.5"
+try:
+    complete("")
+except ValueError:
+    pass
+assert complete.calls == 3
+assert complete.__name__ == "complete" and complete.__doc__ == "Call the model."
+
+@count_calls
+def other():
+    return 1
+other()
+assert other.calls == 1 and complete.calls == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@count_calls
+def complete(prompt, *, temperature=0.0):
+    &quot;&quot;&quot;Call the model.&quot;&quot;&quot;
+    if not prompt:
+        raise ValueError(&quot;empty prompt&quot;)
+    return f&quot;{prompt}@{temperature}&quot;
+
+assert complete.calls == 0
+assert complete(&quot;hi&quot;) == &quot;hi@0.0&quot; and complete(&quot;hi&quot;, temperature=0.5) == &quot;hi@0.5&quot;
+try:
+    complete(&quot;&quot;)
+except ValueError:
+    pass
+assert complete.calls == 3
+assert complete.__name__ == &quot;complete&quot; and complete.__doc__ == &quot;Call the model.&quot;
+
+@count_calls
+def other():
+    return 1
+other()
+assert other.calls == 1 and complete.calls == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Increment <code>wrapper.calls</code> before calling <code>func</code>, so failed calls are counted too.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Set <code>wrapper.calls = 0</code> after defining the wrapper, before returning it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def count_calls(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        wrapper.calls += 1
+        return func(*args, **kwargs)
+    wrapper.calls = 0
+    return wrapper</code></pre></div><p>Each decoration creates a new <code>wrapper</code> with its own <code>calls</code> attribute, so <code>complete</code> and <code>other</code> count separately. Incrementing before the call counts failures too; incrementing after would skip calls that raised. The attribute is set on <code>wrapper</code>, the object the decorated name refers to, which is why <code>complete.calls</code> works from outside. Counting model calls per function this way is a quick check on how many requests a pipeline really makes, often more than expected once retries and loops add up.</p></div></details>
+</article>
+<article class="prob" id="p-a-wrapper-that-loses-the-result" data-pid="m8-1-a-wrapper-that-loses-the-result" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A wrapper that loses the result</h3></header>
+<div class="prob-q"><p><code>log_call</code> should record each call's function name and return value in <code>log</code>, without changing what the function returns. Every decorated function now returns <code>None</code>. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import functools
+
+log = []
+
+def log_call(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        log.append((func.__name__, result))
+    return wrapper
+</textarea>
+<script type="text/plain" class="prob-tests">@log_call
+def total(xs):
+    return sum(xs)
+
+assert total([1, 2, 3]) == 6
+assert total([]) == 0
+assert log == [("total", 6), ("total", 0)]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@log_call
+def total(xs):
+    return sum(xs)
+
+assert total([1, 2, 3]) == 6
+assert total([]) == 0
+assert log == [(&quot;total&quot;, 6), (&quot;total&quot;, 0)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A function without a <code>return</code> statement returns <code>None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+log = []
+
+def log_call(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        log.append((func.__name__, result))
+        return result
+    return wrapper</code></pre></div><p>The wrapper is what callers actually call, so whatever it returns is what they get. It computed the result and recorded it, then fell off the end, which returns <code>None</code>. This is the most common decorator bug, and it is silent: the log looks perfect, while every caller receives <code>None</code>. A decorator that adds behaviour must hand back the original return value unchanged.</p></div></details>
+</article>
+<article class="prob" id="p-what-wraps-preserves" data-pid="m8-1-what-wraps-preserves" data-type="predict" data-level="easy" data-answer="wrapper None False
+embed Embed one text. 2 (text: str, model: str = &#x27;small&#x27;) -&gt; list
+True False [2]">
+<header class="prob-head"><h3>4. What wraps preserves</h3></header>
+<div class="code"><pre><code class="py">import functools, inspect
+
+def a(func):
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def b(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def embed(text: str, model: str = &quot;small&quot;) -&gt; list:
+    &quot;Embed one text.&quot;
+    return [len(text)]
+embed.version = 2
+
+x, y = a(embed), b(embed)
+print(x.__name__, x.__doc__, hasattr(x, &quot;version&quot;))
+print(y.__name__, y.__doc__, y.version, inspect.signature(y))
+print(y.__wrapped__ is embed, y is embed, y(&quot;hi&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>wraps</code> copies name, docstring and the function's <code>__dict__</code> (its attributes), and sets <code>__wrapped__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>wrapper None False
+embed Embed one text. 2 (text: str, model: str = &#x27;small&#x27;) -&gt; list
+True False [2]</pre></div><p>Without <code>wraps</code>, the wrapper keeps its own name and has no docstring or <code>version</code> attribute. With <code>wraps</code>, the name, the docstring and the custom attribute are copied, and <code>inspect.signature</code> follows <code>__wrapped__</code> to show the original parameters and annotations. The decorated object is still a different function from the original; it just carries its identity.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-trace-calls-without-changing-behaviour" data-pid="m8-1-trace-calls-without-changing-behaviour" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Trace calls without changing behaviour</h3></header>
+<div class="prob-q"><p>Write a decorator <code>traced</code> that appends one dict per call to the global list <code>TRACE</code>: <code>{"name": ..., "args": [...], "kwargs": {...}, "outcome": ...}</code>, where args and kwargs values are <code>repr</code>s cut to 30 characters, and <code>outcome</code> is <code>"ok"</code> or the exception's type name. The decorated function must return exactly what it returned, and raise exactly what it raised.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import functools
+
+TRACE = []
+
+def traced(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@traced
+def retrieve(query, *, k=3):
+    if k < 1:
+        raise ValueError("k must be positive")
+    return [f"doc{i}" for i in range(k)]
+
+assert retrieve("refund policy for customers in the European Union", k=2) == ["doc0", "doc1"]
+try:
+    retrieve("x", k=0)
+    assert False
+except ValueError as e:
+    assert str(e) == "k must be positive"
+assert TRACE == [
+    {"name": "retrieve", "args": ["'refund policy for customers i"], "kwargs": {"k": "2"}, "outcome": "ok"},
+    {"name": "retrieve", "args": ["'x'"], "kwargs": {"k": "0"}, "outcome": "ValueError"},
+]
+assert retrieve.__name__ == "retrieve"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@traced
+def retrieve(query, *, k=3):
+    if k &lt; 1:
+        raise ValueError(&quot;k must be positive&quot;)
+    return [f&quot;doc{i}&quot; for i in range(k)]
+
+assert retrieve(&quot;refund policy for customers in the European Union&quot;, k=2) == [&quot;doc0&quot;, &quot;doc1&quot;]
+try:
+    retrieve(&quot;x&quot;, k=0)
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;k must be positive&quot;
+assert TRACE == [
+    {&quot;name&quot;: &quot;retrieve&quot;, &quot;args&quot;: [&quot;&#x27;refund policy for customers i&quot;], &quot;kwargs&quot;: {&quot;k&quot;: &quot;2&quot;}, &quot;outcome&quot;: &quot;ok&quot;},
+    {&quot;name&quot;: &quot;retrieve&quot;, &quot;args&quot;: [&quot;&#x27;x&#x27;&quot;], &quot;kwargs&quot;: {&quot;k&quot;: &quot;0&quot;}, &quot;outcome&quot;: &quot;ValueError&quot;},
+]
+assert retrieve.__name__ == &quot;retrieve&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the entry before the call, set <code>outcome</code> in <code>try</code> / <code>except Exception</code> (then <code>raise</code>), and append in <code>finally</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+TRACE = []
+
+def traced(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        entry = {
+            &quot;name&quot;: func.__name__,
+            &quot;args&quot;: [repr(a)[:30] for a in args],
+            &quot;kwargs&quot;: {k: repr(v)[:30] for k, v in kwargs.items()},
+            &quot;outcome&quot;: &quot;ok&quot;,
+        }
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            entry[&quot;outcome&quot;] = type(e).__name__
+            raise
+        finally:
+            TRACE.append(entry)
+    return wrapper</code></pre></div><p><code>repr</code> (not <code>str</code>) shows quotes and escape characters, so <code>'x'</code> is distinguishable from <code>x</code> in the trace, and cutting to 30 characters keeps a huge prompt from bloating the log. The <code>except</code> records the type and then re-raises with a bare <code>raise</code>, so the caller gets the original exception and traceback; <code>finally</code> appends the entry on both paths. This is the skeleton of LangSmith's <code>@traceable</code> and Langfuse's <code>@observe</code>, which also record timings, nest child calls under their parent, and send the entries to a server instead of a list.</p></div></details>
+</article>
+<article class="prob" id="p-a-wrapper-that-only-accepts-one-argument" data-pid="m8-1-a-wrapper-that-only-accepts-one-argument" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A wrapper that only accepts one argument</h3></header>
+<div class="prob-q"><p><code>check_finite</code> should raise <code>ValueError</code> if a function returns NaN or infinity, for any function. It works for <code>log_loss(p)</code> but breaks for functions with several or keyword arguments. Fix the wrapper so arguments pass through untouched, and add <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import math
+
+def check_finite(func):
+    def wrapper(x):
+        result = func(x)
+        if not math.isfinite(result):
+            raise ValueError(f&quot;{func.__name__} returned {result}&quot;)
+        return result
+    return wrapper
+</textarea>
+<script type="text/plain" class="prob-tests">import math
+
+@check_finite
+def log_loss(p):
+    return -math.log(p) if p > 0 else math.inf
+
+@check_finite
+def weighted(a, b, *, w=0.5):
+    return a * w + b * (1 - w)
+
+assert round(log_loss(0.5), 4) == 0.6931
+assert weighted(2, 4) == 3.0 and weighted(2, 4, w=1) == 2
+try:
+    log_loss(0)
+    assert False
+except ValueError as e:
+    assert "log_loss returned inf" in str(e)
+assert weighted.__name__ == "weighted"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import math
+
+@check_finite
+def log_loss(p):
+    return -math.log(p) if p &gt; 0 else math.inf
+
+@check_finite
+def weighted(a, b, *, w=0.5):
+    return a * w + b * (1 - w)
+
+assert round(log_loss(0.5), 4) == 0.6931
+assert weighted(2, 4) == 3.0 and weighted(2, 4, w=1) == 2
+try:
+    log_loss(0)
+    assert False
+except ValueError as e:
+    assert &quot;log_loss returned inf&quot; in str(e)
+assert weighted.__name__ == &quot;weighted&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def wrapper(*args, **kwargs)</code> and <code>func(*args, **kwargs)</code> forward any call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+import math
+
+def check_finite(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if not math.isfinite(result):
+            raise ValueError(f&quot;{func.__name__} returned {result}&quot;)
+        return result
+    return wrapper</code></pre></div><p>A wrapper with fixed parameters only fits functions with the same signature: <code>weighted(2, 4)</code> passed two arguments to a wrapper that takes one, and <code>w=1</code> was rejected too. <code>*args</code> collects every positional argument into a tuple and <code>**kwargs</code> every keyword argument into a dict, and the call <code>func(*args, **kwargs)</code> unpacks them back exactly as given (3.2), so the original function does its own argument checking. Checking for NaN and infinity after a loss computation is a cheap guard that catches a diverging training run at the first bad step.</p></div></details>
+</article>
+<article class="prob" id="p-reject-none-arguments-by-name" data-pid="m8-1-reject-none-arguments-by-name" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Reject None arguments by name</h3></header>
+<div class="prob-q"><p>Write a decorator <code>no_none</code> that raises <code>TypeError(f"{param} must not be None")</code> before calling the function if any argument, positional or keyword, <strong>including defaults</strong>, is <code>None</code>, naming the parameter. Use <code>inspect.signature(func).bind(*args, **kwargs)</code> and <code>apply_defaults()</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools, inspect
+
+def no_none(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+
+@no_none
+def chunk(text, size=200, overlap=None):
+    calls.append(text)
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+try:
+    chunk("abc", 2)
+    assert False, "overlap defaults to None"
+except TypeError as e:
+    assert str(e) == "overlap must not be None"
+
+@no_none
+def label(text, model="small"):
+    calls.append(text)
+    return f"{model}:{text}"
+
+assert label("hi") == "small:hi" and label("hi", model="big") == "big:hi"
+try:
+    label(None)
+    assert False
+except TypeError as e:
+    assert str(e) == "text must not be None"
+try:
+    label("x", model=None)
+    assert False
+except TypeError as e:
+    assert "model" in str(e)
+assert calls == ["hi", "hi"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+
+@no_none
+def chunk(text, size=200, overlap=None):
+    calls.append(text)
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+try:
+    chunk(&quot;abc&quot;, 2)
+    assert False, &quot;overlap defaults to None&quot;
+except TypeError as e:
+    assert str(e) == &quot;overlap must not be None&quot;
+
+@no_none
+def label(text, model=&quot;small&quot;):
+    calls.append(text)
+    return f&quot;{model}:{text}&quot;
+
+assert label(&quot;hi&quot;) == &quot;small:hi&quot; and label(&quot;hi&quot;, model=&quot;big&quot;) == &quot;big:hi&quot;
+try:
+    label(None)
+    assert False
+except TypeError as e:
+    assert str(e) == &quot;text must not be None&quot;
+try:
+    label(&quot;x&quot;, model=None)
+    assert False
+except TypeError as e:
+    assert &quot;model&quot; in str(e)
+assert calls == [&quot;hi&quot;, &quot;hi&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>bound = inspect.signature(func).bind(*args, **kwargs)</code>; <code>bound.apply_defaults()</code>; then loop over <code>bound.arguments.items()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute the signature once, in the decorator body, not on every call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, inspect
+
+def no_none(func):
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        for name, value in bound.arguments.items():
+            if value is None:
+                raise TypeError(f&quot;{name} must not be None&quot;)
+        return func(*args, **kwargs)
+    return wrapper</code></pre></div><p><code>*args</code> and <code>**kwargs</code> alone do not tell the wrapper which parameter a value belongs to; binding them to the signature does, exactly as Python would when calling the function, and <code>apply_defaults</code> fills in parameters that were not passed. The signature is computed once, at decoration time, because inspecting a function is comparatively slow and the result never changes. The check runs before the call, so the function body never sees bad input, which the <code>calls</code> list confirms. This is a tiny version of what Pydantic's <code>@validate_call</code> does with full type checking (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-decorate-once-or-wrap-on-every-call" data-pid="m8-1-decorate-once-or-wrap-on-every-call" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Decorate once or wrap on every call</h3></header>
+<div class="prob-q"><p>Both call a timed version of <code>f</code> 100,000 times. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import functools, time
+
+def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            wrapper.last = time.perf_counter() - start
+    return wrapper
+
+def f(x):
+    return x + 1
+
+timed_f = timed(f)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for i in range(100_000):
+    timed(f)(i)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">for i in range(100_000):
+    timed_f(i)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What work does <code>timed(f)</code> do each time it is evaluated?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>623.12 ms</td></tr><tr><td>B</td><td>139.06 ms</td></tr></table></div><p>Every <code>timed(f)</code> runs the whole decorator: it creates a new wrapper function and runs <code>functools.wraps</code>, which copies the name, docstring, module, qualified name and <code>__dict__</code> onto it. Version A pays that on every iteration, plus the call; version B decorated once and only pays for the call. The <code>@</code> syntax always decorates once, at definition time, which is the intended use. Wrapping inside a loop also creates a new wrapper with fresh state each time, so a counter or cache in the decorator would never accumulate anything.</p></div></details>
+</article>
+<article class="prob" id="p-separate-state-per-decorated-function" data-pid="m8-1-separate-state-per-decorated-function" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Separate state per decorated function</h3></header>
+<div class="prob-q"><p>Fill in <code>a_calls</code> and <code>b_calls</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import functools
+
+def counted(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        wrapper.calls += 1
+        return func(*args, **kwargs)
+    wrapper.calls = 0
+    return wrapper
+
+@counted
+def a(x):
+    return x * 2
+
+@counted
+def b(x):
+    return a(x) + a(x)
+
+a_calls, b_calls = a.calls, b.calls
+a(1)
+a_calls, b_calls = a.calls, b.calls
+b(1)
+a_calls, b_calls = a.calls, b.calls
+counted(a)(5)
+a_calls, b_calls = a.calls, b.calls</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a_calls</code></th><th><code>b_calls</code></th></tr><tr><td>after definitions</td><td><input class="cell" data-a="0" data-s="0" aria-label="a_calls at after definitions" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="b_calls at after definitions" autocomplete="off"></td></tr><tr><td>after a(1)</td><td><input class="cell" data-a="1" data-s="1" aria-label="a_calls at after a(1)" autocomplete="off"></td><td><input class="cell" data-a="0" data-s="0" aria-label="b_calls at after a(1)" autocomplete="off"></td></tr><tr><td>after b(1)</td><td><input class="cell" data-a="3" data-s="3" aria-label="a_calls at after b(1)" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="b_calls at after b(1)" autocomplete="off"></td></tr><tr><td>after counted(a)(5)</td><td><input class="cell" data-a="4" data-s="4" aria-label="a_calls at after counted(a)(5)" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="b_calls at after counted(a)(5)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>b</code>, the name <code>a</code> refers to the decorated <code>a</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>counted(a)</code> creates a new wrapper around the already-decorated <code>a</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a_calls</code></th><th><code>b_calls</code></th></tr><tr><td>after definitions</td><td><code>0</code></td><td><code>0</code></td></tr><tr><td>after a(1)</td><td><code>1</code></td><td><code>0</code></td></tr><tr><td>after b(1)</td><td><code>3</code></td><td><code>1</code></td></tr><tr><td>after counted(a)(5)</td><td><code>4</code></td><td><code>1</code></td></tr></table></div><p>Each decoration creates its own wrapper with its own <code>calls</code>, starting at 0. <code>b(1)</code> counts one call to <code>b</code> and, because <code>b</code> calls the name <code>a</code>, which is the decorated wrapper, two calls to <code>a</code>. <code>counted(a)</code> wraps the decorated <code>a</code> again: the new outer wrapper counts its own call on a throwaway object (its counter starts at 0 again), and the inner wrapper, which is <code>a</code>, counts one more call. Decorating an already-decorated function stacks wrappers, the subject of 8.2.</p></div></details>
+</article>
+<article class="prob" id="p-a-tracing-decorator-that-swallows-errors" data-pid="m8-1-a-tracing-decorator-that-swallows-errors" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A tracing decorator that swallows errors</h3></header>
+<div class="prob-q"><p><code>observe</code> records each call's outcome in <code>EVENTS</code>. When the decorated function fails, the error is recorded but the caller receives <code>None</code> instead of the exception, so a failed model call looks like an empty answer. Fix it: record, then let the exception propagate unchanged.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import functools
+
+EVENTS = []
+
+def observe(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            result = func(*args, **kwargs)
+            EVENTS.append((func.__name__, &quot;ok&quot;))
+            return result
+        except Exception as e:
+            EVENTS.append((func.__name__, f&quot;error: {e}&quot;))
+    return wrapper
+</textarea>
+<script type="text/plain" class="prob-tests">@observe
+def complete(prompt):
+    if prompt == "timeout":
+        raise TimeoutError("model did not answer")
+    return prompt.upper()
+
+assert complete("hi") == "HI"
+try:
+    complete("timeout")
+    assert False, "the error must reach the caller"
+except TimeoutError as e:
+    assert str(e) == "model did not answer"
+assert EVENTS == [("complete", "ok"), ("complete", "error: model did not answer")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@observe
+def complete(prompt):
+    if prompt == &quot;timeout&quot;:
+        raise TimeoutError(&quot;model did not answer&quot;)
+    return prompt.upper()
+
+assert complete(&quot;hi&quot;) == &quot;HI&quot;
+try:
+    complete(&quot;timeout&quot;)
+    assert False, &quot;the error must reach the caller&quot;
+except TimeoutError as e:
+    assert str(e) == &quot;model did not answer&quot;
+assert EVENTS == [(&quot;complete&quot;, &quot;ok&quot;), (&quot;complete&quot;, &quot;error: model did not answer&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After recording, a bare <code>raise</code> re-raises the exception being handled.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+EVENTS = []
+
+def observe(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            result = func(*args, **kwargs)
+        except Exception as e:
+            EVENTS.append((func.__name__, f&quot;error: {e}&quot;))
+            raise
+        EVENTS.append((func.__name__, &quot;ok&quot;))
+        return result
+    return wrapper</code></pre></div><p>An <code>except</code> block that does not re-raise <strong>handles</strong> the exception; after it, the wrapper fell off the end and returned <code>None</code>. An observability decorator must never change behaviour, so it records and re-raises with a bare <code>raise</code>, which keeps the original type, message and traceback (7.2). Moving the success bookkeeping out of the <code>try</code> block also keeps a failure in the logging itself from being reported as a failure of the function.</p></div></details>
+</article>
+<article class="prob" id="p-repeated-boilerplate-into-a-decorator" data-pid="m8-1-repeated-boilerplate-into-a-decorator" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Repeated boilerplate into a decorator</h3></header>
+<div class="prob-q"><p>Move the repeated timing and logging into a decorator <code>logged(func)</code>, applied to both functions. Same results and same <code>LOG</code> entries. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">LOG = []
+
+def retrieve(query, clock):
+    start = clock()
+    try:
+        return [query + &quot; doc&quot;]
+    finally:
+        LOG.append((&quot;retrieve&quot;, round(clock() - start, 3)))
+
+def generate(query, docs, clock):
+    start = clock()
+    try:
+        if not docs:
+            raise ValueError(&quot;no docs&quot;)
+        return f&quot;answer to {query} from {len(docs)} docs&quot;
+    finally:
+        LOG.append((&quot;generate&quot;, round(clock() - start, 3)))
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([0.0, 0.25, 1.0, 1.5, 2.0, 2.125])
+clock = lambda: next(ticks)
+docs = retrieve("refund", clock)
+assert generate("refund", docs, clock) == "answer to refund from 1 docs"
+try:
+    generate("x", [], clock)
+except ValueError:
+    pass
+assert LOG == [("retrieve", 0.25), ("generate", 0.5), ("generate", 0.125)]
+assert generate.__name__ == "generate"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([0.0, 0.25, 1.0, 1.5, 2.0, 2.125])
+clock = lambda: next(ticks)
+docs = retrieve(&quot;refund&quot;, clock)
+assert generate(&quot;refund&quot;, docs, clock) == &quot;answer to refund from 1 docs&quot;
+try:
+    generate(&quot;x&quot;, [], clock)
+except ValueError:
+    pass
+assert LOG == [(&quot;retrieve&quot;, 0.25), (&quot;generate&quot;, 0.5), (&quot;generate&quot;, 0.125)]
+assert generate.__name__ == &quot;generate&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The wrapper finds the clock in <code>kwargs</code> or as the last positional argument: here it is always the last positional argument, <code>args[-1]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+LOG = []
+
+def logged(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        clock = args[-1]
+        start = clock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            LOG.append((func.__name__, round(clock() - start, 3)))
+    return wrapper
+
+@logged
+def retrieve(query, clock):
+    return [query + &quot; doc&quot;]
+
+@logged
+def generate(query, docs, clock):
+    if not docs:
+        raise ValueError(&quot;no docs&quot;)
+    return f&quot;answer to {query} from {len(docs)} docs&quot;</code></pre></div><p>The two functions now contain only their real logic, and the cross-cutting part lives in one place, so changing the log format or adding a metric is a single edit. <code>func.__name__</code> replaces the hard-coded names. Taking the clock from the arguments is a compromise forced by this test; a real timing decorator would use <code>time.perf_counter</code> directly, or receive the clock when the decorator is created, which is exactly what decorator factories allow (8.2).</p></div></details>
+</article>
+<article class="prob" id="p-what-the-decorator-returns-becomes-the-n" data-pid="m8-1-what-the-decorator-returns-becomes-the-n" data-type="predict" data-level="medium" data-answer="[&#x27;x&#x27;] True
+str &lt;function fetch&gt;
+TypeError: &#x27;str&#x27; object is not callable">
+<header class="prob-head"><h3>12. What the decorator returns becomes the name</h3></header>
+<div class="code"><pre><code class="py">REGISTRY = {}
+
+def register(func):
+    REGISTRY[func.__name__] = func
+    return func                      # the original, unchanged
+
+def describe(func):
+    return f&quot;&lt;function {func.__name__}&gt;&quot;   # not a function at all
+
+@register
+def search(q):
+    return [q]
+
+@describe
+def fetch(doc_id):
+    return doc_id
+
+print(search(&quot;x&quot;), REGISTRY[&quot;search&quot;] is search)
+print(type(fetch).__name__, fetch)
+try:
+    fetch(1)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Whatever the decorator returns is bound to the name, whatever it is.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;x&#x27;] True
+str &lt;function fetch&gt;
+TypeError: &#x27;str&#x27; object is not callable</pre></div><p><code>register</code> records the function and returns it unchanged, so <code>search</code> is still the original function and the registry holds the same object: the registration pattern of 8.4, with no wrapper at all. <code>describe</code> returns a string, so after decoration the name <code>fetch</code> refers to that string, and calling it fails. Python does not require a decorator to return a function; it simply binds the name to the result.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-small-memoizer" data-pid="m8-1-a-small-memoizer" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. A small memoizer</h3></header>
+<div class="prob-q"><p>Write a decorator <code>memo</code> that caches results by arguments. The key combines the positional arguments and the keyword arguments sorted by name, so <code>f(1, b=2)</code> and <code>f(1, b=2)</code> share an entry (but <code>f(1, 2)</code> is a different key). If the arguments are unhashable (a list, a dict), call the function without caching. Expose the cache as <code>wrapper.cache</code> (a dict) and a <code>wrapper.cache_clear()</code> function. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import functools
+
+def memo(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+
+@memo
+def embed(text, model="small"):
+    calls.append((text, model))
+    return [len(text), len(model)]
+
+assert embed("hi") == [2, 5] and embed("hi") == [2, 5] and calls == [("hi", "small")]
+embed("hi", model="large"); embed("hi", model="large")
+assert calls == [("hi", "small"), ("hi", "large")] and len(embed.cache) == 2
+
+@memo
+def total(xs):
+    calls.append(tuple(xs))
+    return sum(xs)
+assert total([1, 2]) == 3 and total([1, 2]) == 3 and calls[-2:] == [(1, 2), (1, 2)]
+assert total.cache == {}
+embed.cache_clear()
+assert embed.cache == {} and embed.__name__ == "embed"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+
+@memo
+def embed(text, model=&quot;small&quot;):
+    calls.append((text, model))
+    return [len(text), len(model)]
+
+assert embed(&quot;hi&quot;) == [2, 5] and embed(&quot;hi&quot;) == [2, 5] and calls == [(&quot;hi&quot;, &quot;small&quot;)]
+embed(&quot;hi&quot;, model=&quot;large&quot;); embed(&quot;hi&quot;, model=&quot;large&quot;)
+assert calls == [(&quot;hi&quot;, &quot;small&quot;), (&quot;hi&quot;, &quot;large&quot;)] and len(embed.cache) == 2
+
+@memo
+def total(xs):
+    calls.append(tuple(xs))
+    return sum(xs)
+assert total([1, 2]) == 3 and total([1, 2]) == 3 and calls[-2:] == [(1, 2), (1, 2)]
+assert total.cache == {}
+embed.cache_clear()
+assert embed.cache == {} and embed.__name__ == &quot;embed&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>key = (args, tuple(sorted(kwargs.items())))</code>. Test hashability with <code>hash(key)</code> inside <code>try</code> / <code>except TypeError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>wrapper.cache = {}</code> and <code>wrapper.cache_clear = wrapper.cache.clear</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def memo(func):
+    cache = {}
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        key = (args, tuple(sorted(kwargs.items())))
+        try:
+            hash(key)
+        except TypeError:
+            return func(*args, **kwargs)
+        if key not in cache:
+            cache[key] = func(*args, **kwargs)
+        return cache[key]
+
+    wrapper.cache = cache
+    wrapper.cache_clear = cache.clear
+    return wrapper</code></pre></div><p>A dict lookup by the argument tuple is the whole idea of memoization, and it only works for hashable keys, which is why lists bypass the cache instead of crashing. Sorting the keyword items makes <code>f(a=1, b=2)</code> and <code>f(b=2, a=1)</code> the same key. The <code>hash(key)</code> check is done separately so that a <code>TypeError</code> raised <strong>inside</strong> <code>func</code> is never mistaken for an unhashable key. Note that the cache returns the <strong>same</strong> list object each time, so a caller that modifies the returned list modifies the cached value too (2.2); caching functions that return mutable objects needs care. <code>functools.lru_cache</code> (8.3) is the production version, with a size limit and statistics; it treats <code>f(1, 2)</code> and <code>f(1, b=2)</code> as different keys too.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-stats-decorator" data-pid="m8-1-read-the-code-a-stats-decorator" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a stats decorator</h3></header>
+<div class="prob-q"><p>This decorator collects per-function statistics for an LLM service dashboard: in <code>STATS[name]</code>, the number of calls, the number of errors and the total seconds, using an injected <code>clock</code>. On the dashboard, every function shows up as <code>wrapper</code> with the combined numbers, failed calls are missing from the counts, and the decorated functions have lost their names. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">STATS = {}
+
+
+def with_stats(func, clock):
+    def wrapper(*args, **kwargs):
+        start = clock()
+        result = func(*args, **kwargs)
+        entry = STATS.setdefault(wrapper.__name__, {&quot;calls&quot;: 0, &quot;errors&quot;: 0, &quot;seconds&quot;: 0.0})
+        entry[&quot;calls&quot;] += 1
+        entry[&quot;seconds&quot;] += clock() - start
+        return result
+    return wrapper
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([0.0, 1.5, 10.0, 10.25, 20.0, 22.0])
+clock = lambda: next(ticks)
+
+def complete(prompt):
+    if prompt == "bad":
+        raise ValueError("invalid prompt")
+    return prompt[::-1]
+
+def embed(text):
+    return [len(text)]
+
+complete = with_stats(complete, clock)
+embed = with_stats(embed, clock)
+assert complete("abc") == "cba" and embed("xy") == [2]
+try:
+    complete("bad")
+    assert False
+except ValueError:
+    pass
+assert STATS == {"complete": {"calls": 2, "errors": 1, "seconds": 3.5}, "embed": {"calls": 1, "errors": 0, "seconds": 0.25}}
+assert complete.__name__ == "complete" and embed.__name__ == "embed"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([0.0, 1.5, 10.0, 10.25, 20.0, 22.0])
+clock = lambda: next(ticks)
+
+def complete(prompt):
+    if prompt == &quot;bad&quot;:
+        raise ValueError(&quot;invalid prompt&quot;)
+    return prompt[::-1]
+
+def embed(text):
+    return [len(text)]
+
+complete = with_stats(complete, clock)
+embed = with_stats(embed, clock)
+assert complete(&quot;abc&quot;) == &quot;cba&quot; and embed(&quot;xy&quot;) == [2]
+try:
+    complete(&quot;bad&quot;)
+    assert False
+except ValueError:
+    pass
+assert STATS == {&quot;complete&quot;: {&quot;calls&quot;: 2, &quot;errors&quot;: 1, &quot;seconds&quot;: 3.5}, &quot;embed&quot;: {&quot;calls&quot;: 1, &quot;errors&quot;: 0, &quot;seconds&quot;: 0.25}}
+assert complete.__name__ == &quot;complete&quot; and embed.__name__ == &quot;embed&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Key the stats by <code>func.__name__</code>, the original's name.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>try</code> / <code>except</code> / <code>finally</code> so errors are counted and the time is recorded either way, and re-raise.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Add <code>functools.wraps(func)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+STATS = {}
+
+
+def with_stats(func, clock):
+    entry = STATS.setdefault(func.__name__, {&quot;calls&quot;: 0, &quot;errors&quot;: 0, &quot;seconds&quot;: 0.0})
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = clock()
+        entry[&quot;calls&quot;] += 1
+        try:
+            return func(*args, **kwargs)
+        except Exception:
+            entry[&quot;errors&quot;] += 1
+            raise
+        finally:
+            entry[&quot;seconds&quot;] += clock() - start
+    return wrapper</code></pre></div><p>Three bugs. The stats were keyed by <code>wrapper.__name__</code>, which is <code>"wrapper"</code> for <strong>every</strong> decorated function (no <code>wraps</code>), so all functions shared one entry; keying by <code>func.__name__</code> gives each its own. Failed calls skipped all the bookkeeping, because the exception left the wrapper before the counting lines: the dashboard showed a 100% success rate for a function that was failing. With <code>try</code>/<code>except</code>/<code>finally</code>, every call is counted, errors are counted, the elapsed time is always added, and the exception still propagates. Finally, <code>functools.wraps</code> restores the names for tracebacks and frameworks. Creating the stats entry once at decoration time also means functions that have never been called appear on the dashboard with zeros. Taking the clock as a second parameter means this cannot be used with <code>@</code> directly; 8.2 shows how a decorator factory fixes that.</p></div></details>
+</article>
+<article class="prob" id="p-decorate-a-generator-properly" data-pid="m8-1-decorate-a-generator-properly" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Decorate a generator properly</h3></header>
+<div class="prob-q"><p>Streaming functions are generators, and a normal wrapper finishes before the stream starts. Write a decorator <code>stream_stats(func)</code> for <strong>generator functions</strong>: its wrapper must itself be a generator that yields every item of the original, and when the stream ends, appends <code>(name, item_count, status)</code> to the global list <code>STREAMS</code>, where status is <code>"complete"</code>, <code>"closed"</code> (the consumer stopped early) or the exception's type name. Exceptions must propagate. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import functools
+
+STREAMS = []
+
+def stream_stats(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import inspect
+
+@stream_stats
+def tokens(text, fail_at=None):
+    for i, word in enumerate(text.split()):
+        if i == fail_at:
+            raise ConnectionError("stream dropped")
+        yield word
+
+assert inspect.isgeneratorfunction(tokens) and tokens.__name__ == "tokens"
+g = tokens("refunds take five days")
+assert STREAMS == []
+assert list(g) == ["refunds", "take", "five", "days"]
+g = tokens("a b c d")
+assert next(g) == "a" and next(g) == "b"
+g.close()
+try:
+    list(tokens("x y z", fail_at=2))
+    assert False
+except ConnectionError:
+    pass
+assert STREAMS == [("tokens", 4, "complete"), ("tokens", 2, "closed"), ("tokens", 2, "ConnectionError")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import inspect
+
+@stream_stats
+def tokens(text, fail_at=None):
+    for i, word in enumerate(text.split()):
+        if i == fail_at:
+            raise ConnectionError(&quot;stream dropped&quot;)
+        yield word
+
+assert inspect.isgeneratorfunction(tokens) and tokens.__name__ == &quot;tokens&quot;
+g = tokens(&quot;refunds take five days&quot;)
+assert STREAMS == []
+assert list(g) == [&quot;refunds&quot;, &quot;take&quot;, &quot;five&quot;, &quot;days&quot;]
+g = tokens(&quot;a b c d&quot;)
+assert next(g) == &quot;a&quot; and next(g) == &quot;b&quot;
+g.close()
+try:
+    list(tokens(&quot;x y z&quot;, fail_at=2))
+    assert False
+except ConnectionError:
+    pass
+assert STREAMS == [(&quot;tokens&quot;, 4, &quot;complete&quot;), (&quot;tokens&quot;, 2, &quot;closed&quot;), (&quot;tokens&quot;, 2, &quot;ConnectionError&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside the wrapper, <code>for item in func(*args, **kwargs): count += 1; yield item</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Closing a generator raises <code>GeneratorExit</code> at its paused <code>yield</code> (6.3); catch it to record <code>"closed"</code>, then re-raise. Append in <code>finally</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+STREAMS = []
+
+def stream_stats(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        count, status = 0, &quot;complete&quot;
+        try:
+            for item in func(*args, **kwargs):
+                count += 1
+                yield item
+        except GeneratorExit:
+            status = &quot;closed&quot;
+            raise
+        except Exception as e:
+            status = type(e).__name__
+            raise
+        finally:
+            STREAMS.append((func.__name__, count, status))
+    return wrapper</code></pre></div><p>Because the wrapper contains <code>yield</code>, it is a generator function itself, so calling <code>tokens(...)</code> creates a generator and runs nothing, exactly like the original; the test checks that <code>STREAMS</code> is still empty at that point. The bookkeeping happens when the wrapper's loop ends, which is when the stream really ends. <code>GeneratorExit</code> is how Python tells a paused generator it is being closed (by <code>close()</code>, or when it is garbage collected after the consumer breaks out of a loop); it is a <code>BaseException</code>, not an <code>Exception</code>, so it needs its own clause and must be re-raised. Counting items as they pass is exactly how streaming LLM tracers measure time to first token and the number of chunks. <code>yield from func(...)</code> would forward items more simply but would not let the wrapper count them.</p></div></details>
+</article>
+<article class="prob" id="p-recursion-through-the-wrapper" data-pid="m8-1-recursion-through-the-wrapper" data-type="predict" data-level="hard" data-answer="5 15
+5 14">
+<header class="prob-head"><h3>16. Recursion through the wrapper</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def counted(func):
+    @functools.wraps(func)
+    def wrapper(*args):
+        wrapper.calls += 1
+        return func(*args)
+    wrapper.calls = 0
+    return wrapper
+
+@counted
+def fib(n):
+    return n if n &lt; 2 else fib(n - 1) + fib(n - 2)
+
+print(fib(5), fib.calls)
+fib.calls = 0
+print(fib.__wrapped__(5), fib.calls)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>fib</code>, the name <code>fib</code> is looked up when the call happens, and it refers to the wrapper.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Calling <code>__wrapped__</code> skips the wrapper only for the outermost call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5 15
+5 14</pre></div><p>Every recursive call looks up the global name <code>fib</code>, which is the wrapper, so all 15 calls of the recursion tree for <code>fib(5)</code> are counted. Calling <code>fib.__wrapped__(5)</code> skips the wrapper for the first call only: the original body still calls <code>fib</code> by name, so the 14 nested calls go through the wrapper again. This is why memoizing a recursive function with a decorator works (each nested call can hit the cache, 8.3), and why logging decorators on recursive functions produce floods of entries.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-a-decorator-in-python-and-what-e" data-pid="m8-1-what-is-a-decorator-in-python-and-what-e" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is a decorator in Python, and what exactly does the <code>@</code> syntax do?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A decorator is a callable that takes a function (or class) and returns a replacement, usually a wrapper that calls the original with extra behaviour before or after. <code>@decorator</code> on the line above a <code>def</code> is pure syntax: after the function is defined, Python calls <code>decorator(func)</code> and binds the function's name to whatever it returns. So <code>@d</code> / <code>def f</code> is equivalent to <code>def f</code> followed by <code>f = d(f)</code>. The decorator runs once, at definition time (usually import time); the wrapper runs on every call. With several decorators, they are applied bottom-up (8.2). Because the result can be anything, a decorator can return a wrapper, the original function unchanged (registration), or even a different kind of object (<code>property</code> returns a descriptor). It relies on functions being first-class objects and on closures to remember the original.</p></div></details>
+</article>
+<article class="prob" id="p-why-should-every-wrapper-use-functools-w" data-pid="m8-1-why-should-every-wrapper-use-functools-w" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why should every wrapper use <code>functools.wraps</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Without it, the decorated name refers to a wrapper that presents itself as the wrapper: <code>__name__</code> is <code>"wrapper"</code>, the docstring is lost, <code>__module__</code> and <code>__qualname__</code> are wrong, and <code>inspect.signature</code> reports <code>(*args, **kwargs)</code>. That breaks logs and tracebacks (every decorated function appears as "wrapper"), documentation and <code>help()</code>, test reports, and any tool that keys on the name (metrics, registries, caches). It also breaks frameworks that introspect signatures, such as FastAPI's dependency injection, pytest fixtures and agent frameworks that build tool schemas from parameters. <code>functools.wraps(func)</code> copies the metadata and the function's <code>__dict__</code>, and sets <code>__wrapped__</code>, which <code>inspect</code> follows to find the real signature, and which gives tests access to the undecorated function.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-add-tracing-to-every-llm-c" data-pid="m8-1-how-would-you-add-tracing-to-every-llm-c" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you add tracing to every LLM call in a codebase with a decorator, and what can go wrong?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Write a decorator that, around each call, records the function name, a sanitised view of the inputs, the output or error type, duration, and model metadata such as token usage, and sends it to a tracing backend (or use an existing one: LangSmith's <code>@traceable</code>, Langfuse's <code>@observe</code>, OpenTelemetry spans), nesting child calls under the current trace so a RAG request shows retrieval, reranking and generation as one tree. Pitfalls: the decorator must never change behaviour, so it re-raises exceptions and returns results untouched, and failures in the tracing itself must be contained; it must use <code>functools.wraps</code> so names and signatures survive for frameworks; generator and <code>async</code> functions need generator and <code>async</code> wrappers, or streaming calls are measured wrongly; logging full prompts and outputs can leak personal data, so redact or sample; it adds overhead on hot paths, so keep the wrapper cheap and send data asynchronously; and recursion or retries inside a decorated function produce many nested entries, which should be grouped. Finally, test it with a fake backend to confirm that results, exceptions and streaming are unchanged.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A decorator takes a function and returns a replacement; <code>@d</code> above <code>def f</code> means <code>f = d(f)</code>, run once at definition time.</li><li>The wrapper pattern: <code>def wrapper(*args, **kwargs)</code>, work before, <code>result = func(*args, **kwargs)</code>, work after, <code>return result</code>.</li><li>Never lose the result or the exception: return what the function returned, and re-raise with a bare <code>raise</code>; use <code>finally</code> for work that must always happen.</li><li>Always <code>@functools.wraps(func)</code>: it keeps the name, docstring and signature (via <code>__wrapped__</code>) that logs, tests and frameworks rely on.</li><li>Recursive calls go through the wrapper; generators and <code>async</code> functions need wrappers of the same kind.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

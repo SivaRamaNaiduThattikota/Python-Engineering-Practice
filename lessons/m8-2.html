@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8.2 · Decorators with arguments</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m8-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 8 · Decorators</span></div>
+  <h1>8.2 Decorators with arguments</h1>
+  <p><code>@retry(times=3)</code> has one more layer than a plain decorator: a factory that takes the settings and returns the decorator. The three levels step by step, validating settings at import time, decorators that work with and without parentheses, stacking several decorators and why their order matters, and what settings capture. Applied to validation, deprecation, rate limiting and fallbacks.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="factory">
+<h2><span class="n">1</span>Three levels: settings, function, call</h2>
+<p>A plain decorator receives the function and nothing else. Many decorators need <strong>settings</strong>: how many times to retry, which range is valid, which role is required. The <code>@</code> line can contain any expression that evaluates to a decorator, so the solution is a function that takes the settings and <strong>returns</strong> a decorator: a <strong>decorator factory</strong>. <code>@retry(times=3)</code> is evaluated in two steps: first <code>retry(times=3)</code> is <strong>called</strong>, returning a decorator; then that decorator is applied to the function below.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">three_levels.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def clip(lo, hi):                          # level 1: the settings
+    def decorator(func):                   # level 2: the function
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):      # level 3: each call
+            return max(lo, min(hi, func(*args, **kwargs)))
+        return wrapper
+    return decorator
+
+@clip(0.0, 1.0)
+def confidence(raw):
+    return raw / 10
+
+print(confidence(4), confidence(15), confidence(-3))
+
+def similarity(a, b):
+    return a - b
+clipped = clip(-1, 1)(similarity)          # the same thing without @
+print(clipped(5, 1), clipped(0.25, 0))</code></pre><div class="out"><span class="ol">Output</span><pre>0.4 1.0 0.0
+1 0.25</pre></div></div>
+<p>Read it from the outside in. <code>clip(0.0, 1.0)</code> runs once, creates a <code>decorator</code> function that remembers <code>lo</code> and <code>hi</code> in its closure, and returns it. The <code>@</code> then calls <code>decorator(confidence)</code>, which creates a <code>wrapper</code> that remembers <code>func</code>, <code>lo</code> and <code>hi</code>, and binds <code>confidence</code> to it. Each call of <code>confidence</code> runs only the innermost level. Writing <code>clip(-1, 1)(similarity)</code> spells out the two calls that <code>@clip(-1, 1)</code> performs. Every level is an ordinary closure (3.4); there is no special decorator machinery.</p>
+<p>Because the settings are fixed when the decorator is applied, which is usually at import time, it is the right moment to <strong>validate</strong> them. A factory that checks <code>if times &lt; 1: raise ValueError(...)</code> before returning the decorator makes a misconfigured function fail as soon as the module is imported, with a clear message, instead of misbehaving on the first call in production. Taking settings as <strong>keyword-only</strong> arguments (<code>def retry(*, times, on)</code>) makes every decorator line self-describing: <code>@retry(times=3, on=(TimeoutError,))</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">validate_settings.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def validate_range(**ranges):
+    for name, (lo, hi) in ranges.items():          # checked once, at decoration time
+        if lo &gt; hi:
+            raise ValueError(f&quot;bad range for {name}: {lo} &gt; {hi}&quot;)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(**kwargs):
+            for name, (lo, hi) in ranges.items():
+                if name in kwargs and not lo &lt;= kwargs[name] &lt;= hi:
+                    raise ValueError(f&quot;{name} must be in [{lo}, {hi}], got {kwargs[name]}&quot;)
+            return func(**kwargs)
+        return wrapper
+    return decorator
+
+@validate_range(temperature=(0, 2), top_p=(0, 1))
+def generate(**settings):
+    return settings
+
+print(generate(temperature=0.7, top_p=0.9))
+for bad in [{&quot;temperature&quot;: 3}, {&quot;top_p&quot;: -0.1}]:
+    try:
+        generate(**bad)
+    except ValueError as e:
+        print(&quot;ValueError:&quot;, e)
+try:
+    validate_range(temperature=(2, 0))
+except ValueError as e:
+    print(&quot;at import:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;temperature&#x27;: 0.7, &#x27;top_p&#x27;: 0.9}
+ValueError: temperature must be in [0, 2], got 3
+ValueError: top_p must be in [0, 1], got -0.1
+at import: bad range for temperature: 2 &gt; 0</pre></div></div>
+</section>
+<section class="sec" id="capture">
+<h2><span class="n">2</span>What the settings capture</h2>
+<p>The factory's arguments are evaluated <strong>once</strong>, when the <code>@</code> line runs, and stored in closures. So <code>@log(level=LEVEL)</code> captures the value <code>LEVEL</code> had at import time; changing the global variable later has no effect on already-decorated functions. That is usually what you want for fixed configuration, and occasionally a surprise. When a setting must be read at <strong>call</strong> time (a feature flag, a per-request limit), pass something the wrapper can call or look up on each call, such as a function or a config object, instead of a plain value.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">capture.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+LEVEL = &quot;info&quot;
+LOG = []
+
+def log(level):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            current = level() if callable(level) else level     # a callable is read on every call
+            LOG.append((func.__name__, current))
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@log(LEVEL)
+def fixed():
+    return 1
+
+@log(lambda: LEVEL)
+def dynamic():
+    return 2
+
+fixed(); dynamic()
+LEVEL = &quot;debug&quot;
+fixed(); dynamic()
+print(LOG)</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;fixed&#x27;, &#x27;info&#x27;), (&#x27;dynamic&#x27;, &#x27;info&#x27;), (&#x27;fixed&#x27;, &#x27;info&#x27;), (&#x27;dynamic&#x27;, &#x27;debug&#x27;)]</pre></div></div>
+<p>This is also why decorating functions <strong>in a loop</strong> with a factory works as expected, unlike the lambdas in a comprehension of 6.1. Each call of the factory creates a new closure with its own copy of the setting, so <code>[clip(0, n)(f) for n in range(3)]</code> gives three functions with three different limits. The late-binding problem only appears when several functions share one variable that changes after they were created (problem 16).</p>
+</section>
+<section class="sec" id="optional">
+<h2><span class="n">3</span>Decorators that work with and without parentheses</h2>
+<p>With a factory, <code>@log</code> (no parentheses) is a bug: Python calls <code>log(func)</code>, passing the function as the <strong>settings</strong>, and binds the name to the decorator that comes back. The function is then never called; calling it returns a wrapper (problem 3). Some libraries let both forms work, <code>@log</code> and <code>@log(level="debug")</code>, so users do not have to remember. The trick is to make the first parameter the optional function, and the settings keyword-only:</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">optional_parens.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def log(func=None, *, level=&quot;info&quot;):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            wrapper.events.append(level)
+            return f(*args, **kwargs)
+        wrapper.events = []
+        return wrapper
+    if func is None:            # called with settings: @log(level=...)
+        return decorator
+    return decorator(func)      # used bare: @log
+
+@log
+def a():
+    return &quot;a&quot;
+
+@log(level=&quot;debug&quot;)
+def b():
+    return &quot;b&quot;
+
+print(a(), a.events, b(), b.events, a.__name__, b.__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>a [&#x27;info&#x27;] b [&#x27;debug&#x27;] a b</pre></div></div>
+<p>Used bare, <code>log</code> receives the function as <code>func</code> and decorates it immediately. Called with keyword settings, <code>func</code> is <code>None</code>, so it returns the decorator, which <code>@</code> then applies. The keyword-only marker <code>*</code> is what makes this unambiguous: a setting can never be passed positionally and mistaken for the function. pytest's <code>@pytest.fixture</code> and <code>@pytest.fixture(scope="module")</code>, and <code>@dataclass</code> versus <code>@dataclass(frozen=True)</code>, work exactly this way. For your own code, supporting only one form is simpler and perfectly fine (problem 14 shows how easily the dual form goes wrong).</p>
+</section>
+<section class="sec" id="stacking">
+<h2><span class="n">4</span>Stacking decorators: order matters</h2>
+<p>Several decorators can sit on one function. They are <strong>applied from the bottom up</strong>: the one closest to the <code>def</code> wraps the function first, and the next one wraps that result. So <code>@a</code> / <code>@b</code> / <code>def f</code> means <code>f = a(b(f))</code>. At <strong>call</strong> time the order is the reverse: the outermost wrapper (<code>a</code>) runs first, calls <code>b</code>'s wrapper, which calls the original; on the way back, results pass through <code>b</code> first and <code>a</code> last, like layers of an onion.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">stacking.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+events = []
+
+def layer(name):
+    def decorator(func):
+        events.append(f&quot;apply {name}&quot;)
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            events.append(f&quot;{name} before&quot;)
+            result = func(*args, **kwargs)
+            events.append(f&quot;{name} after&quot;)
+            return result
+        return wrapper
+    return decorator
+
+@layer(&quot;outer&quot;)
+@layer(&quot;inner&quot;)
+def answer():
+    events.append(&quot;answer runs&quot;)
+    return 42
+
+events.append(&quot;---&quot;)
+answer()
+print(events)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;apply inner&#x27;, &#x27;apply outer&#x27;, &#x27;---&#x27;, &#x27;outer before&#x27;, &#x27;inner before&#x27;, &#x27;answer runs&#x27;, &#x27;inner after&#x27;, &#x27;outer after&#x27;]</pre></div></div>
+<p>The order changes behaviour, not just the log. A few combinations that come up in practice:</p>
+<ul><li><strong>Timing and retries.</strong> <code>@timed</code> above <code>@retry</code> measures the whole operation including all attempts and waits, which is what a user experiences; below it, it times each attempt separately. Decide which number you want (problem 10).</li><li><strong>Caching and everything else.</strong> A cache placed outermost answers repeated calls without running any inner layer: no logging, no rate limiting, no retries. Placed innermost, every call still goes through the outer layers, and only the function body is skipped (problem 8).</li><li><strong>Permission checks and caching.</strong> An authorisation check must run <strong>before</strong> a cache, or a cached result computed for one user could be returned to another who is not allowed to see it.</li><li><strong>Validation and retries.</strong> Validate outside the retry: retrying a call whose arguments are invalid can only fail again.</li></ul>
+</section>
+<section class="sec" id="shapes">
+<h2><span class="n">5</span>Other ways to configure a decorator</h2>
+<p>A factory is not the only way to give a decorator settings. <code>functools.partial</code> can pre-fill the settings of a function that takes them along with the function: <code>strict = partial(validate, strict=True)</code>, then <code>@strict</code>. Classes can act as decorators too, since any callable works after <code>@</code>: a class whose <code>__init__</code> stores the settings and whose <code>__call__</code> method takes the function is a factory with named, inspectable state; Module 9 covers <code>__call__</code>. And many frameworks hang decorators off an object, as in <code>@app.get("/users")</code> or <code>@router.post(...)</code>: the object (<code>app</code>) holds the shared state, here the table of routes, and its method is the factory (8.4).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">partial_and_metadata.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def tag(func=None, **labels):
+    if func is None:
+        return functools.partial(tag, **labels)    # remember the settings, wait for the function
+    func.labels = {**getattr(func, &quot;labels&quot;, {}), **labels}
+    return func                                    # metadata only: no wrapper at all
+
+@tag(team=&quot;search&quot;, cost=&quot;low&quot;)
+@tag(owner=&quot;ana&quot;)
+def rerank(docs):
+    return sorted(docs)
+
+print(rerank.labels, rerank([&quot;b&quot;, &quot;a&quot;]), rerank.__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;owner&#x27;: &#x27;ana&#x27;, &#x27;team&#x27;: &#x27;search&#x27;, &#x27;cost&#x27;: &#x27;low&#x27;} [&#x27;a&#x27;, &#x27;b&#x27;] rerank</pre></div></div>
+<p><code>tag</code> returns the original function after attaching metadata, so stacking two of them merges the labels, and there is no wrapper and no call overhead. <code>functools.partial(tag, **labels)</code> is the factory: it returns a callable that, when <code>@</code> passes it the function, calls <code>tag(func, **labels)</code>. Attaching metadata this way is how test frameworks mark tests (<code>@pytest.mark.slow</code>) and how some agent frameworks annotate tools with descriptions.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-when-each-level-runs" data-pid="m8-2-when-each-level-runs" data-type="predict" data-level="easy" data-answer="factory A
+decorating f
+ready
+calling A
+calling A
+2 3">
+<header class="prob-head"><h3>1. When each level runs</h3></header>
+<div class="code"><pre><code class="py">def deco(label):
+    print(&quot;factory&quot;, label)
+    def decorator(func):
+        print(&quot;decorating&quot;, func.__name__)
+        def wrapper(*args):
+            print(&quot;calling&quot;, label)
+            return func(*args)
+        return wrapper
+    return decorator
+
+@deco(&quot;A&quot;)
+def f(x):
+    return x + 1
+
+print(&quot;ready&quot;)
+print(f(1), f(2))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>deco("A")</code> is called first; its result decorates <code>f</code>. Only the wrapper runs on calls.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>factory A
+decorating f
+ready
+calling A
+calling A
+2 3</pre></div><p>The <code>@</code> line evaluates <code>deco("A")</code> (printing "factory A"), then applies the returned decorator to <code>f</code> ("decorating f"), all before "ready". Each call then runs only the wrapper. In <code>print(f(1), f(2))</code>, both calls run before <code>print</code> displays anything, so the two "calling A" lines come first, then "2 3".</p></div></details>
+</article>
+<article class="prob" id="p-clamp-the-result" data-pid="m8-2-clamp-the-result" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Clamp the result</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>clip(lo, hi)</code> that clamps the decorated function's numeric result to <code>[lo, hi]</code>. Raise <code>ValueError</code> <strong>when the decorator is created</strong> if <code>lo &gt; hi</code>. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import functools
+
+def clip(lo, hi):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@clip(0.0, 1.0)
+def prob(logit):
+    return logit / 4
+
+assert [prob(x) for x in (-8, 2, 8)] == [0.0, 0.5, 1.0]
+assert prob.__name__ == "prob"
+try:
+    clip(1, 0)
+    assert False
+except ValueError:
+    pass
+assert clip(-1, 1)(lambda a, b: a * b)(3, 2) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@clip(0.0, 1.0)
+def prob(logit):
+    return logit / 4
+
+assert [prob(x) for x in (-8, 2, 8)] == [0.0, 0.5, 1.0]
+assert prob.__name__ == &quot;prob&quot;
+try:
+    clip(1, 0)
+    assert False
+except ValueError:
+    pass
+assert clip(-1, 1)(lambda a, b: a * b)(3, 2) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate first, then define <code>decorator(func)</code> with a <code>wrapper</code> inside, and return <code>decorator</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def clip(lo, hi):
+    if lo &gt; hi:
+        raise ValueError(f&quot;lo ({lo}) must not exceed hi ({hi})&quot;)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return max(lo, min(hi, func(*args, **kwargs)))
+        return wrapper
+    return decorator</code></pre></div><p>The check runs in the factory, so <code>clip(1, 0)</code> fails immediately, before any function is decorated: a typo in a decorator line is caught at import. <code>max(lo, min(hi, x))</code> clamps in one expression. The last test shows that a factory's result is an ordinary decorator that can be applied without <code>@</code>. Clamping model outputs to a valid range is common when a regression model's prediction must be a probability or a score.</p></div></details>
+</article>
+<article class="prob" id="p-a-factory-used-without-parentheses" data-pid="m8-2-a-factory-used-without-parentheses" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A factory used without parentheses</h3></header>
+<div class="prob-q"><p><code>retry</code> is a decorator factory, but <code>fetch_answer</code> was decorated with <code>@retry</code> instead of <code>@retry(...)</code>. Calling it returns a function instead of an answer. Fix the decoration so <code>fetch_answer</code> retries twice on <code>TimeoutError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import functools
+
+def retry(times=2, on=(TimeoutError,)):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    if attempt == times:
+                        raise
+        return wrapper
+    return decorator
+
+state = {&quot;calls&quot;: 0}
+
+@retry
+def fetch_answer(q):
+    state[&quot;calls&quot;] += 1
+    if state[&quot;calls&quot;] == 1:
+        raise TimeoutError(&quot;slow&quot;)
+    return f&quot;answer to {q}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert fetch_answer("refund?") == "answer to refund?"
+assert state["calls"] == 2
+assert fetch_answer.__name__ == "fetch_answer"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert fetch_answer(&quot;refund?&quot;) == &quot;answer to refund?&quot;
+assert state[&quot;calls&quot;] == 2
+assert fetch_answer.__name__ == &quot;fetch_answer&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@retry</code> calls <code>retry(fetch_answer)</code>, passing the function as <code>times</code>. Write <code>@retry(times=2)</code> (or <code>@retry()</code>).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def retry(times=2, on=(TimeoutError,)):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    if attempt == times:
+                        raise
+        return wrapper
+    return decorator
+
+state = {&quot;calls&quot;: 0}
+
+@retry(times=2)
+def fetch_answer(q):
+    state[&quot;calls&quot;] += 1
+    if state[&quot;calls&quot;] == 1:
+        raise TimeoutError(&quot;slow&quot;)
+    return f&quot;answer to {q}&quot;</code></pre></div><p><code>@retry</code> without parentheses evaluates to <code>retry(fetch_answer)</code>: the function was passed as <code>times</code>, and the result, the inner <code>decorator</code>, was bound to the name <code>fetch_answer</code>. Calling it with <code>"refund?"</code> treated the string as the function to decorate and returned a wrapper; the original never ran. With parentheses, the factory is called with the settings and its decorator is applied to the function. Making settings keyword-only (<code>def retry(*, times=2, on=...)</code>) turns this mistake into an immediate <code>TypeError</code> at import instead of a silent bug.</p></div></details>
+</article>
+<article class="prob" id="p-stacking-order" data-pid="m8-2-stacking-order" data-type="predict" data-level="easy" data-answer="a(b(c(x)))
+a(b(c(y))) f">
+<header class="prob-head"><h3>4. Stacking order</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def wrap(name):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(x):
+            return f&quot;{name}(&quot; + func(x) + &quot;)&quot;
+        return wrapper
+    return decorator
+
+@wrap(&quot;a&quot;)
+@wrap(&quot;b&quot;)
+@wrap(&quot;c&quot;)
+def f(x):
+    return x
+
+print(f(&quot;x&quot;))
+g = wrap(&quot;a&quot;)(wrap(&quot;b&quot;)(wrap(&quot;c&quot;)(lambda x: x)))
+print(g(&quot;y&quot;), f.__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The bottom decorator wraps the function first. The outermost wrapper runs first and adds its text around everything inside.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>a(b(c(x)))
+a(b(c(y))) f</pre></div><p>Decorators apply bottom-up: <code>c</code> wraps <code>f</code>, <code>b</code> wraps that, <code>a</code> wraps the result, so <code>f = a(b(c(f)))</code>. At call time <code>a</code>'s wrapper runs first, but it calls the inner layers before building its own string, so the result reads from the outside in: <code>a(b(c(x)))</code>. The explicit nesting in <code>g</code> is the same structure. <code>wraps</code> at each layer keeps the name <code>f</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-validate-argument-ranges" data-pid="m8-2-validate-argument-ranges" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Validate argument ranges</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>in_range(**ranges)</code> where each range is <code>(lo, hi)</code>. The wrapper binds the call's arguments to the function's signature (with defaults applied) and raises <code>ValueError(f"{name} must be in [{lo}, {hi}], got {value!r}")</code> for the first argument outside its range, before calling the function. Raise <code>TypeError</code> at decoration time if a range names a parameter the function does not have.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import functools, inspect
+
+def in_range(**ranges):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@in_range(temperature=(0, 2), top_p=(0, 1))
+def generate(prompt, temperature=0.7, top_p=1.0):
+    return (prompt, temperature, top_p)
+
+assert generate("hi") == ("hi", 0.7, 1.0) and generate("hi", 1.5, top_p=0.2) == ("hi", 1.5, 0.2)
+for args, kwargs, msg in [(("hi", 2.5), {}, "temperature must be in [0, 2], got 2.5"),
+                          (("hi",), {"top_p": -1}, "top_p must be in [0, 1], got -1")]:
+    try:
+        generate(*args, **kwargs)
+        assert False
+    except ValueError as e:
+        assert str(e) == msg
+try:
+    in_range(temprature=(0, 2))(generate.__wrapped__)
+    assert False
+except TypeError as e:
+    assert "temprature" in str(e)
+assert generate.__name__ == "generate"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@in_range(temperature=(0, 2), top_p=(0, 1))
+def generate(prompt, temperature=0.7, top_p=1.0):
+    return (prompt, temperature, top_p)
+
+assert generate(&quot;hi&quot;) == (&quot;hi&quot;, 0.7, 1.0) and generate(&quot;hi&quot;, 1.5, top_p=0.2) == (&quot;hi&quot;, 1.5, 0.2)
+for args, kwargs, msg in [((&quot;hi&quot;, 2.5), {}, &quot;temperature must be in [0, 2], got 2.5&quot;),
+                          ((&quot;hi&quot;,), {&quot;top_p&quot;: -1}, &quot;top_p must be in [0, 1], got -1&quot;)]:
+    try:
+        generate(*args, **kwargs)
+        assert False
+    except ValueError as e:
+        assert str(e) == msg
+try:
+    in_range(temprature=(0, 2))(generate.__wrapped__)
+    assert False
+except TypeError as e:
+    assert &quot;temprature&quot; in str(e)
+assert generate.__name__ == &quot;generate&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>decorator(func)</code>, compute <code>sig = inspect.signature(func)</code> and check <code>set(ranges) - set(sig.parameters)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the wrapper: <code>bound = sig.bind(*args, **kwargs)</code>, <code>bound.apply_defaults()</code>, then check each named range.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, inspect
+
+def in_range(**ranges):
+    def decorator(func):
+        sig = inspect.signature(func)
+        unknown = set(ranges) - set(sig.parameters)
+        if unknown:
+            raise TypeError(f&quot;{func.__name__} has no parameter(s): {sorted(unknown)}&quot;)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            for name, (lo, hi) in ranges.items():
+                value = bound.arguments[name]
+                if not lo &lt;= value &lt;= hi:
+                    raise ValueError(f&quot;{name} must be in [{lo}, {hi}], got {value!r}&quot;)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator</code></pre></div><p>The factory holds the ranges; the decorator, which is the first level that sees the function, checks that every named range matches a real parameter, so a misspelling like <code>temprature</code> fails at import instead of silently never validating anything. Binding to the signature is what lets the check work no matter how the argument was passed, positionally (<code>2.5</code>) or by keyword (<code>top_p=-1</code>), and with defaults filled in. The signature is computed once per decorated function. The test re-decorates the original through <code>__wrapped__</code>, which <code>wraps</code> provides.</p></div></details>
+</article>
+<article class="prob" id="p-decorated-functions-that-share-one-cache" data-pid="m8-2-decorated-functions-that-share-one-cache" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Decorated functions that share one cache</h3></header>
+<div class="prob-q"><p><code>cached(maxsize)</code> should give each decorated function its own cache of at most <code>maxsize</code> entries (dropping the oldest). Two decorated functions return each other's results for the same argument. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import functools
+
+def cached(maxsize, store={}):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(x):
+            if x not in store:
+                if len(store) &gt;= maxsize:
+                    store.pop(next(iter(store)))
+                store[x] = func(x)
+            return store[x]
+        wrapper.store = store
+        return wrapper
+    return decorator
+</textarea>
+<script type="text/plain" class="prob-tests">@cached(maxsize=2)
+def square(x):
+    return x * x
+
+@cached(maxsize=2)
+def double(x):
+    return x * 2
+
+assert square(3) == 9 and double(3) == 6
+assert square(4) == 16 and square(5) == 25 and list(square.store) == [4, 5]
+assert double.store == {3: 6} and square.store is not double.store</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@cached(maxsize=2)
+def square(x):
+    return x * x
+
+@cached(maxsize=2)
+def double(x):
+    return x * 2
+
+assert square(3) == 9 and double(3) == 6
+assert square(4) == 16 and square(5) == 25 and list(square.store) == [4, 5]
+assert double.store == {3: 6} and square.store is not double.store</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A mutable default (<code>store={}</code>) is created once, when <code>def cached</code> runs, and shared by every call of the factory (2.4).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Create the dict inside <code>decorator</code>, so each decorated function gets a new one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def cached(maxsize):
+    def decorator(func):
+        store = {}
+
+        @functools.wraps(func)
+        def wrapper(x):
+            if x not in store:
+                if len(store) &gt;= maxsize:
+                    store.pop(next(iter(store)))
+                store[x] = func(x)
+            return store[x]
+        wrapper.store = store
+        return wrapper
+    return decorator</code></pre></div><p><code>store={}</code> is a mutable default argument (2.4): one dict, created when <code>def cached</code> ran, shared by every call of the factory, so <code>square(3)</code> and <code>double(3)</code> used the same key <code>3</code> in the same dict and the second got the first's answer. State that belongs to <strong>one decorated function</strong> must be created in the decorator level, which runs once per function; state that belongs to one <strong>call</strong> goes in the wrapper. Dicts keep insertion order, so <code>next(iter(store))</code> is the oldest key, which gives a simple first-in-first-out eviction; <code>functools.lru_cache</code> (8.3) evicts the <strong>least recently used</strong> instead.</p></div></details>
+</article>
+<article class="prob" id="p-mark-a-function-as-deprecated" data-pid="m8-2-mark-a-function-as-deprecated" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Mark a function as deprecated</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>deprecated(reason, alternative=None)</code> that emits a <code>DeprecationWarning</code> on the <strong>first</strong> call only, with the message <code>"&lt;name&gt; is deprecated: &lt;reason&gt;"</code> plus <code>"; use &lt;alternative&gt;"</code> if given, and <code>stacklevel=2</code> so it points at the caller. Calls still return the original result. Use <code>functools.wraps</code> and the <code>warnings</code> module.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools, warnings
+
+def deprecated(reason, alternative=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import warnings
+
+@deprecated("the v1 API is retired", alternative="embed_v2")
+def embed_v1(text):
+    return [len(text)]
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    assert embed_v1("ab") == [2] and embed_v1("abc") == [3]
+assert len(caught) == 1 and caught[0].category is DeprecationWarning
+assert str(caught[0].message) == "embed_v1 is deprecated: the v1 API is retired; use embed_v2"
+
+@deprecated("slow")
+def old():
+    return "ok"
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    assert old() == "ok"
+assert str(caught[0].message) == "old is deprecated: slow" and old.__name__ == "old"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import warnings
+
+@deprecated(&quot;the v1 API is retired&quot;, alternative=&quot;embed_v2&quot;)
+def embed_v1(text):
+    return [len(text)]
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter(&quot;always&quot;)
+    assert embed_v1(&quot;ab&quot;) == [2] and embed_v1(&quot;abc&quot;) == [3]
+assert len(caught) == 1 and caught[0].category is DeprecationWarning
+assert str(caught[0].message) == &quot;embed_v1 is deprecated: the v1 API is retired; use embed_v2&quot;
+
+@deprecated(&quot;slow&quot;)
+def old():
+    return &quot;ok&quot;
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter(&quot;always&quot;)
+    assert old() == &quot;ok&quot;
+assert str(caught[0].message) == &quot;old is deprecated: slow&quot; and old.__name__ == &quot;old&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the message in the decorator level. Keep a flag such as <code>wrapper.warned = False</code> and flip it on the first call.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, warnings
+
+def deprecated(reason, alternative=None):
+    def decorator(func):
+        message = f&quot;{func.__name__} is deprecated: {reason}&quot;
+        if alternative:
+            message += f&quot;; use {alternative}&quot;
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not wrapper.warned:
+                wrapper.warned = True
+                warnings.warn(message, DeprecationWarning, stacklevel=2)
+            return func(*args, **kwargs)
+        wrapper.warned = False
+        return wrapper
+    return decorator</code></pre></div><p>The message is built once per function, at decoration time. <code>stacklevel=2</code> makes the warning report the line that <strong>called</strong> <code>embed_v1</code>, which is the line someone needs to change, instead of the line inside the wrapper (7.3). Warning only once avoids flooding logs from a hot loop; the <code>warnings</code> module also deduplicates by location by default, but the test switches that off with <code>simplefilter("always")</code>, which is why the flag matters. Python 3.13 added <code>warnings.deprecated</code> as a ready-made decorator with the same idea, which type checkers also understand.</p></div></details>
+</article>
+<article class="prob" id="p-where-to-put-the-cache" data-pid="m8-2-where-to-put-the-cache" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Where to put the cache</h3></header>
+<div class="prob-q"><p>Both decorate an expensive function with a slow logging layer and a cache, then call it 20,000 times with 10 distinct arguments. Which order is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def slow_log(func):
+    @functools.wraps(func)
+    def wrapper(x):
+        line = f&quot;{func.__name__}({x!r})&quot; * 20          # stands in for formatting and writing a log line
+        return func(x)
+    return wrapper
+
+def memo(func):
+    store = {}
+    @functools.wraps(func)
+    def wrapper(x):
+        if x not in store:
+            store[x] = func(x)
+        return store[x]
+    return wrapper
+
+def work(x):
+    return sum(i * i for i in range(2000)) + x
+
+args = [i % 10 for i in range(20_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">f = slow_log(memo(work))
+for x in args:
+    f(x)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">f = memo(slow_log(work))
+for x in args:
+    f(x)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On a cache hit, which layers still run in each version?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>23.03 ms</td></tr><tr><td>B</td><td>7.47 ms</td></tr></table></div><p>With the cache outermost (B), a hit returns before the logging layer is reached, so only 10 calls ever log or compute. With the cache inside (A), every one of the 20,000 calls runs the logging wrapper first and only then finds the cached value. Both compute <code>work</code> only 10 times; the difference is the cost of the outer layers on every hit. Whether that is right depends on intent: if every request must be logged or rate-limited, the cache belongs inside; if repeated answers should be free, it belongs outside.</p></div></details>
+</article>
+<article class="prob" id="p-layers-in-action" data-pid="m8-2-layers-in-action" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Layers in action</h3></header>
+<div class="prob-q"><p>Fill in <code>events</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import functools
+events = []
+
+def mark(name):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args):
+            events.append(name + &quot;&gt;&quot;)
+            try:
+                return func(*args)
+            finally:
+                events.append(&quot;&lt;&quot; + name)
+        return wrapper
+    return decorator
+
+@mark(&quot;auth&quot;)
+@mark(&quot;cache&quot;)
+def load(x):
+    events.append(&quot;load&quot;)
+    if x &lt; 0:
+        raise ValueError(x)
+    return x
+
+load(1)
+events.clear()
+try:
+    load(-1)
+except ValueError:
+    events.append(&quot;caller&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>events</code></th></tr><tr><td>success</td><td><input class="cell" data-a="[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;]" data-s="[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;]" aria-label="events at success" autocomplete="off"></td></tr><tr><td>failure</td><td><input class="cell" data-a="[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;, &#x27;caller&#x27;]" data-s="[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;, &#x27;caller&#x27;]" aria-label="events at failure" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The outermost decorator (<code>auth</code>) enters first and leaves last. <code>finally</code> runs on the way out, even when an exception passes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>events</code></th></tr><tr><td>success</td><td><code>[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;]</code></td></tr><tr><td>failure</td><td><code>[&#x27;auth&gt;&#x27;, &#x27;cache&gt;&#x27;, &#x27;load&#x27;, &#x27;&lt;cache&#x27;, &#x27;&lt;auth&#x27;, &#x27;caller&#x27;]</code></td></tr></table></div><p><code>auth</code> was applied last, so its wrapper is outermost: it enters first, then <code>cache</code>, then the function. On the way out the order reverses. With an exception, each layer's <code>finally</code> still runs as the error passes through it, innermost first, and then the caller's handler runs. This onion order is why authorisation must be the <strong>outer</strong> layer when combined with a cache: it runs before the cache can answer.</p></div></details>
+</article>
+<article class="prob" id="p-timing-that-measures-the-wrong-thing" data-pid="m8-2-timing-that-measures-the-wrong-thing" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Timing that measures the wrong thing</h3></header>
+<div class="prob-q"><p><code>ask</code> is meant to record <strong>one</strong> timing per call, covering all retries, so the dashboard shows what the user waited. It records one timing per attempt instead. Fix the decorator order (nothing else).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import functools
+
+TIMINGS = []
+ticks = iter([0, 1, 1, 3, 3, 4, 10, 11])
+clock = lambda: next(ticks)
+
+def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = clock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            TIMINGS.append(clock() - start)
+    return wrapper
+
+def retry(times):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except TimeoutError:
+                    if attempt == times:
+                        raise
+        return wrapper
+    return decorator
+
+outcomes = iter([TimeoutError(), TimeoutError(), &quot;ok&quot;])
+
+@retry(times=3)
+@timed
+def ask(q):
+    out = next(outcomes)
+    if isinstance(out, Exception):
+        raise out
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">assert ask("refund?") == "ok"
+assert TIMINGS == [1]
+assert ask.__name__ == "ask"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert ask(&quot;refund?&quot;) == &quot;ok&quot;
+assert TIMINGS == [1]
+assert ask.__name__ == &quot;ask&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The decorator listed first is the outermost. Which one should wrap the other?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+TIMINGS = []
+ticks = iter([0, 1, 1, 3, 3, 4, 10, 11])
+clock = lambda: next(ticks)
+
+def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = clock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            TIMINGS.append(clock() - start)
+    return wrapper
+
+def retry(times):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, times + 1):
+                try:
+                    return func(*args, **kwargs)
+                except TimeoutError:
+                    if attempt == times:
+                        raise
+        return wrapper
+    return decorator
+
+outcomes = iter([TimeoutError(), TimeoutError(), &quot;ok&quot;])
+
+@timed
+@retry(times=3)
+def ask(q):
+    out = next(outcomes)
+    if isinstance(out, Exception):
+        raise out
+    return out</code></pre></div><p>With <code>@timed</code> below <code>@retry</code>, the timing wrapper sat <strong>inside</strong> the retry loop, so each of the three attempts was timed separately and the user-visible total was never recorded. Moving <code>@timed</code> to the top makes it the outermost layer: one <code>clock()</code> before the whole retry sequence and one after, here the ticks 0 and 1. Both orders are legitimate measurements; per-attempt latency is useful for spotting a slow provider. The decorator order is the place to say which one you mean.</p></div></details>
+</article>
+<article class="prob" id="p-near-identical-decorators-into-one-facto" data-pid="m8-2-near-identical-decorators-into-one-facto" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Near-identical decorators into one factory</h3></header>
+<div class="prob-q"><p>Replace the three decorators with one factory <code>require(role)</code>. Same behaviour and messages. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import functools
+
+def require_admin(func):
+    @functools.wraps(func)
+    def wrapper(user, *args, **kwargs):
+        if &quot;admin&quot; not in user[&quot;roles&quot;]:
+            raise PermissionError(f&quot;{user[&#x27;name&#x27;]} needs role &#x27;admin&#x27; for {func.__name__}&quot;)
+        return func(user, *args, **kwargs)
+    return wrapper
+
+def require_editor(func):
+    @functools.wraps(func)
+    def wrapper(user, *args, **kwargs):
+        if &quot;editor&quot; not in user[&quot;roles&quot;]:
+            raise PermissionError(f&quot;{user[&#x27;name&#x27;]} needs role &#x27;editor&#x27; for {func.__name__}&quot;)
+        return func(user, *args, **kwargs)
+    return wrapper
+
+def require_viewer(func):
+    @functools.wraps(func)
+    def wrapper(user, *args, **kwargs):
+        if &quot;viewer&quot; not in user[&quot;roles&quot;]:
+            raise PermissionError(f&quot;{user[&#x27;name&#x27;]} needs role &#x27;viewer&#x27; for {func.__name__}&quot;)
+        return func(user, *args, **kwargs)
+    return wrapper
+
+@require_admin
+def delete_index(user, name):
+    return f&quot;deleted {name}&quot;
+
+@require_viewer
+def search(user, q):
+    return [q]
+</textarea>
+<script type="text/plain" class="prob-tests">ana = {"name": "ana", "roles": {"admin", "viewer"}}
+bo = {"name": "bo", "roles": {"viewer"}}
+assert delete_index(ana, "faq") == "deleted faq" and search(bo, "x") == ["x"]
+try:
+    delete_index(bo, "faq")
+    assert False
+except PermissionError as e:
+    assert str(e) == "bo needs role 'admin' for delete_index"
+assert delete_index.__name__ == "delete_index"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ana = {&quot;name&quot;: &quot;ana&quot;, &quot;roles&quot;: {&quot;admin&quot;, &quot;viewer&quot;}}
+bo = {&quot;name&quot;: &quot;bo&quot;, &quot;roles&quot;: {&quot;viewer&quot;}}
+assert delete_index(ana, &quot;faq&quot;) == &quot;deleted faq&quot; and search(bo, &quot;x&quot;) == [&quot;x&quot;]
+try:
+    delete_index(bo, &quot;faq&quot;)
+    assert False
+except PermissionError as e:
+    assert str(e) == &quot;bo needs role &#x27;admin&#x27; for delete_index&quot;
+assert delete_index.__name__ == &quot;delete_index&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def require(role):</code> returns a decorator whose wrapper uses <code>role</code> from the closure. Then <code>@require("admin")</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def require(role):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(user, *args, **kwargs):
+            if role not in user[&quot;roles&quot;]:
+                raise PermissionError(f&quot;{user[&#x27;name&#x27;]} needs role {role!r} for {func.__name__}&quot;)
+            return func(user, *args, **kwargs)
+        return wrapper
+    return decorator
+
+@require(&quot;admin&quot;)
+def delete_index(user, name):
+    return f&quot;deleted {name}&quot;
+
+@require(&quot;viewer&quot;)
+def search(user, q):
+    return [q]</code></pre></div><p>The three decorators differed only in one string, which is exactly what a factory parameter is for: the role now lives in the closure, and a new role needs no new code. <code>{role!r}</code> reproduces the quoted role in the message. The wrapper names <code>user</code> as its first parameter because every protected function takes the user first; that convention is part of the decorator's contract and worth documenting. Web frameworks do the same with dependencies such as FastAPI's <code>Security(...)</code> or Flask-Login's <code>@login_required</code>.</p></div></details>
+</article>
+<article class="prob" id="p-with-and-without-parentheses" data-pid="m8-2-with-and-without-parentheses" data-type="predict" data-level="medium" data-answer="default custom a
+True decorator
+AttributeError">
+<header class="prob-head"><h3>12. With and without parentheses</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def flag(func=None, *, name=&quot;default&quot;):
+    def decorator(f):
+        f.flag = name
+        return f
+    return decorator if func is None else decorator(func)
+
+@flag
+def a(): pass
+
+@flag(name=&quot;custom&quot;)
+def b(): pass
+
+print(a.flag, b.flag, a.__name__)
+c = flag(name=&quot;x&quot;)
+print(callable(c), c.__name__ if hasattr(c, &quot;__name__&quot;) else &quot;-&quot;)
+try:
+    flag(&quot;positional&quot;)
+except Exception as e:
+    print(type(e).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Used bare, <code>func</code> is the function. Called with keywords only, <code>func</code> is <code>None</code> and the decorator is returned.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>default custom a
+True decorator
+AttributeError</pre></div><p><code>@flag</code> passes the function as <code>func</code>, so it is decorated at once with the default name; <code>@flag(name="custom")</code> returns the decorator first. <code>flag(name="x")</code> alone returns the inner <code>decorator</code> function. The last call passes a string positionally, so <code>flag</code> treats it as the function and tries to set an attribute on a string, which raises <code>AttributeError</code>. That is the weak spot of the dual form: a positional mistake is not caught by the signature.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-a-sliding-window-rate-limit" data-pid="m8-2-a-sliding-window-rate-limit" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A sliding-window rate limit</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>rate_limited(calls, per, clock)</code> that allows at most <code>calls</code> calls in any window of <code>per</code> seconds (measured with <code>clock()</code>). A call over the limit raises <code>RateLimitExceeded</code> (define it) with an attribute <code>retry_after</code>, the seconds until the oldest call in the window leaves it, and does <strong>not</strong> call the function. Each decorated function has its own limit. Use <code>collections.deque</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import functools
+from collections import deque
+
+def rate_limited(calls, per, clock):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+clock = lambda: now[0]
+ran = []
+
+@rate_limited(calls=2, per=10, clock=clock)
+def embed(text):
+    ran.append(text)
+    return [len(text)]
+
+assert embed("a") == [1]
+now[0] = 3.0
+assert embed("bb") == [2]
+now[0] = 4.0
+try:
+    embed("ccc")
+    assert False
+except RateLimitExceeded as e:
+    assert e.retry_after == 6.0 and ran == ["a", "bb"]
+now[0] = 10.0
+assert embed("d") == [1]
+try:
+    embed("e")
+    assert False
+except RateLimitExceeded as e:
+    assert e.retry_after == 3.0
+
+@rate_limited(calls=1, per=5, clock=clock)
+def other():
+    return "ok"
+assert other() == "ok" and embed.__name__ == "embed"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+clock = lambda: now[0]
+ran = []
+
+@rate_limited(calls=2, per=10, clock=clock)
+def embed(text):
+    ran.append(text)
+    return [len(text)]
+
+assert embed(&quot;a&quot;) == [1]
+now[0] = 3.0
+assert embed(&quot;bb&quot;) == [2]
+now[0] = 4.0
+try:
+    embed(&quot;ccc&quot;)
+    assert False
+except RateLimitExceeded as e:
+    assert e.retry_after == 6.0 and ran == [&quot;a&quot;, &quot;bb&quot;]
+now[0] = 10.0
+assert embed(&quot;d&quot;) == [1]
+try:
+    embed(&quot;e&quot;)
+    assert False
+except RateLimitExceeded as e:
+    assert e.retry_after == 3.0
+
+@rate_limited(calls=1, per=5, clock=clock)
+def other():
+    return &quot;ok&quot;
+assert other() == &quot;ok&quot; and embed.__name__ == &quot;embed&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a <code>deque</code> of call times per decorated function. On each call, pop times older than <code>now - per</code> from the left.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If the deque is full, <code>retry_after = times[0] + per - now</code>. Otherwise append <code>now</code> and call the function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+from collections import deque
+
+
+class RateLimitExceeded(Exception):
+    def __init__(self, message, retry_after):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def rate_limited(calls, per, clock):
+    if calls &lt; 1 or per &lt;= 0:
+        raise ValueError(&quot;calls must be &gt;= 1 and per &gt; 0&quot;)
+
+    def decorator(func):
+        times = deque()
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            now = clock()
+            while times and times[0] &lt;= now - per:
+                times.popleft()
+            if len(times) &gt;= calls:
+                wait = times[0] + per - now
+                raise RateLimitExceeded(f&quot;{func.__name__}: {calls} calls per {per}s exceeded&quot;, retry_after=wait)
+            times.append(now)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator</code></pre></div><p>A sliding window keeps the exact times of recent calls, so the limit holds for <strong>any</strong> <code>per</code>-second window, not just fixed minutes on the clock. A <code>deque</code> makes dropping expired times from the left O(1). The deque is created in the decorator level, so <code>embed</code> and <code>other</code> have independent limits. Raising instead of sleeping keeps the decorator honest and testable, and <code>retry_after</code> gives the caller (or a retry decorator stacked <strong>outside</strong> it) the exact wait, like the server's <code>Retry-After</code> header (7.4). Rejected calls are not recorded, so waiting callers do not extend each other's wait. At <code>now = 10</code>, the call from time 0 has left the window (<code>0 &lt;= 10 - 10</code>), which is why <code>"d"</code> is allowed.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-decorator-with-optional-" data-pid="m8-2-read-the-code-a-decorator-with-optional-" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a decorator with optional settings</h3></header>
+<div class="prob-q"><p><code>log_calls</code> should work both as <code>@log_calls</code> and as <code>@log_calls(level="debug")</code>, recording <code>(level, name)</code> in <code>LOG</code> for each call and keeping the function's name. <code>@log_calls(level="debug")</code> currently breaks the function, and the bare form loses the name. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">LOG = []
+
+
+def log_calls(func=None, level=&quot;info&quot;):
+    def decorator(f):
+        def wrapper(*args, **kwargs):
+            LOG.append((level, f.__name__))
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator(func)
+</textarea>
+<script type="text/plain" class="prob-tests">@log_calls
+def search(q):
+    return [q]
+
+@log_calls(level="debug")
+def rerank(docs):
+    return sorted(docs)
+
+assert search("x") == ["x"] and rerank(["b", "a"]) == ["a", "b"]
+assert LOG == [("info", "search"), ("debug", "rerank")]
+assert search.__name__ == "search" and rerank.__name__ == "rerank"
+try:
+    log_calls("debug")
+    assert False, "level must be keyword-only"
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@log_calls
+def search(q):
+    return [q]
+
+@log_calls(level=&quot;debug&quot;)
+def rerank(docs):
+    return sorted(docs)
+
+assert search(&quot;x&quot;) == [&quot;x&quot;] and rerank([&quot;b&quot;, &quot;a&quot;]) == [&quot;a&quot;, &quot;b&quot;]
+assert LOG == [(&quot;info&quot;, &quot;search&quot;), (&quot;debug&quot;, &quot;rerank&quot;)]
+assert search.__name__ == &quot;search&quot; and rerank.__name__ == &quot;rerank&quot;
+try:
+    log_calls(&quot;debug&quot;)
+    assert False, &quot;level must be keyword-only&quot;
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With <code>@log_calls(level=...)</code>, <code>func</code> is <code>None</code>, and <code>decorator(None)</code> returns a wrapper around <code>None</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return <code>decorator</code> when <code>func is None</code>. Make <code>level</code> keyword-only with <code>*</code>, and reject a non-callable <code>func</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+LOG = []
+
+
+def log_calls(func=None, *, level=&quot;info&quot;):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            LOG.append((level, f.__name__))
+            return f(*args, **kwargs)
+        return wrapper
+    if func is None:
+        return decorator
+    if not callable(func):
+        raise TypeError(f&quot;log_calls expected a function, got {func!r}; pass settings as keywords&quot;)
+    return decorator(func)</code></pre></div><p>Three bugs. With settings, <code>func</code> is <code>None</code>, but the code still called <code>decorator(None)</code>, so <code>rerank</code> became a wrapper around <code>None</code>, and calling it raised <code>TypeError: 'NoneType' object is not callable</code> (after logging, which made the failure look like a logging bug). Returning the decorator when <code>func is None</code> lets <code>@</code> apply it. <code>level</code> was an ordinary parameter, so <code>log_calls("debug")</code> passed a string as the function; making it keyword-only with <code>*</code> and checking <code>callable(func)</code> turns that mistake into a clear error at import. And without <code>functools.wraps</code>, every decorated function was named <code>wrapper</code>. The dual form needs all three details right, which is why many teams prefer to support just <code>@log_calls()</code>.</p></div></details>
+</article>
+<article class="prob" id="p-fall-back-to-other-implementations" data-pid="m8-2-fall-back-to-other-implementations" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Fall back to other implementations</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>with_fallbacks(*fallbacks, on=(TimeoutError, ConnectionError))</code>. The decorated function is tried first; if it raises one of the <code>on</code> exceptions, each fallback is called with the <strong>same</strong> arguments, in order, until one succeeds. Record the name of the function that answered in <code>wrapper.last_source</code>. If all fail, raise the last exception with the earlier ones attached as notes (<code>"&lt;name&gt;: &lt;Type&gt;: &lt;message&gt;"</code>). Other exceptions propagate at once.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import functools
+
+def with_fallbacks(*fallbacks, on=(TimeoutError, ConnectionError)):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def small_model(q, *, temperature=0.0):
+    return f"small:{q}:{temperature}"
+
+def cached_answer(q, **kwargs):
+    raise ConnectionError("cache offline")
+
+def canned(q, **kwargs):
+    return "Please try again later."
+
+@with_fallbacks(small_model, canned)
+def big_model(q, *, temperature=0.0):
+    raise TimeoutError("30s")
+
+assert big_model("refund?", temperature=0.2) == "small:refund?:0.2" and big_model.last_source == "small_model"
+
+@with_fallbacks(cached_answer, canned)
+def primary(q):
+    raise ConnectionError("down")
+assert primary("x") == "Please try again later." and primary.last_source == "canned"
+
+@with_fallbacks(cached_answer)
+def lonely(q):
+    raise TimeoutError("slow")
+try:
+    lonely("x")
+    assert False
+except ConnectionError as e:
+    assert str(e) == "cache offline" and e.__notes__ == ["lonely: TimeoutError: slow"]
+
+@with_fallbacks(canned)
+def buggy(q):
+    raise KeyError("bug")
+try:
+    buggy("x")
+    assert False
+except KeyError:
+    assert buggy.__name__ == "buggy"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def small_model(q, *, temperature=0.0):
+    return f&quot;small:{q}:{temperature}&quot;
+
+def cached_answer(q, **kwargs):
+    raise ConnectionError(&quot;cache offline&quot;)
+
+def canned(q, **kwargs):
+    return &quot;Please try again later.&quot;
+
+@with_fallbacks(small_model, canned)
+def big_model(q, *, temperature=0.0):
+    raise TimeoutError(&quot;30s&quot;)
+
+assert big_model(&quot;refund?&quot;, temperature=0.2) == &quot;small:refund?:0.2&quot; and big_model.last_source == &quot;small_model&quot;
+
+@with_fallbacks(cached_answer, canned)
+def primary(q):
+    raise ConnectionError(&quot;down&quot;)
+assert primary(&quot;x&quot;) == &quot;Please try again later.&quot; and primary.last_source == &quot;canned&quot;
+
+@with_fallbacks(cached_answer)
+def lonely(q):
+    raise TimeoutError(&quot;slow&quot;)
+try:
+    lonely(&quot;x&quot;)
+    assert False
+except ConnectionError as e:
+    assert str(e) == &quot;cache offline&quot; and e.__notes__ == [&quot;lonely: TimeoutError: slow&quot;]
+
+@with_fallbacks(canned)
+def buggy(q):
+    raise KeyError(&quot;bug&quot;)
+try:
+    buggy(&quot;x&quot;)
+    assert False
+except KeyError:
+    assert buggy.__name__ == &quot;buggy&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside the wrapper, loop over <code>(func, *fallbacks)</code>. Collect notes for each <code>on</code> failure; on success, set <code>wrapper.last_source = f.__name__</code> and return.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After the loop, add the collected notes (except the last failure's own) to the last exception and <code>raise</code> it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def with_fallbacks(*fallbacks, on=(TimeoutError, ConnectionError)):
+    def decorator(func):
+        chain = (func, *fallbacks)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            notes, last = [], None
+            for f in chain:
+                try:
+                    result = f(*args, **kwargs)
+                except on as e:
+                    if last is not None:
+                        notes.append(f&quot;{last[0]}: {type(last[1]).__name__}: {last[1]}&quot;)
+                    last = (f.__name__, e)
+                    continue
+                wrapper.last_source = f.__name__
+                return result
+            for note in notes:
+                last[1].add_note(note)
+            raise last[1]
+        wrapper.last_source = None
+        return wrapper
+    return decorator</code></pre></div><p>The primary and its fallbacks form one chain, tried in order with identical arguments, so fallbacks must accept the same call signature (<code>canned</code> takes <code>**kwargs</code> to ignore extras). Only the listed transient errors move on to the next option; a <code>KeyError</code> from a bug propagates from the first function that has it, as fallbacks must never hide bugs (7.3). When everything fails, the caller receives the <strong>last</strong> real exception, with each earlier failure recorded as a note, so the traceback tells the whole story without inventing a new exception type. <code>last_source</code> makes degradation visible to the caller and to metrics. This is the decorator form of the provider fallback in the 7.P client.</p></div></details>
+</article>
+<article class="prob" id="p-settings-captured-per-decoration" data-pid="m8-2-settings-captured-per-decoration" data-type="predict" data-level="hard" data-answer="[[5], [5, 4], [5, 4, 2]]
+[[5, 4, 2], [5, 4, 2], [5, 4, 2]]
+[5, 4] 10">
+<header class="prob-head"><h3>16. Settings captured per decoration</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def limit(n):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(xs):
+            return func(xs)[:n]
+        return wrapper
+    return decorator
+
+def top(xs):
+    return sorted(xs, reverse=True)
+
+tops = [limit(n)(top) for n in range(1, 4)]
+print([f([5, 1, 4, 2]) for f in tops])
+
+lambdas = [lambda xs: top(xs)[:n] for n in range(1, 4)]
+print([f([5, 1, 4, 2]) for f in lambdas])
+
+N = 2
+@limit(N)
+def best(xs):
+    return top(xs)
+N = 10
+print(best([5, 1, 4, 2]), N)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each call of <code>limit(n)</code> creates a new closure with its own <code>n</code>. The lambdas share the comprehension's single <code>n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[[5], [5, 4], [5, 4, 2]]
+[[5, 4, 2], [5, 4, 2], [5, 4, 2]]
+[5, 4] 10</pre></div><p>Every <code>limit(n)</code> call binds the current value of <code>n</code> as a parameter of a new function call, so each decorated function keeps its own limit: 1, 2 and 3 items. The lambdas instead all refer to the comprehension's variable <code>n</code>, looked up when they run, after it ended at 3: the late-binding trap of 6.1. The decorator factory avoids it for the same reason the <code>n=n</code> default trick does: the value is passed into a new scope at creation time. Likewise <code>@limit(N)</code> captured 2; changing <code>N</code> afterwards does nothing.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-explain-how-a-decorator-with-arguments-w" data-pid="m8-2-explain-how-a-decorator-with-arguments-w" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Explain how a decorator with arguments works, level by level.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It is a function that returns a decorator. <code>@retry(times=3)</code> is evaluated in two steps: first <code>retry(times=3)</code> is called (level one, the factory) and returns a decorator that has <code>times</code> in its closure; then that decorator is called with the function below (level two), and returns a wrapper that has both <code>times</code> and the function in its closure; the name is bound to that wrapper. At call time only level three, the wrapper, runs. So <code>@retry(times=3) def f</code> equals <code>f = retry(times=3)(f)</code>. The factory is the right place to validate settings (fail at import), the decorator level the place for per-function state (a cache, counters, an inspected signature), and the wrapper the place for per-call work. Making settings keyword-only prevents <code>@retry</code> without parentheses from silently passing the function as a setting.</p></div></details>
+</article>
+<article class="prob" id="p-does-the-order-of-stacked-decorators-mat" data-pid="m8-2-does-the-order-of-stacked-decorators-mat" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Does the order of stacked decorators matter? Give examples.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Yes. Decorators are applied bottom-up, so <code>@a @b def f</code> is <code>a(b(f))</code>, and at call time <code>a</code>'s wrapper runs first and sees everything <code>b</code> does. Examples: a timer outside a retry measures total latency including waits, inside it measures each attempt; a cache outside logging or rate limiting short-circuits them on hits, inside it does not; authorisation must sit outside a cache, or a cached result could be served to a user who is not allowed to see it; validation should sit outside retries, since retrying invalid input is pointless; a retry outside a rate limiter will retry rate-limit rejections, while inside it may hammer the limiter. Choosing the order is part of the design, and it is worth a comment when it matters.</p></div></details>
+</article>
+<article class="prob" id="p-you-are-asked-to-write-a-reusable-llm-ca" data-pid="m8-2-you-are-asked-to-write-a-reusable-llm-ca" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. You are asked to write a reusable <code>@llm_call(model=..., retries=..., timeout=...)</code> decorator for your team. What would you consider?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Settings: keyword-only arguments validated in the factory, so a bad model name or negative retry count fails at import; sensible defaults; and the ability to read some settings at call time (a feature flag, a per-request timeout) through callables or a config object rather than values frozen at import. Behaviour: retries only on transient errors with backoff, jitter and a deadline (7.4), the timeout passed to every attempt, and clear exceptions from one hierarchy. Correctness: <code>functools.wraps</code> for names and signatures, support for both sync and <code>async</code> functions (detect with <code>inspect.iscoroutinefunction</code> and return the matching wrapper), and streaming generators. Observability: one trace span per logical call with attempts, latency, tokens, model and errors, without logging secrets or raw personal data. Testability: injectable clock, sleep and transport, and access to the undecorated function through <code>__wrapped__</code>. Composition: document how it should be ordered with caching and rate limiting. Finally, consider whether an explicit client object with methods is clearer than a decorator for this much configuration; the decorator is best when it stays thin.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A decorator with arguments is a factory: <code>@retry(times=3)</code> calls <code>retry(times=3)</code>, which returns the decorator applied to the function.</li><li>Three levels, three jobs: validate settings in the factory, create per-function state in the decorator, do per-call work in the wrapper.</li><li>Settings are captured when the <code>@</code> line runs; pass a callable to read a value at call time. Never use a mutable default for shared state.</li><li>Optional parentheses need <code>func=None</code> plus keyword-only settings; supporting one form is often simpler.</li><li>Stacked decorators apply bottom-up and run top-down: order decides what a timer measures, what a cache skips and where checks happen.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

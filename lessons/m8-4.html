@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8.4 · Registration decorators</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m8-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 8 · Decorators</span></div>
+  <h1>8.4 Registration decorators</h1>
+  <p>Decorators that record a function instead of wrapping it: registries, plugin systems, routers and agent tool lists. How frameworks such as FastAPI and agent libraries read a function's signature and type hints with <code>inspect</code>, turn them into schemas, and dispatch calls by name or by type with <code>functools.singledispatch</code>. Applied to building tool schemas for an LLM and a small URL router.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="register">
+<h2><span class="n">1</span>Decorators that register</h2>
+<p>Not every decorator wraps. A <strong>registration decorator</strong> records the function somewhere and returns it <strong>unchanged</strong>. There is no wrapper, no extra cost per call and nothing that can break the function; the only effect is that, from the moment the module is imported, the function is listed in a <strong>registry</strong>: usually a dict from a name to the function. Later code looks functions up in the registry instead of importing them by name, which is how plugin systems, command-line tools, routers and agent tool lists work.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">registry.py</span><button class="copy">Copy</button></div><pre><code class="py">TOOLS = {}
+
+def tool(func):
+    if func.__name__ in TOOLS:
+        raise ValueError(f&quot;duplicate tool {func.__name__!r}&quot;)
+    TOOLS[func.__name__] = func
+    return func                        # unchanged: registration only
+
+@tool
+def search(query):
+    return [f&quot;doc about {query}&quot;]
+
+@tool
+def get_weather(city):
+    return f&quot;sunny in {city}&quot;
+
+print(list(TOOLS))
+print(TOOLS[&quot;search&quot;](&quot;refunds&quot;), TOOLS[&quot;search&quot;] is search)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;search&#x27;, &#x27;get_weather&#x27;]
+[&#x27;doc about refunds&#x27;] True</pre></div></div>
+<p>Registration happens at <strong>definition time</strong> (8.1): the registry is complete as soon as the module has been imported, before any function is called. That has two consequences. A function in a module that is <strong>never imported</strong> is never registered, which is why frameworks either import your modules for you (scanning a package) or ask you to import them in one place. And registration is a side effect of importing, so a registry should detect duplicates (two tools named <code>search</code> would otherwise overwrite each other silently) and tests should use a fresh registry rather than a global one.</p>
+<p>Often the registered name differs from the function name, or the registration needs metadata (a description, a URL, an HTTP method). Then the registration decorator becomes a factory (8.2): <code>@tool(name="web_search", description="...")</code>. Frameworks put that factory on an object that owns the registry, which is what <code>app</code> is in <code>@app.get("/users/{id}")</code>: the method <code>get</code> is a decorator factory, and <code>app</code> holds the routing table it fills. (Module 9 shows how such objects are built; a closure over a dict does the same job, as below.)</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">registry_factory.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_registry():
+    entries = {}
+
+    def register(name=None, **meta):
+        def decorator(func):
+            key = name or func.__name__
+            if key in entries:
+                raise ValueError(f&quot;{key!r} is already registered&quot;)
+            entries[key] = {&quot;func&quot;: func, **meta}
+            return func
+        return decorator
+
+    return entries, register
+
+commands, command = make_registry()
+
+@command(help=&quot;Rebuild the vector index&quot;)
+def reindex():
+    return &quot;reindexed&quot;
+
+@command(name=&quot;eval&quot;, help=&quot;Run the evaluation suite&quot;)
+def run_eval():
+    return &quot;evaluated&quot;
+
+for key, entry in commands.items():
+    print(key, &quot;-&quot;, entry[&quot;help&quot;], &quot;-&gt;&quot;, entry[&quot;func&quot;]())</code></pre><div class="out"><span class="ol">Output</span><pre>reindex - Rebuild the vector index -&gt; reindexed
+eval - Run the evaluation suite -&gt; evaluated</pre></div></div>
+</section>
+<section class="sec" id="signature">
+<h2><span class="n">2</span>Reading a function: <code>inspect.signature</code></h2>
+<p>Once functions are registered, frameworks want to know <strong>how to call them</strong>. <code>inspect.signature(func)</code> returns a <code>Signature</code> object whose <code>parameters</code> maps each parameter name to a <code>Parameter</code> with a <strong>kind</strong>, a <strong>default</strong> and an <strong>annotation</strong>. The kind says how the parameter can be passed: <code>POSITIONAL_OR_KEYWORD</code> (an ordinary parameter), <code>KEYWORD_ONLY</code> (after <code>*</code>), <code>VAR_POSITIONAL</code> (<code>*args</code>), <code>VAR_KEYWORD</code> (<code>**kwargs</code>) and <code>POSITIONAL_ONLY</code> (before <code>/</code>). A missing default or annotation is <code>inspect.Parameter.empty</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">signature.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+def search(query: str, k: int = 5, *, filters: dict | None = None, **extra) -&gt; list:
+    &quot;&quot;&quot;Search the knowledge base.&quot;&quot;&quot;
+    return []
+
+sig = inspect.signature(search)
+for name, p in sig.parameters.items():
+    if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+        default = &quot;-&quot;
+    else:
+        default = &quot;required&quot; if p.default is p.empty else repr(p.default)
+    annotation = &quot;-&quot; if p.annotation is p.empty else p.annotation
+    print(f&quot;{name:8} {p.kind.name:22} {default:9} {annotation}&quot;)
+print(sig.return_annotation, &quot;|&quot;, inspect.getdoc(search))</code></pre><div class="out"><span class="ol">Output</span><pre>query    POSITIONAL_OR_KEYWORD  required  &lt;class &#x27;str&#x27;&gt;
+k        POSITIONAL_OR_KEYWORD  5         &lt;class &#x27;int&#x27;&gt;
+filters  KEYWORD_ONLY           None      dict | None
+extra    VAR_KEYWORD            -         -
+&lt;class &#x27;list&#x27;&gt; | Search the knowledge base.</pre></div></div>
+<p>Three tools on top of this are worth knowing. <code>sig.bind(*args, **kwargs)</code> checks a call against the signature without calling the function and maps every value to its parameter (used in 7.3 and 8.2). <code>inspect.getdoc(func)</code> returns the docstring with indentation cleaned up. And <code>typing.get_type_hints(func)</code> returns the annotations as real types: when a module starts with <code>from __future__ import annotations</code>, or an annotation is written as a string, <code>p.annotation</code> is just the <strong>text</strong> <code>"int"</code>, and <code>get_type_hints</code> evaluates it into the type <code>int</code> (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">type_hints.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, typing
+
+def count(text: &quot;str&quot;, top: &quot;int&quot; = 3) -&gt; &quot;list[str]&quot;:
+    return text.split()[:top]
+
+print([p.annotation for p in inspect.signature(count).parameters.values()])
+hints = typing.get_type_hints(count)
+print(hints, hints[&quot;return&quot;] == list[str])
+print(typing.get_origin(list[str]), typing.get_args(list[str]), typing.get_args(int | None))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;str&#x27;, &#x27;int&#x27;]
+{&#x27;text&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;top&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: list[str]} True
+&lt;class &#x27;list&#x27;&gt; (&lt;class &#x27;str&#x27;&gt;,) (&lt;class &#x27;int&#x27;&gt;, &lt;class &#x27;NoneType&#x27;&gt;)</pre></div></div>
+<p><code>typing.get_origin</code> and <code>typing.get_args</code> take generic types apart: <code>list[str]</code> has origin <code>list</code> and argument <code>str</code>, and <code>int | None</code> has the arguments <code>int</code> and <code>NoneType</code>. Module 11 explains these types in full; for reading signatures, these two functions are all you need.</p>
+</section>
+<section class="sec" id="schemas">
+<h2><span class="n">3</span>From a function to a tool schema</h2>
+<p>LLM tool calling (function calling) works by sending the model a <strong>schema</strong> for each tool: its name, a description, and a JSON Schema for its parameters. The model then replies with a tool name and JSON arguments, and your code calls the function. Writing those schemas by hand duplicates information the function already contains, so agent libraries generate them from the function: the name from <code>__name__</code>, the description from the docstring, the parameter types from the type hints, and the <code>required</code> list from the parameters without defaults. That is what <code>@tool</code> in LangChain, <code>@function_tool</code> in the OpenAI Agents SDK and similar decorators do.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tool_schema.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, typing
+
+JSON_TYPES = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+def schema_for(func):
+    hints = typing.get_type_hints(func)
+    props, required = {}, []
+    for name, p in inspect.signature(func).parameters.items():
+        props[name] = {&quot;type&quot;: JSON_TYPES[hints[name]]}
+        if p.default is p.empty:
+            required.append(name)
+    doc = inspect.getdoc(func) or &quot;&quot;
+    return {&quot;name&quot;: func.__name__, &quot;description&quot;: doc.split(&quot;\n&quot;)[0],
+            &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: props, &quot;required&quot;: required}}
+
+def get_order(order_id: int, include_items: bool = False) -&gt; dict:
+    &quot;&quot;&quot;Look up an order by its id.
+
+    Returns status and, optionally, the items.
+    &quot;&quot;&quot;
+    return {}
+
+import json
+print(json.dumps(schema_for(get_order), indent=1))</code></pre><div class="out"><span class="ol">Output</span><pre>{
+ &quot;name&quot;: &quot;get_order&quot;,
+ &quot;description&quot;: &quot;Look up an order by its id.&quot;,
+ &quot;parameters&quot;: {
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;properties&quot;: {
+   &quot;order_id&quot;: {
+    &quot;type&quot;: &quot;integer&quot;
+   },
+   &quot;include_items&quot;: {
+    &quot;type&quot;: &quot;boolean&quot;
+   }
+  },
+  &quot;required&quot;: [
+   &quot;order_id&quot;
+  ]
+ }
+}</pre></div></div>
+<p>Two lessons follow from this. The docstring and type hints of a tool are <strong>part of the prompt</strong>: the model only knows what the schema says, so a vague first line or a missing type makes it call the tool wrongly. And the schema is generated at import time from the code, so it cannot drift away from the function, which is the main argument for generating rather than hand-writing it (problem 5). Real implementations also handle <code>list[...]</code>, optional types, enums (<code>Literal</code>, 11.2) and descriptions per parameter, often by building a Pydantic model from the signature (11.4).</p>
+</section>
+<section class="sec" id="dispatch">
+<h2><span class="n">4</span>Dispatching calls</h2>
+<p>A registry is useful because of <strong>dispatch</strong>: given a name (from a tool call, a URL, a command line), look up the function and call it with the arguments. Dispatch code is a boundary in the sense of 7.3: names and arguments come from outside (a user, a model), so unknown names and bad arguments are expected, and should produce clear errors, not tracebacks. A dict lookup also replaces long <code>if</code>/<code>elif</code> chains that compare a command against every known name in turn (problem 8).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dispatch.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+TOOLS = {}
+
+def tool(func):
+    TOOLS[func.__name__] = func
+    return func
+
+@tool
+def add(a: int, b: int) -&gt; int:
+    return a + b
+
+def dispatch(name, args):
+    func = TOOLS.get(name)
+    if func is None:
+        return {&quot;error&quot;: f&quot;unknown tool {name!r}; available: {sorted(TOOLS)}&quot;}
+    try:
+        inspect.signature(func).bind(**args)
+    except TypeError as e:
+        return {&quot;error&quot;: f&quot;bad arguments for {name}: {e}&quot;}
+    return {&quot;result&quot;: func(**args)}
+
+print(dispatch(&quot;add&quot;, {&quot;a&quot;: 2, &quot;b&quot;: 3}))
+print(dispatch(&quot;mul&quot;, {&quot;a&quot;: 2}))
+print(dispatch(&quot;add&quot;, {&quot;a&quot;: 2, &quot;c&quot;: 3}))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;result&#x27;: 5}
+{&#x27;error&#x27;: &quot;unknown tool &#x27;mul&#x27;; available: [&#x27;add&#x27;]&quot;}
+{&#x27;error&#x27;: &quot;bad arguments for add: missing a required argument: &#x27;b&#x27;&quot;}</pre></div></div>
+<p>The standard library has a different kind of dispatch built on registration: <strong><code>functools.singledispatch</code></strong> picks an implementation by the <strong>type of the first argument</strong>. You decorate a default function, then register specialised versions with <code>@func.register</code>; at call time it finds the most specific registered type in the argument's class hierarchy. It replaces chains of <code>isinstance</code> checks, and other modules can add support for their own types without editing the original function.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">singledispatch.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+@functools.singledispatch
+def to_text(value):
+    return str(value)
+
+@to_text.register
+def _(value: float):
+    return f&quot;{value:.2f}&quot;
+
+@to_text.register
+def _(value: list):
+    return &quot;, &quot;.join(to_text(v) for v in value)
+
+@to_text.register
+def _(value: dict):
+    return &quot;; &quot;.join(f&quot;{k}={to_text(v)}&quot; for k, v in value.items())
+
+print(to_text({&quot;score&quot;: 0.91234, &quot;tags&quot;: [&quot;eu&quot;, 3, 1.5], &quot;ok&quot;: True}))
+print(sorted(t.__name__ for t in to_text.registry))</code></pre><div class="out"><span class="ol">Output</span><pre>score=0.91; tags=eu, 3, 1.50; ok=True
+[&#x27;dict&#x27;, &#x27;float&#x27;, &#x27;list&#x27;, &#x27;object&#x27;]</pre></div></div>
+<p>The registered type comes from the annotation of the first parameter (or from <code>@to_text.register(float)</code>). Dispatch follows inheritance: <code>bool</code> is a subclass of <code>int</code> (1.2), so with an <code>int</code> handler registered and no <code>bool</code> handler, <code>True</code> would use the <code>int</code> one (problem 12). The function called <code>_</code> is a convention for "the name does not matter", because the implementations are reached through the registry, never by name.</p>
+</section>
+<section class="sec" id="pitfalls">
+<h2><span class="n">5</span>Registration pitfalls</h2>
+<p>Four problems come up with registries in real projects.</p>
+<ul><li><strong>Nothing registered.</strong> The decorated functions live in a module that nobody imports, so the registry is empty. Import all plugin modules from one place (an <code>__init__.py</code> or a <code>load_plugins()</code> function, 15.1), or use package entry points.</li><li><strong>Registering the wrong object.</strong> With stacked decorators, a registration decorator records whatever it receives. Placed <strong>below</strong> a wrapping decorator such as <code>@timed</code>, it registers the undecorated function, so calls through the registry skip the timing. Put registration <strong>outermost</strong> so it records the final, fully decorated function (problem 6).</li><li><strong>Silent overwrites.</strong> Two functions registered under one name: the second replaces the first, and calls quietly go to the wrong place. Raise on duplicates, or log a warning, deliberately.</li><li><strong>Registering at call time.</strong> If the registration line is inside the wrapper instead of the decorator body, nothing is registered until the first call, which is too late for a router or a tool list (problem 14).</li></ul>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">register_order.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+REGISTRY = {}
+CALLS = []
+
+def register(func):
+    REGISTRY[func.__name__] = func
+    return func
+
+def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        CALLS.append(func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+@timed
+@register              # registers the plain function: the registry bypasses @timed
+def wrong():
+    return &quot;w&quot;
+
+@register              # registers the timed wrapper
+@timed
+def right():
+    return &quot;r&quot;
+
+REGISTRY[&quot;wrong&quot;](); REGISTRY[&quot;right&quot;]()
+print(CALLS, REGISTRY[&quot;right&quot;] is right, REGISTRY[&quot;wrong&quot;] is wrong)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;right&#x27;] True False</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-a-registry-fills-at-import-time" data-pid="m8-4-a-registry-fills-at-import-time" data-type="predict" data-level="easy" data-answer="registering send_welcome for signup
+registering audit for login
+registering audit for signup
+{&#x27;signup&#x27;: [&#x27;send_welcome&#x27;, &#x27;audit&#x27;], &#x27;login&#x27;: [&#x27;audit&#x27;]}
+[&#x27;welcome ana&#x27;, &#x27;audit ana&#x27;] audit bo">
+<header class="prob-head"><h3>1. A registry fills at import time</h3></header>
+<div class="code"><pre><code class="py">HANDLERS = {}
+
+def handles(event):
+    def decorator(func):
+        print(&quot;registering&quot;, func.__name__, &quot;for&quot;, event)
+        HANDLERS.setdefault(event, []).append(func)
+        return func
+    return decorator
+
+@handles(&quot;signup&quot;)
+def send_welcome(user):
+    return f&quot;welcome {user}&quot;
+
+@handles(&quot;signup&quot;)
+@handles(&quot;login&quot;)
+def audit(user):
+    return f&quot;audit {user}&quot;
+
+print({k: [f.__name__ for f in v] for k, v in HANDLERS.items()})
+print([f(&quot;ana&quot;) for f in HANDLERS[&quot;signup&quot;]], audit(&quot;bo&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each decorator runs once when its <code>def</code> executes; stacked ones run bottom-up and both receive the same function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>registering send_welcome for signup
+registering audit for login
+registering audit for signup
+{&#x27;signup&#x27;: [&#x27;send_welcome&#x27;, &#x27;audit&#x27;], &#x27;login&#x27;: [&#x27;audit&#x27;]}
+[&#x27;welcome ana&#x27;, &#x27;audit ana&#x27;] audit bo</pre></div><p>The registrations print while the module is being defined, before any handler runs. <code>audit</code> is registered twice: first for <code>"login"</code> (the lower decorator), then for <code>"signup"</code>, and since <code>handles</code> returns the function unchanged, both entries hold the same object and <code>audit</code> is still callable normally. Lists keep registration order, so <code>send_welcome</code> comes first for <code>"signup"</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-registry-with-names-and-duplicate-chec" data-pid="m8-4-a-registry-with-names-and-duplicate-chec" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. A registry with names and duplicate checks</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>register(name=None)</code> that stores the function in the global dict <code>PROMPTS</code> under <code>name</code> (or the function's own name), raises <code>ValueError</code> if that key is already taken, and returns the function unchanged.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">PROMPTS = {}
+
+def register(name=None):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@register()
+def summarise(text):
+    return f"Summarise: {text}"
+
+@register(name="qa")
+def question_answer(context, question):
+    return f"{context}\nQ: {question}"
+
+assert sorted(PROMPTS) == ["qa", "summarise"]
+assert PROMPTS["qa"] is question_answer and summarise("x") == "Summarise: x"
+try:
+    @register(name="summarise")
+    def other(text):
+        return text
+    assert False
+except ValueError as e:
+    assert "summarise" in str(e)
+assert PROMPTS["summarise"] is summarise</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@register()
+def summarise(text):
+    return f&quot;Summarise: {text}&quot;
+
+@register(name=&quot;qa&quot;)
+def question_answer(context, question):
+    return f&quot;{context}\nQ: {question}&quot;
+
+assert sorted(PROMPTS) == [&quot;qa&quot;, &quot;summarise&quot;]
+assert PROMPTS[&quot;qa&quot;] is question_answer and summarise(&quot;x&quot;) == &quot;Summarise: x&quot;
+try:
+    @register(name=&quot;summarise&quot;)
+    def other(text):
+        return text
+    assert False
+except ValueError as e:
+    assert &quot;summarise&quot; in str(e)
+assert PROMPTS[&quot;summarise&quot;] is summarise</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The factory returns a <code>decorator(func)</code> that computes <code>key = name or func.__name__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">PROMPTS = {}
+
+def register(name=None):
+    def decorator(func):
+        key = name or func.__name__
+        if key in PROMPTS:
+            raise ValueError(f&quot;prompt {key!r} is already registered&quot;)
+        PROMPTS[key] = func
+        return func
+    return decorator</code></pre></div><p>Returning <code>func</code> unchanged means the decorated function behaves exactly as before and is still importable by its own name, while the registry offers lookup by a stable key. The duplicate check fails at import time, which is when a copy-pasted <code>@register(name="summarise")</code> would otherwise silently replace the real one. A prompt registry like this lets an application select prompt templates by name from configuration, and makes it easy to list every prompt for review or evaluation.</p></div></details>
+</article>
+<article class="prob" id="p-a-registration-decorator-that-loses-the-" data-pid="m8-4-a-registration-decorator-that-loses-the-" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A registration decorator that loses the function</h3></header>
+<div class="prob-q"><p>After decoration, <code>clean_text</code> is <code>None</code>, although the registry holds it. Fix the decorator.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">STEPS = []
+
+def step(func):
+    STEPS.append(func)
+
+@step
+def clean_text(s):
+    return &quot; &quot;.join(s.split())
+
+@step
+def lowercase(s):
+    return s.lower()
+</textarea>
+<script type="text/plain" class="prob-tests">assert clean_text("  Hello   World ") == "Hello World"
+assert [f.__name__ for f in STEPS] == ["clean_text", "lowercase"]
+out = "  Refund   POLICY "
+for f in STEPS:
+    out = f(out)
+assert out == "refund policy"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert clean_text(&quot;  Hello   World &quot;) == &quot;Hello World&quot;
+assert [f.__name__ for f in STEPS] == [&quot;clean_text&quot;, &quot;lowercase&quot;]
+out = &quot;  Refund   POLICY &quot;
+for f in STEPS:
+    out = f(out)
+assert out == &quot;refund policy&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Whatever the decorator returns is bound to the name (8.1).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">STEPS = []
+
+def step(func):
+    STEPS.append(func)
+    return func
+
+@step
+def clean_text(s):
+    return &quot; &quot;.join(s.split())
+
+@step
+def lowercase(s):
+    return s.lower()</code></pre></div><p>Without a <code>return</code>, the decorator returns <code>None</code>, and <code>@step</code> binds the name to that. The registry still worked, which hides the problem until someone calls the function directly. A registration decorator must return the function it received. The registry here is an ordered pipeline: steps run in the order they were defined in the file, a simple way to build preprocessing chains.</p></div></details>
+</article>
+<article class="prob" id="p-what-a-signature-tells-you" data-pid="m8-4-what-a-signature-tells-you" data-type="predict" data-level="easy" data-answer="texts POSITIONAL_ONLY True True
+model POSITIONAL_OR_KEYWORD False True
+batch_size KEYWORD_ONLY False False
+normalize KEYWORD_ONLY False True
+options VAR_KEYWORD True True
+{&#x27;texts&#x27;: [&#x27;a&#x27;], &#x27;batch_size&#x27;: 8}">
+<header class="prob-head"><h3>4. What a signature tells you</h3></header>
+<div class="code"><pre><code class="py">import inspect
+
+def embed(texts, /, model=&quot;small&quot;, *, batch_size: int = 64, normalize=True, **options) -&gt; list:
+    return []
+
+for name, p in inspect.signature(embed).parameters.items():
+    print(name, p.kind.name, p.default is p.empty, p.annotation is p.empty)
+print(inspect.signature(embed).bind([&quot;a&quot;], batch_size=8).arguments)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Before <code>/</code> is positional-only; after <code>*</code>, keyword-only. <code>bind</code> maps only the arguments actually given.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>texts POSITIONAL_ONLY True True
+model POSITIONAL_OR_KEYWORD False True
+batch_size KEYWORD_ONLY False False
+normalize KEYWORD_ONLY False True
+options VAR_KEYWORD True True
+{&#x27;texts&#x27;: [&#x27;a&#x27;], &#x27;batch_size&#x27;: 8}</pre></div><p><code>texts</code> is positional-only (before <code>/</code>), required and unannotated. <code>model</code> is an ordinary parameter with a default. <code>batch_size</code> and <code>normalize</code> are keyword-only (after <code>*</code>), with defaults; only <code>batch_size</code> has an annotation. <code>**options</code> is <code>VAR_KEYWORD</code>. <code>bind</code> returns only the arguments that were passed, mapped to their parameter names; <code>apply_defaults()</code> would add the rest.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-generate-a-tool-schema" data-pid="m8-4-generate-a-tool-schema" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Generate a tool schema</h3></header>
+<div class="prob-q"><p>Write <code>tool_schema(func)</code> returning <code>{"name": ..., "description": ..., "parameters": {"type": "object", "properties": {...}, "required": [...]}}</code>. The description is the first line of the docstring (empty string if none). Map <code>str</code>, <code>int</code>, <code>float</code> and <code>bool</code> to <code>"string"</code>, <code>"integer"</code>, <code>"number"</code> and <code>"boolean"</code>, and <code>list[X]</code> to <code>{"type": "array", "items": {"type": ...}}</code>. Parameters without a default are required. Raise <code>TypeError</code> naming the parameter if one has no annotation or an unsupported type. Use <code>typing.get_type_hints</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import inspect, typing
+
+def tool_schema(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def search_docs(query: str, k: int = 5, tags: list[str] = (), min_score: float = 0.0) -> list:
+    """Search the help-centre articles.
+
+    Longer explanation that the model does not need.
+    """
+    return []
+
+s = tool_schema(search_docs)
+assert s == {
+    "name": "search_docs",
+    "description": "Search the help-centre articles.",
+    "parameters": {"type": "object", "required": ["query"], "properties": {
+        "query": {"type": "string"}, "k": {"type": "integer"},
+        "tags": {"type": "array", "items": {"type": "string"}}, "min_score": {"type": "number"}}},
+}
+
+def flag(enabled: bool):
+    return enabled
+assert tool_schema(flag)["parameters"]["properties"] == {"enabled": {"type": "boolean"}} and tool_schema(flag)["description"] == ""
+
+def untyped(x, y: int):
+    return x
+try:
+    tool_schema(untyped)
+    assert False
+except TypeError as e:
+    assert "'x'" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def search_docs(query: str, k: int = 5, tags: list[str] = (), min_score: float = 0.0) -&gt; list:
+    &quot;&quot;&quot;Search the help-centre articles.
+
+    Longer explanation that the model does not need.
+    &quot;&quot;&quot;
+    return []
+
+s = tool_schema(search_docs)
+assert s == {
+    &quot;name&quot;: &quot;search_docs&quot;,
+    &quot;description&quot;: &quot;Search the help-centre articles.&quot;,
+    &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;required&quot;: [&quot;query&quot;], &quot;properties&quot;: {
+        &quot;query&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;k&quot;: {&quot;type&quot;: &quot;integer&quot;},
+        &quot;tags&quot;: {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}}, &quot;min_score&quot;: {&quot;type&quot;: &quot;number&quot;}}},
+}
+
+def flag(enabled: bool):
+    return enabled
+assert tool_schema(flag)[&quot;parameters&quot;][&quot;properties&quot;] == {&quot;enabled&quot;: {&quot;type&quot;: &quot;boolean&quot;}} and tool_schema(flag)[&quot;description&quot;] == &quot;&quot;
+
+def untyped(x, y: int):
+    return x
+try:
+    tool_schema(untyped)
+    assert False
+except TypeError as e:
+    assert &quot;&#x27;x&#x27;&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hints = typing.get_type_hints(func)</code>; a parameter without an annotation is missing from <code>hints</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For lists: <code>typing.get_origin(t) is list</code>, then <code>typing.get_args(t)[0]</code> is the item type.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, typing
+
+SIMPLE = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def _json_type(t, name):
+    if t in SIMPLE:
+        return {&quot;type&quot;: SIMPLE[t]}
+    if typing.get_origin(t) is list:
+        (item,) = typing.get_args(t)
+        return {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: _json_type(item, name)}
+    raise TypeError(f&quot;parameter {name!r}: unsupported type {t!r}&quot;)
+
+
+def tool_schema(func):
+    hints = typing.get_type_hints(func)
+    properties, required = {}, []
+    for name, p in inspect.signature(func).parameters.items():
+        if name not in hints:
+            raise TypeError(f&quot;parameter {name!r} of {func.__name__} has no type annotation&quot;)
+        properties[name] = _json_type(hints[name], name)
+        if p.default is p.empty:
+            required.append(name)
+    doc = inspect.getdoc(func) or &quot;&quot;
+    return {
+        &quot;name&quot;: func.__name__,
+        &quot;description&quot;: doc.splitlines()[0] if doc else &quot;&quot;,
+        &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: properties, &quot;required&quot;: required},
+    }</code></pre></div><p>Everything the model needs is already in the function: the name, the purpose (first docstring line), the parameters and their types, and which ones are required. Generating the schema keeps it in sync with the code forever. Refusing unannotated or unsupported parameters is deliberate: a schema that silently omits a parameter or guesses its type makes the model call the tool wrongly, which shows up as confusing agent failures. The recursive <code>_json_type</code> handles nested lists for free. Note the check order matters for <code>bool</code>: dict lookup by type is exact, so <code>bool</code> maps to <code>"boolean"</code> rather than being treated as an <code>int</code>. Real libraries add per-parameter descriptions (parsed from the docstring or from <code>Annotated</code> metadata), enums and optional types.</p></div></details>
+</article>
+<article class="prob" id="p-the-registry-bypasses-the-timing" data-pid="m8-4-the-registry-bypasses-the-timing" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. The registry bypasses the timing</h3></header>
+<div class="prob-q"><p>Agent tools are called through <code>TOOLS</code>, and every call must be counted by <code>@counted</code>. Calls through the registry are not counted. Fix it by changing only the decorator order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import functools
+
+TOOLS = {}
+COUNTS = {}
+
+def tool(func):
+    TOOLS[func.__name__] = func
+    return func
+
+def counted(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        COUNTS[func.__name__] = COUNTS.get(func.__name__, 0) + 1
+        return func(*args, **kwargs)
+    return wrapper
+
+@counted
+@tool
+def search(query):
+    return [query]
+
+@counted
+@tool
+def fetch(doc_id):
+    return {&quot;id&quot;: doc_id}
+</textarea>
+<script type="text/plain" class="prob-tests">TOOLS["search"]("refund"); TOOLS["search"]("reset"); TOOLS["fetch"](7)
+assert COUNTS == {"search": 2, "fetch": 1}
+assert TOOLS["search"] is search and search.__name__ == "search"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">TOOLS[&quot;search&quot;](&quot;refund&quot;); TOOLS[&quot;search&quot;](&quot;reset&quot;); TOOLS[&quot;fetch&quot;](7)
+assert COUNTS == {&quot;search&quot;: 2, &quot;fetch&quot;: 1}
+assert TOOLS[&quot;search&quot;] is search and search.__name__ == &quot;search&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The bottom decorator runs first. Which object should the registry hold: the plain function or the counted wrapper?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+TOOLS = {}
+COUNTS = {}
+
+def tool(func):
+    TOOLS[func.__name__] = func
+    return func
+
+def counted(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        COUNTS[func.__name__] = COUNTS.get(func.__name__, 0) + 1
+        return func(*args, **kwargs)
+    return wrapper
+
+@tool
+@counted
+def search(query):
+    return [query]
+
+@tool
+@counted
+def fetch(doc_id):
+    return {&quot;id&quot;: doc_id}</code></pre></div><p>Decorators apply bottom-up, so with <code>@tool</code> at the bottom it received the plain function and registered that; <code>@counted</code> then wrapped it for the module-level name only. Calls through <code>TOOLS</code> went straight to the unwrapped function. With <code>@tool</code> on top, it registers the counted wrapper, so every route to the function goes through the counter, and the registry entry and the module name are the same object. <code>wraps</code> keeps <code>__name__</code> as <code>search</code>, which is why the registry key is still right. The rule: registration goes outermost.</p></div></details>
+</article>
+<article class="prob" id="p-format-values-by-type" data-pid="m8-4-format-values-by-type" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Format values by type</h3></header>
+<div class="prob-q"><p>Write a <code>functools.singledispatch</code> function <code>render(value)</code> for building prompt context: the default returns <code>str(value)</code>; <code>float</code> gives 3 decimals; <code>bool</code> gives <code>"yes"</code>/<code>"no"</code>; <code>None</code> gives <code>"n/a"</code>; <code>list</code> and <code>tuple</code> give items rendered and joined with <code>", "</code>; <code>dict</code> gives <code>"key: value"</code> lines joined with newlines, values rendered recursively.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools
+
+@functools.singledispatch
+def render(value):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert render(0.91234) == "0.912" and render(3) == "3" and render(True) == "yes" and render(None) == "n/a"
+assert render([1, 2.5, False]) == "1, 2.500, no" and render(("a", None)) == "a, n/a"
+assert render({"score": 0.5, "tags": ["eu", "vip"], "active": True}) == "score: 0.500\ntags: eu, vip\nactive: yes"
+assert render("text") == "text"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert render(0.91234) == &quot;0.912&quot; and render(3) == &quot;3&quot; and render(True) == &quot;yes&quot; and render(None) == &quot;n/a&quot;
+assert render([1, 2.5, False]) == &quot;1, 2.500, no&quot; and render((&quot;a&quot;, None)) == &quot;a, n/a&quot;
+assert render({&quot;score&quot;: 0.5, &quot;tags&quot;: [&quot;eu&quot;, &quot;vip&quot;], &quot;active&quot;: True}) == &quot;score: 0.500\ntags: eu, vip\nactive: yes&quot;
+assert render(&quot;text&quot;) == &quot;text&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Register implementations with <code>@render.register</code> and a type annotation on the first parameter. For <code>None</code>, register <code>type(None)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Register <code>bool</code> separately: otherwise <code>True</code> would match the default (or an <code>int</code> handler, if you had one).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+@functools.singledispatch
+def render(value):
+    return str(value)
+
+@render.register
+def _(value: float):
+    return f&quot;{value:.3f}&quot;
+
+@render.register
+def _(value: bool):
+    return &quot;yes&quot; if value else &quot;no&quot;
+
+@render.register(type(None))
+def _(value):
+    return &quot;n/a&quot;
+
+@render.register(list)
+@render.register(tuple)
+def _(value):
+    return &quot;, &quot;.join(render(v) for v in value)
+
+@render.register
+def _(value: dict):
+    return &quot;\n&quot;.join(f&quot;{k}: {render(v)}&quot; for k, v in value.items())</code></pre></div><p>Each type gets a small function, and <code>render</code> picks one by the type of its argument, so adding a new type later (a <code>datetime</code>, a NumPy array) is one more registration, possibly in another module, with no change to existing code. <code>None</code> has to be registered through its type, <code>type(None)</code>, since <code>None</code> itself is not a type. Stacking two <code>register</code> calls attaches one implementation to both <code>list</code> and <code>tuple</code>; <code>register(cls)</code> returns the function unchanged, which is what makes stacking possible. Recursion through <code>render</code> handles nested structures, each item dispatched by its own type.</p></div></details>
+</article>
+<article class="prob" id="p-a-command-table-or-an-if-chain" data-pid="m8-4-a-command-table-or-an-if-chain" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. A command table or an if-chain</h3></header>
+<div class="prob-q"><p>Both route 200,000 commands drawn from 30 names to handlers. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">names = [f&quot;cmd{i}&quot; for i in range(30)]
+def handler(i):
+    return lambda: i
+table = {n: handler(i) for i, n in enumerate(names)}
+code = &quot;def route(cmd):\n&quot; + &quot;&quot;.join(f&quot;    {&#x27;if&#x27; if i == 0 else &#x27;elif&#x27;} cmd == {n!r}:\n        return {i}\n&quot; for i, n in enumerate(names))
+ns = {}
+exec(code, ns)
+route = ns[&quot;route&quot;]
+commands = [names[i % 30] for i in range(200_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = [route(c) for c in commands]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = [table[c]() for c in commands]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many comparisons does the chain make for <code>cmd29</code>? And the dict?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>81.50 ms</td></tr><tr><td>B</td><td>29.76 ms</td></tr></table></div><p>The <code>if</code>/<code>elif</code> chain compares the command with each name in turn until one matches: on average 15 string comparisons, 30 for the last name. The dict computes one hash and usually one comparison, whatever the number of commands (4.5). Beyond speed, the table is open for extension: registering a new command does not touch the routing code, and the list of commands is data you can print, document or validate.</p></div></details>
+</article>
+<article class="prob" id="p-registering-and-dispatching" data-pid="m8-4-registering-and-dispatching" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Registering and dispatching</h3></header>
+<div class="prob-q"><p>Fill in <code>routes</code> and <code>result</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">ROUTES = {}
+
+def route(path):
+    def decorator(func):
+        ROUTES[path] = func.__name__
+        return func
+    return decorator
+
+routes, result = sorted(ROUTES), None
+
+@route(&quot;/health&quot;)
+def health():
+    return &quot;ok&quot;
+
+@route(&quot;/docs&quot;)
+@route(&quot;/documents&quot;)
+def docs():
+    return [&quot;a&quot;, &quot;b&quot;]
+
+routes, result = sorted(ROUTES), None
+routes, result = sorted(ROUTES), globals()[ROUTES[&quot;/documents&quot;]]()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>routes</code></th><th><code>result</code></th></tr><tr><td>before any route</td><td><input class="cell" data-a="[]" data-s="[]" aria-label="routes at before any route" autocomplete="off"></td><td><input class="cell" data-a="None" data-s="None" aria-label="result at before any route" autocomplete="off"></td></tr><tr><td>after definitions</td><td><input class="cell" data-a="[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]" data-s="[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]" aria-label="routes at after definitions" autocomplete="off"></td><td><input class="cell" data-a="None" data-s="None" aria-label="result at after definitions" autocomplete="off"></td></tr><tr><td>dispatch /documents</td><td><input class="cell" data-a="[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]" data-s="[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]" aria-label="routes at dispatch /documents" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;]" aria-label="result at dispatch /documents" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two stacked route decorators register the same function under two paths.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>routes</code></th><th><code>result</code></th></tr><tr><td>before any route</td><td><code>[]</code></td><td><code>None</code></td></tr><tr><td>after definitions</td><td><code>[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]</code></td><td><code>None</code></td></tr><tr><td>dispatch /documents</td><td><code>[&#x27;/docs&#x27;, &#x27;/documents&#x27;, &#x27;/health&#x27;]</code></td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;]</code></td></tr></table></div><p>Nothing is registered until the <code>def</code> statements run. Afterwards three paths exist, two pointing at <code>docs</code>; sorting makes the order predictable. Dispatching looks up the function name for the path and calls the function. Real routers store the function object itself rather than its name, but the mechanism is the same.</p></div></details>
+</article>
+<article class="prob" id="p-annotations-that-are-strings" data-pid="m8-4-annotations-that-are-strings" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Annotations that are strings</h3></header>
+<div class="prob-q"><p>The tools this registry reads come from modules that use <code>from __future__ import annotations</code> (common in modern code), so their annotations are stored as <strong>strings</strong>: <code>p.annotation</code> is <code>"int"</code>, not the type <code>int</code>, and <code>param_types</code> maps every parameter to <code>"unknown"</code>. (The tests write the annotations as strings directly, which has the same effect.) Fix it so the real types are used.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from __future__ import annotations
+import inspect
+
+NAMES = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+def param_types(func):
+    return {name: NAMES.get(p.annotation, &quot;unknown&quot;) for name, p in inspect.signature(func).parameters.items()}
+</textarea>
+<script type="text/plain" class="prob-tests">def lookup(order_id: "int", verbose: "bool" = False, note: "str" = "") -> "dict":
+    return {}
+
+assert param_types(lookup) == {"order_id": "integer", "verbose": "boolean", "note": "string"}
+
+def scale(x: "float", factor: "float"):
+    return x * factor
+assert param_types(scale) == {"x": "number", "factor": "number"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def lookup(order_id: &quot;int&quot;, verbose: &quot;bool&quot; = False, note: &quot;str&quot; = &quot;&quot;) -&gt; &quot;dict&quot;:
+    return {}
+
+assert param_types(lookup) == {&quot;order_id&quot;: &quot;integer&quot;, &quot;verbose&quot;: &quot;boolean&quot;, &quot;note&quot;: &quot;string&quot;}
+
+def scale(x: &quot;float&quot;, factor: &quot;float&quot;):
+    return x * factor
+assert param_types(scale) == {&quot;x&quot;: &quot;number&quot;, &quot;factor&quot;: &quot;number&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>typing.get_type_hints(func)</code> evaluates string annotations into real types.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from __future__ import annotations
+import inspect, typing
+
+NAMES = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+def param_types(func):
+    hints = typing.get_type_hints(func)
+    return {name: NAMES.get(hints.get(name), &quot;unknown&quot;) for name in inspect.signature(func).parameters}</code></pre></div><p>With <code>from __future__ import annotations</code>, Python stores annotations as unevaluated strings, which avoids import-time costs and allows forward references; Python 3.14 also evaluates annotations lazily by default (PEP 649). Either way, the raw <code>annotation</code> attribute may not be the type you expect, so code that introspects types should call <code>typing.get_type_hints</code>, which evaluates them in the function's module and returns real types. This exact issue has broken tool-schema generation in agent frameworks and dependency injection in web frameworks, which now all use <code>get_type_hints</code>.</p></div></details>
+</article>
+<article class="prob" id="p-an-if-chain-into-a-registry" data-pid="m8-4-an-if-chain-into-a-registry" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. An if-chain into a registry</h3></header>
+<div class="prob-q"><p>Replace the <code>if</code>/<code>elif</code> chain with a registry filled by a <code>@command("name")</code> decorator. Same results. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">def handle(command, arg):
+    if command == &quot;summarise&quot;:
+        return f&quot;summary of {arg}&quot;
+    elif command == &quot;translate&quot;:
+        return f&quot;{arg} (in French)&quot;
+    elif command == &quot;classify&quot;:
+        return &quot;spam&quot; if &quot;prize&quot; in arg else &quot;ham&quot;
+    else:
+        return f&quot;unknown command {command!r}&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert handle("summarise", "doc") == "summary of doc"
+assert handle("translate", "hello") == "hello (in French)"
+assert handle("classify", "win a prize") == "spam" and handle("classify", "lunch?") == "ham"
+assert handle("delete", "x") == "unknown command 'delete'"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert handle(&quot;summarise&quot;, &quot;doc&quot;) == &quot;summary of doc&quot;
+assert handle(&quot;translate&quot;, &quot;hello&quot;) == &quot;hello (in French)&quot;
+assert handle(&quot;classify&quot;, &quot;win a prize&quot;) == &quot;spam&quot; and handle(&quot;classify&quot;, &quot;lunch?&quot;) == &quot;ham&quot;
+assert handle(&quot;delete&quot;, &quot;x&quot;) == &quot;unknown command &#x27;delete&#x27;&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>COMMANDS = {}</code>; <code>def command(name)</code> returns a decorator that stores the function. <code>handle</code> looks up and calls.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">COMMANDS = {}
+
+def command(name):
+    def decorator(func):
+        COMMANDS[name] = func
+        return func
+    return decorator
+
+@command(&quot;summarise&quot;)
+def summarise(arg):
+    return f&quot;summary of {arg}&quot;
+
+@command(&quot;translate&quot;)
+def translate(arg):
+    return f&quot;{arg} (in French)&quot;
+
+@command(&quot;classify&quot;)
+def classify(arg):
+    return &quot;spam&quot; if &quot;prize&quot; in arg else &quot;ham&quot;
+
+def handle(command_name, arg):
+    func = COMMANDS.get(command_name)
+    if func is None:
+        return f&quot;unknown command {command_name!r}&quot;
+    return func(arg)</code></pre></div><p>Each command is now a separate, testable function, the router is three lines that never change, and adding a command means adding a decorated function anywhere that is imported. The registry can also be inspected: listing <code>COMMANDS</code> gives help text or a tool list for free. The <code>handle</code> parameter was renamed to <code>command_name</code> so it does not shadow the <code>command</code> decorator, a small but real bug source when names are reused.</p></div></details>
+</article>
+<article class="prob" id="p-dispatch-follows-inheritance" data-pid="m8-4-dispatch-follows-inheritance" data-type="predict" data-level="medium" data-answer="int int object list list
+_ True
+bool int">
+<header class="prob-head"><h3>12. Dispatch follows inheritance</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+@functools.singledispatch
+def kind(x):
+    return &quot;object&quot;
+
+@kind.register
+def _(x: int):
+    return &quot;int&quot;
+
+@kind.register
+def _(x: list):
+    return &quot;list&quot;
+
+class Scores(list):
+    pass
+
+print(kind(3), kind(True), kind(2.5), kind([1]), kind(Scores()))
+print(kind.dispatch(bool).__name__, kind.dispatch(float) is kind.registry[object])
+
+@kind.register
+def _(x: bool):
+    return &quot;bool&quot;
+print(kind(True), kind(1))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>bool</code> is a subclass of <code>int</code>; a <code>list</code> subclass is still a <code>list</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>int int object list list
+_ True
+bool int</pre></div><p><code>singledispatch</code> looks up the argument's class hierarchy for the most specific registered type. <code>True</code> is a <code>bool</code>, a subclass of <code>int</code>, so it uses the <code>int</code> handler until a <code>bool</code> handler is registered. <code>2.5</code> has no handler and falls back to the default for <code>object</code>. A subclass of <code>list</code> uses the <code>list</code> handler. <code>dispatch(cls)</code> shows which implementation would be chosen without calling it; every implementation here is named <code>_</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-a-small-url-router" data-pid="m8-4-a-small-url-router" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A small URL router</h3></header>
+<div class="prob-q"><p>Write <code>make_router()</code> returning <code>(route, dispatch)</code>. <code>route(method, template)</code> is a decorator factory registering a handler for a template such as <code>"/docs/{doc_id}/chunks/{n}"</code>. <code>dispatch(method, path)</code> finds the template that matches the path segment by segment (<code>{name}</code> matches any one segment), converts captured values with the handler's type hints (<code>int</code>, <code>float</code>, else <code>str</code>), and returns <code>(200, handler(**params))</code>. Return <code>(404, "not found")</code> if no template matches, <code>(405, "method not allowed")</code> if one matches but not for this method, and <code>(422, "invalid &lt;name&gt;")</code> if a conversion fails.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import typing
+
+def make_router():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">route, dispatch = make_router()
+
+@route("GET", "/docs/{doc_id}")
+def get_doc(doc_id: int):
+    return {"id": doc_id}
+
+@route("GET", "/docs/{doc_id}/chunks/{n}")
+def get_chunk(doc_id: int, n: int):
+    return {"doc": doc_id, "chunk": n}
+
+@route("POST", "/search/{query}")
+def search(query: str):
+    return [query]
+
+@route("GET", "/health")
+def health():
+    return "ok"
+
+assert dispatch("GET", "/docs/7") == (200, {"id": 7})
+assert dispatch("GET", "/docs/7/chunks/3") == (200, {"doc": 7, "chunk": 3})
+assert dispatch("POST", "/search/refund") == (200, ["refund"])
+assert dispatch("GET", "/health") == (200, "ok")
+assert dispatch("GET", "/docs/abc") == (422, "invalid doc_id")
+assert dispatch("DELETE", "/docs/7") == (405, "method not allowed")
+assert dispatch("GET", "/nope") == (404, "not found") and dispatch("GET", "/docs/7/chunks") == (404, "not found")
+assert get_doc(5) == {"id": 5}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 8 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">route, dispatch = make_router()
+
+@route(&quot;GET&quot;, &quot;/docs/{doc_id}&quot;)
+def get_doc(doc_id: int):
+    return {&quot;id&quot;: doc_id}
+
+@route(&quot;GET&quot;, &quot;/docs/{doc_id}/chunks/{n}&quot;)
+def get_chunk(doc_id: int, n: int):
+    return {&quot;doc&quot;: doc_id, &quot;chunk&quot;: n}
+
+@route(&quot;POST&quot;, &quot;/search/{query}&quot;)
+def search(query: str):
+    return [query]
+
+@route(&quot;GET&quot;, &quot;/health&quot;)
+def health():
+    return &quot;ok&quot;
+
+assert dispatch(&quot;GET&quot;, &quot;/docs/7&quot;) == (200, {&quot;id&quot;: 7})
+assert dispatch(&quot;GET&quot;, &quot;/docs/7/chunks/3&quot;) == (200, {&quot;doc&quot;: 7, &quot;chunk&quot;: 3})
+assert dispatch(&quot;POST&quot;, &quot;/search/refund&quot;) == (200, [&quot;refund&quot;])
+assert dispatch(&quot;GET&quot;, &quot;/health&quot;) == (200, &quot;ok&quot;)
+assert dispatch(&quot;GET&quot;, &quot;/docs/abc&quot;) == (422, &quot;invalid doc_id&quot;)
+assert dispatch(&quot;DELETE&quot;, &quot;/docs/7&quot;) == (405, &quot;method not allowed&quot;)
+assert dispatch(&quot;GET&quot;, &quot;/nope&quot;) == (404, &quot;not found&quot;) and dispatch(&quot;GET&quot;, &quot;/docs/7/chunks&quot;) == (404, &quot;not found&quot;)
+assert get_doc(5) == {&quot;id&quot;: 5}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store routes as a list of <code>(method, segments, handler)</code>, where <code>segments = template.strip("/").split("/")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A path matches when it has the same number of segments and every non-<code>{...}</code> segment is equal. Collect the <code>{name}</code> values, then convert with <code>typing.get_type_hints(handler).get(name, str)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import typing
+
+
+def make_router():
+    routes = []
+
+    def route(method, template):
+        segments = template.strip(&quot;/&quot;).split(&quot;/&quot;)
+
+        def decorator(func):
+            routes.append((method.upper(), segments, func))
+            return func
+        return decorator
+
+    def _match(segments, parts):
+        if len(segments) != len(parts):
+            return None
+        params = {}
+        for seg, part in zip(segments, parts):
+            if seg.startswith(&quot;{&quot;) and seg.endswith(&quot;}&quot;):
+                params[seg[1:-1]] = part
+            elif seg != part:
+                return None
+        return params
+
+    def dispatch(method, path):
+        parts = path.strip(&quot;/&quot;).split(&quot;/&quot;)
+        path_matched = False
+        for route_method, segments, func in routes:
+            params = _match(segments, parts)
+            if params is None:
+                continue
+            path_matched = True
+            if route_method != method.upper():
+                continue
+            hints = typing.get_type_hints(func)
+            converted = {}
+            for name, raw in params.items():
+                kind = hints.get(name, str)
+                try:
+                    converted[name] = kind(raw) if kind in (int, float) else raw
+                except ValueError:
+                    return 422, f&quot;invalid {name}&quot;
+            return 200, func(**converted)
+        if path_matched:
+            return 405, &quot;method not allowed&quot;
+        return 404, &quot;not found&quot;
+
+    return route, dispatch</code></pre></div><p>This is the core of every web framework's router. Registration splits each template once, at import time, into segments. Dispatch compares segments: literals must be equal, placeholders capture the text. The handler's type hints decide conversion, which is exactly how FastAPI turns <code>/docs/7</code> into <code>doc_id=7</code> and answers <code>/docs/abc</code> with a 422 validation error instead of calling your function with bad data. Distinguishing 404 (no such path) from 405 (path exists, wrong method) is the HTTP convention, and it needs the "matched any path" flag. The handlers are returned unchanged, so they can still be called and tested directly. Real routers compile templates into regular expressions or a tree for speed and support typed converters in the template itself.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-plugin-registry" data-pid="m8-4-read-the-code-a-plugin-registry" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a plugin registry</h3></header>
+<div class="prob-q"><p>This plugin system lets modules register data loaders by file extension. The loaders registered in one test leak into others, a second loader for <code>.csv</code> silently replaces the first, and <code>load("x.json")</code> fails with "no loader" until a JSON file has been loaded once. Read it, find the bugs and fix them so that: each <code>make_plugins()</code> call has its own registry, duplicates raise <code>ValueError</code>, and registration happens when the decorator is applied.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def make_plugins(registry={}):
+    def loader(ext):
+        def decorator(func):
+            def wrapper(path):
+                registry[ext] = func
+                return func(path)
+            return wrapper
+        return decorator
+
+    def load(path):
+        ext = path.rsplit(&quot;.&quot;, 1)[-1]
+        if ext not in registry:
+            raise LookupError(f&quot;no loader for .{ext}&quot;)
+        return registry[ext](path)
+
+    return loader, load, registry
+</textarea>
+<script type="text/plain" class="prob-tests">loader, load, registry = make_plugins()
+
+@loader("csv")
+def read_csv(path):
+    return f"csv rows from {path}"
+
+@loader("json")
+def read_json(path):
+    return f"json from {path}"
+
+assert sorted(registry) == ["csv", "json"]
+assert load("data/x.json") == "json from data/x.json" and load("a.csv") == "csv rows from a.csv"
+try:
+    @loader("csv")
+    def other_csv(path):
+        return "other"
+    assert False, "duplicate must raise"
+except ValueError:
+    pass
+assert load("a.csv") == "csv rows from a.csv"
+
+loader2, load2, registry2 = make_plugins()
+assert registry2 == {}
+try:
+    load2("a.csv")
+    assert False
+except LookupError:
+    pass
+assert read_csv("b.csv") == "csv rows from b.csv"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">loader, load, registry = make_plugins()
+
+@loader(&quot;csv&quot;)
+def read_csv(path):
+    return f&quot;csv rows from {path}&quot;
+
+@loader(&quot;json&quot;)
+def read_json(path):
+    return f&quot;json from {path}&quot;
+
+assert sorted(registry) == [&quot;csv&quot;, &quot;json&quot;]
+assert load(&quot;data/x.json&quot;) == &quot;json from data/x.json&quot; and load(&quot;a.csv&quot;) == &quot;csv rows from a.csv&quot;
+try:
+    @loader(&quot;csv&quot;)
+    def other_csv(path):
+        return &quot;other&quot;
+    assert False, &quot;duplicate must raise&quot;
+except ValueError:
+    pass
+assert load(&quot;a.csv&quot;) == &quot;csv rows from a.csv&quot;
+
+loader2, load2, registry2 = make_plugins()
+assert registry2 == {}
+try:
+    load2(&quot;a.csv&quot;)
+    assert False
+except LookupError:
+    pass
+assert read_csv(&quot;b.csv&quot;) == &quot;csv rows from b.csv&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>registry={}</code> is a mutable default shared by every <code>make_plugins()</code> call (2.4).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The registration line is inside <code>wrapper</code>, so it runs only when the function is called. Move it into <code>decorator</code>, check for duplicates there, and return <code>func</code> unchanged.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_plugins():
+    registry = {}
+
+    def loader(ext):
+        def decorator(func):
+            if ext in registry:
+                raise ValueError(f&quot;a loader for .{ext} is already registered: {registry[ext].__name__}&quot;)
+            registry[ext] = func
+            return func
+        return decorator
+
+    def load(path):
+        ext = path.rsplit(&quot;.&quot;, 1)[-1]
+        if ext not in registry:
+            raise LookupError(f&quot;no loader for .{ext}&quot;)
+        return registry[ext](path)
+
+    return loader, load, registry</code></pre></div><p>Three bugs. The mutable default <code>registry={}</code> was created once, when <code>def make_plugins</code> ran, so every "new" plugin system shared one dict and registrations leaked between tests (2.4); creating the dict inside the function gives each call its own. The registration sat <strong>inside the wrapper</strong>, so a loader was registered only after it had been called once, through the decorated name, which made <code>load</code> fail for any format nobody had called directly; registration must happen in the decorator level, which runs at definition time. And nothing prevented two loaders for one extension, so the later one silently won; the duplicate check raises at import with a message naming the existing loader. With no wrapper needed at all, returning <code>func</code> unchanged also keeps <code>read_csv</code> callable and named as before.</p></div></details>
+</article>
+<article class="prob" id="p-call-a-tool-with-typed-arguments" data-pid="m8-4-call-a-tool-with-typed-arguments" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Call a tool with typed arguments</h3></header>
+<div class="prob-q"><p>A model returns tool calls as a name and a <strong>JSON string</strong> of arguments. Write <code>call_tool(tools, name, arguments_json)</code> returning <code>{"result": ...}</code> or, for problems the model can fix, <code>{"error": message}</code>: unknown tool; invalid JSON or not an object; missing required or unknown parameters; a value whose type does not match the annotation (<code>int</code>, <code>float</code>, <code>str</code>, <code>bool</code>; an <code>int</code> value is accepted for <code>float</code>, a <code>bool</code> is not accepted for <code>int</code> or <code>float</code>). Errors inside the tool itself propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import inspect, json, typing
+
+def call_tool(tools, name, arguments_json):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def refund(order_id: int, amount: float, reason: str = "", notify: bool = True):
+    if amount > 500:
+        raise RuntimeError("limit exceeded in payment system")
+    return f"refunded {amount} on {order_id} ({reason or 'no reason'}, notify={notify})"
+
+tools = {"refund": refund}
+assert call_tool(tools, "refund", '{"order_id": 7, "amount": 20}') == {"result": "refunded 20 on 7 (no reason, notify=True)"}
+assert call_tool(tools, "refund", '{"order_id": 7, "amount": 2.5, "notify": false}')["result"].endswith("notify=False)")
+assert call_tool(tools, "cancel", "{}") == {"error": "unknown tool 'cancel'"}
+assert call_tool(tools, "refund", "{order_id: 7}")["error"].startswith("arguments are not valid JSON")
+assert call_tool(tools, "refund", "[7, 20]") == {"error": "arguments must be a JSON object"}
+assert call_tool(tools, "refund", '{"amount": 1}') == {"error": "missing required argument: order_id"}
+assert call_tool(tools, "refund", '{"order_id": 1, "amount": 1, "currency": "EUR"}') == {"error": "unknown argument: currency"}
+assert call_tool(tools, "refund", '{"order_id": "7", "amount": 1}') == {"error": "order_id must be int, got str"}
+assert call_tool(tools, "refund", '{"order_id": true, "amount": 1}') == {"error": "order_id must be int, got bool"}
+try:
+    call_tool(tools, "refund", '{"order_id": 7, "amount": 900}')
+    assert False
+except RuntimeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 9 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def refund(order_id: int, amount: float, reason: str = &quot;&quot;, notify: bool = True):
+    if amount &gt; 500:
+        raise RuntimeError(&quot;limit exceeded in payment system&quot;)
+    return f&quot;refunded {amount} on {order_id} ({reason or &#x27;no reason&#x27;}, notify={notify})&quot;
+
+tools = {&quot;refund&quot;: refund}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: 7, &quot;amount&quot;: 20}&#x27;) == {&quot;result&quot;: &quot;refunded 20 on 7 (no reason, notify=True)&quot;}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: 7, &quot;amount&quot;: 2.5, &quot;notify&quot;: false}&#x27;)[&quot;result&quot;].endswith(&quot;notify=False)&quot;)
+assert call_tool(tools, &quot;cancel&quot;, &quot;{}&quot;) == {&quot;error&quot;: &quot;unknown tool &#x27;cancel&#x27;&quot;}
+assert call_tool(tools, &quot;refund&quot;, &quot;{order_id: 7}&quot;)[&quot;error&quot;].startswith(&quot;arguments are not valid JSON&quot;)
+assert call_tool(tools, &quot;refund&quot;, &quot;[7, 20]&quot;) == {&quot;error&quot;: &quot;arguments must be a JSON object&quot;}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;amount&quot;: 1}&#x27;) == {&quot;error&quot;: &quot;missing required argument: order_id&quot;}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: 1, &quot;amount&quot;: 1, &quot;currency&quot;: &quot;EUR&quot;}&#x27;) == {&quot;error&quot;: &quot;unknown argument: currency&quot;}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: &quot;7&quot;, &quot;amount&quot;: 1}&#x27;) == {&quot;error&quot;: &quot;order_id must be int, got str&quot;}
+assert call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: true, &quot;amount&quot;: 1}&#x27;) == {&quot;error&quot;: &quot;order_id must be int, got bool&quot;}
+try:
+    call_tool(tools, &quot;refund&quot;, &#x27;{&quot;order_id&quot;: 7, &quot;amount&quot;: 900}&#x27;)
+    assert False
+except RuntimeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Parse with <code>json.loads</code> inside <code>try</code>; check <code>isinstance(args, dict)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare <code>set(args)</code> with the signature's parameters for unknown and missing (required = no default) names.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Type check: reject <code>bool</code> unless the annotation is <code>bool</code>; accept <code>int</code> for <code>float</code>; otherwise <code>isinstance(value, expected)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, json, typing
+
+
+def _type_error(name, value, expected):
+    if isinstance(value, bool) and expected is not bool:
+        return f&quot;{name} must be {expected.__name__}, got bool&quot;
+    if expected is float and isinstance(value, (int, float)):
+        return None
+    if not isinstance(value, expected):
+        return f&quot;{name} must be {expected.__name__}, got {type(value).__name__}&quot;
+    return None
+
+
+def call_tool(tools, name, arguments_json):
+    func = tools.get(name)
+    if func is None:
+        return {&quot;error&quot;: f&quot;unknown tool {name!r}&quot;}
+    try:
+        args = json.loads(arguments_json)
+    except json.JSONDecodeError as e:
+        return {&quot;error&quot;: f&quot;arguments are not valid JSON: {e.msg}&quot;}
+    if not isinstance(args, dict):
+        return {&quot;error&quot;: &quot;arguments must be a JSON object&quot;}
+    params = inspect.signature(func).parameters
+    hints = typing.get_type_hints(func)
+    for key in args:
+        if key not in params:
+            return {&quot;error&quot;: f&quot;unknown argument: {key}&quot;}
+    for pname, p in params.items():
+        if p.default is p.empty and pname not in args:
+            return {&quot;error&quot;: f&quot;missing required argument: {pname}&quot;}
+    for key, value in args.items():
+        expected = hints.get(key)
+        if expected is not None:
+            problem = _type_error(key, value, expected)
+            if problem:
+                return {&quot;error&quot;: problem}
+    return {&quot;result&quot;: func(**args)}</code></pre></div><p>Every check before the call targets a mistake the <strong>model</strong> can correct, and returns a short, specific message it can act on: "order_id must be int, got str" leads to a corrected call on the next turn, a traceback does not. Booleans need special care because <code>bool</code> is a subclass of <code>int</code> (1.2): without the explicit check, <code>true</code> would be accepted as an order id. Accepting an integer for a <code>float</code> parameter matches JSON, which has a single number type. The final call is deliberately outside any handler: the <code>RuntimeError</code> comes from the payment system, it is not the model's fault, and it must reach your error handling and alerting (7.3). This is the validation that frameworks generate from a Pydantic model of the parameters (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-import-time-order-and-stacked-registrati" data-pid="m8-4-import-time-order-and-stacked-registrati" data-type="predict" data-level="hard" data-answer="[&#x27;reg a&#x27;, &#x27;wrap greet&#x27;, &#x27;reg b&#x27;]
+hi ana | wrapped hi bo | wrapped hi cy
+True True">
+<header class="prob-head"><h3>16. Import-time order and stacked registrations</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+ORDER = []
+REG = {}
+
+def reg(name):
+    def decorator(func):
+        ORDER.append(f&quot;reg {name}&quot;)
+        REG[name] = func
+        return func
+    return decorator
+
+def wrap(func):
+    ORDER.append(f&quot;wrap {func.__name__}&quot;)
+    @functools.wraps(func)
+    def wrapper(*args):
+        return &quot;wrapped &quot; + func(*args)
+    return wrapper
+
+@reg(&quot;b&quot;)
+@wrap
+@reg(&quot;a&quot;)
+def greet(x):
+    return f&quot;hi {x}&quot;
+
+print(ORDER)
+print(REG[&quot;a&quot;](&quot;ana&quot;), &quot;|&quot;, REG[&quot;b&quot;](&quot;bo&quot;), &quot;|&quot;, greet(&quot;cy&quot;))
+print(REG[&quot;b&quot;] is greet, REG[&quot;a&quot;] is greet.__wrapped__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Decorators apply bottom-up: <code>reg("a")</code>, then <code>wrap</code>, then <code>reg("b")</code>. Each registers whatever it receives.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;reg a&#x27;, &#x27;wrap greet&#x27;, &#x27;reg b&#x27;]
+hi ana | wrapped hi bo | wrapped hi cy
+True True</pre></div><p>The bottom decorator <code>reg("a")</code> sees the original function and registers it; <code>wrap</code> then creates the wrapper; <code>reg("b")</code> registers the wrapper, which is also what the name <code>greet</code> ends up bound to. So <code>"a"</code> dispatches to the undecorated function and <code>"b"</code> to the wrapped one, and <code>__wrapped__</code> confirms which is which. Stacking registrations around a wrapper is legitimate when you want both versions available, but usually it is an accident, which is why registration normally goes outermost.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-how-does-fastapi-know-which-function-han" data-pid="m8-4-how-does-fastapi-know-which-function-han" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How does FastAPI know which function handles a route and what parameters it expects?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Through a registration decorator plus introspection. <code>@app.get("/items/{item_id}")</code> is a method acting as a decorator factory: when the module is imported, it records the path template, the HTTP method and the function in the application's routing table, and returns the function unchanged. At that point FastAPI also inspects the function with <code>inspect.signature</code> and its type hints: parameters named in the path become path parameters, simple types not in the path become query parameters, Pydantic models become the JSON body, and <code>Depends(...)</code> defaults declare dependencies. It builds validation (with Pydantic) and the OpenAPI schema from this information. When a request arrives, the router matches the path, converts and validates the values against the annotations (returning 422 on failure), resolves dependencies and calls the function. That is why type hints in FastAPI are not documentation but behaviour, and why wrapping route functions in decorators without <code>functools.wraps</code> breaks them.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-functools-singledispatch-and-whe" data-pid="m8-4-what-is-functools-singledispatch-and-whe" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What is <code>functools.singledispatch</code>, and when is it better than <code>isinstance</code> checks?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It turns a function into a generic function that chooses an implementation based on the type of its first argument. You decorate a default implementation with <code>@singledispatch</code>, then register specialised ones with <code>@func.register</code> (using the annotation of the first parameter or an explicit type); at call time it walks the argument's class hierarchy (its MRO) to find the most specific registered type. It is better than an <code>if isinstance(...)</code> chain when the set of supported types should be open: other modules can register their own types without editing your function, each implementation is a small separate function, and the dispatch is cached and fast. It dispatches on one argument only and on types, not values; for methods there is <code>singledispatchmethod</code>. A chain of <code>isinstance</code> checks is fine for two or three fixed cases.</p></div></details>
+</article>
+<article class="prob" id="p-design-the-tool-calling-layer-of-an-agen" data-pid="m8-4-design-the-tool-calling-layer-of-an-agen" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Design the tool-calling layer of an agent framework.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A registry filled by a decorator (<code>@tool</code>, possibly with a name, description and permissions), with duplicate detection and an explicit place where tool modules are imported. Schemas generated from each function's signature, type hints and docstring (or a Pydantic model of its parameters), so they cannot drift from the code; descriptions written for the model, since they are part of the prompt. Dispatch that parses the model's JSON arguments, validates them against the schema, and returns concise, actionable errors for unknown tools, bad JSON, missing or mistyped arguments, while letting genuine failures inside a tool reach logging and alerting. Around each call: per-tool timeouts, retries only for idempotent tools, rate limits, permission checks per user and environment (no file deletion from a public chatbot), confirmation for dangerous actions, and output limits so a huge result does not overflow the context. Observability: one trace span per tool call with arguments (redacted), result size, duration and errors. Plus testing: tools are plain functions testable without the agent, and the registry is injectable so tests use a fake set of tools. Version tool schemas, because changing a tool's parameters changes what deployed prompts and models expect.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A registration decorator records the function (in a dict or list) and returns it unchanged; it runs at import time, so unimported modules register nothing.</li><li>Registries with names and metadata use a factory (<code>@route("GET", "/x")</code>); check for duplicates and give tests a fresh registry.</li><li><code>inspect.signature</code> gives parameters, kinds, defaults and annotations; use <code>typing.get_type_hints</code> to get real types, even from string annotations.</li><li>Tool schemas, routers and validators are generated from signatures and type hints, so docstrings and hints become behaviour.</li><li>Dispatch by name with a dict, by type with <code>functools.singledispatch</code>; with stacked decorators, register outermost.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

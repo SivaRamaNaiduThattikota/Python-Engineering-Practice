@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8.3 · Caching, retries and timing</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m8-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 8 · Decorators</span></div>
+  <h1>8.3 Caching, retries and timing</h1>
+  <p>The decorators every production codebase has: caching with <code>functools.lru_cache</code> and how it really works, time-limited caches, what makes a cache key correct, retry decorators with backoff, why a decorator cannot enforce a timeout on its own, and measuring latency with percentiles. Applied to embeddings, model calls and service metrics.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="lru">
+<h2><span class="n">1</span><code>functools.lru_cache</code>: how it works</h2>
+<p>Memoization, which you built by hand in 8.1, is in the standard library: <code>@functools.lru_cache(maxsize=128)</code> and its unbounded form <code>@functools.cache</code>. On each call, the wrapper builds a <strong>key</strong> from the arguments, looks it up in a dict, and returns the stored result on a <strong>hit</strong>; on a <strong>miss</strong> it calls the function, stores the result and returns it. With a <code>maxsize</code>, the cache also tracks the order in which entries were used, and when it is full it evicts the <strong>least recently used</strong> entry, the one that has gone longest without a hit. <code>cache_info()</code> reports hits, misses and sizes, and <code>cache_clear()</code> empties it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lru.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+calls = []
+
+@functools.lru_cache(maxsize=2)
+def tokens(text):
+    calls.append(text)
+    return len(text.split())
+
+for t in [&quot;refund policy&quot;, &quot;reset password&quot;, &quot;refund policy&quot;, &quot;invoice copy&quot;, &quot;reset password&quot;]:
+    tokens(t)
+print(calls)
+print(tokens.cache_info())
+tokens.cache_clear()
+print(tokens.cache_info().currsize, tokens.__wrapped__(&quot;a b c&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;refund policy&#x27;, &#x27;reset password&#x27;, &#x27;invoice copy&#x27;, &#x27;reset password&#x27;]
+CacheInfo(hits=1, misses=4, maxsize=2, currsize=2)
+0 3</pre></div></div>
+<p>Follow the calls: two misses fill the cache, the repeated <code>"refund policy"</code> is a hit and becomes the most recently used, so when <code>"invoice copy"</code> arrives, <code>"reset password"</code> is the least recently used and is evicted. Asking for it again is therefore a miss and it is computed a second time. <code>lru_cache</code> uses <code>functools.wraps</code>, so <code>__wrapped__</code> gives the undecorated function, handy in tests that should not touch the cache.</p>
+<p>The key rules matter in practice. Every argument must be <strong>hashable</strong>, or the call raises <code>TypeError: unhashable type: 'list'</code> (problem 3). Positional and keyword forms are <strong>different keys</strong>: <code>f(1, 2)</code> and <code>f(1, b=2)</code> are cached separately, even though they mean the same thing. Equal values of different types are a grey area: the documentation says they are "usually" treated as the same call, but CPython has a fast path that uses a single <code>int</code> or <code>str</code> argument directly as the key, so <code>f(1)</code> gets its own entry while <code>f(1.0)</code> and <code>f(True)</code> share one. Never rely on either behaviour; pass <code>typed=True</code> when the type of an argument matters (problem 16). And the cache stores the <strong>object</strong> returned, so a mutable result such as a list is shared by every caller that gets a hit: a caller that appends to it changes the cached value for everyone (problem 4).</p>
+</section>
+<section class="sec" id="when">
+<h2><span class="n">2</span>When caching is safe, and what it costs</h2>
+<p>Caching is only correct for functions whose result depends <strong>only on their arguments</strong>: the same arguments must always produce the same answer, and calling it must have no side effects that callers rely on. Pure computations (parsing, tokenising, formatting, feature extraction) qualify. Functions that read the clock, random numbers, files, databases or the network do not, because the world changes while the cache keeps the old answer; caching them is a decision about <strong>staleness</strong>, which a time-limited cache makes explicit (below).</p>
+<p>LLM calls sit in between. With temperature 0, a provider usually returns the same answer for the same request, though not guaranteed; with temperature above 0, answers vary by design, and caching freezes one sample. Embeddings for a given model are deterministic in practice, which is why embedding caches are everywhere: re-embedding an unchanged document costs money and time for nothing. In both cases the <strong>key</strong> must include everything that affects the result: the model, the full prompt including the system message, and every parameter. A cache keyed only on the user's question returns a cheap model's answer to a request for the expensive one (problem 6).</p>
+<p>The costs are memory and correctness. <code>@functools.cache</code> never evicts, so a function called with ever-new arguments (request ids, timestamps, user texts) grows until the process runs out of memory; give long-running services a <code>maxsize</code> (problem 10). A cache also keeps every argument and result <strong>alive</strong> (2.1), including large arrays. And a decorated method caches on <code>self</code>, keeping every instance it has seen alive for as long as the cache exists (Module 9 shows the alternatives).</p>
+<div class="callout c-sql"><div class="ci">≈</div><div><div class="ct">SQL / Power BI</div><p>A cache is a materialised result: Power BI's import mode or a materialised view in SQL stores the answer so queries do not recompute it. The same trade-off applies: fast reads, but the result is only as fresh as the last refresh, and a refresh policy (a TTL, a schedule, invalidation on change) is part of the design, not an afterthought.</p></div></div>
+</section>
+<section class="sec" id="ttl">
+<h2><span class="n">3</span>Time-limited caches</h2>
+<p>A <strong>TTL</strong> ("time to live") cache stores each entry together with the time it was created, and treats entries older than the TTL as missing. It makes staleness a number: "an exchange rate may be up to 60 seconds old", "a retrieved document list may be up to 10 minutes old". <code>lru_cache</code> has no TTL, so it is a common hand-written decorator. Injecting the clock makes it testable without waiting (problem 5).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">ttl.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def ttl_cache(seconds, clock):
+    def decorator(func):
+        store = {}
+
+        @functools.wraps(func)
+        def wrapper(*args):
+            now = clock()
+            if args in store:
+                value, created = store[args]
+                if now - created &lt; seconds:
+                    return value
+            value = func(*args)
+            store[args] = (value, now)
+            return value
+        wrapper.cache_clear = store.clear
+        return wrapper
+    return decorator
+
+now = [0.0]
+fetched = []
+
+@ttl_cache(seconds=60, clock=lambda: now[0])
+def exchange_rate(currency):
+    fetched.append((currency, now[0]))
+    return {&quot;EUR&quot;: 1.08, &quot;GBP&quot;: 1.27}[currency]
+
+exchange_rate(&quot;EUR&quot;); now[0] = 30; exchange_rate(&quot;EUR&quot;); now[0] = 61; exchange_rate(&quot;EUR&quot;)
+print(fetched)</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;EUR&#x27;, 0.0), (&#x27;EUR&#x27;, 61)]</pre></div></div>
+<p>Expired entries in this simple version stay in memory until they are next requested; production caches also bound their size and purge old entries. Libraries such as <code>cachetools</code> (<code>TTLCache</code>, <code>LRUCache</code>) and external stores such as Redis (with per-key expiry) provide this, and Redis also lets several processes share one cache, which <code>lru_cache</code> cannot.</p>
+</section>
+<section class="sec" id="retry">
+<h2><span class="n">4</span>Retry as a decorator</h2>
+<p>Lesson 7.4 built the retry logic: transient errors only, exponential backoff with jitter, a maximum number of attempts, and re-raising the last error. As a decorator factory it becomes a one-line policy on any function: <code>@retry(attempts=4, on=(TimeoutError, ConnectionError))</code>. Keep <code>sleep</code> and the random generator injectable (with production defaults) so tests can run the whole sequence instantly.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">retry_decorator.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, random, time
+
+def retry(*, attempts=3, on=(TimeoutError, ConnectionError), base=0.5, cap=8.0, sleep=time.sleep, rng=random.Random()):
+    if attempts &lt; 1:
+        raise ValueError(&quot;attempts must be at least 1&quot;)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    if attempt == attempts:
+                        raise
+                    sleep(rng.uniform(0, min(cap, base * 2 ** (attempt - 1))))
+        return wrapper
+    return decorator
+
+waits = []
+failures = iter([TimeoutError(&quot;t1&quot;), ConnectionError(&quot;c1&quot;)])
+
+@retry(attempts=3, sleep=waits.append, rng=random.Random(7))
+def ask(q):
+    err = next(failures, None)
+    if err:
+        raise err
+    return f&quot;answer: {q}&quot;
+
+print(ask(&quot;refund?&quot;), [round(w, 3) for w in waits])</code></pre><div class="out"><span class="ol">Output</span><pre>answer: refund? [0.162, 0.151]</pre></div></div>
+<p>The <code>tenacity</code> library is the full-featured version: <code>@retry(stop=stop_after_attempt(4), wait=wait_random_exponential(max=30), retry=retry_if_exception_type(TimeoutError))</code>, plus callbacks before sleeping, statistics, and support for <code>async</code> functions. Most LLM SDKs already retry internally (the OpenAI and Anthropic clients retry twice by default); adding your own decorator on top multiplies the attempts, so decide which layer owns retries.</p>
+<p>A word on <strong>timeouts</strong>. A decorator cannot safely stop a synchronous function that is already running: Python has no way to interrupt a thread from outside. The Unix-only <code>signal.alarm</code> trick works only in the main thread, and running the function in a helper thread with a timeout abandons the thread rather than stopping it. So timeouts belong <strong>inside</strong> the I/O call: pass <code>timeout=</code> to the HTTP client or SDK, which can give up on the network operation itself. With <code>async</code> code (14.5), <code>asyncio.timeout()</code> can cancel a waiting coroutine, which is one of the reasons LLM services are often written with asyncio.</p>
+</section>
+<section class="sec" id="timing">
+<h2><span class="n">5</span>Timing and latency statistics</h2>
+<p>For measuring durations, use <code>time.perf_counter()</code>: a high-resolution clock meant for intervals that never jumps backwards. <code>time.time()</code> is wall-clock time, which can jump when the system clock is adjusted (NTP corrections, daylight saving changes on some systems), producing negative or huge "durations". <code>time.monotonic()</code> also never goes backwards and is the right clock for timeouts and deadlines.</p>
+<p>A single average hides what users feel. Latencies are usually skewed: most calls are fast and a few are very slow, and those few are the ones users complain about. Services therefore report <strong>percentiles</strong>: p50 (the median, a typical call), p95 and p99 (the slow tail). An LLM endpoint with a mean of 1.2 s can have a p99 of 9 s. <code>statistics.quantiles(data, n=100)</code> returns the 99 cut points between percentiles; for small samples, the simple <strong>nearest-rank</strong> method (sort, then take the value at position <code>ceil(p * n)</code>) is easy to reason about (problem 15).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">percentiles.py</span><button class="copy">Copy</button></div><pre><code class="py">import math, statistics
+
+latencies = [0.8, 0.9, 1.0, 1.1, 0.9, 1.0, 1.2, 0.95, 8.5, 1.05]
+
+def nearest_rank(data, p):
+    ordered = sorted(data)
+    return ordered[max(0, math.ceil(p * len(ordered)) - 1)]
+
+print(round(statistics.mean(latencies), 3), statistics.median(latencies))
+print(nearest_rank(latencies, 0.50), nearest_rank(latencies, 0.95), nearest_rank(latencies, 0.99))
+q = statistics.quantiles(latencies, n=100, method=&quot;inclusive&quot;)
+print(round(q[49], 3), round(q[94], 3))</code></pre><div class="out"><span class="ol">Output</span><pre>1.74 1.0
+1.0 8.5 8.5
+1.0 5.215</pre></div></div>
+<p>One slow call (8.5 s) pulls the mean to almost twice the median, while the median still describes a typical call. The p95 and p99 by nearest rank both land on the slow call, because with ten samples the top 5% is a single value; percentiles of tiny samples are noisy, so dashboards compute them over many calls. <code>statistics.quantiles</code> <strong>interpolates</strong> between neighbouring values, so its p95 here lands between the second-slowest call and the outlier (5.215 s) rather than on the outlier. Both methods are standard; on small samples they can differ a lot, so state the method next to the number.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-hits-misses-and-keys" data-pid="m8-3-hits-misses-and-keys" data-type="predict" data-level="easy" data-answer="CacheInfo(hits=1, misses=3, maxsize=None, currsize=3)
+1 5
+4.0 float">
+<header class="prob-head"><h3>1. Hits, misses and keys</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+@functools.lru_cache(maxsize=None)
+def area(w, h=1):
+    return w * h
+
+area(2, 3); area(2, 3); area(2, h=3); area(w=2, h=3)
+print(area.cache_info())
+area(4); area(4.0)
+print(area.cache_info().hits, area.cache_info().currsize)
+print(area(4.0), type(area(4.0)).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Positional and keyword forms make different keys.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>CPython uses a single <code>int</code> argument directly as the key, but wraps a single <code>float</code> in a tuple.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>CacheInfo(hits=1, misses=3, maxsize=None, currsize=3)
+1 5
+4.0 float</pre></div><p><code>area(2, 3)</code> misses, then hits. <code>area(2, h=3)</code> and <code>area(w=2, h=3)</code> are two more <strong>different</strong> keys, so two more misses: 1 hit, 3 misses. <code>area(4)</code> and <code>area(4.0)</code> are both misses, even though <code>4 == 4.0</code>: CPython's fast path stores a lone <code>int</code> (or <code>str</code>) argument as the bare key, while <code>4.0</code> gets a tuple key, and the two do not match. So the cache now holds 5 entries, and the last line returns the float result <code>4.0</code>. The documentation only promises that equal values of different types are "usually" treated as the same call, which is why <code>typed=True</code> exists.</p></div></details>
+</article>
+<article class="prob" id="p-normalise-before-the-cache" data-pid="m8-3-normalise-before-the-cache" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. Normalise before the cache</h3></header>
+<div class="prob-q"><p>Users type the same question in many forms. Write <code>search(query)</code> that normalises the query (strip, lower-case, collapse whitespace) and then calls a cached helper <code>_search(normalised)</code> decorated with <code>functools.lru_cache(maxsize=256)</code>, which returns <code>run_search(normalised)</code> (given). Equivalent queries must hit the cache.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import functools
+
+searched = []
+
+def run_search(q):
+    searched.append(q)
+    return [f&quot;doc for {q}&quot;]
+
+def search(query):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert search("Refund  Policy") == ["doc for refund policy"]
+assert search("  refund policy ") == ["doc for refund policy"]
+assert search("REFUND\tpolicy") == ["doc for refund policy"]
+assert searched == ["refund policy"]
+assert _search.cache_info().hits == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert search(&quot;Refund  Policy&quot;) == [&quot;doc for refund policy&quot;]
+assert search(&quot;  refund policy &quot;) == [&quot;doc for refund policy&quot;]
+assert search(&quot;REFUND\tpolicy&quot;) == [&quot;doc for refund policy&quot;]
+assert searched == [&quot;refund policy&quot;]
+assert _search.cache_info().hits == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define <code>@functools.lru_cache(maxsize=256) def _search(q): return run_search(q)</code>, and in <code>search</code>, <code>" ".join(query.lower().split())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+searched = []
+
+def run_search(q):
+    searched.append(q)
+    return [f&quot;doc for {q}&quot;]
+
+@functools.lru_cache(maxsize=256)
+def _search(q):
+    return run_search(q)
+
+def search(query):
+    return _search(&quot; &quot;.join(query.lower().split()))</code></pre></div><p>Caching <code>search</code> directly would key on the raw text, so three spellings of one question would be three misses. Normalising first maps them to one key, which raises the hit rate without changing results, because the search itself only ever sees normalised text. Splitting the work into a public function that normalises and a private cached one is a common shape. Note that the cached list is shared by all callers (a caller appending to it would change the cache), which is why some code returns tuples from cached functions.</p></div></details>
+</article>
+<article class="prob" id="p-caching-a-function-that-receives-a-list" data-pid="m8-3-caching-a-function-that-receives-a-list" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Caching a function that receives a list</h3></header>
+<div class="prob-q"><p><code>embed_many(texts)</code> is decorated with <code>lru_cache</code>, but callers pass lists, so every call fails with <code>TypeError: unhashable type: 'list'</code>. Keep the cache, keep the public signature (it takes a list), and make it work.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import functools
+
+calls = []
+
+@functools.lru_cache(maxsize=128)
+def embed_many(texts):
+    calls.append(texts)
+    return [[len(t)] for t in texts]
+</textarea>
+<script type="text/plain" class="prob-tests">assert embed_many(["a", "bb"]) == [[1], [2]]
+assert embed_many(["a", "bb"]) == [[1], [2]]
+assert len(calls) == 1
+assert embed_many(["c"]) == [[1]] and len(calls) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert embed_many([&quot;a&quot;, &quot;bb&quot;]) == [[1], [2]]
+assert embed_many([&quot;a&quot;, &quot;bb&quot;]) == [[1], [2]]
+assert len(calls) == 1
+assert embed_many([&quot;c&quot;]) == [[1]] and len(calls) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Cache a helper that takes a <strong>tuple</strong>, and convert the list in a thin public function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+calls = []
+
+@functools.lru_cache(maxsize=128)
+def _embed_many(texts):
+    calls.append(texts)
+    return [[len(t)] for t in texts]
+
+def embed_many(texts):
+    return _embed_many(tuple(texts))</code></pre></div><p><code>lru_cache</code> builds its key from the arguments, and lists are unhashable because they can change (4.5): a list used as a key could be modified after storing, and the cache would never find it again. Converting to a tuple produces an immutable, hashable key with the same contents. The public function keeps accepting lists, so callers do not change. For large inputs, a key built from a hash of the contents (<code>hashlib.sha256</code>) keeps the cache's memory smaller than storing every tuple.</p></div></details>
+</article>
+<article class="prob" id="p-a-cached-list-is-shared" data-pid="m8-3-a-cached-list-is-shared" data-type="predict" data-level="easy" data-answer="loading en
+[&#x27;the&#x27;, &#x27;a&#x27;, &#x27;refund&#x27;]
+True 2">
+<header class="prob-head"><h3>4. A cached list is shared</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+@functools.lru_cache(maxsize=None)
+def stop_words(lang):
+    print(&quot;loading&quot;, lang)
+    return [&quot;the&quot;, &quot;a&quot;] if lang == &quot;en&quot; else [&quot;der&quot;, &quot;die&quot;]
+
+words = stop_words(&quot;en&quot;)
+words.append(&quot;refund&quot;)                  # a caller changes the returned list
+print(stop_words(&quot;en&quot;))
+print(stop_words(&quot;en&quot;) is words, stop_words.cache_info().hits)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A hit returns the stored object itself, not a copy.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>loading en
+[&#x27;the&#x27;, &#x27;a&#x27;, &#x27;refund&#x27;]
+True 2</pre></div><p>The list was loaded once. The caller's <code>append</code> changed the cached object, so every later caller receives <code>["the", "a", "refund"]</code>: a bug that appears far from its cause. Every hit returns the very same object, which <code>is</code> confirms. Return immutable values (a tuple, a <code>frozenset</code>) from cached functions, or copy on the way out.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-a-ttl-cache-with-keyword-arguments" data-pid="m8-3-a-ttl-cache-with-keyword-arguments" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A TTL cache with keyword arguments</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>ttl_cache(seconds, clock)</code> that caches results for <code>seconds</code> (an entry created at time <code>t</code> is valid while <code>clock() - t &lt; seconds</code>). The key must combine positional arguments and keyword arguments sorted by name. Expose <code>wrapper.cache_clear()</code> and <code>wrapper.stats()</code> returning <code>{"hits": h, "misses": m}</code>. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import functools
+
+def ttl_cache(seconds, clock):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [0.0]
+fetched = []
+
+@ttl_cache(10, clock=lambda: now[0])
+def retrieve(query, *, k=3):
+    fetched.append((query, k, now[0]))
+    return [f"{query}-{i}" for i in range(k)]
+
+retrieve("refund"); retrieve("refund"); retrieve("refund", k=2)
+now[0] = 9.9
+retrieve("refund")
+now[0] = 10.0
+retrieve("refund")
+assert fetched == [("refund", 3, 0.0), ("refund", 2, 0.0), ("refund", 3, 10.0)]
+assert retrieve.stats() == {"hits": 2, "misses": 3}
+retrieve.cache_clear()
+retrieve("refund")
+assert len(fetched) == 4 and retrieve.__name__ == "retrieve"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [0.0]
+fetched = []
+
+@ttl_cache(10, clock=lambda: now[0])
+def retrieve(query, *, k=3):
+    fetched.append((query, k, now[0]))
+    return [f&quot;{query}-{i}&quot; for i in range(k)]
+
+retrieve(&quot;refund&quot;); retrieve(&quot;refund&quot;); retrieve(&quot;refund&quot;, k=2)
+now[0] = 9.9
+retrieve(&quot;refund&quot;)
+now[0] = 10.0
+retrieve(&quot;refund&quot;)
+assert fetched == [(&quot;refund&quot;, 3, 0.0), (&quot;refund&quot;, 2, 0.0), (&quot;refund&quot;, 3, 10.0)]
+assert retrieve.stats() == {&quot;hits&quot;: 2, &quot;misses&quot;: 3}
+retrieve.cache_clear()
+retrieve(&quot;refund&quot;)
+assert len(fetched) == 4 and retrieve.__name__ == &quot;retrieve&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>key -&gt; (value, created_at)</code>. On a lookup, a present but expired entry counts as a miss.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the counters in a small dict in the decorator level and return a copy from <code>stats()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def ttl_cache(seconds, clock):
+    def decorator(func):
+        store = {}
+        counts = {&quot;hits&quot;: 0, &quot;misses&quot;: 0}
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            key = (args, tuple(sorted(kwargs.items())))
+            now = clock()
+            entry = store.get(key)
+            if entry is not None and now - entry[1] &lt; seconds:
+                counts[&quot;hits&quot;] += 1
+                return entry[0]
+            counts[&quot;misses&quot;] += 1
+            value = func(*args, **kwargs)
+            store[key] = (value, now)
+            return value
+
+        wrapper.cache_clear = store.clear
+        wrapper.stats = lambda: dict(counts)
+        return wrapper
+    return decorator</code></pre></div><p>Each entry carries its creation time, and validity is a comparison with the injected clock, so the test controls time exactly: at 9.9 s the entry is still valid, at 10.0 it has expired and is refetched. Sorting keyword items makes the key independent of keyword order, and <code>k=2</code> is a separate key from the default <code>k=3</code> because the parameters genuinely differ. <code>stats</code> returns a copy so callers cannot alter the counters. The hit rate, <code>hits / (hits + misses)</code>, is the number to watch when tuning a TTL: longer TTLs raise it at the price of staler answers.</p></div></details>
+</article>
+<article class="prob" id="p-a-model-cache-that-ignores-the-model" data-pid="m8-3-a-model-cache-that-ignores-the-model" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. A model cache that ignores the model</h3></header>
+<div class="prob-q"><p><code>complete(prompt, model, temperature)</code> caches answers in <code>CACHE</code> keyed by the prompt only, so asking the large model returns the small model's cached answer. Fix the key so every argument that affects the answer is part of it. Only temperature 0 calls may be cached at all.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">CACHE = {}
+calls = []
+
+def call_model(prompt, model, temperature):
+    calls.append((prompt, model, temperature))
+    return f&quot;{model}@{temperature}: {prompt}&quot;
+
+def complete(prompt, model=&quot;small&quot;, temperature=0.0):
+    if prompt in CACHE:
+        return CACHE[prompt]
+    answer = call_model(prompt, model, temperature)
+    CACHE[prompt] = answer
+    return answer
+</textarea>
+<script type="text/plain" class="prob-tests">assert complete("Refund?") == "small@0.0: Refund?"
+assert complete("Refund?", model="large") == "large@0.0: Refund?"
+assert complete("Refund?", model="large") == "large@0.0: Refund?"
+a = complete("Write a poem", temperature=0.9)
+b = complete("Write a poem", temperature=0.9)
+assert len(calls) == 4 and len(CACHE) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert complete(&quot;Refund?&quot;) == &quot;small@0.0: Refund?&quot;
+assert complete(&quot;Refund?&quot;, model=&quot;large&quot;) == &quot;large@0.0: Refund?&quot;
+assert complete(&quot;Refund?&quot;, model=&quot;large&quot;) == &quot;large@0.0: Refund?&quot;
+a = complete(&quot;Write a poem&quot;, temperature=0.9)
+b = complete(&quot;Write a poem&quot;, temperature=0.9)
+assert len(calls) == 4 and len(CACHE) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Key by <code>(prompt, model, temperature)</code>, and skip the cache entirely when <code>temperature != 0</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">CACHE = {}
+calls = []
+
+def call_model(prompt, model, temperature):
+    calls.append((prompt, model, temperature))
+    return f&quot;{model}@{temperature}: {prompt}&quot;
+
+def complete(prompt, model=&quot;small&quot;, temperature=0.0):
+    if temperature != 0:
+        return call_model(prompt, model, temperature)
+    key = (prompt, model, temperature)
+    if key not in CACHE:
+        CACHE[key] = call_model(prompt, model, temperature)
+    return CACHE[key]</code></pre></div><p>A cache key must contain <strong>everything</strong> that can change the result; leaving out the model meant two different requests looked identical, and the second got the first one's answer, a silent correctness bug. Sampling with a temperature above 0 is meant to produce varied answers, so caching it would freeze one sample and defeat the purpose; those calls bypass the cache. In a real system the key also includes the system prompt (or its version), tool definitions and every generation parameter, and is usually a hash of a canonical JSON encoding of the whole request.</p></div></details>
+</article>
+<article class="prob" id="p-a-retry-decorator" data-pid="m8-3-a-retry-decorator" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A retry decorator</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>retry(*, attempts, on, base, sleep, rng)</code> that retries the function on the exception types in <code>on</code>, waiting <code>rng.uniform(0, base * 2 ** (n - 1))</code> before retry <code>n</code>, and re-raises the last error when the attempts are used up. Record the number of attempts the last call used in <code>wrapper.last_attempts</code>. Raise <code>ValueError</code> at creation if <code>attempts &lt; 1</code>. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools
+
+def retry(*, attempts, on, base, sleep, rng):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)
+waits = []
+outcomes = iter([TimeoutError(), TimeoutError(), "ok", ConnectionError("down"), KeyError("bug")])
+
+@retry(attempts=3, on=(TimeoutError, ConnectionError), base=1.0, sleep=waits.append, rng=top)
+def call():
+    out = next(outcomes)
+    if isinstance(out, Exception):
+        raise out
+    return out
+
+assert call() == "ok" and call.last_attempts == 3 and waits == [1.0, 2.0]
+try:
+    call()
+    assert False
+except KeyError:
+    assert call.last_attempts == 2 and waits == [1.0, 2.0, 1.0]
+try:
+    retry(attempts=0, on=(TimeoutError,), base=1, sleep=None, rng=top)
+    assert False
+except ValueError:
+    pass
+assert call.__name__ == "call"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from types import SimpleNamespace
+top = SimpleNamespace(uniform=lambda a, b: b)
+waits = []
+outcomes = iter([TimeoutError(), TimeoutError(), &quot;ok&quot;, ConnectionError(&quot;down&quot;), KeyError(&quot;bug&quot;)])
+
+@retry(attempts=3, on=(TimeoutError, ConnectionError), base=1.0, sleep=waits.append, rng=top)
+def call():
+    out = next(outcomes)
+    if isinstance(out, Exception):
+        raise out
+    return out
+
+assert call() == &quot;ok&quot; and call.last_attempts == 3 and waits == [1.0, 2.0]
+try:
+    call()
+    assert False
+except KeyError:
+    assert call.last_attempts == 2 and waits == [1.0, 2.0, 1.0]
+try:
+    retry(attempts=0, on=(TimeoutError,), base=1, sleep=None, rng=top)
+    assert False
+except ValueError:
+    pass
+assert call.__name__ == &quot;call&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop <code>for attempt in range(1, attempts + 1)</code>, set <code>wrapper.last_attempts = attempt</code> at the start of each attempt.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def retry(*, attempts, on, base, sleep, rng):
+    if attempts &lt; 1:
+        raise ValueError(&quot;attempts must be at least 1&quot;)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, attempts + 1):
+                wrapper.last_attempts = attempt
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    if attempt == attempts:
+                        raise
+                    sleep(rng.uniform(0, base * 2 ** (attempt - 1)))
+        wrapper.last_attempts = 0
+        return wrapper
+    return decorator</code></pre></div><p>The retry logic of 7.4, packaged so the policy is one line above any function. In the second call, the <code>ConnectionError</code> is retried (one wait of 1.0), and the <code>KeyError</code> on the second attempt is not in <code>on</code>, so it propagates immediately, with <code>last_attempts</code> showing where it stopped. Settings are keyword-only and validated at decoration time. Recording the attempt count on the wrapper is a cheap metric: a function that regularly needs three attempts is a sign of an unhealthy dependency long before it fails outright.</p></div></details>
+</article>
+<article class="prob" id="p-recompute-or-cache" data-pid="m8-3-recompute-or-cache" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Recompute or cache</h3></header>
+<div class="prob-q"><p>Both featurise 100,000 texts drawn from 1,000 distinct strings. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import functools, re
+
+WORD = re.compile(r&quot;[a-z]+&quot;)
+
+def featurise(text):
+    words = WORD.findall(text.lower())
+    return (len(words), sum(len(w) for w in words), len(set(words)))
+
+cached_featurise = functools.lru_cache(maxsize=2048)(featurise)
+texts = [f&quot;Refund request number {i % 1000} for order {i % 1000} please help&quot; for i in range(100_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">rows = [featurise(t) for t in texts]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">rows = [cached_featurise(t) for t in texts]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many times does each version run the regex and the counting?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>487.88 ms</td></tr><tr><td>B</td><td>25.72 ms</td></tr></table></div><p>Version A tokenises every text, 100,000 times. Version B computes each of the 1,000 distinct texts once and answers the other 99,000 calls with a dict lookup, and a lookup is much cheaper than a regex pass plus counting. The cache only pays off because texts repeat; with all-distinct inputs it would add overhead and memory for nothing. Returning a tuple keeps the cached results safe from accidental modification by callers.</p></div></details>
+</article>
+<article class="prob" id="p-an-lru-cache-step-by-step" data-pid="m8-3-an-lru-cache-step-by-step" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. An LRU cache step by step</h3></header>
+<div class="prob-q"><p>Fill in <code>hits</code>, <code>misses</code> and <code>size</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import functools
+
+@functools.lru_cache(maxsize=2)
+def f(x):
+    return x * 2
+
+def info():
+    i = f.cache_info()
+    return i.hits, i.misses, i.currsize
+
+f(1); f(2)
+hits, misses, size = info()
+f(1)
+hits, misses, size = info()
+f(3)
+hits, misses, size = info()
+f(2)
+hits, misses, size = info()
+f(1); f(3)
+hits, misses, size = info()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>hits</code></th><th><code>misses</code></th><th><code>size</code></th></tr><tr><td>f(1), f(2)</td><td><input class="cell" data-a="0" data-s="0" aria-label="hits at f(1), f(2)" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="misses at f(1), f(2)" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at f(1), f(2)" autocomplete="off"></td></tr><tr><td>f(1) again</td><td><input class="cell" data-a="1" data-s="1" aria-label="hits at f(1) again" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="misses at f(1) again" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at f(1) again" autocomplete="off"></td></tr><tr><td>f(3) evicts</td><td><input class="cell" data-a="1" data-s="1" aria-label="hits at f(3) evicts" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="misses at f(3) evicts" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at f(3) evicts" autocomplete="off"></td></tr><tr><td>f(2)</td><td><input class="cell" data-a="1" data-s="1" aria-label="hits at f(2)" autocomplete="off"></td><td><input class="cell" data-a="4" data-s="4" aria-label="misses at f(2)" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at f(2)" autocomplete="off"></td></tr><tr><td>f(1), f(3)</td><td><input class="cell" data-a="1" data-s="1" aria-label="hits at f(1), f(3)" autocomplete="off"></td><td><input class="cell" data-a="6" data-s="6" aria-label="misses at f(1), f(3)" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at f(1), f(3)" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A hit makes an entry the most recently used. When full, the least recently used entry is evicted.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>hits</code></th><th><code>misses</code></th><th><code>size</code></th></tr><tr><td>f(1), f(2)</td><td><code>0</code></td><td><code>2</code></td><td><code>2</code></td></tr><tr><td>f(1) again</td><td><code>1</code></td><td><code>2</code></td><td><code>2</code></td></tr><tr><td>f(3) evicts</td><td><code>1</code></td><td><code>3</code></td><td><code>2</code></td></tr><tr><td>f(2)</td><td><code>1</code></td><td><code>4</code></td><td><code>2</code></td></tr><tr><td>f(1), f(3)</td><td><code>1</code></td><td><code>6</code></td><td><code>2</code></td></tr></table></div><p>1 and 2 are misses. <code>f(1)</code> again is a hit, making 1 the most recently used, so <code>f(3)</code> evicts 2. <code>f(2)</code> is therefore a miss, and it evicts the least recently used entry, which is now 1 (3 was used more recently). Then <code>f(1)</code> misses again and evicts 3, so <code>f(3)</code> misses too. The cache never holds more than two entries, so <code>currsize</code> stays 2 once full.</p></div></details>
+</article>
+<article class="prob" id="p-a-cache-that-grows-forever" data-pid="m8-3-a-cache-that-grows-forever" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. A cache that grows forever</h3></header>
+<div class="prob-q"><p>A long-running scoring service caches <code>score(request_id, text)</code>, but every request has a new id, so the cache never gets a hit and memory grows without limit. Change the caching so that only the text is part of the key, with at most 1,000 entries, while <code>score</code> keeps its signature and still logs the request id.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import functools
+
+LOG = []
+
+@functools.cache
+def score(request_id, text):
+    LOG.append(request_id)
+    return round(len(set(text.split())) / max(1, len(text.split())), 3)
+</textarea>
+<script type="text/plain" class="prob-tests">a = score("r1", "refund refund policy")
+b = score("r2", "refund refund policy")
+assert a == b == 0.667
+assert LOG == ["r1", "r2"]
+assert _score_text.cache_info().hits == 1 and _score_text.cache_info().maxsize == 1000</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = score(&quot;r1&quot;, &quot;refund refund policy&quot;)
+b = score(&quot;r2&quot;, &quot;refund refund policy&quot;)
+assert a == b == 0.667
+assert LOG == [&quot;r1&quot;, &quot;r2&quot;]
+assert _score_text.cache_info().hits == 1 and _score_text.cache_info().maxsize == 1000</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Move the computation into <code>_score_text(text)</code> with <code>@functools.lru_cache(maxsize=1000)</code>; <code>score</code> logs and delegates.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+LOG = []
+
+@functools.lru_cache(maxsize=1000)
+def _score_text(text):
+    return round(len(set(text.split())) / max(1, len(text.split())), 3)
+
+def score(request_id, text):
+    LOG.append(request_id)
+    return _score_text(text)</code></pre></div><p>Two problems in one: the key included an argument (<code>request_id</code>) that does not affect the result but is unique per call, so the hit rate was zero; and <code>functools.cache</code> has no size limit, so every request added an entry forever, a memory leak. The fix caches only the pure part, keyed by what actually determines the result, with a bounded LRU cache. A side effect such as logging must never be inside a cached function either, because on a hit it would silently not happen; here the log stays in the uncached outer function, so every request is still logged.</p></div></details>
+</article>
+<article class="prob" id="p-a-hand-made-cache-into-lru-cache" data-pid="m8-3-a-hand-made-cache-into-lru-cache" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. A hand-made cache into lru_cache</h3></header>
+<div class="prob-q"><p>Replace the manual dictionary cache with <code>functools.lru_cache</code>, same results and same number of loads. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">_SCHEMAS = {}
+loads = []
+
+def load_schema(name):
+    if name in _SCHEMAS:
+        return _SCHEMAS[name]
+    loads.append(name)
+    schema = {&quot;name&quot;: name, &quot;fields&quot;: tuple(sorted({&quot;id&quot;, name + &quot;_id&quot;, &quot;created&quot;}))}
+    _SCHEMAS[name] = schema
+    return schema
+</textarea>
+<script type="text/plain" class="prob-tests">a = load_schema("orders")
+b = load_schema("orders")
+c = load_schema("users")
+assert a is b and a["fields"] == ("created", "id", "orders_id")
+assert loads == ["orders", "users"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = load_schema(&quot;orders&quot;)
+b = load_schema(&quot;orders&quot;)
+c = load_schema(&quot;users&quot;)
+assert a is b and a[&quot;fields&quot;] == (&quot;created&quot;, &quot;id&quot;, &quot;orders_id&quot;)
+assert loads == [&quot;orders&quot;, &quot;users&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Decorate with <code>@functools.lru_cache(maxsize=None)</code> and remove the dictionary logic.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+loads = []
+
+@functools.lru_cache(maxsize=None)
+def load_schema(name):
+    loads.append(name)
+    return {&quot;name&quot;: name, &quot;fields&quot;: tuple(sorted({&quot;id&quot;, name + &quot;_id&quot;, &quot;created&quot;}))}</code></pre></div><p>The decorator does exactly what the hand-written code did, returning the same object on a hit (so <code>a is b</code> still holds), and adds <code>cache_info()</code>, <code>cache_clear()</code> and thread safety for free. The function body now contains only the real work. Note the <code>loads.append</code>: a side effect in a cached function runs only on misses, which is what this test wants (counting loads), but would be a bug if the side effect were something callers rely on every time. <code>maxsize=None</code> is equivalent to <code>functools.cache</code>; unbounded is fine here because the set of schema names is small and fixed.</p></div></details>
+</article>
+<article class="prob" id="p-latency-statistics" data-pid="m8-3-latency-statistics" data-type="predict" data-level="medium" data-answer="298 103.5
+102 130 2400 2400
+106.5 11">
+<header class="prob-head"><h3>12. Latency statistics</h3></header>
+<div class="code"><pre><code class="py">import math, statistics
+
+ms = [120, 95, 110, 2400, 105, 130, 98, 102, 115, 99, 101, 97]
+
+def pct(data, p):
+    s = sorted(data)
+    return s[max(0, math.ceil(p * len(s)) - 1)]
+
+print(round(statistics.mean(ms)), statistics.median(ms))
+print(pct(ms, 0.5), pct(ms, 0.9), pct(ms, 0.95), max(ms))
+fast = [x for x in ms if x &lt; 1000]
+print(round(statistics.mean(fast), 1), len(fast))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The median of an even number of values is the mean of the middle two. Nearest rank takes the value at position <code>ceil(p * n)</code> (counting from 1).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>298 103.5
+102 130 2400 2400
+106.5 11</pre></div><p>One 2.4 s outlier lifts the mean to about 298 ms, almost three times the median of 103.5 ms (the mean of 102 and 105). By nearest rank with 12 values, p50 is the 6th value (102), p90 the 11th (130) and p95 the 12th, which is the outlier itself: with few samples, high percentiles are just the slowest calls. Dropping the outlier gives a mean close to the median, which is why the mean alone misleads for latency.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-a-batch-aware-embedding-cache" data-pid="m8-3-a-batch-aware-embedding-cache" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. A batch-aware embedding cache</h3></header>
+<div class="prob-q"><p>Embedding APIs are called with batches, so a per-call <code>lru_cache</code> on the batch is useless. Write <code>make_cached_embedder(embed_batch)</code> returning <code>embed(texts)</code>: it returns one vector per input text, in order (duplicates included), sends only texts <strong>not yet cached</strong> to <code>embed_batch</code> in <strong>one</strong> call (each distinct text once), and never calls <code>embed_batch</code> when everything is cached. Expose the cache dict as <code>embed.cache</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def make_cached_embedder(embed_batch):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">sent = []
+def embed_batch(texts):
+    sent.append(list(texts))
+    return [[len(t), t.count(" ")] for t in texts]
+
+embed = make_cached_embedder(embed_batch)
+assert embed(["refund policy", "reset", "refund policy"]) == [[13, 1], [5, 0], [13, 1]]
+assert sent == [["refund policy", "reset"]]
+assert embed(["reset", "invoice copy", "reset"]) == [[5, 0], [12, 1], [5, 0]]
+assert sent[-1] == ["invoice copy"]
+assert embed(["reset", "refund policy"]) == [[5, 0], [13, 1]] and len(sent) == 2
+assert embed([]) == [] and len(embed.cache) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sent = []
+def embed_batch(texts):
+    sent.append(list(texts))
+    return [[len(t), t.count(&quot; &quot;)] for t in texts]
+
+embed = make_cached_embedder(embed_batch)
+assert embed([&quot;refund policy&quot;, &quot;reset&quot;, &quot;refund policy&quot;]) == [[13, 1], [5, 0], [13, 1]]
+assert sent == [[&quot;refund policy&quot;, &quot;reset&quot;]]
+assert embed([&quot;reset&quot;, &quot;invoice copy&quot;, &quot;reset&quot;]) == [[5, 0], [12, 1], [5, 0]]
+assert sent[-1] == [&quot;invoice copy&quot;]
+assert embed([&quot;reset&quot;, &quot;refund policy&quot;]) == [[5, 0], [13, 1]] and len(sent) == 2
+assert embed([]) == [] and len(embed.cache) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Find the missing texts in order without duplicates with <code>list(dict.fromkeys(t for t in texts if t not in cache))</code> (4.5).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Call <code>embed_batch(missing)</code> once if <code>missing</code> is not empty, store <code>zip(missing, vectors)</code> in the cache, then build the result from the cache.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def make_cached_embedder(embed_batch):
+    cache = {}
+
+    def embed(texts):
+        missing = list(dict.fromkeys(t for t in texts if t not in cache))
+        if missing:
+            vectors = embed_batch(missing)
+            for text, vec in zip(missing, vectors, strict=True):
+                cache[text] = vec
+        return [cache[t] for t in texts]
+
+    embed.cache = cache
+    return embed</code></pre></div><p>A decorator like <code>lru_cache</code> keys on the whole argument, so a batch with one new text would be a miss for all of them. Caching per <strong>item</strong> and sending only the missing ones keeps the batching benefit (one API call per request) while never paying twice for the same text. <code>dict.fromkeys</code> removes duplicates inside one batch while keeping order, so <code>"refund policy"</code> appearing twice is embedded once, and <code>zip(..., strict=True)</code> checks the API returned one vector per text. In production the cache key would be a hash of the model name and the exact text, stored in a shared store (Redis, a database table) so all workers and future runs benefit, and the cache would be invalidated when the embedding model changes, since vectors from different models are not comparable.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-retry-decorator" data-pid="m8-3-read-the-code-a-retry-decorator" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: a retry decorator</h3></header>
+<div class="prob-q"><p>This retry decorator is used across a codebase. It should retry only <code>TimeoutError</code> and <code>ConnectionError</code> by default, wait <code>delay * 2 ** (n - 1)</code> before retry <code>n</code> (never after the last attempt), re-raise the last error if all attempts fail, and keep the function's name. Read it, find the bugs and fix them. (<code>sleep</code> is injected.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">def retry(attempts=3, on=Exception, delay=1.0, sleep=None):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for i in range(attempts):
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    sleep(delay * 2 ** i)
+            return None
+        return wrapper
+    return decorator
+</textarea>
+<script type="text/plain" class="prob-tests">waits = []
+
+def scripted(*outcomes):
+    it = iter(outcomes)
+    def fn():
+        out = next(it)
+        if isinstance(out, BaseException):
+            raise out
+        return out
+    return fn
+
+f = retry(sleep=waits.append)(scripted(TimeoutError(), "ok"))
+assert f() == "ok" and waits == [1.0]
+
+waits.clear()
+g = retry(attempts=3, sleep=waits.append)(scripted(TimeoutError("a"), ConnectionError("b"), TimeoutError("c")))
+try:
+    g()
+    assert False
+except TimeoutError as e:
+    assert str(e) == "c" and waits == [1.0, 2.0]
+
+waits.clear()
+h = retry(sleep=waits.append)(scripted(ValueError("bad input"), "never"))
+try:
+    h()
+    assert False
+except ValueError:
+    assert waits == []
+
+@retry(sleep=waits.append)
+def named():
+    return 1
+assert named.__name__ == "named"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">waits = []
+
+def scripted(*outcomes):
+    it = iter(outcomes)
+    def fn():
+        out = next(it)
+        if isinstance(out, BaseException):
+            raise out
+        return out
+    return fn
+
+f = retry(sleep=waits.append)(scripted(TimeoutError(), &quot;ok&quot;))
+assert f() == &quot;ok&quot; and waits == [1.0]
+
+waits.clear()
+g = retry(attempts=3, sleep=waits.append)(scripted(TimeoutError(&quot;a&quot;), ConnectionError(&quot;b&quot;), TimeoutError(&quot;c&quot;)))
+try:
+    g()
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;c&quot; and waits == [1.0, 2.0]
+
+waits.clear()
+h = retry(sleep=waits.append)(scripted(ValueError(&quot;bad input&quot;), &quot;never&quot;))
+try:
+    h()
+    assert False
+except ValueError:
+    assert waits == []
+
+@retry(sleep=waits.append)
+def named():
+    return 1
+assert named.__name__ == &quot;named&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Change the default <code>on</code> to <code>(TimeoutError, ConnectionError)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Track the attempt number; on the last one, <code>raise</code> instead of sleeping. Delete the <code>return None</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Add <code>functools.wraps(func)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+
+def retry(attempts=3, on=(TimeoutError, ConnectionError), delay=1.0, sleep=None):
+    if attempts &lt; 1:
+        raise ValueError(&quot;attempts must be at least 1&quot;)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except on:
+                    if attempt == attempts:
+                        raise
+                    sleep(delay * 2 ** (attempt - 1))
+        return wrapper
+    return decorator</code></pre></div><p>Four bugs. <strong><code>on=Exception</code></strong> as the default retried everything, including <code>ValueError</code> for bad input and bugs, so failures were delayed by seconds of pointless waiting and repeated calls. <strong>Sleeping after the last attempt</strong> wasted the longest wait of the sequence for nothing. <strong><code>return None</code></strong> after the loop turned "all attempts failed" into a normal-looking <code>None</code> result, the swallowed-error bug of 7.3; re-raising the last exception on the final attempt fixes both of these at once. And without <strong><code>functools.wraps</code></strong>, every retried function was named <code>wrapper</code> in logs and traces. Validating <code>attempts</code> up front turns <code>retry(attempts=0)</code>, which would never call the function at all, into an error at import.</p></div></details>
+</article>
+<article class="prob" id="p-latency-percentiles-per-function" data-pid="m8-3-latency-percentiles-per-function" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Latency percentiles per function</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>track_latency(clock, window=1000)</code> that records the duration of every call (successful or not) in a per-function <code>deque</code> keeping only the last <code>window</code> durations, and exposes <code>wrapper.latency()</code> returning <code>{"count": n, "p50": ..., "p95": ..., "max": ...}</code> computed by nearest rank over the recorded durations (<code>None</code> values when there are none). Exceptions propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import functools, math
+from collections import deque
+
+def track_latency(clock, window=1000):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([0, 1, 10, 12, 20, 23, 30, 34, 40, 50])
+clock = lambda: next(ticks)
+
+@track_latency(clock, window=4)
+def ask(fail=False):
+    if fail:
+        raise TimeoutError("slow")
+    return "ok"
+
+assert ask.latency() == {"count": 0, "p50": None, "p95": None, "max": None}
+ask(); ask(); ask()
+try:
+    ask(fail=True)
+except TimeoutError:
+    pass
+assert ask.latency() == {"count": 4, "p50": 2, "p95": 4, "max": 4}
+ask()
+assert ask.latency() == {"count": 4, "p50": 3, "p95": 10, "max": 10}
+assert ask.__name__ == "ask"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([0, 1, 10, 12, 20, 23, 30, 34, 40, 50])
+clock = lambda: next(ticks)
+
+@track_latency(clock, window=4)
+def ask(fail=False):
+    if fail:
+        raise TimeoutError(&quot;slow&quot;)
+    return &quot;ok&quot;
+
+assert ask.latency() == {&quot;count&quot;: 0, &quot;p50&quot;: None, &quot;p95&quot;: None, &quot;max&quot;: None}
+ask(); ask(); ask()
+try:
+    ask(fail=True)
+except TimeoutError:
+    pass
+assert ask.latency() == {&quot;count&quot;: 4, &quot;p50&quot;: 2, &quot;p95&quot;: 4, &quot;max&quot;: 4}
+ask()
+assert ask.latency() == {&quot;count&quot;: 4, &quot;p50&quot;: 3, &quot;p95&quot;: 10, &quot;max&quot;: 10}
+assert ask.__name__ == &quot;ask&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Record <code>clock() - start</code> in a <code>finally</code> block, into <code>deque(maxlen=window)</code> created in the decorator level.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Nearest rank: <code>s = sorted(values)</code>, <code>s[math.ceil(p * len(s)) - 1]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, math
+from collections import deque
+
+def track_latency(clock, window=1000):
+    def decorator(func):
+        durations = deque(maxlen=window)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            start = clock()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                durations.append(clock() - start)
+
+        def latency():
+            if not durations:
+                return {&quot;count&quot;: 0, &quot;p50&quot;: None, &quot;p95&quot;: None, &quot;max&quot;: None}
+            s = sorted(durations)
+            rank = lambda p: s[math.ceil(p * len(s)) - 1]
+            return {&quot;count&quot;: len(s), &quot;p50&quot;: rank(0.50), &quot;p95&quot;: rank(0.95), &quot;max&quot;: s[-1]}
+
+        wrapper.latency = latency
+        return wrapper
+    return decorator</code></pre></div><p>The durations are 1, 2, 3, 4 for the first four calls (the failed one included, thanks to <code>finally</code>), so p50 is the 2nd sorted value and p95 the 4th. The fifth call takes 10, and <code>deque(maxlen=4)</code> drops the oldest duration (1), so the window becomes 2, 3, 4, 10: p50 is now 3 and p95 is 10. A bounded window keeps memory constant and makes the statistics describe <strong>recent</strong> behaviour, which is what an alert should react to. Failed calls must be included: timeouts are often the slowest calls, and excluding them makes a degrading service look healthy. Production systems use histograms (Prometheus, OpenTelemetry) rather than raw samples, but the percentiles mean the same thing.</p></div></details>
+</article>
+<article class="prob" id="p-equal-keys-different-types" data-pid="m8-3-equal-keys-different-types" data-type="predict" data-level="hard" data-answer="1 (int) | 1.0 (float) | 1.0 (float)
+1 (int) | 1.0 (float) | True (bool)
+2 3
+832040 31 28">
+<header class="prob-head"><h3>16. Equal keys, different types</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+@functools.lru_cache(maxsize=None)
+def describe(x):
+    return f&quot;{x!r} ({type(x).__name__})&quot;
+
+print(describe(1), &quot;|&quot;, describe(1.0), &quot;|&quot;, describe(True))
+
+@functools.lru_cache(maxsize=None, typed=True)
+def describe_typed(x):
+    return f&quot;{x!r} ({type(x).__name__})&quot;
+
+print(describe_typed(1), &quot;|&quot;, describe_typed(1.0), &quot;|&quot;, describe_typed(True))
+print(describe.cache_info().currsize, describe_typed.cache_info().currsize)
+
+@functools.lru_cache(maxsize=None)
+def fib(n):
+    return n if n &lt; 2 else fib(n - 1) + fib(n - 2)
+print(fib(30), fib.cache_info().misses, fib.cache_info().hits)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A single <code>int</code> argument becomes its own key; a <code>float</code> or <code>bool</code> argument is wrapped in a tuple, and <code>(1.0,) == (True,)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With caching, each <code>fib(n)</code> is computed once; recursive calls go through the cached wrapper (8.1).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>1 (int) | 1.0 (float) | 1.0 (float)
+1 (int) | 1.0 (float) | True (bool)
+2 3
+832040 31 28</pre></div><p>Without <code>typed</code>, <code>describe(1)</code> is stored under the bare key <code>1</code> (the fast path for a single <code>int</code>), so <code>describe(1.0)</code> misses and stores its own entry under the tuple <code>(1.0,)</code>. <code>describe(True)</code> uses the tuple <code>(True,)</code>, which equals <code>(1.0,)</code> and hashes the same, so it <strong>hits</strong> the float's entry and prints <code>1.0 (float)</code>: the cache answered with a result computed for a different type. With <code>typed=True</code>, the type is part of every key, so three entries are stored. For <code>fib(30)</code>, each value from 0 to 30 is computed once (31 misses), and the recursive calls that find an already computed value are hits: 28 of them. Without the cache, <code>fib(30)</code> makes about 2.7 million calls.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-when-is-it-safe-to-cache-a-function-s-re" data-pid="m8-3-when-is-it-safe-to-cache-a-function-s-re" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When is it safe to cache a function's results?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When the result depends only on the arguments and the function has no side effects that callers rely on: the same arguments always give the same answer, and skipping the call changes nothing else. Pure computations qualify. Functions that depend on time, randomness, files, databases or the network can be cached only if you accept staleness, made explicit with a TTL or invalidation when the source changes. The key must include every input that affects the result: for LLM calls the model, the full prompt including system messages, tools and all parameters; sampling with temperature above 0 should usually not be cached. Arguments must be hashable, returned mutable objects are shared by all callers, the cache needs a size bound in long-running processes, and caches that cross users must not leak one user's data to another.</p></div></details>
+</article>
+<article class="prob" id="p-how-does-functools-lru-cache-work-and-wh" data-pid="m8-3-how-does-functools-lru-cache-work-and-wh" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How does <code>functools.lru_cache</code> work, and what are its pitfalls?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It wraps the function and keeps a dict from a key built from the positional and keyword arguments to the result, plus a doubly linked list that records usage order. A hit moves the entry to the most recent end and returns the stored object; a miss calls the function, stores the result and, if <code>maxsize</code> is exceeded, evicts the least recently used entry. Lookups and updates are O(1), it is thread-safe, and <code>cache_info()</code> and <code>cache_clear()</code> are available. Pitfalls: arguments must be hashable; <code>f(1, 2)</code> and <code>f(1, b=2)</code> are different keys; equal values of different types may or may not share a key unless <code>typed=True</code>; the returned object is shared, so mutating it corrupts the cache; <code>@cache</code> (unbounded) leaks memory when arguments keep changing; side effects inside the function run only on misses; decorating methods keeps every <code>self</code> alive; and the cache is per process, so it does not help other workers and disappears on restart.</p></div></details>
+</article>
+<article class="prob" id="p-design-the-caching-layer-for-an-llm-appl" data-pid="m8-3-design-the-caching-layer-for-an-llm-appl" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Design the caching layer for an LLM application.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Separate the caches by what they store. An <strong>exact response cache</strong> keyed by a hash of the canonical request (model, system prompt version, messages, tools, parameters), used only for deterministic requests, with a TTL that reflects how fresh answers must be, scoped per tenant or user when responses can contain private data, and stored in a shared store such as Redis so all workers benefit. An <strong>embedding cache</strong> keyed by model and text hash, long-lived, and invalidated by model version, which often saves the most money in RAG ingestion. A <strong>retrieval cache</strong> for search results with a short TTL, invalidated when the index is updated. A <strong>semantic cache</strong> (match similar rather than identical questions via embeddings) can raise the hit rate but risks returning an answer to a subtly different question, so it needs a strict similarity threshold and evaluation. Measure hit rate, savings and staleness, protect against cache stampedes when a popular entry expires, provider prompt caching (cached prefixes billed at a discount) complements but does not replace an application cache, and make it easy to bypass the cache for debugging and evaluation runs.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>functools.lru_cache(maxsize=...)</code> memoizes by hashable arguments and evicts the least recently used entry; <code>cache_info()</code> shows hits and misses.</li><li>Cache only results that depend on the arguments alone; the key must include everything that changes the answer (for LLMs: model, full prompt, parameters).</li><li>Bound caches in long-running code, never mutate returned objects, keep side effects outside cached functions, and use a TTL when freshness matters.</li><li>A retry decorator packages 7.4's policy; a decorator cannot stop a running synchronous call, so pass timeouts to the I/O itself.</li><li>Time with <code>perf_counter</code>, include failures, and report percentiles (p50, p95, p99), not just the mean.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

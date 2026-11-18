@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8.P · Module 8 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m8-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 8 · Decorators</span></div>
+  <h1>8.P Module 8 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 8: wrappers and <code>functools.wraps</code>, decorator factories and stacking order, caching, retries and timing, and registration with signature introspection. Then a mini project that needs all of it: a small tool framework for an agent, with generated schemas, caching, retries and statistics.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">3 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For every decorator, ask three questions. <strong>What runs when?</strong> The factory and the decorator run once, at definition time; the wrapper runs on every call (8.1, 8.2). <strong>What does the name end up bound to?</strong> A wrapper (then <code>functools.wraps</code> is mandatory), the original function (registration, 8.4), or something else. <strong>What must the wrapper never change?</strong> The arguments, the return value and the exceptions, unless changing them is the decorator's stated purpose (8.1). And with several decorators, decide the order on purpose: the top one is the outermost layer (8.2).</p>
+<p>The problems mix the lessons on purpose. The mini project at the end combines all of them in one small framework of the kind agent libraries provide.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-two-moments-and-a-name" data-pid="m8-p-two-moments-and-a-name" data-type="predict" data-level="easy" data-answer="start
+stamping reply
+[reply] hi | [reply] Please: hi
+reply raw">
+<header class="prob-head"><h3>1. Two moments and a name</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+def stamp(func):
+    print(&quot;stamping&quot;, func.__name__)
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return f&quot;[{func.__name__}] &quot; + func(*args, **kwargs)
+    return wrapper
+
+print(&quot;start&quot;)
+
+@stamp
+def reply(text, *, polite=False):
+    return (&quot;Please: &quot; if polite else &quot;&quot;) + text
+
+print(reply(&quot;hi&quot;), &quot;|&quot;, reply(&quot;hi&quot;, polite=True))
+print(reply.__name__, reply.__wrapped__(&quot;raw&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The decorator body runs when the <code>def</code> statement runs; <code>__wrapped__</code> is the original.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>start
+stamping reply
+[reply] hi | [reply] Please: hi
+reply raw</pre></div><p>"start" prints first because it comes before the <code>def</code>; "stamping reply" prints when the decorated function is defined. Calls go through the wrapper, which adds the prefix and forwards the keyword argument unchanged. <code>wraps</code> keeps the name and provides <code>__wrapped__</code>, which calls the original function without the prefix.</p></div></details>
+</article>
+<article class="prob" id="p-check-the-return-type" data-pid="m8-p-check-the-return-type" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Check the return type</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>returns(*types)</code> that checks the decorated function's result is an instance of one of <code>types</code> and raises <code>TypeError(f"{name} returned {type_name}, expected {expected}")</code> otherwise, where <code>expected</code> is the type names joined with <code>" or "</code>. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import functools
+
+def returns(*types):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@returns(str)
+def summarise(text):
+    return text[:10] if text else None
+
+@returns(int, float)
+def score(x):
+    return x
+
+assert summarise("refund policy text") == "refund pol" and score(3) == 3 and score(0.5) == 0.5
+try:
+    summarise("")
+    assert False
+except TypeError as e:
+    assert str(e) == "summarise returned NoneType, expected str"
+try:
+    score("high")
+    assert False
+except TypeError as e:
+    assert str(e) == "score returned str, expected int or float"
+assert summarise.__name__ == "summarise"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@returns(str)
+def summarise(text):
+    return text[:10] if text else None
+
+@returns(int, float)
+def score(x):
+    return x
+
+assert summarise(&quot;refund policy text&quot;) == &quot;refund pol&quot; and score(3) == 3 and score(0.5) == 0.5
+try:
+    summarise(&quot;&quot;)
+    assert False
+except TypeError as e:
+    assert str(e) == &quot;summarise returned NoneType, expected str&quot;
+try:
+    score(&quot;high&quot;)
+    assert False
+except TypeError as e:
+    assert str(e) == &quot;score returned str, expected int or float&quot;
+assert summarise.__name__ == &quot;summarise&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>isinstance(result, types)</code> accepts a tuple of types directly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def returns(*types):
+    expected = &quot; or &quot;.join(t.__name__ for t in types)
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            if not isinstance(result, types):
+                raise TypeError(f&quot;{func.__name__} returned {type(result).__name__}, expected {expected}&quot;)
+            return result
+        return wrapper
+    return decorator</code></pre></div><p>The expected-types text is built once in the factory, and <code>isinstance</code> with a tuple covers several types in one check. A function that sometimes returns <code>None</code> instead of a string is a classic source of errors far downstream (a prompt containing the text <code>"None"</code>); checking at the boundary turns it into an immediate, precise error. Static type checkers catch many such problems before running (11.1), but data from models and APIs can still surprise you at run time.</p></div></details>
+</article>
+<article class="prob" id="p-a-factory-with-a-missing-level" data-pid="m8-p-a-factory-with-a-missing-level" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A factory with a missing level</h3></header>
+<div class="prob-q"><p><code>truncate(n)</code> should be used as <code>@truncate(5)</code> to cut the decorated function's list result to <code>n</code> items. Decorating fails at import with a <code>TypeError</code>. Fix the factory.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import functools
+
+def truncate(n):
+    @functools.wraps(n)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)[:n]
+    return wrapper
+</textarea>
+<script type="text/plain" class="prob-tests">@truncate(2)
+def top_docs(q):
+    return [f"{q}-{i}" for i in range(5)]
+
+assert top_docs("refund") == ["refund-0", "refund-1"]
+assert top_docs.__name__ == "top_docs"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@truncate(2)
+def top_docs(q):
+    return [f&quot;{q}-{i}&quot; for i in range(5)]
+
+assert top_docs(&quot;refund&quot;) == [&quot;refund-0&quot;, &quot;refund-1&quot;]
+assert top_docs.__name__ == &quot;top_docs&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A decorator with arguments needs three levels: the factory takes <code>n</code>, the decorator takes <code>func</code>, the wrapper takes the call's arguments.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def truncate(n):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)[:n]
+        return wrapper
+    return decorator</code></pre></div><p><code>@truncate(2)</code> first calls <code>truncate(2)</code>, and whatever that returns is applied to the function. The broken version returned <code>wrapper</code> directly, after applying <code>functools.wraps(2)</code> to it, which fails because an integer has no function attributes; even without that, the function would have been passed to <code>wrapper</code> as an argument. The middle level, <code>decorator(func)</code>, is what receives the function and gives <code>func</code> a meaning inside the wrapper's closure (8.2).</p></div></details>
+</article>
+<article class="prob" id="p-layers-and-a-cache" data-pid="m8-p-layers-and-a-cache" data-type="predict" data-level="medium" data-answer="4 2
+2 2">
+<header class="prob-head"><h3>4. Layers and a cache</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+LOG = []
+
+def logged(func):
+    @functools.wraps(func)
+    def wrapper(x):
+        LOG.append(func.__name__)
+        return func(x)
+    return wrapper
+
+@logged
+@functools.lru_cache(maxsize=None)
+def outer_log(x):
+    return x * 2
+
+@functools.lru_cache(maxsize=None)
+@logged
+def inner_log(x):
+    return x * 3
+
+for x in [1, 1, 2, 1]:
+    outer_log(x); inner_log(x)
+print(LOG.count(&quot;outer_log&quot;), LOG.count(&quot;inner_log&quot;))
+print(outer_log.__wrapped__.cache_info().hits, inner_log.cache_info().hits)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A cache placed outside the logger answers hits before the logger runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>4 2
+2 2</pre></div><p>For <code>outer_log</code>, the logger is outermost, so all four calls are logged, even the two that the cache answers. For <code>inner_log</code>, the cache is outermost, so only the two misses reach the logger. <code>outer_log.__wrapped__</code> is the cached function inside the logger (thanks to <code>wraps</code>), with 2 hits; <code>inner_log</code> is itself the cache, also with 2 hits. Same cache, same hits, different logging, purely because of the order.</p></div></details>
+</article>
+<article class="prob" id="p-versioned-prompt-registry" data-pid="m8-p-versioned-prompt-registry" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Versioned prompt registry</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>prompt(name, version)</code> that registers the decorated function in the global dict <code>PROMPTS</code> under <code>(name, version)</code>, sets <code>func.prompt_name</code> and <code>func.prompt_version</code>, raises <code>ValueError</code> if that pair is already registered, and returns the function. Then write <code>latest(name)</code> returning the registered function with the highest version for <code>name</code> (versions are integers), raising <code>KeyError(name)</code> if there is none.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">PROMPTS = {}
+
+def prompt(name, version):
+    pass
+
+def latest(name):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@prompt("summary", 1)
+def summary_v1(text):
+    return f"Summarise: {text}"
+
+@prompt("summary", 3)
+def summary_v3(text):
+    return f"Summarise in 3 bullet points: {text}"
+
+@prompt("summary", 2)
+def summary_v2(text):
+    return f"Summarise briefly: {text}"
+
+@prompt("qa", 1)
+def qa_v1(context, q):
+    return f"{context}\nQ: {q}"
+
+assert latest("summary") is summary_v3 and latest("summary")("x").startswith("Summarise in 3")
+assert summary_v2.prompt_version == 2 and summary_v2.prompt_name == "summary" and latest("qa") is qa_v1
+try:
+    prompt("summary", 2)(lambda t: t)
+    assert False
+except ValueError:
+    pass
+try:
+    latest("translate")
+    assert False
+except KeyError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@prompt(&quot;summary&quot;, 1)
+def summary_v1(text):
+    return f&quot;Summarise: {text}&quot;
+
+@prompt(&quot;summary&quot;, 3)
+def summary_v3(text):
+    return f&quot;Summarise in 3 bullet points: {text}&quot;
+
+@prompt(&quot;summary&quot;, 2)
+def summary_v2(text):
+    return f&quot;Summarise briefly: {text}&quot;
+
+@prompt(&quot;qa&quot;, 1)
+def qa_v1(context, q):
+    return f&quot;{context}\nQ: {q}&quot;
+
+assert latest(&quot;summary&quot;) is summary_v3 and latest(&quot;summary&quot;)(&quot;x&quot;).startswith(&quot;Summarise in 3&quot;)
+assert summary_v2.prompt_version == 2 and summary_v2.prompt_name == &quot;summary&quot; and latest(&quot;qa&quot;) is qa_v1
+try:
+    prompt(&quot;summary&quot;, 2)(lambda t: t)
+    assert False
+except ValueError:
+    pass
+try:
+    latest(&quot;translate&quot;)
+    assert False
+except KeyError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>latest</code> filters the keys with <code>key[0] == name</code> and takes <code>max</code> by version.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">PROMPTS = {}
+
+def prompt(name, version):
+    def decorator(func):
+        key = (name, version)
+        if key in PROMPTS:
+            raise ValueError(f&quot;prompt {name!r} version {version} is already registered&quot;)
+        func.prompt_name = name
+        func.prompt_version = version
+        PROMPTS[key] = func
+        return func
+    return decorator
+
+def latest(name):
+    versions = [v for (n, v) in PROMPTS if n == name]
+    if not versions:
+        raise KeyError(name)
+    return PROMPTS[(name, max(versions))]</code></pre></div><p>Prompts change often, and comparing versions in evaluations requires keeping the old ones; a registry keyed by name and version does that, and the attributes on each function let traces and logs record which version produced an answer. Registration order does not matter, because <code>latest</code> picks the maximum version, not the last one registered (v2 was defined after v3). The duplicate check catches a copy-pasted decorator at import. Production systems often store prompt versions outside the code (a prompt management tool or a database), but the lookup logic is the same.</p></div></details>
+</article>
+<article class="prob" id="p-a-framework-that-cannot-see-the-paramete" data-pid="m8-p-a-framework-that-cannot-see-the-paramete" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. A framework that cannot see the parameters</h3></header>
+<div class="prob-q"><p>A mini framework calls handlers with values taken <strong>by parameter name</strong> from a request dict, using <code>inspect.signature</code>. After <code>@audit</code> was added, every handler fails with a missing argument. Fix the decorator so the framework sees the real parameters.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import inspect
+
+AUDIT = []
+
+def audit(func):
+    def wrapper(*args, **kwargs):
+        AUDIT.append(func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+def call_handler(handler, request):
+    names = inspect.signature(handler).parameters
+    return handler(**{n: request[n] for n in names if n in request})
+</textarea>
+<script type="text/plain" class="prob-tests">@audit
+def get_order(order_id, user):
+    return f"order {order_id} for {user}"
+
+request = {"order_id": 7, "user": "ana", "trace_id": "t1"}
+assert call_handler(get_order, request) == "order 7 for ana"
+assert AUDIT == ["get_order"] and get_order.__name__ == "get_order"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@audit
+def get_order(order_id, user):
+    return f&quot;order {order_id} for {user}&quot;
+
+request = {&quot;order_id&quot;: 7, &quot;user&quot;: &quot;ana&quot;, &quot;trace_id&quot;: &quot;t1&quot;}
+assert call_handler(get_order, request) == &quot;order 7 for ana&quot;
+assert AUDIT == [&quot;get_order&quot;] and get_order.__name__ == &quot;get_order&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>functools.wraps</code>, <code>inspect.signature</code> sees the wrapper's <code>(*args, **kwargs)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+import inspect
+
+AUDIT = []
+
+def audit(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        AUDIT.append(func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+def call_handler(handler, request):
+    names = inspect.signature(handler).parameters
+    return handler(**{n: request[n] for n in names if n in request})</code></pre></div><p>The framework asked the decorated function for its parameters and got <code>args</code> and <code>kwargs</code>, neither of which is in the request, so it called the handler with nothing. <code>functools.wraps</code> sets <code>__wrapped__</code>, and <code>inspect.signature</code> follows it to the original's <code>(order_id, user)</code>. This is precisely how a decorator without <code>wraps</code> breaks FastAPI routes, pytest fixtures and agent tool schemas: the code still runs, but every tool that introspects it is misled (8.1, 8.4).</p></div></details>
+</article>
+<article class="prob" id="p-run-once-then-reuse" data-pid="m8-p-run-once-then-reuse" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Run once, then reuse</h3></header>
+<div class="prob-q"><p>Loading a model or creating a client should happen once, lazily, on first use. Write a decorator <code>once</code> for functions without arguments: the first call runs the function and stores its result; later calls return the stored result without calling it again. If the first call raises, nothing is stored and the next call tries again. Provide <code>wrapper.reset()</code> to forget the stored result. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import functools
+
+def once(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">loads = []
+attempts = iter([ConnectionError("hub unreachable"), "model-v1", "model-v2"])
+
+@once
+def load_model():
+    loads.append(1)
+    out = next(attempts)
+    if isinstance(out, Exception):
+        raise out
+    return out
+
+try:
+    load_model()
+    assert False
+except ConnectionError:
+    pass
+assert load_model() == "model-v1" and load_model() == "model-v1" and len(loads) == 2
+load_model.reset()
+assert load_model() == "model-v2" and len(loads) == 3 and load_model.__name__ == "load_model"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">loads = []
+attempts = iter([ConnectionError(&quot;hub unreachable&quot;), &quot;model-v1&quot;, &quot;model-v2&quot;])
+
+@once
+def load_model():
+    loads.append(1)
+    out = next(attempts)
+    if isinstance(out, Exception):
+        raise out
+    return out
+
+try:
+    load_model()
+    assert False
+except ConnectionError:
+    pass
+assert load_model() == &quot;model-v1&quot; and load_model() == &quot;model-v1&quot; and len(loads) == 2
+load_model.reset()
+assert load_model() == &quot;model-v2&quot; and len(loads) == 3 and load_model.__name__ == &quot;load_model&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a private sentinel <code>_UNSET = object()</code> (2.1) to tell "not loaded yet" apart from a function that returns <code>None</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the state in a one-item dict or with <code>nonlocal</code>, so <code>reset</code> can change it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+_UNSET = object()
+
+def once(func):
+    state = {&quot;value&quot;: _UNSET}
+
+    @functools.wraps(func)
+    def wrapper():
+        if state[&quot;value&quot;] is _UNSET:
+            state[&quot;value&quot;] = func()
+        return state[&quot;value&quot;]
+
+    def reset():
+        state[&quot;value&quot;] = _UNSET
+
+    wrapper.reset = reset
+    return wrapper</code></pre></div><p>The sentinel distinguishes "never loaded" from "loaded, and the result happens to be <code>None</code>", which a plain <code>None</code> check would get wrong (2.1). If <code>func()</code> raises, the assignment never happens, so the state stays unset and the next call retries: a transient failure at start-up does not leave the process permanently broken. <code>functools.cache</code> on a zero-argument function gives the same caching but no simple per-function reset and no retry semantics you control. In threaded servers, two requests could both see the unset state and load twice; a lock around the check fixes that (14.2).</p></div></details>
+</article>
+<article class="prob" id="p-recursive-edit-distance-plain-or-cached" data-pid="m8-p-recursive-edit-distance-plain-or-cached" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Recursive edit distance: plain or cached</h3></header>
+<div class="prob-q"><p>Both compute the edit distance between two 7-character words with the same recursive definition. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def dist(a, b):
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    if a[0] == b[0]:
+        return dist(a[1:], b[1:])
+    return 1 + min(dist(a[1:], b), dist(a, b[1:]), dist(a[1:], b[1:]))
+
+@functools.lru_cache(maxsize=None)
+def cdist(a, b):
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    if a[0] == b[0]:
+        return cdist(a[1:], b[1:])
+    return 1 + min(cdist(a[1:], b), cdist(a, b[1:]), cdist(a[1:], b[1:]))
+
+x, y = &quot;refunds&quot;, &quot;rufands&quot; </code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">d = dist(x, y)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">cdist.cache_clear()
+d = cdist(x, y)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>How many times does the plain version solve the same pair of suffixes?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>587.83 µs</td></tr><tr><td>B</td><td>62.49 µs</td></tr></table></div><p>The plain recursion branches three ways at every mismatch and solves the same <code>(suffix, suffix)</code> pairs over and over, so its work grows exponentially with the length. The cached version solves each of the at most 8 x 8 suffix pairs once; every repeated sub-problem is a dictionary lookup, because the recursive calls go through the cached wrapper (8.1). This is dynamic programming by memoization, the subject of 16.5. Clearing the cache inside the measured code makes the comparison fair: every run starts empty.</p></div></details>
+</article>
+<article class="prob" id="p-counting-through-a-registry" data-pid="m8-p-counting-through-a-registry" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Counting through a registry</h3></header>
+<div class="prob-q"><p>Fill in <code>calls</code> and <code>names</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import functools
+
+REG = {}
+calls = {}
+
+def counted(func):
+    @functools.wraps(func)
+    def wrapper(*args):
+        calls[func.__name__] = calls.get(func.__name__, 0) + 1
+        return func(*args)
+    return wrapper
+
+def reg(func):
+    REG[func.__name__] = func
+    return func
+
+@reg
+@counted
+def a(x):
+    return x
+
+@counted
+@reg
+def b(x):
+    return x
+
+names = sorted(REG)
+REG[&quot;a&quot;](1); REG[&quot;b&quot;](1)
+names = sorted(REG)
+a(1); b(1)
+names = sorted(REG)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>calls</code></th><th><code>names</code></th></tr><tr><td>after definitions</td><td><input class="cell" data-a="{}" data-s="{}" aria-label="calls at after definitions" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;]" aria-label="names at after definitions" autocomplete="off"></td></tr><tr><td>through the registry</td><td><input class="cell" data-a="{&#x27;a&#x27;: 1}" data-s="{&#x27;a&#x27;: 1}" aria-label="calls at through the registry" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;]" aria-label="names at through the registry" autocomplete="off"></td></tr><tr><td>by name</td><td><input class="cell" data-a="{&#x27;a&#x27;: 2, &#x27;b&#x27;: 1}" data-s="{&#x27;a&#x27;: 2, &#x27;b&#x27;: 1}" aria-label="calls at by name" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;a&#x27;, &#x27;b&#x27;]" data-s="[&#x27;a&#x27;, &#x27;b&#x27;]" aria-label="names at by name" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>a</code> registered its counted wrapper; <code>b</code> registered the plain function and was wrapped afterwards.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>calls</code></th><th><code>names</code></th></tr><tr><td>after definitions</td><td><code>{}</code></td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;]</code></td></tr><tr><td>through the registry</td><td><code>{&#x27;a&#x27;: 1}</code></td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;]</code></td></tr><tr><td>by name</td><td><code>{&#x27;a&#x27;: 2, &#x27;b&#x27;: 1}</code></td><td><code>[&#x27;a&#x27;, &#x27;b&#x27;]</code></td></tr></table></div><p>Both functions are registered, under their own names. Through the registry, <code>a</code> is counted (its registered object is the counted wrapper) but <code>b</code> is not, because <code>reg</code> saw <code>b</code> before <code>counted</code> wrapped it. Called by name, both go through their counted wrappers. The difference is only the order of the two decorators.</p></div></details>
+</article>
+<article class="prob" id="p-inline-retries-and-timing-into-decorator" data-pid="m8-p-inline-retries-and-timing-into-decorator" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Inline retries and timing into decorators</h3></header>
+<div class="prob-q"><p>Move the retry loop and the timing into two decorators, <code>retrying(attempts)</code> and <code>timed</code>, and apply them so the behaviour and <code>TIMES</code> stay the same. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">TIMES = []
+ticks = iter(range(0, 1000, 5))
+clock = lambda: next(ticks)
+
+def fetch(q, flaky):
+    start = clock()
+    try:
+        for attempt in range(1, 4):
+            try:
+                if flaky and attempt &lt; 3:
+                    raise TimeoutError(&quot;slow&quot;)
+                return f&quot;result for {q}&quot;
+            except TimeoutError:
+                if attempt == 3:
+                    raise
+    finally:
+        TIMES.append(clock() - start)
+</textarea>
+<script type="text/plain" class="prob-tests">assert fetch("refund", flaky=False) == "result for refund"
+assert fetch("reset", flaky=True) == "result for reset"
+assert TIMES == [5, 5]
+assert fetch.__name__ == "fetch"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert fetch(&quot;refund&quot;, flaky=False) == &quot;result for refund&quot;
+assert fetch(&quot;reset&quot;, flaky=True) == &quot;result for reset&quot;
+assert TIMES == [5, 5]
+assert fetch.__name__ == &quot;fetch&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The timing covers all attempts, so <code>@timed</code> must be the outer decorator.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside the decorated function, failures must depend on an attempt counter; keep it in a small dict keyed by the query.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+TIMES = []
+ticks = iter(range(0, 1000, 5))
+clock = lambda: next(ticks)
+
+def timed(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = clock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            TIMES.append(clock() - start)
+    return wrapper
+
+def retrying(attempts):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except TimeoutError:
+                    if attempt == attempts:
+                        raise
+        return wrapper
+    return decorator
+
+_tries = {}
+
+@timed
+@retrying(attempts=3)
+def fetch(q, flaky):
+    _tries[q] = _tries.get(q, 0) + 1
+    if flaky and _tries[q] &lt; 3:
+        raise TimeoutError(&quot;slow&quot;)
+    return f&quot;result for {q}&quot;</code></pre></div><p>The original mixed three concerns in one function: the real work, retrying and timing. With decorators, <code>fetch</code> contains only the work, and the two policies are reusable and visible in its header. <code>@timed</code> sits on top so the measurement covers the whole retry sequence, as before; the clock is read twice per call either way, so <code>TIMES</code> is unchanged. The attempt counter had to move into state that survives across calls, because each retry is now a separate call of the inner function, a small sign of how decorators separate "the attempt" from "the policy". In real code the flakiness would come from the network, not a counter.</p></div></details>
+</article>
+<article class="prob" id="p-stop-a-stream-at-a-size-limit" data-pid="m8-p-stop-a-stream-at-a-size-limit" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Stop a stream at a size limit</h3></header>
+<div class="prob-q"><p>Write a decorator factory <code>max_chars(limit)</code> for <strong>generator functions</strong> that yield text chunks. The wrapper yields the chunks unchanged until the total length would exceed <code>limit</code>; it then yields only the part of that chunk that fits (if any), <strong>closes</strong> the underlying generator, sets <code>wrapper.truncated = True</code> and stops. If the stream ends within the limit, <code>wrapper.truncated</code> is <code>False</code>. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import functools
+
+def max_chars(limit):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">closed = []
+
+@max_chars(12)
+def answer(chunks):
+    try:
+        for c in chunks:
+            yield c
+    finally:
+        closed.append(True)
+
+assert "".join(answer(["Refunds ", "take five ", "days."])) == "Refunds take"
+assert answer.truncated is True and closed == [True]
+assert list(answer(["short", " one"])) == ["short", " one"] and answer.truncated is False
+assert list(answer(["exactly12chr"])) == ["exactly12chr"] and answer.truncated is False
+assert list(answer(["123456789012", "3"])) == ["123456789012"] and answer.truncated is True
+assert answer.__name__ == "answer"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">closed = []
+
+@max_chars(12)
+def answer(chunks):
+    try:
+        for c in chunks:
+            yield c
+    finally:
+        closed.append(True)
+
+assert &quot;&quot;.join(answer([&quot;Refunds &quot;, &quot;take five &quot;, &quot;days.&quot;])) == &quot;Refunds take&quot;
+assert answer.truncated is True and closed == [True]
+assert list(answer([&quot;short&quot;, &quot; one&quot;])) == [&quot;short&quot;, &quot; one&quot;] and answer.truncated is False
+assert list(answer([&quot;exactly12chr&quot;])) == [&quot;exactly12chr&quot;] and answer.truncated is False
+assert list(answer([&quot;123456789012&quot;, &quot;3&quot;])) == [&quot;123456789012&quot;] and answer.truncated is True
+assert answer.__name__ == &quot;answer&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a running total. Create the inner generator yourself, <code>gen = func(*args, **kwargs)</code>, so you can call <code>gen.close()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If <code>total + len(chunk) &gt; limit</code>, yield <code>chunk[:limit - total]</code> if it is not empty, close, mark truncated, <code>return</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+def max_chars(limit):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            wrapper.truncated = False
+            total = 0
+            gen = func(*args, **kwargs)
+            try:
+                for chunk in gen:
+                    if total + len(chunk) &gt; limit:
+                        rest = chunk[:limit - total]
+                        if rest:
+                            yield rest
+                        wrapper.truncated = True
+                        return
+                    total += len(chunk)
+                    yield chunk
+            finally:
+                gen.close()
+        wrapper.truncated = False
+        return wrapper
+    return decorator</code></pre></div><p>The wrapper is itself a generator (8.1), so the limit is applied while streaming, chunk by chunk, and the consumer receives text as soon as it arrives. Holding a reference to the inner generator lets the wrapper <strong>close</strong> it as soon as the limit is reached, which runs its <code>finally</code> block (the test's <code>closed</code> list); in a real stream, that is where the HTTP connection to the provider is released, so you stop paying for tokens you will discard. The <code>finally</code> in the wrapper also closes the source when the consumer itself stops early. Exactly reaching the limit is not truncation; only a chunk that would exceed it is. Guards like this protect UIs and logs from runaway generations.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-feature-flag-decorator" data-pid="m8-p-read-the-code-a-feature-flag-decorator" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>12. Read the code: a feature-flag decorator</h3></header>
+<div class="prob-q"><p><code>@feature(name, fallback)</code> should route calls to the decorated function when <code>FLAGS[name]</code> is true <strong>at call time</strong>, and to <code>fallback</code> with the same arguments otherwise; it should keep the function's name, and record each choice in <code>ROUTED</code>. Turning a flag on at run time has no effect, the fallback receives the wrong arguments, and the name is lost. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">FLAGS = {&quot;new_ranker&quot;: False}
+ROUTED = []
+
+
+def feature(name, fallback):
+    enabled = FLAGS.get(name, False)
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if enabled:
+                ROUTED.append(func.__name__)
+                return func(*args, **kwargs)
+            ROUTED.append(fallback.__name__)
+            return fallback(*args)
+        return wrapper
+    return decorator
+</textarea>
+<script type="text/plain" class="prob-tests">def old_rank(docs, *, top=3):
+    return sorted(docs)[:top]
+
+@feature("new_ranker", fallback=old_rank)
+def new_rank(docs, *, top=3):
+    return sorted(docs, key=len)[:top]
+
+docs = ["ccc", "a", "bb", "dddd"]
+assert new_rank(docs, top=2) == ["a", "bb"] and ROUTED == ["old_rank"]
+FLAGS["new_ranker"] = True
+assert new_rank(docs, top=2) == ["a", "bb"] and new_rank(["zz", "y"], top=1) == ["y"]
+FLAGS["new_ranker"] = False
+assert new_rank(["zz", "y"], top=1) == ["y"]
+assert ROUTED == ["old_rank", "new_rank", "new_rank", "old_rank"]
+assert new_rank.__name__ == "new_rank"
+FLAGS["new_ranker"] = True
+assert new_rank(["zz", "yyy", "x"], top=2) == ["x", "zz"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def old_rank(docs, *, top=3):
+    return sorted(docs)[:top]
+
+@feature(&quot;new_ranker&quot;, fallback=old_rank)
+def new_rank(docs, *, top=3):
+    return sorted(docs, key=len)[:top]
+
+docs = [&quot;ccc&quot;, &quot;a&quot;, &quot;bb&quot;, &quot;dddd&quot;]
+assert new_rank(docs, top=2) == [&quot;a&quot;, &quot;bb&quot;] and ROUTED == [&quot;old_rank&quot;]
+FLAGS[&quot;new_ranker&quot;] = True
+assert new_rank(docs, top=2) == [&quot;a&quot;, &quot;bb&quot;] and new_rank([&quot;zz&quot;, &quot;y&quot;], top=1) == [&quot;y&quot;]
+FLAGS[&quot;new_ranker&quot;] = False
+assert new_rank([&quot;zz&quot;, &quot;y&quot;], top=1) == [&quot;y&quot;]
+assert ROUTED == [&quot;old_rank&quot;, &quot;new_rank&quot;, &quot;new_rank&quot;, &quot;old_rank&quot;]
+assert new_rank.__name__ == &quot;new_rank&quot;
+FLAGS[&quot;new_ranker&quot;] = True
+assert new_rank([&quot;zz&quot;, &quot;yyy&quot;, &quot;x&quot;], top=2) == [&quot;x&quot;, &quot;zz&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>enabled</code> is computed once, in the factory, at import time. Read <code>FLAGS.get(name, False)</code> inside the wrapper.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fallback(*args)</code> drops the keyword arguments. And add <code>functools.wraps</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+
+FLAGS = {&quot;new_ranker&quot;: False}
+ROUTED = []
+
+
+def feature(name, fallback):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if FLAGS.get(name, False):
+                ROUTED.append(func.__name__)
+                return func(*args, **kwargs)
+            ROUTED.append(fallback.__name__)
+            return fallback(*args, **kwargs)
+        return wrapper
+    return decorator</code></pre></div><p>Three bugs. The flag was read in the factory, which runs once at import (8.2), so the value was frozen at <code>False</code> and flipping the flag later did nothing; a feature flag must be read on each call. The fallback received only <code>*args</code>, so <code>top=2</code> was silently dropped and it used its default of 3, returning the wrong number of results without any error. And without <code>functools.wraps</code>, traces and the routing log of other tools would show <code>wrapper</code>. Feature flags like this let a team roll out a new retriever or prompt to some traffic and compare metrics, with the old path as an instant rollback; the two implementations must accept the same arguments, which the test checks with a keyword argument.</p></div></details>
+</article>
+<article class="prob" id="p-when-should-you-not-use-a-decorator" data-pid="m8-p-when-should-you-not-use-a-decorator" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. When should you not use a decorator?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When the behaviour is not cross-cutting, or when it needs to vary per call. A decorator applies the same policy to every call of a function, fixed at definition time, which is ideal for logging, timing, caching, registration and simple retries, but awkward when the caller must choose (a timeout per request, a retry policy per endpoint, a different model per tenant); pass a parameter or use an explicit client object instead. Avoid decorators that change a function's signature or return type in surprising ways, that hide important control flow (a decorator that sometimes skips the call), or that accumulate so many settings they become a configuration language. Stacks of five decorators make the order of effects hard to see. And remember the practical limits: generators and <code>async</code> functions need matching wrappers, recursion goes through the wrapper, and introspection needs <code>functools.wraps</code>. A plain function call inside the body is often the clearest choice.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-test-code-that-uses-decorator" data-pid="m8-p-how-do-you-test-code-that-uses-decorator" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. How do you test code that uses decorators?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Test the decorator itself once, with tiny fake functions: that it returns results and raises exceptions unchanged, preserves the name and signature, and applies its policy (number of retries, cache hits, recorded timings) correctly; inject the clock, <code>sleep</code> and random generator so those tests run instantly. Then test decorated business functions without the decorator's side effects when they get in the way: call <code>func.__wrapped__</code> to reach the original, clear caches between tests with <code>cache_clear()</code> (or a fixture that does it automatically, 13.2), and give registries a fresh instance per test instead of a global dict. For registration, assert that importing the module registers what you expect, and that duplicates fail. For decorators that read configuration, test both values of each flag, and test that the value is read at the intended time. Finally, include a few tests through the real decorated path, because the composition order of stacked decorators is itself behaviour worth checking.</p></div></details>
+</article>
+<article class="prob" id="p-everything-at-once" data-pid="m8-p-everything-at-once" data-type="predict" data-level="hard" data-answer="computing ana
+computing bo
+HELLO ANA HELLO ANA HELLO BO
+1 [&#x27;loud_hello&#x27;] hello">
+<header class="prob-head"><h3>15. Everything at once</h3></header>
+<div class="code"><pre><code class="py">import functools
+
+REG = {}
+
+def tool(name=None):
+    def decorator(func):
+        REG[name or func.__name__] = func
+        return func
+    return decorator
+
+def shout(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs).upper()
+    return wrapper
+
+@tool(&quot;loud_hello&quot;)
+@shout
+@functools.lru_cache(maxsize=None)
+def hello(name):
+    print(&quot;computing&quot;, name)
+    return f&quot;hello {name}&quot;
+
+print(REG[&quot;loud_hello&quot;](&quot;ana&quot;), hello(&quot;ana&quot;), hello(&quot;bo&quot;))
+print(hello.__wrapped__.cache_info().hits, list(REG), hello.__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Bottom-up: cache, then the shouting wrapper, then registration of the shouting wrapper.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>computing ana
+computing bo
+HELLO ANA HELLO ANA HELLO BO
+1 [&#x27;loud_hello&#x27;] hello</pre></div><p>The cache is innermost, the uppercasing wrapper goes around it, and the registry receives that wrapper under the name <code>loud_hello</code>, returning it unchanged, so <code>REG["loud_hello"]</code> and <code>hello</code> are the same object. <code>"ana"</code> is computed once (the print appears once) and the second call is a cache hit; <code>"bo"</code> is computed. <code>hello.__wrapped__</code> is the cached function, with one hit. All three results are upper-cased, since every call passes through <code>shout</code>. The arguments of <code>print</code> are evaluated left to right, so both "computing" lines appear before the results.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a tool framework for an agent</h2>
+<p>Agent libraries let you turn plain functions into tools with a decorator. Build a small version: tools are registered with metadata, their schemas are generated from signatures and type hints, idempotent tools can be cached, flaky ones retried, every call goes through one dispatcher that validates arguments and returns errors the model can act on, and per-tool statistics are kept. Every rule in the spec maps to a lesson in this module.</p>
+<article class="prob" id="p-toolkit" data-pid="m8-p-toolkit" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>16. Build the toolkit</h3></header>
+<div class="prob-q"><p>Implement <code>make_toolkit()</code> returning <code>(tool, run, schemas, stats)</code>.</p>
+<ul><li><strong><code>tool(*, description=None, cache=False, retries=0, retry_on=(TimeoutError,))</code></strong> is a decorator factory. It registers the function under its name (duplicates raise <code>ValueError</code>), with the description or else the first docstring line. Every parameter must have a type annotation among <code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code>, or <code>TypeError</code> is raised at decoration time. It returns the function unchanged.</li><li><strong><code>schemas()</code></strong> returns a list, sorted by tool name, of <code>{"name", "description", "parameters": {"type": "object", "properties": {p: {"type": json_type}}, "required": [...]}}</code>.</li><li><strong><code>run(name, args)</code></strong> returns <code>{"result": value}</code> or <code>{"error": message}</code>: <code>"unknown tool 'x'"</code>; <code>"bad arguments: &lt;bind error&gt;"</code> for missing or unknown arguments. Then it calls the tool: with <code>cache=True</code>, results are cached by <code>(name, sorted argument items)</code>; with <code>retries=n</code>, an exception in <code>retry_on</code> is retried up to <code>n</code> more times, and if it still fails, <code>run</code> returns <code>{"error": "&lt;name&gt; failed: &lt;Type&gt;: &lt;message&gt;"}</code>. Any other exception propagates.</li><li><strong><code>stats()</code></strong> returns <code>{name: {"calls": c, "cache_hits": h, "errors": e}}</code> for every registered tool, where <code>calls</code> counts <code>run</code> calls that reached the tool (cache hits included) and <code>errors</code> counts calls that ended in a returned failure.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 16">import inspect, typing
+
+JSON_TYPES = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def make_toolkit():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">tool, run, schemas, stats = make_toolkit()
+hits = []
+
+@tool(cache=True)
+def get_order(order_id: int) -> dict:
+    """Look up an order by id.
+
+    More detail here.
+    """
+    hits.append(order_id)
+    return {"id": order_id, "status": "shipped"}
+
+flaky = iter([TimeoutError("slow"), TimeoutError("slow again"), "ok"])
+
+@tool(description="Search the help centre.", retries=2)
+def search(query: str, limit: int = 3):
+    out = next(flaky)
+    if isinstance(out, Exception):
+        raise out
+    return [f"{query}-{i}" for i in range(limit)]
+
+@tool(retries=1)
+def ping(host: str):
+    raise TimeoutError(f"{host} timed out")
+
+assert [s["name"] for s in schemas()] == ["get_order", "ping", "search"]
+assert schemas()[0] == {"name": "get_order", "description": "Look up an order by id.",
+                        "parameters": {"type": "object", "properties": {"order_id": {"type": "integer"}}, "required": ["order_id"]}}
+assert schemas()[2]["parameters"]["required"] == ["query"] and schemas()[2]["description"] == "Search the help centre."
+
+assert run("get_order", {"order_id": 7}) == {"result": {"id": 7, "status": "shipped"}}
+assert run("get_order", {"order_id": 7})["result"]["id"] == 7 and hits == [7]
+assert run("search", {"query": "refund", "limit": 2}) == {"result": ["refund-0", "refund-1"]}
+assert run("ping", {"host": "db"}) == {"error": "ping failed: TimeoutError: db timed out"}
+assert run("cancel", {}) == {"error": "unknown tool 'cancel'"}
+assert run("get_order", {}) == {"error": "bad arguments: missing a required argument: 'order_id'"}
+assert stats() == {"get_order": {"calls": 2, "cache_hits": 1, "errors": 0},
+                   "search": {"calls": 1, "cache_hits": 0, "errors": 0},
+                   "ping": {"calls": 1, "cache_hits": 0, "errors": 1}}
+
+try:
+    @tool()
+    def get_order(order_id: int):
+        return {}
+    assert False, "duplicate"
+except ValueError:
+    pass
+try:
+    @tool()
+    def untyped(x):
+        return x
+    assert False, "no annotation"
+except TypeError:
+    pass
+
+@tool()
+def boom(n: int):
+    raise KeyError("bug")
+try:
+    run("boom", {"n": 1})
+    assert False
+except KeyError:
+    pass
+assert get_order(1) == {"id": 1, "status": "shipped"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 11 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tool, run, schemas, stats = make_toolkit()
+hits = []
+
+@tool(cache=True)
+def get_order(order_id: int) -&gt; dict:
+    &quot;&quot;&quot;Look up an order by id.
+
+    More detail here.
+    &quot;&quot;&quot;
+    hits.append(order_id)
+    return {&quot;id&quot;: order_id, &quot;status&quot;: &quot;shipped&quot;}
+
+flaky = iter([TimeoutError(&quot;slow&quot;), TimeoutError(&quot;slow again&quot;), &quot;ok&quot;])
+
+@tool(description=&quot;Search the help centre.&quot;, retries=2)
+def search(query: str, limit: int = 3):
+    out = next(flaky)
+    if isinstance(out, Exception):
+        raise out
+    return [f&quot;{query}-{i}&quot; for i in range(limit)]
+
+@tool(retries=1)
+def ping(host: str):
+    raise TimeoutError(f&quot;{host} timed out&quot;)
+
+assert [s[&quot;name&quot;] for s in schemas()] == [&quot;get_order&quot;, &quot;ping&quot;, &quot;search&quot;]
+assert schemas()[0] == {&quot;name&quot;: &quot;get_order&quot;, &quot;description&quot;: &quot;Look up an order by id.&quot;,
+                        &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;order_id&quot;: {&quot;type&quot;: &quot;integer&quot;}}, &quot;required&quot;: [&quot;order_id&quot;]}}
+assert schemas()[2][&quot;parameters&quot;][&quot;required&quot;] == [&quot;query&quot;] and schemas()[2][&quot;description&quot;] == &quot;Search the help centre.&quot;
+
+assert run(&quot;get_order&quot;, {&quot;order_id&quot;: 7}) == {&quot;result&quot;: {&quot;id&quot;: 7, &quot;status&quot;: &quot;shipped&quot;}}
+assert run(&quot;get_order&quot;, {&quot;order_id&quot;: 7})[&quot;result&quot;][&quot;id&quot;] == 7 and hits == [7]
+assert run(&quot;search&quot;, {&quot;query&quot;: &quot;refund&quot;, &quot;limit&quot;: 2}) == {&quot;result&quot;: [&quot;refund-0&quot;, &quot;refund-1&quot;]}
+assert run(&quot;ping&quot;, {&quot;host&quot;: &quot;db&quot;}) == {&quot;error&quot;: &quot;ping failed: TimeoutError: db timed out&quot;}
+assert run(&quot;cancel&quot;, {}) == {&quot;error&quot;: &quot;unknown tool &#x27;cancel&#x27;&quot;}
+assert run(&quot;get_order&quot;, {}) == {&quot;error&quot;: &quot;bad arguments: missing a required argument: &#x27;order_id&#x27;&quot;}
+assert stats() == {&quot;get_order&quot;: {&quot;calls&quot;: 2, &quot;cache_hits&quot;: 1, &quot;errors&quot;: 0},
+                   &quot;search&quot;: {&quot;calls&quot;: 1, &quot;cache_hits&quot;: 0, &quot;errors&quot;: 0},
+                   &quot;ping&quot;: {&quot;calls&quot;: 1, &quot;cache_hits&quot;: 0, &quot;errors&quot;: 1}}
+
+try:
+    @tool()
+    def get_order(order_id: int):
+        return {}
+    assert False, &quot;duplicate&quot;
+except ValueError:
+    pass
+try:
+    @tool()
+    def untyped(x):
+        return x
+    assert False, &quot;no annotation&quot;
+except TypeError:
+    pass
+
+@tool()
+def boom(n: int):
+    raise KeyError(&quot;bug&quot;)
+try:
+    run(&quot;boom&quot;, {&quot;n&quot;: 1})
+    assert False
+except KeyError:
+    pass
+assert get_order(1) == {&quot;id&quot;: 1, &quot;status&quot;: &quot;shipped&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep one dict of entries, <code>name -&gt; {"func", "description", "schema", "cache", "retries", "retry_on", "stats"}</code>, filled by the decorator; build the schema there, at decoration time.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>run</code>: look up, <code>inspect.signature(func).bind(**args)</code> for argument errors, then the cache check, then the retry loop around the call.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The cache dict can live in the entry; the key is <code>tuple(sorted(args.items()))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, typing
+
+JSON_TYPES = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def _schema(func, description):
+    hints = typing.get_type_hints(func)
+    props, required = {}, []
+    for pname, p in inspect.signature(func).parameters.items():
+        kind = hints.get(pname)
+        if kind not in JSON_TYPES:
+            raise TypeError(f&quot;{func.__name__}: parameter {pname!r} needs a str, int, float or bool annotation&quot;)
+        props[pname] = {&quot;type&quot;: JSON_TYPES[kind]}
+        if p.default is p.empty:
+            required.append(pname)
+    return {&quot;name&quot;: func.__name__, &quot;description&quot;: description,
+            &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: props, &quot;required&quot;: required}}
+
+
+def make_toolkit():
+    entries = {}
+
+    def tool(*, description=None, cache=False, retries=0, retry_on=(TimeoutError,)):
+        def decorator(func):
+            name = func.__name__
+            if name in entries:
+                raise ValueError(f&quot;tool {name!r} is already registered&quot;)
+            doc = inspect.getdoc(func) or &quot;&quot;
+            desc = description or (doc.splitlines()[0] if doc else &quot;&quot;)
+            entries[name] = {
+                &quot;func&quot;: func,
+                &quot;schema&quot;: _schema(func, desc),
+                &quot;cache&quot;: {} if cache else None,
+                &quot;retries&quot;: retries,
+                &quot;retry_on&quot;: retry_on,
+                &quot;stats&quot;: {&quot;calls&quot;: 0, &quot;cache_hits&quot;: 0, &quot;errors&quot;: 0},
+            }
+            return func
+        return decorator
+
+    def run(name, args):
+        entry = entries.get(name)
+        if entry is None:
+            return {&quot;error&quot;: f&quot;unknown tool {name!r}&quot;}
+        func = entry[&quot;func&quot;]
+        try:
+            inspect.signature(func).bind(**args)
+        except TypeError as e:
+            return {&quot;error&quot;: f&quot;bad arguments: {e}&quot;}
+        entry[&quot;stats&quot;][&quot;calls&quot;] += 1
+        key = tuple(sorted(args.items()))
+        if entry[&quot;cache&quot;] is not None and key in entry[&quot;cache&quot;]:
+            entry[&quot;stats&quot;][&quot;cache_hits&quot;] += 1
+            return {&quot;result&quot;: entry[&quot;cache&quot;][key]}
+        for attempt in range(entry[&quot;retries&quot;] + 1):
+            try:
+                result = func(**args)
+            except entry[&quot;retry_on&quot;] as e:
+                if attempt == entry[&quot;retries&quot;]:
+                    entry[&quot;stats&quot;][&quot;errors&quot;] += 1
+                    return {&quot;error&quot;: f&quot;{name} failed: {type(e).__name__}: {e}&quot;}
+                continue
+            if entry[&quot;cache&quot;] is not None:
+                entry[&quot;cache&quot;][key] = result
+            return {&quot;result&quot;: result}
+
+    def schemas():
+        return [entries[n][&quot;schema&quot;] for n in sorted(entries)]
+
+    def stats():
+        return {n: dict(e[&quot;stats&quot;]) for n, e in entries.items()}
+
+    return tool, run, schemas, stats</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Decorator factories (8.2):</strong> <code>@tool(cache=True)</code> and <code>@tool(retries=2)</code> carry settings, validated and stored when the module is imported; settings are keyword-only, so <code>@tool</code> cannot be misused positionally without an error.</li><li><strong>Registration and introspection (8.4):</strong> the decorator returns the function unchanged (so <code>get_order(1)</code> still works directly), refuses duplicates, and generates each schema once from the signature, the type hints and the docstring, so the schemas the model sees can never drift from the code. Unannotated parameters fail at import, not when the model calls them.</li><li><strong>Caching and retries (8.3):</strong> the cache key is built from sorted argument items, so argument order does not matter; only successful results are cached; only the configured transient errors are retried, and a final failure becomes a message for the model rather than a crash, while a <code>KeyError</code> from a bug propagates (7.3).</li><li><strong>Wrapper rules (8.1):</strong> nothing about the tools' behaviour changes; the policies live in the dispatcher, and statistics record calls, hits and returned errors per tool.</li></ul>
+<p>Putting caching and retries in <code>run</code> rather than in wrappers around each function keeps the registered object identical to the user's function, which makes tools easy to test directly. Real frameworks add timeouts, permissions and tracing in the same dispatcher, and build parameter validation from Pydantic models (11.4).</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Decorators run once at definition time; wrappers run per call and must pass arguments, results and exceptions through unchanged.</li><li>Every wrapper gets <code>functools.wraps</code>: names, signatures and <code>__wrapped__</code> are what frameworks, logs and tests rely on.</li><li>Factories validate settings at import; read anything dynamic (flags, limits) at call time.</li><li>Order is behaviour: registration outermost, caches outside what they should skip, timers outside retries when measuring the user's wait.</li><li>Registries plus <code>inspect.signature</code> and type hints turn plain functions into routes, commands and tools.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
