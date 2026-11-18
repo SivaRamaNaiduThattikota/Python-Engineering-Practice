@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-5", num="14.5", title="asyncio in practice",
@@ -15,6 +16,8 @@ term("Backoff", "Waiting longer after each failed attempt before retrying (for e
 term("Jitter", "Randomness added to retry waits so that many clients that failed together do not all retry at the same instant.")
 
 section("limits", "Bounding concurrency with a semaphore",
+    fig(chain(["100 tasks started", ("Semaphore(4)", "accent"), "at most 4 calls|in flight", ("the rest wait|at async with", "good")]),
+        "A semaphore keeps every task but lets only a fixed number into the slow section at once."),
     p("""`gather` over 10,000 coroutines starts 10,000 requests at once, which exceeds every provider's rate limit, exhausts connection pools and memory, and gets the
     client throttled. **`asyncio.Semaphore(n)`** fixes the number of tasks allowed inside a block: `async with sem:` decrements its counter, or waits while it is
     zero, and increments it on exit. Acquire it **inside** each task, around the request itself, so that all tasks can be created at once but only `n` call the API
@@ -57,6 +60,8 @@ section("rate", "Rate limits, timeouts and retries",
 )
 
 section("queues", "Worker pools on asyncio.Queue",
+    fig(chain(["producer|await queue.put()", ("Queue(maxsize)|full: put waits", "accent"), "N workers|await queue.get()", "process,|task_done()", ("queue.join(),|cancel workers", "good")]),
+        "A bounded queue gives back-pressure: the producer slows down to the speed of the workers."),
     p("""For long or unbounded streams of work (items arriving from a crawler, a message queue, or a file too big to load), use a **producer-consumer** design: an
     `asyncio.Queue(maxsize=...)` between producers and a fixed number of **worker tasks**. Producers `await queue.put(item)`, which waits when the queue is full,
     giving natural **back-pressure**; each worker loops on `item = await queue.get()`, processes it, and calls `queue.task_done()`. `await queue.join()` waits until

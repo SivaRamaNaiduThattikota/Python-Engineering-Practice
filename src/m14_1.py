@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-1", num="14.1", title="Concurrency concepts",
@@ -16,6 +17,16 @@ term("GIL", "The Global Interpreter Lock of standard CPython: only one thread ex
 term("Race condition", "A bug where the result depends on the timing or interleaving of concurrent tasks that share data.")
 
 section("kinds", "Two kinds of slow",
+    fig(stage_map(14, "an async evaluation runner"), "Module 14 at a glance: when concurrency helps, then threads, processes and asyncio, building up to an evaluation runner."),
+    fig(flowchart({
+        "q": ("ask", 0, 0, "where does the time go?|(wall time vs CPU time)"),
+        "proc": ("accent2", 1, 0, "processes, or a vectorised|library such as NumPy"),
+        "io": ("ask", 0, 1, "many waiting tasks,|or async code already?"),
+        "aio": ("accent", 1, 1, "asyncio"),
+        "thr": ("accent", 0, 2, "threads"),
+    }, [("q", "proc", "CPU"), ("q", "io", "waiting"), ("io", "aio", "yes"), ("io", "thr", "no")],
+        cell=(270, 90), label="choosing a concurrency tool"),
+        "The rule of thumb from this lesson: measure first, then pick the tool that matches the kind of slow."),
     p("""A program is slow for one of two reasons, and the cure differs. **I/O-bound** work spends its time **waiting**: for a model API to answer, a database
     query, a file download, a disk read. The CPU is idle meanwhile, so the cure is to start other work during the wait; ten API calls that each take 2
     seconds can finish in about 2 seconds instead of 20. **CPU-bound** work spends its time **computing**: tokenising a corpus, computing features, parsing
@@ -27,6 +38,14 @@ section("kinds", "Two kinds of slow",
 )
 
 section("models", "Concurrency, parallelism and Python's three tools",
+    fig(table(["", "processes", "threads", "asyncio"], [
+        ["runs in parallel on cores", "yes", "no, with the GIL", "no (one thread)"],
+        ["shares memory", "no, data is pickled", "yes", "yes"],
+        ["switches between tasks", "the OS", "the OS, at any moment", "only at await"],
+        ["cost per task", "high", "medium", "very low"],
+        ["good for", "CPU-bound work", "a moderate number of waits", "thousands of waits"],
+    ], label="Python's three concurrency tools"),
+        "Processes give parallelism; threads and coroutines give concurrency for work that waits."),
     p("""**Concurrency** means several tasks are in progress at once, with their execution interleaved; **parallelism** means several tasks execute at the same
     instant on different cores. One cook juggling three pots is concurrent; three cooks are parallel. Waiting work needs only concurrency; computing work
     needs parallelism."""),
@@ -57,6 +76,12 @@ section("gil", "The GIL and free-threaded Python",
 )
 
 section("laws", "Two laws for planning",
+    fig(table(["workers n", "1", "2", "4", "8", "16", "unlimited"], [
+        ["speed-up with p = 0.9", "1.0", "1.8", "3.1", "4.7", "6.4", "10"],
+    ], hl={(0, 6)}, label="Amdahl's law: 1 / ((1 - p) + p / n)"),
+        "With 10% serial work, no number of workers gets past a 10 times speed-up."),
+    fig(chain(["target: 50 requests|per second", "each call|takes 2 s", ("L = 50 x 2 = 100|calls in flight", "accent")]),
+        "Little's law turns a throughput target and a latency into the concurrency you need."),
     p("""**Amdahl's law** bounds the speed-up from parallelism. If a fraction `p` of the work can run in parallel and the rest is serial, `n` workers give a speed-up
     of `1 / ((1 - p) + p / n)`. With `p = 0.9`, eight workers give 4.7 times, and even infinitely many give only 10 times, because the serial 10% remains.
     Before parallelising a pipeline, find its serial parts: a single writer, a global lock, a step that must see all data."""),

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-4", num="14.4", title="asyncio basics",
@@ -50,6 +51,15 @@ section("coroutines", "Coroutines and await",
 )
 
 section("loop", "How the event loop runs tasks",
+    fig(flowchart({
+        "pick": ("start", 0, 0, "take the next ready task"),
+        "run": ("accent", 0, 1, "run it until it|awaits something"),
+        "ready": ("ask", 0, 2, "is that thing|ready now?"),
+        "park": ("step", 1, 2, "park the task until|the timer or data arrives"),
+        "wake": ("good", 1, 1, "mark it ready again"),
+    }, [("pick", "run"), ("run", "ready"), ("ready", "run", "yes", {"route": [(-0.45, 2), (-0.45, 1)]}), ("ready", "park", "no"),
+        ("park", "wake"), ("wake", "pick", "", {"route": [(1, 0)]})], cell=(250, 84), label="one turn of the event loop"),
+        "One thread runs every task, switching only at an `await` that has to wait; code that never awaits blocks everyone."),
     p("""The event loop keeps a queue of tasks ready to run. It runs one until that task reaches an `await` on something not ready (a sleep, a network read), then
     picks the next ready task. When a timer expires or data arrives, the waiting task becomes ready again. Everything happens in **one thread**, so between two
     `await`s a task runs without interruption: no other task can modify shared state in the middle of a block that contains no `await`. That makes asyncio easier
@@ -85,6 +95,12 @@ section("loop", "How the event loop runs tasks",
 )
 
 section("structured", "gather, TaskGroup and exceptions",
+    fig(table(["one task fails", "gather()", "gather(return_exceptions=True)", "TaskGroup"], [
+        ["the others", "keep running", "keep running", "are cancelled"],
+        ["you get", "the first exception", "a list with values and exceptions", "an ExceptionGroup"],
+        ["use when", "rarely", "each result stands alone", "the tasks belong together"],
+    ], label="gather versus TaskGroup when a task fails"),
+        "Choose by whether one failure should stop the whole operation."),
     p("""If one awaitable passed to `gather` raises, `gather` raises that exception at once, and the other awaitables **keep running** (they are not cancelled);
     with **`return_exceptions=True`**, exceptions are returned in the result list in place of values, which suits batches where each item may fail
     independently. **`asyncio.TaskGroup`** (Python 3.11) is the structured alternative: `async with asyncio.TaskGroup() as tg:` and `tg.create_task(...)` inside;

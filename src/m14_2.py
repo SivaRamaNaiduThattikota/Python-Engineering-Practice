@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-2", num="14.2", title="Threads and futures",
@@ -27,6 +28,8 @@ section("threading", "`threading.Thread` in brief",
 )
 
 section("executors", "Executors and futures",
+    fig(chain(["pool.submit(fn, x)", "returns a Future|at once", "a worker thread|runs fn(x)", ("future.result()|waits, or re-raises", "good")]),
+        "An executor hands work to a pool and gives back a future: a placeholder for the result, or for the exception."),
     p("""**`ThreadPoolExecutor(max_workers=n)`** keeps `n` worker threads. `executor.submit(fn, *args, **kwargs)` schedules one call and immediately returns a
     **`Future`**. `future.result(timeout=None)` waits for the call and returns its value, or **re-raises its exception** in the calling thread, with the
     original traceback; `future.exception()` returns the exception instead of raising, `future.done()` tells whether it finished, `future.cancel()` cancels a

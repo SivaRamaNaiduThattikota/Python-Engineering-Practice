@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-p", num="14.P", title="Module 14 practice set and mini project",
@@ -11,6 +12,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(14, "an async evaluation runner"), "Module 14 at a glance: when concurrency helps, then threads, processes and asyncio, building up to an evaluation runner."),
     p("""For any slow program, first ask **what it waits on** (14.1): computation calls for processes (14.3) or vectorised code, waiting calls for threads (14.2) or
     asyncio (14.4). Then ask **what it shares**: return results instead of sharing state, protect what must be shared, and remember that in asyncio a race can
     happen at every `await`. Finally ask **what can go wrong at scale** (14.5): limits, rate limits, timeouts, transient failures, back-pressure and shutdown."""),
@@ -363,6 +365,20 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: an async evaluation runner",
+    fig(flowchart({
+        "case": ("start", 0, 0, "next case"),
+        "done": ("ask", 0, 1, "already in done_ids?"),
+        "skip": ("step", 1, 1, "skip it"),
+        "call": ("accent", 0, 2, "semaphore + spacing,|call with a timeout"),
+        "err": ("ask", 0, 3, "did it answer?"),
+        "retry": ("ask", 1, 3, "transient error and|attempts left?"),
+        "fail": ("bad", 2, 3, "write ok: false"),
+        "score": ("accent2", 0, 4, "score in the|process pool"),
+        "write": ("end", 0, 5, "write ok: true"),
+    }, [("case", "done"), ("done", "skip", "yes"), ("done", "call", "no"), ("call", "err"), ("err", "retry", "no"),
+        ("retry", "call", "yes", {"route": [(1, 2)]}), ("retry", "fail", "no"), ("err", "score", "yes"), ("score", "write")],
+        cell=(220, 78), label="each case in the evaluation runner"),
+        "The runner per case: skip what is done, limit and space the calls, retry only transient errors, and score off the event loop."),
     p("""Every prompt or model change triggers an evaluation run: hundreds of questions sent to a model, each answer scored against an expected answer. The runner must use the
     provider's capacity without exceeding it, survive timeouts and transient failures, keep the CPU-heavy scoring off the event loop, write each result as soon as it is
     known, and skip the cases a previous, interrupted run already finished. Build it from the pieces of this module."""),

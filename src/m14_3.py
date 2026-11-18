@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m14-3", num="14.3", title="Processes",
@@ -15,6 +16,8 @@ term("Pickling", "Turning a Python object into bytes (with `pickle`) so it can b
 term("Start method", "How `multiprocessing` creates a worker process: `spawn` (a fresh interpreter), `fork` (a copy of the parent) or `forkserver`.")
 
 section("pool", "`ProcessPoolExecutor`",
+    fig(chain(["main process", "pickle fn and args", "worker process|imports the module, runs fn", "pickle the result", ("back in the|main process", "good")]),
+        "Every call to a process pool sends data both ways as bytes, so tasks must be big enough to be worth the trip."),
     p("""`concurrent.futures.ProcessPoolExecutor(max_workers=n)` has the same interface as the thread pool of 14.2 (`submit`, `map`, `as_completed`, futures), but each
     worker is a separate **process**. Each has its own interpreter and its own GIL, so pure-Python computation runs truly in parallel, one task per core. The
     default `max_workers` is the number of CPUs, which is the right number for CPU-bound work: more processes than cores just compete for them. The lower-level
@@ -25,6 +28,15 @@ section("pool", "`ProcessPoolExecutor`",
 )
 
 section("pickle", "What can be sent",
+    fig(table(["object sent to a worker", "picklable?"], [
+        ["a function defined at module top level", "yes (sent by name)"],
+        ["functools.partial(top_level_fn, 3)", "yes"],
+        ["numbers, strings, lists, dicts, NumPy arrays", "yes"],
+        ["a lambda", "no"],
+        ["a function defined inside another function", "no"],
+        ["an open file, a lock, a network client", "no"],
+    ], hl={(3, 1), (4, 1), (5, 1)}, label="what a process pool can send"),
+        "Functions travel by importable name, so only top-level ones can be sent."),
     p("""`pickle` sends **functions and classes by name**: it records "the function `square` in module `tasks`", and the worker imports that module and looks the name up.
     So a worker can receive only functions and classes that are defined at the **top level of an importable module**. Lambdas, functions defined inside other
     functions, and classes defined inside functions have no importable name and fail with `PicklingError`. `functools.partial(top_level_fn, arg)` works, and so
