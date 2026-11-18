@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11.3 · Dataclasses</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m11-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 11 · Typing, dataclasses and Pydantic</span></div>
+  <h1>11.3 Dataclasses</h1>
+  <p><code>@dataclass</code> writes the boilerplate of data-holding classes from their type hints: <code>__init__</code>, <code>__repr__</code>, <code>__eq__</code>, and optionally ordering, hashing and slots. Fields and defaults (and the mutable-default rule), <code>field()</code> options, <code>__post_init__</code> for validation and derived values, frozen instances and <code>replace</code>, <code>asdict</code> and <code>fields</code>, inheritance and keyword-only fields, and what dataclasses do not do (validate types). Applied to documents, configs, chunks and experiment records.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>From boilerplate to one decorator</h2>
+<p>Many classes are mainly <strong>data</strong>: a document with an id, text and tags; a configuration; an evaluation result; a record from a file. Writing them by hand means an <code>__init__</code> that copies every parameter to an attribute, a <code>__repr__</code> that shows them, and an <code>__eq__</code> (and maybe <code>__hash__</code>) that compares them, all of which must be updated every time a field is added (9.1, 9.2). <strong><code>@dataclass</code></strong> generates those methods from the class's annotated attributes, so the class body states only what matters: the fields, their types and their defaults.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">first_dataclass.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass
+
+@dataclass
+class Document:
+    id: str
+    text: str
+    score: float = 0.0
+
+d = Document(&quot;faq-1&quot;, &quot;Refunds take 5 days.&quot;)
+print(d)
+print(d == Document(&quot;faq-1&quot;, &quot;Refunds take 5 days.&quot;), d.score, Document(&quot;x&quot;, &quot;y&quot;, score=0.9))
+try:
+    Document(&quot;only-id&quot;)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>Document(id=&#x27;faq-1&#x27;, text=&#x27;Refunds take 5 days.&#x27;, score=0.0)
+True 0.0 Document(id=&#x27;x&#x27;, text=&#x27;y&#x27;, score=0.9)
+TypeError: Document.__init__() missing 1 required positional argument: &#x27;text&#x27;</pre></div></div>
+<p>The generated <code>__init__</code> takes the fields in the order they are declared, with the declared defaults, exactly as if you had written it; the <code>__repr__</code> shows class name and fields, readable in logs and test failures; <code>__eq__</code> compares instances of the same class field by field, as a tuple. Everything is normal Python afterwards: you can add methods, properties and class methods (9.3, 9.6). Note that the <strong>type hints are not checked</strong>: <code>Document(1, None)</code> is accepted. Dataclasses generate code from hints; validation is Pydantic's job (11.4).</p>
+</section>
+<section class="sec" id="defaults">
+<h2><span class="n">2</span>Defaults, <code>default_factory</code> and <code>field()</code></h2>
+<p>A field's default is evaluated <strong>once</strong>, when the class is defined, and shared by every instance, which is safe for numbers, strings and <code>None</code> but would be the mutable-default bug of 2.4 for a list or dict. Dataclasses refuse it outright: <code>tags: list[str] = []</code> raises <code>ValueError: mutable default &lt;class 'list'&gt; for field tags is not allowed</code> when the class is created. Use <strong><code>field(default_factory=list)</code></strong> instead: the factory is called for every new instance, so each gets its own list (problem 3).</p>
+<p><code>dataclasses.field(...)</code> customises a field in other ways too. <code>repr=False</code> hides it from the repr (secrets, huge embeddings). <code>compare=False</code> leaves it out of <code>__eq__</code> (and of ordering and hashing): for caches, timestamps or metadata that should not affect identity. <code>init=False</code> removes it from <code>__init__</code>, for values computed in <code>__post_init__</code> (below). <code>kw_only=True</code> makes it keyword-only. <code>metadata={...}</code> attaches arbitrary information that tools can read through <code>dataclasses.fields()</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">defaults.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class Chunk:
+    doc_id: str
+    text: str
+    tags: list[str] = field(default_factory=list)
+    embedding: list[float] = field(default_factory=list, repr=False, compare=False)
+    source: str = field(default=&quot;unknown&quot;, metadata={&quot;help&quot;: &quot;where the text came from&quot;})
+
+a, b = Chunk(&quot;d1&quot;, &quot;Refunds&quot;), Chunk(&quot;d1&quot;, &quot;Refunds&quot;)
+a.tags.append(&quot;billing&quot;)
+print(a, b.tags)
+b.embedding = [0.1, 0.2]
+a.tags.clear()
+print(a == b)
+
+try:
+    @dataclass
+    class Bad:
+        tags: list[str] = []
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>Chunk(doc_id=&#x27;d1&#x27;, text=&#x27;Refunds&#x27;, tags=[&#x27;billing&#x27;], source=&#x27;unknown&#x27;) []
+True
+ValueError: mutable default &lt;class &#x27;list&#x27;&gt; for field tags is not allowed: use default_factory</pre></div></div>
+<p><code>a == b</code> is true even though only <code>b</code> has an embedding, because <code>compare=False</code> excluded it: two chunks with the same document and text are the same chunk whatever their cached vectors. The order rule for defaults is the same as for function parameters: fields without defaults must come before fields with defaults, or the class definition fails. Keyword-only fields lift that restriction (problem 6).</p>
+</section>
+<section class="sec" id="postinit">
+<h2><span class="n">3</span><code>__post_init__</code>: validation and derived fields</h2>
+<p>The generated <code>__init__</code> only assigns fields. If you define <strong><code>__post_init__(self)</code></strong>, the generated <code>__init__</code> calls it at the end, after all fields are set. It is the place to <strong>validate</strong> (raise <code>ValueError</code> for impossible values), to <strong>normalise</strong> (strip text, lower-case labels, sort tags) and to <strong>compute derived fields</strong>, declared with <code>field(init=False)</code> so they are not constructor arguments. For values needed only during construction, not stored, declare them as <code>InitVar[...]</code>: they are passed to <code>__init__</code> and then to <code>__post_init__</code> as arguments.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">post_init.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field, InitVar
+
+@dataclass
+class Prediction:
+    label: str
+    probs: dict[str, float]
+    threshold: InitVar[float] = 0.5
+    confident: bool = field(init=False)
+
+    def __post_init__(self, threshold):
+        self.label = self.label.strip().lower()
+        if self.label not in self.probs:
+            raise ValueError(f&quot;label {self.label!r} has no probability&quot;)
+        total = sum(self.probs.values())
+        if abs(total - 1) &gt; 1e-6:
+            raise ValueError(f&quot;probabilities sum to {total}, not 1&quot;)
+        self.confident = self.probs[self.label] &gt;= threshold
+
+p = Prediction(&quot; Spam &quot;, {&quot;spam&quot;: 0.8, &quot;ham&quot;: 0.2})
+print(p, Prediction(&quot;ham&quot;, {&quot;spam&quot;: 0.45, &quot;ham&quot;: 0.55}, threshold=0.6).confident)
+try:
+    Prediction(&quot;phish&quot;, {&quot;spam&quot;: 1.0})
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>Prediction(label=&#x27;spam&#x27;, probs={&#x27;spam&#x27;: 0.8, &#x27;ham&#x27;: 0.2}, confident=True) False
+ValueError: label &#x27;phish&#x27; has no probability</pre></div></div>
+<p><code>__post_init__</code> runs only at construction. Assigning a field later (<code>p.label = "x"</code>) bypasses it, so derived fields can go stale and invariants can be broken. For data that changes, use properties (9.3) for derived values, or make the dataclass <strong>frozen</strong> so that it cannot change at all.</p>
+</section>
+<section class="sec" id="frozen">
+<h2><span class="n">4</span>Frozen dataclasses, <code>replace</code>, ordering and slots</h2>
+<p><code>@dataclass(frozen=True)</code> makes instances immutable: assigning a field raises <code>FrozenInstanceError</code>. Because equal frozen objects can never change, the dataclass also gets a <code>__hash__</code> built from the compared fields, so instances work in sets and as dict keys (9.2). To "change" a frozen object, <strong><code>dataclasses.replace(obj, field=new)</code></strong> builds a new instance with some fields changed, calling <code>__init__</code> (and <code>__post_init__</code>) again, so validation applies to the copy too. Inside <code>__post_init__</code> of a frozen class, normalising a field requires <code>object.__setattr__(self, "name", value)</code>, since normal assignment is blocked (9.3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">frozen.py</span><button class="copy">Copy</button></div><pre><code class="py">import dataclasses
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True, order=True)
+class Version:
+    major: int
+    minor: int = 0
+    patch: int = 0
+
+v = Version(1, 9)
+print(v, sorted([Version(1, 10), v, Version(0, 9, 3)]), v &lt; Version(1, 10))
+try:
+    v.minor = 10
+except dataclasses.FrozenInstanceError as e:
+    print(&quot;FrozenInstanceError:&quot;, e)
+w = dataclasses.replace(v, minor=10)
+print(w, v, {v, Version(1, 9)}, hasattr(v, &quot;__dict__&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>Version(major=1, minor=9, patch=0) [Version(major=0, minor=9, patch=3), Version(major=1, minor=9, patch=0), Version(major=1, minor=10, patch=0)] True
+FrozenInstanceError: cannot assign to field &#x27;minor&#x27;
+Version(major=1, minor=10, patch=0) Version(major=1, minor=9, patch=0) {Version(major=1, minor=9, patch=0)} False</pre></div></div>
+<p><code>order=True</code> generates <code>__lt__</code> and friends comparing the fields <strong>as a tuple, in declaration order</strong>, which is right for a version but a trap for records whose first field is a name: sorting would then be alphabetical, not by score (problem 10). <code>slots=True</code> (Python 3.10+) generates <code>__slots__</code> (9.3): smaller instances and no accidental new attributes. <code>unsafe_hash=True</code> adds a hash to a mutable dataclass, which is only safe if the compared fields are never changed while the object is in a set or dict (problem 14).</p>
+</section>
+<section class="sec" id="utilities">
+<h2><span class="n">5</span>Inspecting and converting: <code>fields</code>, <code>asdict</code>, <code>astuple</code></h2>
+<p>The <code>dataclasses</code> module exposes the structure it generated. <strong><code>fields(obj_or_class)</code></strong> returns <code>Field</code> objects with each field's name, type, default and metadata, which is how generic code (serialisers, config loaders, CLI builders) works with any dataclass. <strong><code>asdict(obj)</code></strong> converts an instance into a dict, <strong>recursively</strong>: nested dataclasses, and lists and dicts containing them, become plain dicts and lists, ready for <code>json.dumps</code>. <strong><code>astuple</code></strong> does the same into tuples. Both deep-copy the values, so the result is independent of the object. Going the other way, from a dict to nested dataclasses, needs a little code, usually a classmethod <code>from_dict</code> (9.6, problem 7).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">utilities.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from dataclasses import dataclass, field, fields, asdict
+
+@dataclass
+class Metric:
+    name: str
+    value: float
+
+@dataclass
+class Run:
+    run_id: str
+    params: dict[str, float]
+    metrics: list[Metric] = field(default_factory=list)
+
+r = Run(&quot;r1&quot;, {&quot;lr&quot;: 0.1}, [Metric(&quot;f1&quot;, 0.81), Metric(&quot;loss&quot;, 0.42)])
+print([(f.name, f.type) for f in fields(Run)])
+data = asdict(r)
+print(json.dumps(data))
+data[&quot;params&quot;][&quot;lr&quot;] = 999
+print(r.params[&quot;lr&quot;], type(data[&quot;metrics&quot;][0]).__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;run_id&#x27;, &lt;class &#x27;str&#x27;&gt;), (&#x27;params&#x27;, dict[str, float]), (&#x27;metrics&#x27;, list[__main__.Metric])]
+{&quot;run_id&quot;: &quot;r1&quot;, &quot;params&quot;: {&quot;lr&quot;: 0.1}, &quot;metrics&quot;: [{&quot;name&quot;: &quot;f1&quot;, &quot;value&quot;: 0.81}, {&quot;name&quot;: &quot;loss&quot;, &quot;value&quot;: 0.42}]}
+0.1 dict</pre></div></div>
+</section>
+<section class="sec" id="inheritance">
+<h2><span class="n">6</span>Inheritance, keyword-only fields, and limits</h2>
+<p>Dataclasses can inherit: the subclass's fields come after the base's, and the generated <code>__init__</code> takes them all. The rule that fields without defaults must come first applies across the whole hierarchy, so a base class with a default field followed by a subclass with a required one fails at class creation (<code>TypeError: non-default argument follows default argument</code>). <strong><code>kw_only=True</code></strong>, on the decorator or on individual fields, solves it: keyword-only fields may be declared in any order, and calls become self-documenting, <code>Config(model="small", retries=3)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">inheritance.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, KW_ONLY
+
+@dataclass(kw_only=True)
+class BaseConfig:
+    timeout: float = 30.0
+
+@dataclass(kw_only=True)
+class LLMConfig(BaseConfig):
+    model: str
+    temperature: float = 0.0
+
+@dataclass
+class Request:
+    prompt: str
+    _: KW_ONLY
+    stream: bool = False
+    user: str = &quot;anon&quot;
+
+print(LLMConfig(model=&quot;small&quot;), Request(&quot;hi&quot;, stream=True))
+try:
+    Request(&quot;hi&quot;, True)
+except TypeError as e:
+    print(&quot;TypeError:&quot;, str(e)[:60])</code></pre><div class="out"><span class="ol">Output</span><pre>LLMConfig(timeout=30.0, model=&#x27;small&#x27;, temperature=0.0) Request(prompt=&#x27;hi&#x27;, stream=True, user=&#x27;anon&#x27;)
+TypeError: Request.__init__() takes 2 positional arguments but 3 were g</pre></div></div>
+<p>Know the limits. Dataclasses <strong>do not validate types</strong> (hints are documentation, 11.1), they do not parse or convert input, and they do not serialise anything more complex than <code>asdict</code>. That is what makes them fast and simple, and what Pydantic adds (11.4). Compared with <code>typing.NamedTuple</code>, a dataclass is mutable by default, can have defaults computed per instance, <code>__post_init__</code>, slots and ordering control; a named tuple is an immutable tuple (it can be unpacked and indexed), lighter, but less flexible. Use dataclasses for internal structured data, Pydantic models at boundaries, <code>TypedDict</code> for dicts that stay dicts (11.2).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-what-dataclass-generates" data-pid="m11-3-what-dataclass-generates" data-type="predict" data-level="easy" data-answer="Result(query=&#x27;refund&#x27;, hits=3, score=0.0) True False
+True False
+Result(query=42, hits=&#x27;many&#x27;, score=0.0)">
+<header class="prob-head"><h3>1. What @dataclass generates</h3></header>
+<div class="code"><pre><code class="py">from dataclasses import dataclass
+
+@dataclass
+class Result:
+    query: str
+    hits: int = 0
+    score: float = 0.0
+
+a = Result(&quot;refund&quot;, 3)
+b = Result(&quot;refund&quot;, hits=3)
+print(a, a == b, a is b)
+print(Result(&quot;x&quot;) == Result(&quot;x&quot;, 0, 0.0), Result(&quot;x&quot;) == (&quot;x&quot;, 0, 0.0))
+print(Result(42, &quot;many&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The generated <code>__eq__</code> compares instances of the same class field by field; types are not checked.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Result(query=&#x27;refund&#x27;, hits=3, score=0.0) True False
+True False
+Result(query=42, hits=&#x27;many&#x27;, score=0.0)</pre></div><p>The generated <code>__init__</code> accepts positional and keyword arguments in field order, with the declared defaults, and the repr shows every field. Two instances with equal fields are equal but distinct objects. Equality with a tuple is <code>False</code>: the generated <code>__eq__</code> only compares instances of the same class (it returns <code>NotImplemented</code> otherwise, 9.2). The last line shows that hints are not enforced: an int query and a string hit count are stored without complaint.</p></div></details>
+</article>
+<article class="prob" id="p-a-document-dataclass" data-pid="m11-3-a-document-dataclass" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. A document dataclass</h3></header>
+<div class="prob-q"><p>Write a dataclass <code>Document</code> with fields <code>id: str</code>, <code>text: str</code>, <code>tags: list[str]</code> (default: a new empty list per instance), <code>score: float = 0.0</code> and <code>embedding: list[float]</code> (default empty list, hidden from the repr and ignored by <code>==</code>). Add a method <code>word_count()</code> and a method <code>tag(label)</code> that adds a lower-cased label if it is not present and returns <code>self</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from dataclasses import dataclass, field
+
+@dataclass
+class Document:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a = Document("d1", "Refund policy for orders")
+b = Document("d2", "Reset password")
+a.tag("Billing").tag("billing").tag("FAQ")
+assert a.tags == ["billing", "faq"] and b.tags == [] and a.word_count() == 4
+assert repr(b) == "Document(id='d2', text='Reset password', tags=[], score=0.0)"
+c = Document("d1", "Refund policy for orders", tags=["billing", "faq"], embedding=[0.1])
+assert c == a and Document("d3", "x", score=0.5).score == 0.5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = Document(&quot;d1&quot;, &quot;Refund policy for orders&quot;)
+b = Document(&quot;d2&quot;, &quot;Reset password&quot;)
+a.tag(&quot;Billing&quot;).tag(&quot;billing&quot;).tag(&quot;FAQ&quot;)
+assert a.tags == [&quot;billing&quot;, &quot;faq&quot;] and b.tags == [] and a.word_count() == 4
+assert repr(b) == &quot;Document(id=&#x27;d2&#x27;, text=&#x27;Reset password&#x27;, tags=[], score=0.0)&quot;
+c = Document(&quot;d1&quot;, &quot;Refund policy for orders&quot;, tags=[&quot;billing&quot;, &quot;faq&quot;], embedding=[0.1])
+assert c == a and Document(&quot;d3&quot;, &quot;x&quot;, score=0.5).score == 0.5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tags: list[str] = field(default_factory=list)</code>; <code>embedding: list[float] = field(default_factory=list, repr=False, compare=False)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class Document:
+    id: str
+    text: str
+    tags: list[str] = field(default_factory=list)
+    score: float = 0.0
+    embedding: list[float] = field(default_factory=list, repr=False, compare=False)
+
+    def word_count(self):
+        return len(self.text.split())
+
+    def tag(self, label):
+        label = label.lower()
+        if label not in self.tags:
+            self.tags.append(label)
+        return self</code></pre></div><p><code>default_factory=list</code> gives each document its own tag list, so tagging <code>a</code> leaves <code>b</code> untouched, the bug that mutable defaults cause in hand-written classes (9.1) is impossible here. Hiding the embedding from the repr keeps logs readable (embeddings are hundreds of floats), and excluding it from comparison means a document is identified by its id, text, tags and score, not by a cached vector. Methods live in the class as usual; <code>@dataclass</code> only adds the generated ones.</p></div></details>
+</article>
+<article class="prob" id="p-a-mutable-default-that-breaks-the-class" data-pid="m11-3-a-mutable-default-that-breaks-the-class" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A mutable default that breaks the class</h3></header>
+<div class="prob-q"><p>Defining <code>Conversation</code> fails with <code>ValueError: mutable default &lt;class 'list'&gt; for field messages is not allowed</code>. Fix the field so every conversation gets its own message list.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from dataclasses import dataclass
+
+@dataclass
+class Conversation:
+    system: str
+    messages: list[dict] = []
+
+    def add(self, role, content):
+        self.messages.append({&quot;role&quot;: role, &quot;content&quot;: content})
+</textarea>
+<script type="text/plain" class="prob-tests">a, b = Conversation("Be brief."), Conversation("Be formal.")
+a.add("user", "hi")
+assert a.messages == [{"role": "user", "content": "hi"}] and b.messages == []
+assert Conversation("x", [{"role": "user", "content": "y"}]).messages[0]["content"] == "y"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a, b = Conversation(&quot;Be brief.&quot;), Conversation(&quot;Be formal.&quot;)
+a.add(&quot;user&quot;, &quot;hi&quot;)
+assert a.messages == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}] and b.messages == []
+assert Conversation(&quot;x&quot;, [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;y&quot;}]).messages[0][&quot;content&quot;] == &quot;y&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from dataclasses import field</code> and use <code>field(default_factory=list)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class Conversation:
+    system: str
+    messages: list[dict] = field(default_factory=list)
+
+    def add(self, role, content):
+        self.messages.append({&quot;role&quot;: role, &quot;content&quot;: content})</code></pre></div><p>A default value is created once, when the class is defined, and a plain class would share that one list between every instance that did not pass its own (the bug of 2.4 and 9.1). Dataclasses detect mutable defaults of the common types (<code>list</code>, <code>dict</code>, <code>set</code>) and refuse to create the class, turning a subtle data leak into an error at import time. <code>default_factory=list</code> calls <code>list()</code> for each new instance. Note that a caller who passes their own list still shares it with the conversation; copying in <code>__post_init__</code> would prevent that.</p></div></details>
+</article>
+<article class="prob" id="p-frozen-instances-and-replace" data-pid="m11-3-frozen-instances-and-replace" data-type="predict" data-level="easy" data-answer="Settings(model=&#x27;small&#x27;, temperature=0.0) Settings(model=&#x27;small&#x27;, temperature=0.7) False
+cannot assign
+2 cached">
+<header class="prob-head"><h3>4. Frozen instances and replace</h3></header>
+<div class="code"><pre><code class="py">import dataclasses
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Settings:
+    model: str
+    temperature: float = 0.0
+
+s = Settings(&quot;small&quot;)
+t = dataclasses.replace(s, temperature=0.7)
+print(s, t, s is t)
+try:
+    s.model = &quot;large&quot;
+except dataclasses.FrozenInstanceError:
+    print(&quot;cannot assign&quot;)
+print(len({s, Settings(&quot;small&quot;), t}), {s: &quot;cached&quot;}[Settings(&quot;small&quot;)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A frozen dataclass is hashable by its fields; <code>replace</code> builds a new instance.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Settings(model=&#x27;small&#x27;, temperature=0.0) Settings(model=&#x27;small&#x27;, temperature=0.7) False
+cannot assign
+2 cached</pre></div><p><code>replace</code> returns a new object with one field changed and leaves the original as it was. Assignment raises <code>FrozenInstanceError</code>. Because frozen instances cannot change, the dataclass generates a hash from the fields, so equal settings collapse in a set and work as dict keys: <code>Settings("small")</code> finds the entry stored under <code>s</code>. That makes frozen dataclasses good cache keys for model configurations (8.3).</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-a-validated-immutable-generation-config" data-pid="m11-3-a-validated-immutable-generation-config" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A validated, immutable generation config</h3></header>
+<div class="prob-q"><p>Write a frozen dataclass with slots, <code>GenerationConfig(model: str, temperature: float = 0.0, max_tokens: int = 512, stop: tuple[str, ...] = ())</code>, whose <code>__post_init__</code> raises <code>ValueError</code> for a blank model, a temperature outside <code>[0, 2]</code> or a non-positive <code>max_tokens</code>, and <strong>normalises</strong> <code>stop</code> by removing duplicates while keeping order (it must still be a tuple). Add <code>with_changes(**changes)</code> returning a new, validated config.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import dataclasses
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import dataclasses
+c = GenerationConfig("small", stop=("###", "User:", "###"))
+assert c.stop == ("###", "User:") and c.temperature == 0.0 and not hasattr(c, "__dict__")
+hot = c.with_changes(temperature=0.9)
+assert hot.temperature == 0.9 and c.temperature == 0.0 and hot.stop == ("###", "User:")
+for bad in [dict(model=" "), dict(model="x", temperature=3), dict(model="x", max_tokens=0)]:
+    try:
+        GenerationConfig(**bad)
+        assert False, bad
+    except ValueError:
+        pass
+try:
+    c.with_changes(temperature=-1)
+    assert False
+except ValueError:
+    pass
+assert len({c, GenerationConfig("small", stop=("###", "User:"))}) == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import dataclasses
+c = GenerationConfig(&quot;small&quot;, stop=(&quot;###&quot;, &quot;User:&quot;, &quot;###&quot;))
+assert c.stop == (&quot;###&quot;, &quot;User:&quot;) and c.temperature == 0.0 and not hasattr(c, &quot;__dict__&quot;)
+hot = c.with_changes(temperature=0.9)
+assert hot.temperature == 0.9 and c.temperature == 0.0 and hot.stop == (&quot;###&quot;, &quot;User:&quot;)
+for bad in [dict(model=&quot; &quot;), dict(model=&quot;x&quot;, temperature=3), dict(model=&quot;x&quot;, max_tokens=0)]:
+    try:
+        GenerationConfig(**bad)
+        assert False, bad
+    except ValueError:
+        pass
+try:
+    c.with_changes(temperature=-1)
+    assert False
+except ValueError:
+    pass
+assert len({c, GenerationConfig(&quot;small&quot;, stop=(&quot;###&quot;, &quot;User:&quot;))}) == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In a frozen dataclass, normalise with <code>object.__setattr__(self, "stop", ...)</code> inside <code>__post_init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>with_changes</code> is <code>dataclasses.replace(self, **changes)</code>, which runs <code>__post_init__</code> again.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import dataclasses
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class GenerationConfig:
+    model: str
+    temperature: float = 0.0
+    max_tokens: int = 512
+    stop: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if not self.model.strip():
+            raise ValueError(&quot;model must not be blank&quot;)
+        if not 0 &lt;= self.temperature &lt;= 2:
+            raise ValueError(f&quot;temperature must be in [0, 2], got {self.temperature}&quot;)
+        if self.max_tokens &lt; 1:
+            raise ValueError(f&quot;max_tokens must be positive, got {self.max_tokens}&quot;)
+        object.__setattr__(self, &quot;stop&quot;, tuple(dict.fromkeys(self.stop)))
+
+    def with_changes(self, **changes):
+        return dataclasses.replace(self, **changes)</code></pre></div><p>Immutability plus validation in <code>__post_init__</code> gives the strongest guarantee a plain Python object can have: every config that exists is valid, and stays valid, because nothing can change it, and every "change" goes through <code>replace</code>, which constructs a new instance and validates it again. Frozen dataclasses block <code>self.stop = ...</code>, so normalisation uses <code>object.__setattr__</code>, the same escape hatch as 9.3. <code>dict.fromkeys</code> removes duplicate stop sequences in order (4.5). Being frozen also makes configs hashable, so they can key caches of model responses, and slots make them small. This is the hand-made version of a Pydantic model with <code>frozen=True</code> and validators (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-inherited-defaults-block-a-required-fiel" data-pid="m11-3-inherited-defaults-block-a-required-fiel" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Inherited defaults block a required field</h3></header>
+<div class="prob-q"><p><code>TrainConfig</code> inherits from <code>BaseConfig</code>, whose fields have defaults, and adds a required <code>dataset</code> field. Defining it fails with <code>TypeError: non-default argument 'dataset' follows default argument</code>. Fix it without giving <code>dataset</code> a default, so that calls use keyword arguments.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from dataclasses import dataclass
+
+@dataclass
+class BaseConfig:
+    seed: int = 0
+    device: str = &quot;cpu&quot;
+
+@dataclass
+class TrainConfig(BaseConfig):
+    dataset: str
+    epochs: int = 3
+</textarea>
+<script type="text/plain" class="prob-tests">c = TrainConfig(dataset="tickets.jsonl", epochs=5)
+assert (c.dataset, c.epochs, c.seed, c.device) == ("tickets.jsonl", 5, 0, "cpu")
+assert TrainConfig(dataset="x", seed=42).seed == 42
+try:
+    TrainConfig()
+    assert False, "dataset is required"
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">c = TrainConfig(dataset=&quot;tickets.jsonl&quot;, epochs=5)
+assert (c.dataset, c.epochs, c.seed, c.device) == (&quot;tickets.jsonl&quot;, 5, 0, &quot;cpu&quot;)
+assert TrainConfig(dataset=&quot;x&quot;, seed=42).seed == 42
+try:
+    TrainConfig()
+    assert False, &quot;dataset is required&quot;
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make the fields keyword-only: <code>@dataclass(kw_only=True)</code> on the subclass (and, for consistency, the base).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass
+
+@dataclass(kw_only=True)
+class BaseConfig:
+    seed: int = 0
+    device: str = &quot;cpu&quot;
+
+@dataclass(kw_only=True)
+class TrainConfig(BaseConfig):
+    dataset: str
+    epochs: int = 3</code></pre></div><p>The generated <code>__init__</code> lists the base's fields first, then the subclass's, and Python forbids a parameter without a default after parameters with defaults, so <code>dataset</code> could not come after <code>seed</code> and <code>device</code>. Keyword-only parameters have no positional order, so the restriction disappears: <code>dataset</code> stays required, and every call names its arguments, which for configs with many fields is clearer anyway (<code>TrainConfig(dataset=..., epochs=5)</code> cannot silently swap two numbers). <code>KW_ONLY</code> (a pseudo-field) makes only the fields after it keyword-only, when some should stay positional.</p></div></details>
+</article>
+<article class="prob" id="p-nested-dataclasses-from-and-to-dicts" data-pid="m11-3-nested-dataclasses-from-and-to-dicts" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Nested dataclasses from and to dicts</h3></header>
+<div class="prob-q"><p>Write dataclasses <code>Metric(name: str, value: float)</code> and <code>Run(run_id: str, params: dict[str, float], metrics: list[Metric] = [] via a factory)</code>. Add a classmethod <code>Run.from_dict(data)</code> that builds the nested objects from a dict like <code>asdict</code> produces (raising <code>KeyError</code> naming missing keys), a method <code>to_json()</code> using <code>asdict</code> and <code>json.dumps(sort_keys=True)</code>, and a method <code>best(name)</code> returning the highest value of a metric or <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import json
+from dataclasses import dataclass, field, asdict
+
+@dataclass
+class Metric:
+    pass
+
+@dataclass
+class Run:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+from dataclasses import asdict
+r = Run("r1", {"lr": 0.1}, [Metric("f1", 0.81), Metric("f1", 0.84), Metric("loss", 0.3)])
+data = asdict(r)
+again = Run.from_dict(data)
+assert again == r and isinstance(again.metrics[0], Metric)
+assert json.loads(r.to_json()) == data and r.to_json().startswith('{"metrics"')
+assert r.best("f1") == 0.84 and r.best("auc") is None
+assert Run.from_dict({"run_id": "r2", "params": {}}).metrics == []
+try:
+    Run.from_dict({"params": {}})
+    assert False
+except KeyError as e:
+    assert "run_id" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+from dataclasses import asdict
+r = Run(&quot;r1&quot;, {&quot;lr&quot;: 0.1}, [Metric(&quot;f1&quot;, 0.81), Metric(&quot;f1&quot;, 0.84), Metric(&quot;loss&quot;, 0.3)])
+data = asdict(r)
+again = Run.from_dict(data)
+assert again == r and isinstance(again.metrics[0], Metric)
+assert json.loads(r.to_json()) == data and r.to_json().startswith(&#x27;{&quot;metrics&quot;&#x27;)
+assert r.best(&quot;f1&quot;) == 0.84 and r.best(&quot;auc&quot;) is None
+assert Run.from_dict({&quot;run_id&quot;: &quot;r2&quot;, &quot;params&quot;: {}}).metrics == []
+try:
+    Run.from_dict({&quot;params&quot;: {}})
+    assert False
+except KeyError as e:
+    assert &quot;run_id&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from_dict</code>: check <code>{"run_id", "params"} - data.keys()</code>, then <code>cls(data["run_id"], dict(data["params"]), [Metric(**m) for m in data.get("metrics", [])])</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from dataclasses import dataclass, field, asdict
+
+@dataclass
+class Metric:
+    name: str
+    value: float
+
+@dataclass
+class Run:
+    run_id: str
+    params: dict[str, float]
+    metrics: list[Metric] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data):
+        missing = {&quot;run_id&quot;, &quot;params&quot;} - data.keys()
+        if missing:
+            raise KeyError(f&quot;missing keys: {&#x27;, &#x27;.join(sorted(missing))}&quot;)
+        return cls(data[&quot;run_id&quot;], dict(data[&quot;params&quot;]), [Metric(**m) for m in data.get(&quot;metrics&quot;, [])])
+
+    def to_json(self):
+        return json.dumps(asdict(self), sort_keys=True)
+
+    def best(self, name):
+        values = [m.value for m in self.metrics if m.name == name]
+        return max(values) if values else None</code></pre></div><p><code>asdict</code> converts nested dataclasses to plain dicts and lists recursively, which makes saving runs to JSON one line, but it is one-way: going back requires knowing which dicts should become <code>Metric</code>s, which is what <code>from_dict</code> encodes. The round trip test (<code>from_dict(asdict(r)) == r</code>) is the check every serialisable class should have. <code>Metric(**m)</code> unpacks each dict into the constructor, so an unexpected key in the data raises <code>TypeError</code>, a cheap guard against silently dropping fields. Experiment trackers store run records in exactly this shape; Pydantic does the reverse conversion automatically from the type hints (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-serialising-records-asdict-or-a-direct-d" data-pid="m11-3-serialising-records-asdict-or-a-direct-d" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Serialising records: asdict or a direct dict</h3></header>
+<div class="prob-q"><p>Both turn 50,000 dataclass records into dicts for JSON. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import dataclasses
+from dataclasses import dataclass
+
+@dataclass
+class Row:
+    id: int
+    label: str
+    score: float
+
+rows = [Row(i, &quot;spam&quot;, 0.5) for i in range(50_000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">out = [dataclasses.asdict(r) for r in rows]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">out = [{&#x27;id&#x27;: r.id, &#x27;label&#x27;: r.label, &#x27;score&#x27;: r.score} for r in rows]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does <code>asdict</code> do with every field value, in case it is a nested dataclass, list or dict?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>177.97 ms</td></tr><tr><td>B</td><td>18.82 ms</td></tr></table></div><p><code>asdict</code> is general: for every field it checks whether the value is a dataclass, a list, a tuple or a dict, recurses into it, and deep-copies what it finds, so that the result shares nothing with the object. For flat records of strings and numbers that machinery is pure overhead; a dict built directly reads three attributes. Use <code>asdict</code> when you need its guarantees (nested dataclasses, an independent copy), and build dicts directly, or use <code>vars(row)</code> for a shallow copy of the fields, on hot paths such as serialising every row of an export.</p></div></details>
+</article>
+<article class="prob" id="p-inspecting-a-dataclass" data-pid="m11-3-inspecting-a-dataclass" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Inspecting a dataclass</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import dataclasses
+from dataclasses import dataclass, field
+
+@dataclass
+class Inner:
+    x: int
+
+@dataclass
+class Outer:
+    name: str
+    inner: Inner
+    tags: list[str] = field(default_factory=list)
+    cache: dict = field(default_factory=dict, repr=False, compare=False)
+
+o = Outer(&quot;a&quot;, Inner(1), [&quot;t&quot;])
+r = [f.name for f in dataclasses.fields(Outer)]
+r = dataclasses.asdict(o)
+r = dataclasses.astuple(o)
+r = repr(dataclasses.replace(o, name=&quot;b&quot;))
+r = o == Outer(&quot;a&quot;, Inner(1), [&quot;t&quot;], cache={&quot;k&quot;: 1})</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>field names</td><td><input class="cell" data-a="[&#x27;name&#x27;, &#x27;inner&#x27;, &#x27;tags&#x27;, &#x27;cache&#x27;]" data-s="[&#x27;name&#x27;, &#x27;inner&#x27;, &#x27;tags&#x27;, &#x27;cache&#x27;]" aria-label="r at field names" autocomplete="off"></td></tr><tr><td>asdict</td><td><input class="cell" data-a="{&#x27;name&#x27;: &#x27;a&#x27;, &#x27;inner&#x27;: {&#x27;x&#x27;: 1}, &#x27;tags&#x27;: [&#x27;t&#x27;], &#x27;cache&#x27;: {}}" data-s="{&#x27;name&#x27;: &#x27;a&#x27;, &#x27;inner&#x27;: {&#x27;x&#x27;: 1}, &#x27;tags&#x27;: [&#x27;t&#x27;], &#x27;cache&#x27;: {}}" aria-label="r at asdict" autocomplete="off"></td></tr><tr><td>astuple</td><td><input class="cell" data-a="(&#x27;a&#x27;, (1,), [&#x27;t&#x27;], {})" data-s="(&#x27;a&#x27;, (1,), [&#x27;t&#x27;], {})" aria-label="r at astuple" autocomplete="off"></td></tr><tr><td>replace</td><td><input class="cell" data-a="&quot;Outer(name=&#x27;b&#x27;, inner=Inner(x=1), tags=[&#x27;t&#x27;])&quot;" data-s="Outer(name=&#x27;b&#x27;, inner=Inner(x=1), tags=[&#x27;t&#x27;])" aria-label="r at replace" autocomplete="off"></td></tr><tr><td>compare=False</td><td><input class="cell" data-a="True" data-s="True" aria-label="r at compare=False" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>asdict</code> and <code>astuple</code> recurse into nested dataclasses; <code>repr=False</code> hides a field from the repr; <code>compare=False</code> ignores it in <code>==</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>field names</td><td><code>[&#x27;name&#x27;, &#x27;inner&#x27;, &#x27;tags&#x27;, &#x27;cache&#x27;]</code></td></tr><tr><td>asdict</td><td><code>{&#x27;name&#x27;: &#x27;a&#x27;, &#x27;inner&#x27;: {&#x27;x&#x27;: 1}, &#x27;tags&#x27;: [&#x27;t&#x27;], &#x27;cache&#x27;: {}}</code></td></tr><tr><td>astuple</td><td><code>(&#x27;a&#x27;, (1,), [&#x27;t&#x27;], {})</code></td></tr><tr><td>replace</td><td><code>&quot;Outer(name=&#x27;b&#x27;, inner=Inner(x=1), tags=[&#x27;t&#x27;])&quot;</code></td></tr><tr><td>compare=False</td><td><code>True</code></td></tr></table></div><p><code>fields</code> lists all fields in declaration order, including hidden ones. <code>asdict</code> turns the nested <code>Inner</code> into a dict and includes every field; <code>astuple</code> does the same with tuples. <code>replace</code> builds a new instance whose repr leaves out <code>cache</code>. The comparison ignores <code>cache</code>, so instances that differ only in their cache are equal.</p></div></details>
+</article>
+<article class="prob" id="p-sorting-that-uses-the-wrong-field" data-pid="m11-3-sorting-that-uses-the-wrong-field" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Sorting that uses the wrong field</h3></header>
+<div class="prob-q"><p><code>Candidate</code> uses <code>order=True</code> so results can be sorted, but <code>sorted(candidates)</code> sorts by <code>name</code> instead of by <code>score</code>, and ties should then go by <code>name</code>. Fix the class so the generated ordering compares by score first, then name, without changing the constructor's argument order (<code>Candidate(name, score, meta)</code>), and so that <code>meta</code> is ignored by comparisons.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from dataclasses import dataclass, field
+
+@dataclass(order=True)
+class Candidate:
+    name: str
+    score: float
+    meta: dict = field(default_factory=dict)
+</textarea>
+<script type="text/plain" class="prob-tests">cs = [Candidate("b", 0.5), Candidate("a", 0.9), Candidate("c", 0.5, {"x": 1})]
+assert [c.name for c in sorted(cs)] == ["b", "c", "a"]
+assert [c.name for c in sorted(cs, reverse=True)] == ["a", "c", "b"]
+assert Candidate("a", 0.9) == Candidate("a", 0.9, {"note": "differs"})
+assert repr(Candidate("a", 1.0)) == "Candidate(name='a', score=1.0, meta={})"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">cs = [Candidate(&quot;b&quot;, 0.5), Candidate(&quot;a&quot;, 0.9), Candidate(&quot;c&quot;, 0.5, {&quot;x&quot;: 1})]
+assert [c.name for c in sorted(cs)] == [&quot;b&quot;, &quot;c&quot;, &quot;a&quot;]
+assert [c.name for c in sorted(cs, reverse=True)] == [&quot;a&quot;, &quot;c&quot;, &quot;b&quot;]
+assert Candidate(&quot;a&quot;, 0.9) == Candidate(&quot;a&quot;, 0.9, {&quot;note&quot;: &quot;differs&quot;})
+assert repr(Candidate(&quot;a&quot;, 1.0)) == &quot;Candidate(name=&#x27;a&#x27;, score=1.0, meta={})&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Add a first field <code>sort_key: tuple = field(init=False, repr=False)</code> set in <code>__post_init__</code> to <code>(self.score, self.name)</code>; mark the other fields <code>compare=False</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass(order=True)
+class Candidate:
+    sort_key: tuple = field(init=False, repr=False)
+    name: str = field(compare=False)
+    score: float = field(compare=False)
+    meta: dict = field(default_factory=dict, compare=False)
+
+    def __post_init__(self):
+        self.sort_key = (self.score, self.name)</code></pre></div><p><code>order=True</code> compares fields as a tuple <strong>in declaration order</strong>, so the first field, <code>name</code>, decided the order. The documented pattern is a hidden first field holding the sort key, computed in <code>__post_init__</code> and excluded from <code>__init__</code> and the repr, while the real fields are marked <code>compare=False</code>. Equality then also uses only the key, which is consistent: two candidates with the same score and name are equal whatever their metadata. Since <code>sort_key</code> has no default and comes first, the others still follow the non-default-first rule (the later fields have no defaults either). For one-off sorts, <code>sorted(cs, key=lambda c: (c.score, c.name))</code> is simpler; <code>order=True</code> is for types whose natural order is used everywhere.</p></div></details>
+</article>
+<article class="prob" id="p-frozen-chunks-for-deduplication" data-pid="m11-3-frozen-chunks-for-deduplication" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. Frozen chunks for deduplication</h3></header>
+<div class="prob-q"><p>Write a frozen dataclass <code>Chunk(doc_id: str, text: str, position: int = 0)</code> that normalises <code>text</code> in <code>__post_init__</code> (strip and collapse inner whitespace to single spaces) and rejects empty text and negative positions with <code>ValueError</code>. Add a property <code>length</code> (number of characters) and a function <code>dedupe(chunks)</code> returning the chunks without duplicates (same doc, normalised text and position), keeping the first occurrence and the order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Chunk:
+    pass
+
+def dedupe(chunks):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">a = Chunk("faq", "  Refunds   take 5 days. ")
+assert a.text == "Refunds take 5 days." and a.length == 20
+chunks = [a, Chunk("faq", "Refunds take 5 days."), Chunk("faq", "Refunds take 5 days.", 1), Chunk("terms", "No refunds.")]
+assert dedupe(chunks) == [a, chunks[2], chunks[3]]
+assert len(set(chunks)) == 3
+for bad in [("x", "   "), ("x", "ok", -1)]:
+    try:
+        Chunk(*bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = Chunk(&quot;faq&quot;, &quot;  Refunds   take 5 days. &quot;)
+assert a.text == &quot;Refunds take 5 days.&quot; and a.length == 20
+chunks = [a, Chunk(&quot;faq&quot;, &quot;Refunds take 5 days.&quot;), Chunk(&quot;faq&quot;, &quot;Refunds take 5 days.&quot;, 1), Chunk(&quot;terms&quot;, &quot;No refunds.&quot;)]
+assert dedupe(chunks) == [a, chunks[2], chunks[3]]
+assert len(set(chunks)) == 3
+for bad in [(&quot;x&quot;, &quot;   &quot;), (&quot;x&quot;, &quot;ok&quot;, -1)]:
+    try:
+        Chunk(*bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>object.__setattr__(self, "text", " ".join(self.text.split()))</code> in <code>__post_init__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>dict.fromkeys(chunks)</code> keeps the first of equal (hashable) items, in order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Chunk:
+    doc_id: str
+    text: str
+    position: int = 0
+
+    def __post_init__(self):
+        normalised = &quot; &quot;.join(self.text.split())
+        if not normalised:
+            raise ValueError(&quot;chunk text must not be empty&quot;)
+        if self.position &lt; 0:
+            raise ValueError(f&quot;position must not be negative, got {self.position}&quot;)
+        object.__setattr__(self, &quot;text&quot;, normalised)
+
+    @property
+    def length(self):
+        return len(self.text)
+
+def dedupe(chunks):
+    return list(dict.fromkeys(chunks))</code></pre></div><p>Normalising in <code>__post_init__</code> means equality and hashing see the cleaned text, so two chunks that differ only in whitespace are the same chunk; that is what lets <code>dict.fromkeys</code> (4.5) remove duplicates in one line, keeping the first of each and the original order. Being frozen is what makes the generated <code>__hash__</code> safe: the fields that define identity can never change after construction. Properties work on dataclasses as on any class (9.3). Deduplicating chunks before embedding saves cost and keeps repeated boilerplate (footers, disclaimers) from flooding retrieval results.</p></div></details>
+</article>
+<article class="prob" id="p-initvar-init-false-and-repr-false" data-pid="m11-3-initvar-init-false-and-repr-false" data-type="predict" data-level="medium" data-answer="Account(user=&#x27;ana&#x27;, key_hint=&#x27;sk-1...&#x27;) sk-1...
+[&#x27;user&#x27;, &#x27;key_hint&#x27;, &#x27;secret&#x27;] False
+Account(user=&#x27;bo&#x27;, key_hint=&#x27;sk-9...&#x27;) s3">
+<header class="prob-head"><h3>12. InitVar, init=False and repr=False</h3></header>
+<div class="code"><pre><code class="py">from dataclasses import dataclass, field, InitVar, fields
+
+@dataclass
+class Account:
+    user: str
+    raw_key: InitVar[str]
+    key_hint: str = field(init=False)
+    secret: str = field(default=&quot;&quot;, repr=False)
+
+    def __post_init__(self, raw_key):
+        self.key_hint = raw_key[:4] + &quot;...&quot;
+
+a = Account(&quot;ana&quot;, &quot;sk-123456&quot;)
+print(a, a.key_hint)
+print([f.name for f in fields(Account)], hasattr(a, &quot;raw_key&quot;))
+b = Account(&quot;bo&quot;, &quot;sk-999&quot;, secret=&quot;s3&quot;)
+print(b, b.secret)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An <code>InitVar</code> is a constructor argument passed to <code>__post_init__</code>, not stored. <code>init=False</code> fields are not constructor arguments.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Account(user=&#x27;ana&#x27;, key_hint=&#x27;sk-1...&#x27;) sk-1...
+[&#x27;user&#x27;, &#x27;key_hint&#x27;, &#x27;secret&#x27;] False
+Account(user=&#x27;bo&#x27;, key_hint=&#x27;sk-9...&#x27;) s3</pre></div><p><code>raw_key</code> goes to <code>__init__</code> and on to <code>__post_init__</code>, which derives <code>key_hint</code> from it, but it is not a field: it is not stored, not in the repr and not listed by <code>fields</code>, a good way to accept a secret and keep only a harmless hint. <code>key_hint</code> is computed rather than passed. <code>secret</code> is a normal field that the repr hides, so it can be set and read, but never appears in a log line that prints the object.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-flatten-and-rebuild-nested-configs" data-pid="m11-3-flatten-and-rebuild-nested-configs" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Flatten and rebuild nested configs</h3></header>
+<div class="prob-q"><p>Experiment trackers store configs as flat <code>"section.field": value</code> dicts. For nested dataclasses, write <code>flatten(obj)</code> returning such a dict (nested dataclass fields joined with dots, 6.2) and <code>unflatten(cls, flat)</code> rebuilding an instance, converting string values to the field's annotated type when the field is <code>int</code>, <code>float</code> or <code>bool</code> (<code>"true"/"false"</code>), so that values typed on a command line work. Missing keys use the field defaults; unknown keys raise <code>KeyError</code>. Use <code>dataclasses.fields</code> and <code>typing.get_type_hints</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import dataclasses, typing
+from dataclasses import dataclass, field
+
+def flatten(obj, prefix=&quot;&quot;):
+    pass
+
+def unflatten(cls, flat):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from dataclasses import dataclass, field
+
+@dataclass
+class Optim:
+    lr: float = 0.001
+    momentum: float = 0.9
+
+@dataclass
+class Model:
+    name: str = "small"
+    layers: int = 2
+    dropout: bool = False
+
+@dataclass
+class Config:
+    model: Model = field(default_factory=Model)
+    optim: Optim = field(default_factory=Optim)
+    seed: int = 0
+
+c = Config(Model("large", 4), Optim(lr=0.01))
+flat = flatten(c)
+assert flat == {"model.name": "large", "model.layers": 4, "model.dropout": False, "optim.lr": 0.01, "optim.momentum": 0.9, "seed": 0}
+assert unflatten(Config, flat) == c
+cli = {"model.layers": "8", "optim.lr": "3e-4", "model.dropout": "true", "seed": "7"}
+assert unflatten(Config, cli) == Config(Model("small", 8, True), Optim(lr=0.0003), seed=7)
+try:
+    unflatten(Config, {"model.layerz": "3"})
+    assert False
+except KeyError as e:
+    assert "model.layerz" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class Optim:
+    lr: float = 0.001
+    momentum: float = 0.9
+
+@dataclass
+class Model:
+    name: str = &quot;small&quot;
+    layers: int = 2
+    dropout: bool = False
+
+@dataclass
+class Config:
+    model: Model = field(default_factory=Model)
+    optim: Optim = field(default_factory=Optim)
+    seed: int = 0
+
+c = Config(Model(&quot;large&quot;, 4), Optim(lr=0.01))
+flat = flatten(c)
+assert flat == {&quot;model.name&quot;: &quot;large&quot;, &quot;model.layers&quot;: 4, &quot;model.dropout&quot;: False, &quot;optim.lr&quot;: 0.01, &quot;optim.momentum&quot;: 0.9, &quot;seed&quot;: 0}
+assert unflatten(Config, flat) == c
+cli = {&quot;model.layers&quot;: &quot;8&quot;, &quot;optim.lr&quot;: &quot;3e-4&quot;, &quot;model.dropout&quot;: &quot;true&quot;, &quot;seed&quot;: &quot;7&quot;}
+assert unflatten(Config, cli) == Config(Model(&quot;small&quot;, 8, True), Optim(lr=0.0003), seed=7)
+try:
+    unflatten(Config, {&quot;model.layerz&quot;: &quot;3&quot;})
+    assert False
+except KeyError as e:
+    assert &quot;model.layerz&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>flatten</code>: for each field, if the value is a dataclass instance (<code>dataclasses.is_dataclass</code>), recurse with <code>prefix + name + "."</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>unflatten</code>: group keys by their first part; for a field whose type is a dataclass, recurse with the sub-dict; otherwise convert and assign. Track used keys to detect unknown ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import dataclasses, typing
+from dataclasses import dataclass, field
+
+
+def flatten(obj, prefix=&quot;&quot;):
+    out = {}
+    for f in dataclasses.fields(obj):
+        value = getattr(obj, f.name)
+        if dataclasses.is_dataclass(value):
+            out.update(flatten(value, prefix + f.name + &quot;.&quot;))
+        else:
+            out[prefix + f.name] = value
+    return out
+
+
+def _convert(value, hint):
+    if not isinstance(value, str) or hint is str:
+        return value
+    if hint is bool:
+        if value.lower() in (&quot;true&quot;, &quot;false&quot;):
+            return value.lower() == &quot;true&quot;
+        raise ValueError(f&quot;not a bool: {value!r}&quot;)
+    if hint in (int, float):
+        return hint(value)
+    return value
+
+
+def unflatten(cls, flat, _prefix=&quot;&quot;):
+    hints = typing.get_type_hints(cls)
+    names = {f.name for f in dataclasses.fields(cls)}
+    if not _prefix:
+        for key in flat:
+            head = key.split(&quot;.&quot;, 1)[0]
+            if head not in names:
+                raise KeyError(f&quot;unknown config key: {key}&quot;)
+    kwargs = {}
+    for f in dataclasses.fields(cls):
+        key = _prefix + f.name
+        hint = hints[f.name]
+        if dataclasses.is_dataclass(hint):
+            sub_names = {g.name for g in dataclasses.fields(hint)}
+            for k in flat:
+                if k.startswith(key + &quot;.&quot;) and k[len(key) + 1:].split(&quot;.&quot;, 1)[0] not in sub_names:
+                    raise KeyError(f&quot;unknown config key: {k}&quot;)
+            if any(k.startswith(key + &quot;.&quot;) for k in flat):
+                kwargs[f.name] = unflatten(hint, flat, key + &quot;.&quot;)
+        elif key in flat:
+            kwargs[f.name] = _convert(flat[key], hint)
+    return cls(**kwargs)</code></pre></div><p><code>dataclasses.fields</code> and the type hints are all a generic tool needs: <code>flatten</code> walks the fields and recurses into nested dataclasses, producing the flat keys that trackers like MLflow and Weights &amp; Biases expect, and <code>unflatten</code> uses each field's annotated type to decide whether to recurse (a dataclass) or to convert (a string from the command line to <code>int</code>, <code>float</code> or <code>bool</code>). Fields not present keep their defaults, because they are simply not passed to the constructor, and unknown keys are rejected so that a typo like <code>model.layerz=3</code> fails instead of being silently ignored, the most common way hyperparameter overrides go wrong. This is the core of what configuration libraries such as Hydra and OmegaConf structured configs, and <code>simple_parsing</code>, do with dataclasses.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-dataclass-with-hidden-tr" data-pid="m11-3-read-the-code-a-dataclass-with-hidden-tr" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>14. Read the code: a dataclass with hidden traps</h3></header>
+<div class="prob-q"><p><code>IndexEntry</code> objects are kept in a set to avoid indexing the same document twice. Documents re-indexed after an edit are not found in the set, two entries for the same document compare unequal because of a timestamp, and <code>normalised_title</code> is wrong after a title change. Read it, find the bugs and fix them: identity is <code>(doc_id, version)</code>; <code>indexed_at</code> is metadata; the title is normalised once at creation and entries never change after creation.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">from dataclasses import dataclass, field
+
+
+@dataclass(unsafe_hash=True)
+class IndexEntry:
+    doc_id: str
+    version: int
+    title: str
+    indexed_at: float = 0.0
+    normalised_title: str = field(init=False)
+
+    def __post_init__(self):
+        self.normalised_title = self.title.strip().lower()
+</textarea>
+<script type="text/plain" class="prob-tests">import dataclasses
+seen = set()
+a = IndexEntry("faq", 1, "  Refund Policy ", indexed_at=100.0)
+seen.add(a)
+assert IndexEntry("faq", 1, "Refund Policy", indexed_at=200.0) in seen
+assert IndexEntry("faq", 2, "Refund Policy") not in seen
+assert a.normalised_title == "refund policy"
+try:
+    a.title = "Changed"
+    assert False, "entries must be immutable"
+except dataclasses.FrozenInstanceError:
+    pass
+b = dataclasses.replace(a, title="New Title", version=2)
+assert b.normalised_title == "new title" and b.version == 2 and a in seen</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import dataclasses
+seen = set()
+a = IndexEntry(&quot;faq&quot;, 1, &quot;  Refund Policy &quot;, indexed_at=100.0)
+seen.add(a)
+assert IndexEntry(&quot;faq&quot;, 1, &quot;Refund Policy&quot;, indexed_at=200.0) in seen
+assert IndexEntry(&quot;faq&quot;, 2, &quot;Refund Policy&quot;) not in seen
+assert a.normalised_title == &quot;refund policy&quot;
+try:
+    a.title = &quot;Changed&quot;
+    assert False, &quot;entries must be immutable&quot;
+except dataclasses.FrozenInstanceError:
+    pass
+b = dataclasses.replace(a, title=&quot;New Title&quot;, version=2)
+assert b.normalised_title == &quot;new title&quot; and b.version == 2 and a in seen</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make it <code>frozen=True</code> (which also gives a safe <code>__hash__</code>) and drop <code>unsafe_hash</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Mark <code>title</code>, <code>indexed_at</code> and <code>normalised_title</code> with <code>compare=False</code>; set <code>normalised_title</code> with <code>object.__setattr__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class IndexEntry:
+    doc_id: str
+    version: int
+    title: str = field(compare=False)
+    indexed_at: float = field(default=0.0, compare=False)
+    normalised_title: str = field(init=False, compare=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, &quot;normalised_title&quot;, self.title.strip().lower())</code></pre></div><p>Three bugs. <strong>Identity was every field</strong>: equality and the hash included <code>title</code>, <code>indexed_at</code> and <code>normalised_title</code>, so the same document indexed at a different time (or with a different title spelling) counted as new; marking metadata <code>compare=False</code> makes identity exactly <code>(doc_id, version)</code>, and both <code>__eq__</code> and <code>__hash__</code> follow. <strong><code>unsafe_hash</code> on a mutable class</strong>: the hash was computed from fields that could change, so changing a title after adding the entry to a set left it in the wrong bucket, unfindable. <strong>A derived field that went stale</strong>: <code>normalised_title</code> was computed once in <code>__post_init__</code> but <code>title</code> could be reassigned later. <code>frozen=True</code> fixes the last two at once: nothing changes after creation, so the generated hash is safe and the derived value cannot drift, and <code>replace</code> builds a corrected copy that recomputes it. The normalisation must then use <code>object.__setattr__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-diff-two-configs" data-pid="m11-3-diff-two-configs" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>15. Diff two configs</h3></header>
+<div class="prob-q"><p>Write <code>diff(a, b)</code> for two instances of the same dataclass (raise <code>TypeError</code> otherwise) returning a dict of the fields that differ, as dotted paths for nested dataclasses, mapping to <code>(old, new)</code> pairs. Fields marked <code>compare=False</code> are ignored. Lists and dicts are compared by value and reported whole. Use <code>dataclasses.fields</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import dataclasses
+
+def diff(a, b, prefix=&quot;&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from dataclasses import dataclass, field
+
+@dataclass
+class Optim:
+    lr: float = 0.001
+    schedule: list[int] = field(default_factory=list)
+
+@dataclass
+class Config:
+    model: str = "small"
+    optim: Optim = field(default_factory=Optim)
+    notes: str = field(default="", compare=False)
+
+base = Config()
+new = Config(model="large", optim=Optim(lr=0.01, schedule=[10, 20]), notes="tried bigger")
+assert diff(base, new) == {"model": ("small", "large"), "optim.lr": (0.001, 0.01), "optim.schedule": ([], [10, 20])}
+assert diff(base, Config(notes="only notes")) == {}
+try:
+    diff(base, Optim())
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class Optim:
+    lr: float = 0.001
+    schedule: list[int] = field(default_factory=list)
+
+@dataclass
+class Config:
+    model: str = &quot;small&quot;
+    optim: Optim = field(default_factory=Optim)
+    notes: str = field(default=&quot;&quot;, compare=False)
+
+base = Config()
+new = Config(model=&quot;large&quot;, optim=Optim(lr=0.01, schedule=[10, 20]), notes=&quot;tried bigger&quot;)
+assert diff(base, new) == {&quot;model&quot;: (&quot;small&quot;, &quot;large&quot;), &quot;optim.lr&quot;: (0.001, 0.01), &quot;optim.schedule&quot;: ([], [10, 20])}
+assert diff(base, Config(notes=&quot;only notes&quot;)) == {}
+try:
+    diff(base, Optim())
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Iterate <code>dataclasses.fields(a)</code>, skip <code>not f.compare</code>, recurse when both values are dataclass instances, else compare with <code>!=</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import dataclasses
+
+def diff(a, b, prefix=&quot;&quot;):
+    if type(a) is not type(b) or not dataclasses.is_dataclass(a):
+        raise TypeError(f&quot;cannot diff {type(a).__name__} with {type(b).__name__}&quot;)
+    changes = {}
+    for f in dataclasses.fields(a):
+        if not f.compare:
+            continue
+        old, new = getattr(a, f.name), getattr(b, f.name)
+        path = prefix + f.name
+        if dataclasses.is_dataclass(old) and dataclasses.is_dataclass(new) and type(old) is type(new):
+            changes.update(diff(old, new, path + &quot;.&quot;))
+        elif old != new:
+            changes[path] = (old, new)
+    return changes</code></pre></div><p>Experiment comparison ("what changed between run 12 and run 13?") is mostly a structural diff of configs, and dataclass metadata makes it generic: <code>fields()</code> gives every field and its <code>compare</code> flag, so notes and timestamps marked <code>compare=False</code> are skipped automatically, matching what the generated <code>__eq__</code> considers. Recursing into nested dataclasses gives precise dotted paths instead of "the whole optimiser config changed". Lists are compared by value and reported whole, which is the useful granularity for schedules and layer sizes. Tools such as MLflow's run comparison and <code>deepdiff</code> provide richer versions.</p></div></details>
+</article>
+<article class="prob" id="p-asdict-copies-equality-across-types" data-pid="m11-3-asdict-copies-equality-across-types" data-type="predict" data-level="hard" data-answer="[&#x27;x&#x27;] {&#x27;tags&#x27;: [&#x27;x&#x27;, &#x27;y&#x27;]}
+False True True
+TypeError: unhashable type: &#x27;A&#x27;
+True True False">
+<header class="prob-head"><h3>16. asdict copies, equality across types</h3></header>
+<div class="code"><pre><code class="py">import dataclasses
+from dataclasses import dataclass, field
+
+@dataclass
+class A:
+    tags: list[str] = field(default_factory=list)
+
+@dataclass
+class B:
+    tags: list[str] = field(default_factory=list)
+
+a = A([&quot;x&quot;])
+d = dataclasses.asdict(a)
+d[&quot;tags&quot;].append(&quot;y&quot;)
+print(a.tags, d)
+print(A([&quot;x&quot;]) == B([&quot;x&quot;]), A([&quot;x&quot;]) == A([&quot;x&quot;]), dataclasses.astuple(a) == ([&quot;x&quot;],))
+try:
+    hash(A())
+except TypeError as e:
+    print(&quot;TypeError:&quot;, e)
+print(dataclasses.is_dataclass(A), dataclasses.is_dataclass(a), dataclasses.is_dataclass(dict))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>asdict</code> deep-copies values. The generated <code>__eq__</code> compares only instances of the same class. A non-frozen dataclass with <code>eq=True</code> is unhashable.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;x&#x27;] {&#x27;tags&#x27;: [&#x27;x&#x27;, &#x27;y&#x27;]}
+False True True
+TypeError: unhashable type: &#x27;A&#x27;
+True True False</pre></div><p><code>asdict</code> builds new lists, so appending to the dict's list leaves the dataclass unchanged. Instances of two different dataclasses are never equal, even with identical fields, because the generated <code>__eq__</code> returns <code>NotImplemented</code> for other classes; <code>astuple</code> gives a plain tuple, which compares by value. A regular (mutable) dataclass defines <code>__eq__</code> and therefore has <code>__hash__ = None</code> (9.2), so hashing it fails. <code>is_dataclass</code> accepts both the class and its instances.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-does-dataclass-generate-and-when-wo" data-pid="m11-3-what-does-dataclass-generate-and-when-wo" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What does <code>@dataclass</code> generate, and when would you not use it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>From the annotated class attributes it generates <code>__init__</code> (fields in declaration order, with defaults and <code>default_factory</code>), <code>__repr__</code> and <code>__eq__</code>; with options, ordering methods (<code>order=True</code>), immutability plus <code>__hash__</code> (<code>frozen=True</code>), <code>__slots__</code> (<code>slots=True</code>) and keyword-only parameters (<code>kw_only=True</code>); <code>__post_init__</code> hooks into construction for validation and derived fields, and <code>fields</code>, <code>asdict</code>, <code>astuple</code> and <code>replace</code> work with any dataclass. Do not use it when you need validation or conversion of untrusted input (use Pydantic), when the object is mostly behaviour with internal state rather than data (a client, a cache: write a normal class), when the data should stay a plain dict for an API (TypedDict), or for huge numbers of records where columnar structures (DataFrames, arrays) are far more efficient.</p></div></details>
+</article>
+<article class="prob" id="p-explain-the-hashing-rules-of-dataclasses" data-pid="m11-3-explain-the-hashing-rules-of-dataclasses" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Explain the hashing rules of dataclasses: <code>eq</code>, <code>frozen</code> and <code>unsafe_hash</code>.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>With the default <code>eq=True</code> and <code>frozen=False</code>, a dataclass defines value-based <code>__eq__</code> and sets <code>__hash__</code> to <code>None</code>, so instances are unhashable: a mutable object whose equality depends on its fields must not live in a set, since changing a field would break the set. With <code>frozen=True</code> (and <code>eq=True</code>), fields cannot be reassigned, so the dataclass generates <code>__hash__</code> from the same fields as <code>__eq__</code> (those with <code>compare=True</code>), and instances work as set members and dict keys. <code>unsafe_hash=True</code> forces a field-based hash on a mutable dataclass; it is only correct if the compared fields are never changed while the object is stored, which is easy to violate. <code>eq=False</code> keeps identity-based equality and hashing from <code>object</code>. Use <code>compare=False</code> on fields that should not affect identity, such as timestamps or caches.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-model-configuration-for-ml" data-pid="m11-3-how-would-you-model-configuration-for-ml" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you model configuration for ML experiments, and why?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use typed, nested, structured objects instead of loose dicts: one dataclass (or Pydantic model) per component (data, model, optimiser, training, evaluation), composed into a root config, with types and defaults in one place. Make configs immutable (frozen) so a run cannot change its own settings halfway, and derive variants with <code>replace</code> or overrides; validate values when the config is built (ranges, allowed choices with <code>Literal</code>), failing before any expensive work starts. Support overrides from the command line or files by flattening to dotted keys and converting strings to the annotated types, rejecting unknown keys so typos fail. Serialise the fully resolved config (<code>asdict</code> to JSON or YAML) and log it with every run, together with the code version and data version, so results are reproducible, and diff configs to explain differences between runs. Libraries such as Hydra and OmegaConf structured configs, or Pydantic settings, implement these patterns; at the boundary where configs are loaded from files or environment variables, Pydantic's validation and error messages are especially valuable.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>@dataclass</code> generates <code>__init__</code>, <code>__repr__</code> and <code>__eq__</code> from annotated fields; hints are not validated.</li><li>Mutable defaults need <code>field(default_factory=list)</code>; <code>field()</code> also offers <code>repr=False</code>, <code>compare=False</code>, <code>init=False</code>, <code>kw_only</code> and <code>metadata</code>.</li><li><code>__post_init__</code> validates, normalises and computes <code>init=False</code> fields; <code>InitVar</code> passes construction-only values.</li><li><code>frozen=True</code> makes instances immutable and hashable; <code>replace</code> builds validated copies; <code>order=True</code> compares fields in declaration order; <code>slots=True</code> saves memory.</li><li><code>fields</code>, <code>asdict</code> and <code>astuple</code> make generic tools possible; use <code>kw_only</code> for inheritance with defaults, and Pydantic when input must be validated.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

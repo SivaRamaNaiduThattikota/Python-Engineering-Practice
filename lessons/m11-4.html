@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11.4 · Pydantic models</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m11-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 11 · Typing, dataclasses and Pydantic</span></div>
+  <h1>11.4 Pydantic models</h1>
+  <p>Pydantic validates and converts data according to type hints, which is why it sits at the boundaries of most Python services: API requests, configuration and LLM output. Models and validation errors, lax versus strict conversion, <code>Field</code> constraints, field and model validators, serialisation and JSON Schema, model configuration, <code>TypeAdapter</code> for types that are not models, and the version 2 traps. Applied to tickets, requests and structured LLM answers.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="basics">
+<h2><span class="n">1</span>Models: validation and conversion from type hints</h2>
+<p>A <strong>Pydantic model</strong> looks like a dataclass: a class inheriting from <code>pydantic.BaseModel</code> with annotated fields. The difference is what happens at construction: Pydantic <strong>validates</strong> every field against its type and <strong>converts</strong> compatible input, so <code>Ticket(id="42", ...)</code> stores the integer 42, and incompatible input raises a <code>ValidationError</code> that lists <strong>all</strong> problems at once, each with its location. It is the runtime check that type hints alone do not provide (11.1), which is why Pydantic is used wherever untrusted data enters a program: web requests (FastAPI is built on it), configuration files, message queues and LLM outputs.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, ValidationError
+
+class Ticket(BaseModel):
+    id: int
+    title: str
+    priority: int = 3
+    tags: list[str] = []
+
+t = Ticket(id=&quot;42&quot;, title=&quot;Refund not received&quot;, tags=(&quot;billing&quot;, &quot;eu&quot;))
+print(t, type(t.id).__name__, t.tags)
+print(Ticket(id=1, title=&quot;x&quot;).tags is Ticket(id=2, title=&quot;y&quot;).tags)
+try:
+    Ticket(id=&quot;abc&quot;, priority=2.5)
+except ValidationError as e:
+    print(e.error_count(), &quot;errors&quot;)
+    for err in e.errors():
+        print(&quot; &quot;, err[&quot;loc&quot;], err[&quot;type&quot;], &quot;-&quot;, err[&quot;msg&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>id=42 title=&#x27;Refund not received&#x27; priority=3 tags=[&#x27;billing&#x27;, &#x27;eu&#x27;] int [&#x27;billing&#x27;, &#x27;eu&#x27;]
+False
+3 errors
+  (&#x27;id&#x27;,) int_parsing - Input should be a valid integer, unable to parse string as an integer
+  (&#x27;title&#x27;,) missing - Field required
+  (&#x27;priority&#x27;,) int_from_float - Input should be a valid integer, got a number with a fractional part</pre></div></div>
+<p>Three things to notice. The string <code>"42"</code> and the tuple of tags were <strong>converted</strong> to the declared types: by default Pydantic works in <strong>lax</strong> mode, accepting values that convert without losing information. A mutable default such as <code>[]</code> is fine in Pydantic, unlike dataclasses (11.3), because Pydantic copies defaults for each instance, so the two tag lists are different objects. And the error lists three problems in one exception: an <code>id</code> that is not an integer, a missing <code>title</code>, and a <code>priority</code> of 2.5, which Pydantic refuses to truncate to 2. Each error has a location (<code>loc</code>), a machine-readable <code>type</code> and a human message, which is exactly what you need to tell a user, or a model, what to fix.</p>
+<p>Data usually arrives as a dict or a JSON string, so models have two class methods: <strong><code>Model.model_validate(data)</code></strong> for dicts and objects, and <strong><code>Model.model_validate_json(text)</code></strong> for JSON, which parses and validates in one fast step (Pydantic's core is written in Rust). Both return an instance or raise <code>ValidationError</code>, and both are what you use for LLM output: <code>Answer.model_validate_json(reply_text)</code> (problem 5).</p>
+</section>
+<section class="sec" id="fields">
+<h2><span class="n">2</span>Field types and constraints</h2>
+<p>Any type from 11.1 and 11.2 works as a field type: <code>str | None</code>, <code>Literal["spam", "ham"]</code>, <code>list[Citation]</code> (nested models), <code>dict[str, float]</code>, <code>datetime</code>, <code>UUID</code>, <code>Enum</code> classes. Constraints are attached with <strong><code>Field(...)</code></strong>: numbers take <code>gt</code>, <code>ge</code>, <code>lt</code>, <code>le</code>; strings and lists take <code>min_length</code> and <code>max_length</code>; strings take <code>pattern</code> (a regex). <code>Field</code> also sets a <code>description</code> (which ends up in the JSON Schema), a <code>default</code> or <code>default_factory</code>, and an <code>alias</code> for input names that are not valid Python identifiers. The same constraints can be written as <code>Annotated[float, Field(ge=0, le=1)]</code> (11.2), which lets you name a constrained type once and reuse it.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">fields.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Annotated, Literal
+from pydantic import BaseModel, Field, ValidationError
+
+Probability = Annotated[float, Field(ge=0, le=1)]
+
+class Citation(BaseModel):
+    source: str = Field(min_length=1)
+    quote: str = Field(max_length=200)
+
+class Answer(BaseModel):
+    label: Literal[&quot;answer&quot;, &quot;refuse&quot;, &quot;clarify&quot;]
+    text: str
+    confidence: Probability
+    citations: list[Citation] = Field(default_factory=list, max_length=5)
+    request_id: str | None = Field(default=None, alias=&quot;requestId&quot;)
+
+a = Answer.model_validate({&quot;label&quot;: &quot;answer&quot;, &quot;text&quot;: &quot;5 days&quot;, &quot;confidence&quot;: &quot;0.9&quot;,
+                           &quot;citations&quot;: [{&quot;source&quot;: &quot;faq.md&quot;, &quot;quote&quot;: &quot;Refunds take 5 days.&quot;}], &quot;requestId&quot;: &quot;r-1&quot;})
+print(a.confidence, a.citations[0].source, a.request_id)
+try:
+    Answer.model_validate({&quot;label&quot;: &quot;maybe&quot;, &quot;text&quot;: &quot;x&quot;, &quot;confidence&quot;: 1.4, &quot;citations&quot;: [{&quot;source&quot;: &quot;&quot;, &quot;quote&quot;: &quot;q&quot;}]})
+except ValidationError as e:
+    print([(&quot;.&quot;.join(map(str, err[&quot;loc&quot;])), err[&quot;type&quot;]) for err in e.errors()])</code></pre><div class="out"><span class="ol">Output</span><pre>0.9 faq.md r-1
+[(&#x27;label&#x27;, &#x27;literal_error&#x27;), (&#x27;confidence&#x27;, &#x27;less_than_equal&#x27;), (&#x27;citations.0.source&#x27;, &#x27;string_too_short&#x27;)]</pre></div></div>
+<p>The error locations are paths into the data, <code>citations.0.source</code>, so even deeply nested problems can be reported precisely. Note the version 2 rule that surprises people coming from older code: a field annotated <code>str | None</code> <strong>without a default is required</strong>. "May be <code>None</code>" and "may be missing" are different things; give such fields <code>= None</code> if they may be absent (problem 10).</p>
+</section>
+<section class="sec" id="validators">
+<h2><span class="n">3</span>Validators: custom rules</h2>
+<p>Type and constraint checks cover most rules; the rest go into <strong>validators</strong>. <code>@field_validator("name")</code> is a class method that receives the value of one field and returns the (possibly transformed) value, or raises <code>ValueError</code> with a message, which Pydantic turns into a validation error for that field. By default it runs <strong>after</strong> Pydantic's own type validation (<code>mode="after"</code>), so it receives a value of the declared type; with <code>mode="before"</code>, it runs first and receives the raw input, which is how you accept extra input formats, such as a comma-separated string for a list field (problem 6). <code>@model_validator(mode="after")</code> receives the whole validated model and checks rules between fields, such as a start date before an end date (problem 7).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">validators.py</span><button class="copy">Copy</button></div><pre><code class="py">from datetime import date
+from pydantic import BaseModel, ValidationError, field_validator, model_validator
+
+class Query(BaseModel):
+    text: str
+    tags: list[str] = []
+    start: date | None = None
+    end: date | None = None
+
+    @field_validator(&quot;text&quot;)
+    @classmethod
+    def not_blank(cls, v: str) -&gt; str:
+        v = v.strip()
+        if not v:
+            raise ValueError(&quot;must not be blank&quot;)
+        return v
+
+    @field_validator(&quot;tags&quot;, mode=&quot;before&quot;)
+    @classmethod
+    def split_tags(cls, v):
+        return [t.strip().lower() for t in v.split(&quot;,&quot;) if t.strip()] if isinstance(v, str) else v
+
+    @model_validator(mode=&quot;after&quot;)
+    def check_range(self):
+        if self.start and self.end and self.start &gt; self.end:
+            raise ValueError(&quot;start must not be after end&quot;)
+        return self
+
+print(Query(text=&quot;  refund window &quot;, tags=&quot;EU, billing,&quot;, start=&quot;2025-01-01&quot;))
+for bad in [{&quot;text&quot;: &quot;  &quot;}, {&quot;text&quot;: &quot;x&quot;, &quot;start&quot;: &quot;2025-03-01&quot;, &quot;end&quot;: &quot;2025-01-01&quot;}]:
+    try:
+        Query(**bad)
+    except ValidationError as e:
+        print(e.errors()[0][&quot;loc&quot;], e.errors()[0][&quot;msg&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>text=&#x27;refund window&#x27; tags=[&#x27;eu&#x27;, &#x27;billing&#x27;] start=datetime.date(2025, 1, 1) end=None
+(&#x27;text&#x27;,) Value error, must not be blank
+() Value error, start must not be after end</pre></div></div>
+<p>Validators keep rules next to the data they protect, and every way of creating the model runs them, so no invalid object can exist. Keep them pure and fast: they run on every validation. A model validator's error has an empty location <code>()</code>, because it concerns the model as a whole.</p>
+</section>
+<section class="sec" id="serialise">
+<h2><span class="n">4</span>Serialising: <code>model_dump</code>, JSON and JSON Schema</h2>
+<p>Models convert back to plain data with <strong><code>model_dump()</code></strong> (a dict, nested models included) and <strong><code>model_dump_json()</code></strong> (a JSON string, fast). Options shape the output: <code>exclude_none=True</code> drops fields that are <code>None</code>, <code>exclude={...}</code> and <code>include={...}</code> select fields, and <code>by_alias=True</code> uses the aliases, so you can read and write external formats such as camel-case JSON while using Python names internally. Dates, enums and nested models are serialised correctly without extra code.</p>
+<p><strong><code>Model.model_json_schema()</code></strong> returns the JSON Schema of the model: types, required fields, constraints, <code>enum</code> for literals and the field descriptions. That is the schema you send to an LLM API as the structured-output format or as tool parameters (11.2's hand-written generator, done for you), so the same class describes the output to the model and validates it when it comes back (problem 12).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">serialise.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class Verdict(BaseModel):
+    label: Literal[&quot;spam&quot;, &quot;ham&quot;] = Field(description=&quot;the predicted class&quot;)
+    confidence: float = Field(ge=0, le=1)
+    note: str | None = None
+
+v = Verdict(label=&quot;spam&quot;, confidence=0.93)
+print(v.model_dump(), v.model_dump(exclude_none=True), v.model_dump_json())
+schema = Verdict.model_json_schema()
+print(schema[&quot;required&quot;], schema[&quot;properties&quot;][&quot;label&quot;])
+print(schema[&quot;properties&quot;][&quot;confidence&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;label&#x27;: &#x27;spam&#x27;, &#x27;confidence&#x27;: 0.93, &#x27;note&#x27;: None} {&#x27;label&#x27;: &#x27;spam&#x27;, &#x27;confidence&#x27;: 0.93} {&quot;label&quot;:&quot;spam&quot;,&quot;confidence&quot;:0.93,&quot;note&quot;:null}
+[&#x27;label&#x27;, &#x27;confidence&#x27;] {&#x27;description&#x27;: &#x27;the predicted class&#x27;, &#x27;enum&#x27;: [&#x27;spam&#x27;, &#x27;ham&#x27;], &#x27;title&#x27;: &#x27;Label&#x27;, &#x27;type&#x27;: &#x27;string&#x27;}
+{&#x27;maximum&#x27;: 1, &#x27;minimum&#x27;: 0, &#x27;title&#x27;: &#x27;Confidence&#x27;, &#x27;type&#x27;: &#x27;number&#x27;}</pre></div></div>
+</section>
+<section class="sec" id="config">
+<h2><span class="n">5</span>Model configuration and <code>TypeAdapter</code></h2>
+<p>Behaviour that applies to the whole model goes in <code>model_config = ConfigDict(...)</code>. <strong><code>extra="forbid"</code></strong> rejects unknown fields instead of ignoring them, which catches typos such as <code>temprature</code> in a request (problem 3); <code>extra="allow"</code> keeps them. <strong><code>frozen=True</code></strong> makes instances immutable and hashable (like frozen dataclasses). <strong><code>str_strip_whitespace=True</code></strong> strips every string field. <strong><code>strict=True</code></strong> turns off lax conversion for the whole model, and individual fields can be strict with <code>Field(strict=True)</code>. <strong><code>validate_assignment=True</code></strong> re-validates fields when they are assigned after creation; by default, assignment is <strong>not</strong> validated, and neither is <code>model_copy(update=...)</code> (problem 16).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">config.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, ConfigDict, ValidationError
+
+class Request(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;, str_strip_whitespace=True, validate_assignment=True)
+    model: str
+    temperature: float = 0.0
+
+r = Request(model=&quot;  small &quot;)
+print(repr(r.model))
+for bad in [{&quot;model&quot;: &quot;x&quot;, &quot;temprature&quot;: 0.5}, {&quot;model&quot;: &quot;x&quot;, &quot;temperature&quot;: &quot;hot&quot;}]:
+    try:
+        Request(**bad)
+    except ValidationError as e:
+        print(e.errors()[0][&quot;loc&quot;], e.errors()[0][&quot;type&quot;])
+try:
+    r.temperature = &quot;warm&quot;
+except ValidationError as e:
+    print(&quot;assignment:&quot;, e.errors()[0][&quot;type&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>&#x27;small&#x27;
+(&#x27;temprature&#x27;,) extra_forbidden
+(&#x27;temperature&#x27;,) float_parsing
+assignment: float_parsing</pre></div></div>
+<p>Not everything needs a class. <strong><code>TypeAdapter(T)</code></strong> validates any type: <code>TypeAdapter(list[int]).validate_python(["1", 2])</code>, a <code>TypedDict</code>, a union of models. It is the tool for a top-level list of objects in an LLM reply, and for <strong>discriminated unions</strong>: <code>Annotated[A | B | C, Field(discriminator="type")]</code> validates the tagged events of 11.2, choosing the model by the value of the <code>type</code> field and reporting errors against that model only (problem 15). The <code>@validate_call</code> decorator applies the same validation to a function's arguments (the production version of 11.1's <code>validated</code>).</p>
+</section>
+<section class="sec" id="llm">
+<h2><span class="n">6</span>Pydantic for LLM output</h2>
+<p>Structured output from a model is untrusted input: even with a JSON schema enforced by the provider, values can be out of range, lists empty, labels misspelt, or the reply truncated (7.4). The robust loop is: describe the answer as a model, send <code>model_json_schema()</code> as the response format or tool schema, parse the reply with <code>model_validate_json</code>, and on <code>ValidationError</code> send the <strong>errors</strong> back to the model in a compact form (location and message for each) and ask again, a limited number of times. Libraries such as Instructor and the OpenAI and Anthropic SDKs' parse helpers wrap exactly this loop around Pydantic models.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">llm_output.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
+
+class Classification(BaseModel):
+    label: Literal[&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;]
+    confidence: float = Field(ge=0, le=1)
+    reasons: list[str] = Field(min_length=1)
+
+def compact(e: ValidationError) -&gt; str:
+    return &quot;; &quot;.join(f&quot;{&#x27;.&#x27;.join(map(str, err[&#x27;loc&#x27;])) or &#x27;reply&#x27;}: {err[&#x27;msg&#x27;]}&quot; for err in e.errors())
+
+replies = [&#x27;{&quot;label&quot;: &quot;Spam&quot;, &quot;confidence&quot;: 93, &quot;reasons&quot;: []}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.93, &quot;reasons&quot;: [&quot;prize offer&quot;]}&#x27;]
+for reply in replies:
+    try:
+        result = Classification.model_validate_json(reply)
+        print(&quot;valid:&quot;, result)
+    except ValidationError as e:
+        print(&quot;send back:&quot;, compact(e))</code></pre><div class="out"><span class="ol">Output</span><pre>send back: label: Input should be &#x27;spam&#x27;, &#x27;ham&#x27; or &#x27;phish&#x27;; confidence: Input should be less than or equal to 1; reasons: List should have at least 1 item after validation, not 0
+valid: label=&#x27;spam&#x27; confidence=0.93 reasons=[&#x27;prize offer&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-lax-conversion-and-errors" data-pid="m11-4-lax-conversion-and-errors" data-type="predict" data-level="easy" data-answer="id=7 price=9.5 active=True
+{&#x27;id&#x27;: 7, &#x27;price&#x27;: 3.0, &#x27;active&#x27;: True}
+1 [&#x27;int_parsing&#x27;]
+1 [&#x27;int_from_float&#x27;]
+2 [&#x27;missing&#x27;, &#x27;float_parsing&#x27;]">
+<header class="prob-head"><h3>1. Lax conversion and errors</h3></header>
+<div class="code"><pre><code class="py">from pydantic import BaseModel, ValidationError
+
+class Item(BaseModel):
+    id: int
+    price: float
+    active: bool = True
+
+print(Item(id=&quot;7&quot;, price=&quot;9.5&quot;, active=&quot;yes&quot;))
+print(Item(id=7.0, price=3).model_dump())
+for bad in [{&quot;id&quot;: &quot;7a&quot;, &quot;price&quot;: 1}, {&quot;id&quot;: 7.5, &quot;price&quot;: 1}, {&quot;price&quot;: &quot;x&quot;}]:
+    try:
+        Item(**bad)
+    except ValidationError as e:
+        print(e.error_count(), [err[&quot;type&quot;] for err in e.errors()])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Lax mode converts strings that look like numbers or booleans, and whole floats to ints, but never loses information.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>id=7 price=9.5 active=True
+{&#x27;id&#x27;: 7, &#x27;price&#x27;: 3.0, &#x27;active&#x27;: True}
+1 [&#x27;int_parsing&#x27;]
+1 [&#x27;int_from_float&#x27;]
+2 [&#x27;missing&#x27;, &#x27;float_parsing&#x27;]</pre></div><p>Lax validation converts <code>"7"</code> to 7, <code>"9.5"</code> to 9.5, <code>"yes"</code> to <code>True</code>, and <code>7.0</code> to 7 because no information is lost. It refuses <code>"7a"</code> (not a number) and <code>7.5</code> (truncating it would lose the fraction), each with a precise error type. The last input has two problems, a missing <code>id</code> and an unparsable <code>price</code>, and both are reported in the same exception.</p></div></details>
+</article>
+<article class="prob" id="p-a-ticket-model-with-constraints" data-pid="m11-4-a-ticket-model-with-constraints" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A ticket model with constraints</h3></header>
+<div class="prob-q"><p>Write a Pydantic model <code>Ticket</code> with: <code>id</code> (a positive int), <code>title</code> (a string of 3 to 100 characters, whitespace stripped), <code>priority</code> (an int from 1 to 5, default 3), <code>status</code> (one of <code>"open"</code>, <code>"pending"</code>, <code>"closed"</code>, default <code>"open"</code>) and <code>tags</code> (a list of strings, default empty). Then write <code>ticket_errors(data)</code> returning <code>[]</code> if <code>data</code> is a valid ticket, or a sorted list of the field names that failed.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
+
+def ticket_errors(data):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = Ticket(id="12", title="  Refund missing  ")
+assert (t.id, t.title, t.priority, t.status, t.tags) == (12, "Refund missing", 3, "open", [])
+assert ticket_errors({"id": 1, "title": "Login fails", "priority": 5, "status": "pending"}) == []
+assert ticket_errors({"id": 0, "title": "ok", "priority": 9, "status": "done"}) == ["id", "priority", "status", "title"]
+assert ticket_errors({"title": "Valid title"}) == ["id"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = Ticket(id=&quot;12&quot;, title=&quot;  Refund missing  &quot;)
+assert (t.id, t.title, t.priority, t.status, t.tags) == (12, &quot;Refund missing&quot;, 3, &quot;open&quot;, [])
+assert ticket_errors({&quot;id&quot;: 1, &quot;title&quot;: &quot;Login fails&quot;, &quot;priority&quot;: 5, &quot;status&quot;: &quot;pending&quot;}) == []
+assert ticket_errors({&quot;id&quot;: 0, &quot;title&quot;: &quot;ok&quot;, &quot;priority&quot;: 9, &quot;status&quot;: &quot;done&quot;}) == [&quot;id&quot;, &quot;priority&quot;, &quot;status&quot;, &quot;title&quot;]
+assert ticket_errors({&quot;title&quot;: &quot;Valid title&quot;}) == [&quot;id&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>id: int = Field(gt=0)</code>; <code>title: str = Field(min_length=3, max_length=100)</code> with <code>model_config = ConfigDict(str_strip_whitespace=True)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The field name is the first element of each error's <code>loc</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+class Ticket(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    id: int = Field(gt=0)
+    title: str = Field(min_length=3, max_length=100)
+    priority: int = Field(default=3, ge=1, le=5)
+    status: Literal[&quot;open&quot;, &quot;pending&quot;, &quot;closed&quot;] = &quot;open&quot;
+    tags: list[str] = []
+
+
+def ticket_errors(data):
+    try:
+        Ticket.model_validate(data)
+    except ValidationError as e:
+        return sorted({str(err[&quot;loc&quot;][0]) for err in e.errors()})
+    return []</code></pre></div><p>Each rule is declared on the field it belongs to, and Pydantic checks them all in one pass, so one call reports every bad field. Stripping whitespace happens before the length check, which is why <code>"  Refund missing  "</code> is stored clean and <code>"ok"</code> (2 characters) fails. The <code>Literal</code> gives a precise "Input should be 'open', 'pending' or 'closed'" error. Sorting a set of first locations turns the detailed errors into a summary for a form or an API response; in practice you would return the full <code>e.errors()</code> as JSON, which FastAPI does automatically with a 422 response.</p></div></details>
+</article>
+<article class="prob" id="p-a-request-model-that-ignores-typos" data-pid="m11-4-a-request-model-that-ignores-typos" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A request model that ignores typos</h3></header>
+<div class="prob-q"><p><code>ChatRequest</code> silently ignores unknown fields, so a client sending <code>temprature</code> gets the default temperature and no error. Make the model reject unknown fields, and add the missing constraint that <code>temperature</code> must be between 0 and 2.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from pydantic import BaseModel
+
+class ChatRequest(BaseModel):
+    model: str
+    prompt: str
+    temperature: float = 0.0
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+assert ChatRequest(model="small", prompt="hi", temperature="0.5").temperature == 0.5
+assert ChatRequest(model="small", prompt="hi").temperature == 0.0
+for bad in [{"model": "small", "prompt": "hi", "temprature": 0.9}, {"model": "small", "prompt": "hi", "temperature": 3}]:
+    try:
+        ChatRequest.model_validate(bad)
+        assert False, bad
+    except ValidationError as e:
+        assert e.errors()[0]["type"] in ("extra_forbidden", "less_than_equal")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+assert ChatRequest(model=&quot;small&quot;, prompt=&quot;hi&quot;, temperature=&quot;0.5&quot;).temperature == 0.5
+assert ChatRequest(model=&quot;small&quot;, prompt=&quot;hi&quot;).temperature == 0.0
+for bad in [{&quot;model&quot;: &quot;small&quot;, &quot;prompt&quot;: &quot;hi&quot;, &quot;temprature&quot;: 0.9}, {&quot;model&quot;: &quot;small&quot;, &quot;prompt&quot;: &quot;hi&quot;, &quot;temperature&quot;: 3}]:
+    try:
+        ChatRequest.model_validate(bad)
+        assert False, bad
+    except ValidationError as e:
+        assert e.errors()[0][&quot;type&quot;] in (&quot;extra_forbidden&quot;, &quot;less_than_equal&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>model_config = ConfigDict(extra="forbid")</code>, and <code>temperature: float = Field(default=0.0, ge=0, le=2)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, ConfigDict, Field
+
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    model: str
+    prompt: str
+    temperature: float = Field(default=0.0, ge=0, le=2)</code></pre></div><p>By default Pydantic <strong>ignores</strong> extra fields, which is friendly to evolving clients but dangerous for settings: a misspelt <code>temprature</code> is dropped, the request runs with temperature 0, and nobody notices that the user's setting was never applied. <code>extra="forbid"</code> turns the typo into an <code>extra_forbidden</code> error naming the field. The range constraint makes 3 fail with <code>less_than_equal</code> instead of reaching the provider, which would reject it with a less helpful message (or clamp it silently). Public APIs often forbid extras on requests and allow them on responses.</p></div></details>
+</article>
+<article class="prob" id="p-dumping-excluding-and-aliases" data-pid="m11-4-dumping-excluding-and-aliases" data-type="predict" data-level="easy" data-answer="5 {&#x27;user_id&#x27;: 5, &#x27;name&#x27;: &#x27;Ana&#x27;, &#x27;email&#x27;: None}
+{&#x27;userId&#x27;: 5, &#x27;name&#x27;: &#x27;Ana&#x27;} {&quot;user_id&quot;:5,&quot;name&quot;:&quot;Ana&quot;}
+ValidationError">
+<header class="prob-head"><h3>4. Dumping, excluding and aliases</h3></header>
+<div class="code"><pre><code class="py">from pydantic import BaseModel, Field
+
+class User(BaseModel):
+    user_id: int = Field(alias=&quot;userId&quot;)
+    name: str
+    email: str | None = None
+
+u = User.model_validate({&quot;userId&quot;: &quot;5&quot;, &quot;name&quot;: &quot;Ana&quot;})
+print(u.user_id, u.model_dump())
+print(u.model_dump(by_alias=True, exclude_none=True), u.model_dump_json(exclude={&quot;email&quot;}))
+try:
+    User(user_id=5, name=&quot;Bo&quot;)
+except Exception as e:
+    print(type(e).__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>With an alias, the input must use the alias unless the model allows population by field name.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5 {&#x27;user_id&#x27;: 5, &#x27;name&#x27;: &#x27;Ana&#x27;, &#x27;email&#x27;: None}
+{&#x27;userId&#x27;: 5, &#x27;name&#x27;: &#x27;Ana&#x27;} {&quot;user_id&quot;:5,&quot;name&quot;:&quot;Ana&quot;}
+ValidationError</pre></div><p>The input used the alias <code>userId</code>, converted from a string; inside Python the attribute is <code>user_id</code>, and <code>model_dump</code> uses field names by default. With <code>by_alias=True</code> the output speaks the external format again, and <code>exclude_none</code> drops the empty email. Constructing with the Python name fails with a <code>ValidationError</code>, because an aliased field is filled from its alias unless the configuration sets <code>validate_by_name=True</code> (older code: <code>populate_by_name=True</code>).</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-validate-a-model-s-structured-answer" data-pid="m11-4-validate-a-model-s-structured-answer" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Validate a model's structured answer</h3></header>
+<div class="prob-q"><p>Write a model <code>Classification</code> with <code>label</code> (one of <code>"spam"</code>, <code>"ham"</code>, <code>"phish"</code>), <code>confidence</code> (a float in <code>[0, 1]</code>) and <code>reasons</code> (a list of 1 to 3 non-blank strings, each stripped). Then write <code>parse_reply(text)</code> returning <code>(Classification, [])</code> when the JSON reply is valid, or <code>(None, errors)</code> where <code>errors</code> is a list of <code>"&lt;location&gt;: &lt;message&gt;"</code> strings (location joined with dots, <code>"reply"</code> for errors without a location), so they can be sent back to the model.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from typing import Literal
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+def parse_reply(text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ok, errs = parse_reply('{"label": "phish", "confidence": 0.87, "reasons": [" fake login link ", "urgent tone"]}')
+assert errs == [] and ok.label == "phish" and ok.reasons == ["fake login link", "urgent tone"]
+none, errs = parse_reply('{"label": "Spam", "confidence": 1.5, "reasons": []}')
+assert none is None and len(errs) == 3 and errs[0].startswith("label: ") and errs[1].startswith("confidence: ") and errs[2].startswith("reasons: ")
+none, errs = parse_reply('{"label": "spam", "confidence": 0.9, "reasons": ["  "]}')
+assert errs == ["reasons: Value error, reasons must not be blank"]
+none, errs = parse_reply("Sure! Here is the JSON")
+assert none is None and errs[0].startswith("reply: ")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ok, errs = parse_reply(&#x27;{&quot;label&quot;: &quot;phish&quot;, &quot;confidence&quot;: 0.87, &quot;reasons&quot;: [&quot; fake login link &quot;, &quot;urgent tone&quot;]}&#x27;)
+assert errs == [] and ok.label == &quot;phish&quot; and ok.reasons == [&quot;fake login link&quot;, &quot;urgent tone&quot;]
+none, errs = parse_reply(&#x27;{&quot;label&quot;: &quot;Spam&quot;, &quot;confidence&quot;: 1.5, &quot;reasons&quot;: []}&#x27;)
+assert none is None and len(errs) == 3 and errs[0].startswith(&quot;label: &quot;) and errs[1].startswith(&quot;confidence: &quot;) and errs[2].startswith(&quot;reasons: &quot;)
+none, errs = parse_reply(&#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9, &quot;reasons&quot;: [&quot;  &quot;]}&#x27;)
+assert errs == [&quot;reasons: Value error, reasons must not be blank&quot;]
+none, errs = parse_reply(&quot;Sure! Here is the JSON&quot;)
+assert none is None and errs[0].startswith(&quot;reply: &quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>reasons: list[str] = Field(min_length=1, max_length=3)</code> plus a <code>field_validator("reasons")</code> that strips and rejects blanks.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Classification.model_validate_json(text)</code> reports invalid JSON as a <code>ValidationError</code> whose <code>loc</code> is empty.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, Field, ValidationError, field_validator
+
+
+class Classification(BaseModel):
+    label: Literal[&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;]
+    confidence: float = Field(ge=0, le=1)
+    reasons: list[str] = Field(min_length=1, max_length=3)
+
+    @field_validator(&quot;reasons&quot;)
+    @classmethod
+    def strip_reasons(cls, reasons: list[str]) -&gt; list[str]:
+        cleaned = [r.strip() for r in reasons]
+        if any(not r for r in cleaned):
+            raise ValueError(&quot;reasons must not be blank&quot;)
+        return cleaned
+
+
+def parse_reply(text):
+    try:
+        return Classification.model_validate_json(text), []
+    except ValidationError as e:
+        errors = []
+        for err in e.errors():
+            loc = &quot;.&quot;.join(str(part) for part in err[&quot;loc&quot;]) or &quot;reply&quot;
+            errors.append(f&quot;{loc}: {err[&#x27;msg&#x27;]}&quot;)
+        return None, errors</code></pre></div><p><code>model_validate_json</code> parses and validates in one step, so malformed JSON ("Sure! Here is...") and wrong values end up in the same error format; the JSON error simply has no location. Converting each error to <code>location: message</code> gives the model precise, short feedback ("label: Input should be 'spam', 'ham' or 'phish'"), which is far more effective in a repair prompt than a traceback. The validator turns the message of its <code>ValueError</code> into a "Value error, ..." entry for the field it validates (<code>reasons</code>, the whole list, since the validator receives the list). The case-sensitive literal rejects <code>"Spam"</code> on purpose; normalising case with a <code>mode="before"</code> validator would be the lenient alternative.</p></div></details>
+</article>
+<article class="prob" id="p-a-validator-that-runs-too-late" data-pid="m11-4-a-validator-that-runs-too-late" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A validator that runs too late</h3></header>
+<div class="prob-q"><p><code>Doc.tags</code> should accept either a list of strings or a comma-separated string (<code>"billing, EU"</code>), and always store lower-cased, stripped tags. Passing a string fails with "Input should be a valid list", because the validator runs after Pydantic has already rejected the string. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from pydantic import BaseModel, field_validator
+
+class Doc(BaseModel):
+    id: str
+    tags: list[str] = []
+
+    @field_validator(&quot;tags&quot;)
+    @classmethod
+    def split(cls, v):
+        if isinstance(v, str):
+            v = v.split(&quot;,&quot;)
+        return [t.strip().lower() for t in v if t.strip()]
+</textarea>
+<script type="text/plain" class="prob-tests">assert Doc(id="d1", tags="Billing, EU,").tags == ["billing", "eu"]
+assert Doc(id="d2", tags=["  FAQ ", ""]).tags == ["faq"]
+assert Doc(id="d3").tags == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert Doc(id=&quot;d1&quot;, tags=&quot;Billing, EU,&quot;).tags == [&quot;billing&quot;, &quot;eu&quot;]
+assert Doc(id=&quot;d2&quot;, tags=[&quot;  FAQ &quot;, &quot;&quot;]).tags == [&quot;faq&quot;]
+assert Doc(id=&quot;d3&quot;).tags == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@field_validator("tags", mode="before")</code> runs on the raw input, before type validation.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, field_validator
+
+class Doc(BaseModel):
+    id: str
+    tags: list[str] = []
+
+    @field_validator(&quot;tags&quot;, mode=&quot;before&quot;)
+    @classmethod
+    def split(cls, v):
+        if isinstance(v, str):
+            v = v.split(&quot;,&quot;)
+        return [t.strip().lower() for t in v if t.strip()]</code></pre></div><p>An <code>after</code> validator (the default) receives a value that has already passed type validation, so a string never reached it: Pydantic rejected it as "not a list" first. A <code>before</code> validator runs on the raw input and can reshape it into something the type accepts; Pydantic then validates the returned list as <code>list[str]</code>. The rule of thumb: <code>before</code> to accept extra input formats, <code>after</code> to check or normalise values that already have the right type. Comma-separated values from query strings, CSV cells and environment variables are the classic case.</p></div></details>
+</article>
+<article class="prob" id="p-a-date-range-with-a-cross-field-rule" data-pid="m11-4-a-date-range-with-a-cross-field-rule" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A date range with a cross-field rule</h3></header>
+<div class="prob-q"><p>Write a model <code>Window</code> with <code>start</code> and <code>end</code> (<code>datetime.date</code>, accepting ISO strings), and <code>max_days</code> (int, default 31). Add a <code>model_validator(mode="after")</code> that raises <code>ValueError("end is before start")</code> when <code>end &lt; start</code> and <code>ValueError(f"window longer than {max_days} days")</code> when the span (end minus start, in days) exceeds <code>max_days</code>. Add a property <code>days</code> returning the inclusive number of days.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from datetime import date
+from pydantic import BaseModel, ValidationError, model_validator
+
+class Window(BaseModel):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from datetime import date
+from pydantic import ValidationError
+w = Window(start="2025-01-01", end="2025-01-31")
+assert w.start == date(2025, 1, 1) and w.days == 31
+for bad, msg in [({"start": "2025-02-01", "end": "2025-01-01"}, "end is before start"),
+                 ({"start": "2025-01-01", "end": "2025-03-01", "max_days": 30}, "window longer than 30 days")]:
+    try:
+        Window(**bad)
+        assert False
+    except ValidationError as e:
+        assert e.errors()[0]["loc"] == () and msg in e.errors()[0]["msg"]
+assert Window(start="2025-01-01", end="2025-01-01").days == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from datetime import date
+from pydantic import ValidationError
+w = Window(start=&quot;2025-01-01&quot;, end=&quot;2025-01-31&quot;)
+assert w.start == date(2025, 1, 1) and w.days == 31
+for bad, msg in [({&quot;start&quot;: &quot;2025-02-01&quot;, &quot;end&quot;: &quot;2025-01-01&quot;}, &quot;end is before start&quot;),
+                 ({&quot;start&quot;: &quot;2025-01-01&quot;, &quot;end&quot;: &quot;2025-03-01&quot;, &quot;max_days&quot;: 30}, &quot;window longer than 30 days&quot;)]:
+    try:
+        Window(**bad)
+        assert False
+    except ValidationError as e:
+        assert e.errors()[0][&quot;loc&quot;] == () and msg in e.errors()[0][&quot;msg&quot;]
+assert Window(start=&quot;2025-01-01&quot;, end=&quot;2025-01-01&quot;).days == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside the model validator, <code>self.start</code> and <code>self.end</code> are already <code>date</code> objects; <code>(self.end - self.start).days</code> is an int.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from datetime import date
+from pydantic import BaseModel, ValidationError, model_validator
+
+class Window(BaseModel):
+    start: date
+    end: date
+    max_days: int = 31
+
+    @model_validator(mode=&quot;after&quot;)
+    def check(self):
+        if self.end &lt; self.start:
+            raise ValueError(&quot;end is before start&quot;)
+        if (self.end - self.start).days &gt; self.max_days:
+            raise ValueError(f&quot;window longer than {self.max_days} days&quot;)
+        return self
+
+    @property
+    def days(self):
+        return (self.end - self.start).days + 1</code></pre></div><p>Field types turned the ISO strings into <code>date</code> objects before the model validator ran, so the cross-field rule compares real dates, not strings. A rule involving several fields cannot live in a single field's validator, so <code>model_validator(mode="after")</code> is the right place, and it must return <code>self</code>. Its errors have the location <code>()</code>, the model as a whole. Ordinary properties work on Pydantic models as on any class (9.3), and are not part of the serialised output. Date windows like this guard reporting and backfill APIs from requests that would scan years of data.</p></div></details>
+</article>
+<article class="prob" id="p-where-to-build-the-typeadapter" data-pid="m11-4-where-to-build-the-typeadapter" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. Where to build the TypeAdapter</h3></header>
+<div class="prob-q"><p>Both validate 2,000 event dicts with a <code>TypeAdapter</code>. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, TypeAdapter
+
+class Row(BaseModel):
+    id: int
+    label: str
+    score: float
+
+data = [{&quot;id&quot;: i, &quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.5} for i in range(2_000)]
+def validate_one(d):
+    return TypeAdapter(Row).validate_python(d)
+ROW = TypeAdapter(Row)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">rows = [validate_one(d) for d in data]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">rows = [ROW.validate_python(d) for d in data]</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What work does creating a <code>TypeAdapter</code> involve, and how often does each version do it?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>39.82 ms</td></tr><tr><td>B</td><td>5.70 ms</td></tr></table></div><p>Creating a <code>TypeAdapter</code> builds a validator for the type: Pydantic walks the type, generates a core schema and compiles it in its Rust core. Doing that inside a function called per item repeats the whole build 2,000 times, while the validation itself is cheap. Build adapters once, at module level or in a cached factory, and reuse them; the same applies to models, whose validator is built once when the class is defined. Measured here in Pyodide, also note that <code>model_construct</code> (which skips validation) is not faster than <code>model_validate</code> for simple rows, because validation runs in compiled code while <code>model_construct</code> runs in Python, so "skip validation for speed" is rarely worth the lost guarantee.</p></div></details>
+</article>
+<article class="prob" id="p-reading-a-validationerror" data-pid="m11-4-reading-a-validationerror" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Reading a ValidationError</h3></header>
+<div class="prob-q"><p>Fill in <code>count</code>, <code>locs</code> and <code>types</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from pydantic import BaseModel, Field, ValidationError
+
+class Item(BaseModel):
+    name: str
+    qty: int = Field(gt=0)
+
+class Order(BaseModel):
+    id: int
+    items: list[Item]
+
+def info(data):
+    try:
+        Order.model_validate(data)
+        return 0, [], []
+    except ValidationError as e:
+        return e.error_count(), [err[&quot;loc&quot;] for err in e.errors()], [err[&quot;type&quot;] for err in e.errors()]
+
+count, locs, types = info({&quot;id&quot;: 1, &quot;items&quot;: [{&quot;name&quot;: &quot;pen&quot;, &quot;qty&quot;: 2}]})
+count, locs, types = info({&quot;id&quot;: &quot;x&quot;, &quot;items&quot;: [{&quot;name&quot;: &quot;pen&quot;, &quot;qty&quot;: 0}]})
+count, locs, types = info({&quot;items&quot;: [{&quot;qty&quot;: &quot;3&quot;}, {&quot;name&quot;: &quot;ok&quot;, &quot;qty&quot;: 1}]})</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>count</code></th><th><code>locs</code></th><th><code>types</code></th></tr><tr><td>valid</td><td><input class="cell" data-a="0" data-s="0" aria-label="count at valid" autocomplete="off"></td><td><input class="cell" data-a="[]" data-s="[]" aria-label="locs at valid" autocomplete="off"></td><td><input class="cell" data-a="[]" data-s="[]" aria-label="types at valid" autocomplete="off"></td></tr><tr><td>two problems</td><td><input class="cell" data-a="2" data-s="2" aria-label="count at two problems" autocomplete="off"></td><td><input class="cell" data-a="[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;qty&#x27;)]" data-s="[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;qty&#x27;)]" aria-label="locs at two problems" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;int_parsing&#x27;, &#x27;greater_than&#x27;]" data-s="[&#x27;int_parsing&#x27;, &#x27;greater_than&#x27;]" aria-label="types at two problems" autocomplete="off"></td></tr><tr><td>missing fields</td><td><input class="cell" data-a="2" data-s="2" aria-label="count at missing fields" autocomplete="off"></td><td><input class="cell" data-a="[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;name&#x27;)]" data-s="[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;name&#x27;)]" aria-label="locs at missing fields" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;missing&#x27;, &#x27;missing&#x27;]" data-s="[&#x27;missing&#x27;, &#x27;missing&#x27;]" aria-label="types at missing fields" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Locations are tuples of keys and list indexes. <code>"3"</code> converts to 3 in lax mode.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>count</code></th><th><code>locs</code></th><th><code>types</code></th></tr><tr><td>valid</td><td><code>0</code></td><td><code>[]</code></td><td><code>[]</code></td></tr><tr><td>two problems</td><td><code>2</code></td><td><code>[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;qty&#x27;)]</code></td><td><code>[&#x27;int_parsing&#x27;, &#x27;greater_than&#x27;]</code></td></tr><tr><td>missing fields</td><td><code>2</code></td><td><code>[(&#x27;id&#x27;,), (&#x27;items&#x27;, 0, &#x27;name&#x27;)]</code></td><td><code>[&#x27;missing&#x27;, &#x27;missing&#x27;]</code></td></tr></table></div><p>A valid order produces no errors. In the second, the id is not an integer and the item's quantity fails <code>gt=0</code>; the item error's location goes into the list by index. In the third, the order id is missing and the first item has no name, while its quantity <code>"3"</code> converts fine. Locations are tuples such as <code>('items', 0, 'name')</code>, which is what lets a UI highlight the exact field.</p></div></details>
+</article>
+<article class="prob" id="p-an-optional-field-that-is-required" data-pid="m11-4-an-optional-field-that-is-required" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. An Optional field that is required</h3></header>
+<div class="prob-q"><p><code>ToolCall.reasoning</code> is annotated <code>str | None</code> and the team assumed that makes it optional, but every call without <code>reasoning</code> fails with "Field required". Fix the model so <code>reasoning</code> may be absent (defaulting to <code>None</code>) while <code>name</code> and <code>arguments</code> stay required.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from pydantic import BaseModel
+
+class ToolCall(BaseModel):
+    name: str
+    arguments: dict
+    reasoning: str | None
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+t = ToolCall.model_validate({"name": "search", "arguments": {"q": "refund"}})
+assert t.reasoning is None and t.name == "search"
+assert ToolCall(name="x", arguments={}, reasoning="needed docs").reasoning == "needed docs"
+try:
+    ToolCall.model_validate({"name": "x"})
+    assert False
+except ValidationError as e:
+    assert [err["loc"] for err in e.errors()] == [("arguments",)]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+t = ToolCall.model_validate({&quot;name&quot;: &quot;search&quot;, &quot;arguments&quot;: {&quot;q&quot;: &quot;refund&quot;}})
+assert t.reasoning is None and t.name == &quot;search&quot;
+assert ToolCall(name=&quot;x&quot;, arguments={}, reasoning=&quot;needed docs&quot;).reasoning == &quot;needed docs&quot;
+try:
+    ToolCall.model_validate({&quot;name&quot;: &quot;x&quot;})
+    assert False
+except ValidationError as e:
+    assert [err[&quot;loc&quot;] for err in e.errors()] == [(&quot;arguments&quot;,)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In Pydantic v2, a field is optional only if it has a default: <code>reasoning: str | None = None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel
+
+class ToolCall(BaseModel):
+    name: str
+    arguments: dict
+    reasoning: str | None = None</code></pre></div><p>Pydantic v2 separates two questions that v1 mixed up: "may the value be <code>None</code>?" (the type, <code>str | None</code>) and "may the field be missing?" (whether it has a default). Without a default, the field is required even though <code>None</code> is an allowed value, so the caller would have to send <code>"reasoning": null</code> explicitly. Adding <code>= None</code> answers both. The same distinction matters for JSON schemas sent to LLMs: a nullable but required field forces the model to always emit the key, which is sometimes exactly what you want; choose deliberately.</p></div></details>
+</article>
+<article class="prob" id="p-answers-with-citations" data-pid="m11-4-answers-with-citations" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. Answers with citations</h3></header>
+<div class="prob-q"><p>Write models <code>Citation(source: str, quote: str)</code> and <code>RAGAnswer(answer: str, citations: list[Citation])</code>. Then write <code>check_answer(data, allowed_sources)</code> that validates <code>data</code> into a <code>RAGAnswer</code> (a <code>ValidationError</code> propagates), then raises <code>ValueError</code> listing (sorted) any cited sources not in <code>allowed_sources</code>, and returns the answer with duplicate citations removed (same source and quote, first kept, order preserved). An answer with no citations is invalid: require at least one with <code>Field(min_length=1)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">from pydantic import BaseModel, Field
+
+def check_answer(data, allowed_sources):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+data = {"answer": "Refunds take 5 days.", "citations": [{"source": "faq.md", "quote": "5 days"}, {"source": "faq.md", "quote": "5 days"},
+                                                        {"source": "terms.md", "quote": "no refunds after 30 days"}]}
+a = check_answer(data, {"faq.md", "terms.md"})
+assert [c.source for c in a.citations] == ["faq.md", "terms.md"] and isinstance(a, RAGAnswer)
+assert len(data["citations"]) == 3 and a.answer == "Refunds take 5 days."
+try:
+    check_answer({"answer": "x", "citations": [{"source": "blog.md", "quote": "q"}, {"source": "aaa.md", "quote": "q"}]}, {"faq.md"})
+    assert False
+except ValueError as e:
+    assert "aaa.md" in str(e) and str(e).index("aaa.md") < str(e).index("blog.md") and not isinstance(e, ValidationError)
+try:
+    check_answer({"answer": "x", "citations": []}, {"faq.md"})
+    assert False
+except ValidationError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+data = {&quot;answer&quot;: &quot;Refunds take 5 days.&quot;, &quot;citations&quot;: [{&quot;source&quot;: &quot;faq.md&quot;, &quot;quote&quot;: &quot;5 days&quot;}, {&quot;source&quot;: &quot;faq.md&quot;, &quot;quote&quot;: &quot;5 days&quot;},
+                                                        {&quot;source&quot;: &quot;terms.md&quot;, &quot;quote&quot;: &quot;no refunds after 30 days&quot;}]}
+a = check_answer(data, {&quot;faq.md&quot;, &quot;terms.md&quot;})
+assert [c.source for c in a.citations] == [&quot;faq.md&quot;, &quot;terms.md&quot;] and isinstance(a, RAGAnswer)
+assert len(data[&quot;citations&quot;]) == 3 and a.answer == &quot;Refunds take 5 days.&quot;
+try:
+    check_answer({&quot;answer&quot;: &quot;x&quot;, &quot;citations&quot;: [{&quot;source&quot;: &quot;blog.md&quot;, &quot;quote&quot;: &quot;q&quot;}, {&quot;source&quot;: &quot;aaa.md&quot;, &quot;quote&quot;: &quot;q&quot;}]}, {&quot;faq.md&quot;})
+    assert False
+except ValueError as e:
+    assert &quot;aaa.md&quot; in str(e) and str(e).index(&quot;aaa.md&quot;) &lt; str(e).index(&quot;blog.md&quot;) and not isinstance(e, ValidationError)
+try:
+    check_answer({&quot;answer&quot;: &quot;x&quot;, &quot;citations&quot;: []}, {&quot;faq.md&quot;})
+    assert False
+except ValidationError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate with <code>RAGAnswer.model_validate(data)</code>, compute unknown sources with a set difference, and rebuild with <code>answer.model_copy(update={"citations": unique})</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, Field
+
+
+class Citation(BaseModel):
+    source: str
+    quote: str
+
+
+class RAGAnswer(BaseModel):
+    answer: str
+    citations: list[Citation] = Field(min_length=1)
+
+
+def check_answer(data, allowed_sources):
+    answer = RAGAnswer.model_validate(data)
+    unknown = sorted({c.source for c in answer.citations} - set(allowed_sources))
+    if unknown:
+        raise ValueError(f&quot;citations to sources that were not retrieved: {&#x27;, &#x27;.join(unknown)}&quot;)
+    seen, unique = set(), []
+    for c in answer.citations:
+        key = (c.source, c.quote)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return answer.model_copy(update={&quot;citations&quot;: unique})</code></pre></div><p>Two layers of checking with different jobs. The model checks the <strong>shape</strong> (strings where strings belong, at least one citation), something Pydantic does generically. The function checks <strong>meaning</strong> that depends on context the model cannot know: whether the cited sources were actually retrieved for this question. A citation to a document that was never in the context is a hallucination, and catching it is one of the cheapest RAG quality checks (5.P did it with regex; here it works on structured output). <code>model_copy(update=...)</code> returns a new model with the deduplicated list; note that it does <strong>not</strong> re-validate, which is fine here because the list came from validated citations.</p></div></details>
+</article>
+<article class="prob" id="p-the-generated-json-schema" data-pid="m11-4-the-generated-json-schema" data-type="predict" data-level="medium" data-answer="[&#x27;steps&#x27;] [&#x27;final&#x27;, &#x27;steps&#x27;]
+1 {&#x27;$ref&#x27;: &#x27;#/$defs/Step&#x27;}
+{&#x27;enum&#x27;: [&#x27;search&#x27;, &#x27;calculator&#x27;], &#x27;title&#x27;: &#x27;Tool&#x27;, &#x27;type&#x27;: &#x27;string&#x27;} [&#x27;tool&#x27;, &#x27;input&#x27;]
+{&#x27;anyOf&#x27;: [{&#x27;type&#x27;: &#x27;string&#x27;}, {&#x27;type&#x27;: &#x27;null&#x27;}], &#x27;default&#x27;: None, &#x27;title&#x27;: &#x27;Final&#x27;}">
+<header class="prob-head"><h3>12. The generated JSON Schema</h3></header>
+<div class="code"><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, Field
+
+class Step(BaseModel):
+    tool: Literal[&quot;search&quot;, &quot;calculator&quot;]
+    input: str = Field(description=&quot;what to send to the tool&quot;)
+
+class Plan(BaseModel):
+    steps: list[Step] = Field(min_length=1, max_length=4)
+    final: str | None = None
+
+s = Plan.model_json_schema()
+print(s[&quot;required&quot;], sorted(s[&quot;properties&quot;]))
+print(s[&quot;properties&quot;][&quot;steps&quot;][&quot;minItems&quot;], s[&quot;properties&quot;][&quot;steps&quot;][&quot;items&quot;])
+step = s[&quot;$defs&quot;][&quot;Step&quot;]
+print(step[&quot;properties&quot;][&quot;tool&quot;], step[&quot;required&quot;])
+print(s[&quot;properties&quot;][&quot;final&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Nested models are placed in <code>$defs</code> and referenced with <code>$ref</code>. Literals become <code>enum</code> with a type. A field with a default is not required.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;steps&#x27;] [&#x27;final&#x27;, &#x27;steps&#x27;]
+1 {&#x27;$ref&#x27;: &#x27;#/$defs/Step&#x27;}
+{&#x27;enum&#x27;: [&#x27;search&#x27;, &#x27;calculator&#x27;], &#x27;title&#x27;: &#x27;Tool&#x27;, &#x27;type&#x27;: &#x27;string&#x27;} [&#x27;tool&#x27;, &#x27;input&#x27;]
+{&#x27;anyOf&#x27;: [{&#x27;type&#x27;: &#x27;string&#x27;}, {&#x27;type&#x27;: &#x27;null&#x27;}], &#x27;default&#x27;: None, &#x27;title&#x27;: &#x27;Final&#x27;}</pre></div><p>Only <code>steps</code> is required, because <code>final</code> has a default. The list constraints become <code>minItems</code> and <code>maxItems</code>, and the nested <code>Step</code> model is defined once under <code>$defs</code> and referenced, which keeps large schemas compact. The literal becomes an <code>enum</code> of strings, the description is carried over, and <code>str | None</code> becomes an <code>anyOf</code> of string and null with its default. This dict is exactly what you pass as a response format or tool schema.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-structured-output-repair-loop" data-pid="m11-4-a-structured-output-repair-loop" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A structured-output repair loop</h3></header>
+<div class="prob-q"><p>Write <code>ask_structured(ask, prompt, model_cls, attempts=3)</code>. <code>ask(messages)</code> returns the model's reply text. Validate each reply with <code>model_cls.model_validate_json</code>. On failure, append the reply as an assistant message and a user message <code>"Your reply was invalid:\n&lt;errors&gt;\nReply with JSON matching the schema."</code> where <code>&lt;errors&gt;</code> has one <code>"- &lt;loc&gt;: &lt;msg&gt;"</code> line per error (<code>loc</code> dotted, <code>reply</code> if empty). The first user message must contain the prompt followed by <code>"\nJSON schema: "</code> and <code>json.dumps(model_cls.model_json_schema())</code>. Return <code>(instance, attempts_used)</code>; after the last failure, raise <code>ValueError(f"no valid reply after {attempts} attempts")</code> chained from the last <code>ValidationError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import json
+from pydantic import BaseModel, ValidationError
+
+def ask_structured(ask, prompt, model_cls, attempts=3):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
+
+class Verdict(BaseModel):
+    label: Literal["spam", "ham"]
+    confidence: float = Field(ge=0, le=1)
+
+replies = iter(["not json", '{"label": "eggs", "confidence": 2}', '{"label": "spam", "confidence": 0.9}'])
+seen = []
+def ask(messages):
+    seen.append([m["content"] for m in messages])
+    return next(replies)
+
+v, used = ask_structured(ask, "Classify: WIN A PRIZE", Verdict)
+assert v == Verdict(label="spam", confidence=0.9) and used == 3
+assert seen[0][0].startswith("Classify: WIN A PRIZE\nJSON schema: ") and json.loads(seen[0][0].split("JSON schema: ", 1)[1])["required"] == ["label", "confidence"]
+assert seen[1][1] == "not json" and seen[1][2].startswith("Your reply was invalid:\n- reply: ")
+lines = seen[2][-1].splitlines()
+assert lines[1].startswith("- label: ") and lines[2].startswith("- confidence: ") and lines[-1] == "Reply with JSON matching the schema."
+try:
+    ask_structured(lambda m: "{}", "x", Verdict, attempts=2)
+    assert False
+except ValueError as e:
+    assert str(e) == "no valid reply after 2 attempts" and isinstance(e.__cause__, ValidationError)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+from typing import Literal
+from pydantic import BaseModel, Field, ValidationError
+
+class Verdict(BaseModel):
+    label: Literal[&quot;spam&quot;, &quot;ham&quot;]
+    confidence: float = Field(ge=0, le=1)
+
+replies = iter([&quot;not json&quot;, &#x27;{&quot;label&quot;: &quot;eggs&quot;, &quot;confidence&quot;: 2}&#x27;, &#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9}&#x27;])
+seen = []
+def ask(messages):
+    seen.append([m[&quot;content&quot;] for m in messages])
+    return next(replies)
+
+v, used = ask_structured(ask, &quot;Classify: WIN A PRIZE&quot;, Verdict)
+assert v == Verdict(label=&quot;spam&quot;, confidence=0.9) and used == 3
+assert seen[0][0].startswith(&quot;Classify: WIN A PRIZE\nJSON schema: &quot;) and json.loads(seen[0][0].split(&quot;JSON schema: &quot;, 1)[1])[&quot;required&quot;] == [&quot;label&quot;, &quot;confidence&quot;]
+assert seen[1][1] == &quot;not json&quot; and seen[1][2].startswith(&quot;Your reply was invalid:\n- reply: &quot;)
+lines = seen[2][-1].splitlines()
+assert lines[1].startswith(&quot;- label: &quot;) and lines[2].startswith(&quot;- confidence: &quot;) and lines[-1] == &quot;Reply with JSON matching the schema.&quot;
+try:
+    ask_structured(lambda m: &quot;{}&quot;, &quot;x&quot;, Verdict, attempts=2)
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;no valid reply after 2 attempts&quot; and isinstance(e.__cause__, ValidationError)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the first message once; keep a <code>messages</code> list and extend it with <code>+</code> after each failure (2.4).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Format errors with a small helper so both the loop and tests agree on the format.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from pydantic import BaseModel, ValidationError
+
+
+def _format(e):
+    lines = []
+    for err in e.errors():
+        loc = &quot;.&quot;.join(str(p) for p in err[&quot;loc&quot;]) or &quot;reply&quot;
+        lines.append(f&quot;- {loc}: {err[&#x27;msg&#x27;]}&quot;)
+    return &quot;\n&quot;.join(lines)
+
+
+def ask_structured(ask, prompt, model_cls, attempts=3):
+    schema = json.dumps(model_cls.model_json_schema())
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;{prompt}\nJSON schema: {schema}&quot;}]
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        reply = ask(messages)
+        try:
+            return model_cls.model_validate_json(reply), attempt
+        except ValidationError as e:
+            last_error = e
+            messages = messages + [
+                {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: reply},
+                {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: f&quot;Your reply was invalid:\n{_format(e)}\nReply with JSON matching the schema.&quot;},
+            ]
+    raise ValueError(f&quot;no valid reply after {attempts} attempts&quot;) from last_error</code></pre></div><p>The model class is the single source of truth: its JSON Schema tells the model what to produce, <code>model_validate_json</code> checks what it produced, and the validation errors tell it precisely what to fix, one line per problem with its location. Showing the model its own invalid reply alongside the errors usually fixes the output on the next attempt. The loop is bounded, chains the final error from the last <code>ValidationError</code> so logs keep the details (7.2), and builds new message lists instead of mutating the caller's (2.4). This is the 7.4 repair loop rebuilt on Pydantic, and essentially what Instructor does; with providers that enforce schemas server-side, the loop still matters for semantic constraints (ranges, lengths, cross-field rules) that schemas cannot fully express.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-api-request-model" data-pid="m11-4-read-the-code-an-api-request-model" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: an API request model</h3></header>
+<div class="prob-q"><p><code>CompletionRequest</code> validates requests to an internal LLM gateway. It accepts roles like <code>"admin"</code>, accepts a temperature of 7, ignores unknown keys such as <code>max_token</code>, lets <code>max_tokens=0</code> through, and every instance shares one <code>stop</code> list. Read it, find the bugs and fix them: roles are <code>system</code>, <code>user</code>, <code>assistant</code>, <code>tool</code>; temperature in <code>[0, 2]</code>; <code>max_tokens</code> from 1 to 32,000 (default 512); at least one message; no unknown keys at either level; a fresh <code>stop</code> list per request with at most 4 entries.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">from pydantic import BaseModel, Field
+
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+
+STOP = []
+
+
+class CompletionRequest(BaseModel):
+    model: str
+    messages: list[Message]
+    temperature: float = 1.0
+    max_tokens: int = 512
+    stop: list[str] = Field(default_factory=lambda: STOP)
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+ok = CompletionRequest.model_validate({"model": "small", "messages": [{"role": "user", "content": "hi"}], "temperature": "0.2"})
+assert ok.temperature == 0.2 and ok.max_tokens == 512
+ok.stop.append("###")
+assert CompletionRequest(model="m", messages=[{"role": "user", "content": "x"}]).stop == []
+cases = [
+    {"model": "m", "messages": [{"role": "admin", "content": "x"}]},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "temperature": 7},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "max_token": 100},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "max_tokens": 0},
+    {"model": "m", "messages": []},
+    {"model": "m", "messages": [{"role": "user", "content": "x", "name": "bob"}]},
+    {"model": "m", "messages": [{"role": "user", "content": "x"}], "stop": ["a", "b", "c", "d", "e"]},
+]
+for c in cases:
+    try:
+        CompletionRequest.model_validate(c)
+        assert False, c
+    except ValidationError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+ok = CompletionRequest.model_validate({&quot;model&quot;: &quot;small&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;hi&quot;}], &quot;temperature&quot;: &quot;0.2&quot;})
+assert ok.temperature == 0.2 and ok.max_tokens == 512
+ok.stop.append(&quot;###&quot;)
+assert CompletionRequest(model=&quot;m&quot;, messages=[{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;}]).stop == []
+cases = [
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;admin&quot;, &quot;content&quot;: &quot;x&quot;}]},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;}], &quot;temperature&quot;: 7},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;}], &quot;max_token&quot;: 100},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;}], &quot;max_tokens&quot;: 0},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: []},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;, &quot;name&quot;: &quot;bob&quot;}]},
+    {&quot;model&quot;: &quot;m&quot;, &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;x&quot;}], &quot;stop&quot;: [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;, &quot;e&quot;]},
+]
+for c in cases:
+    try:
+        CompletionRequest.model_validate(c)
+        assert False, c
+    except ValidationError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>Literal</code> for roles, <code>Field(ge=..., le=...)</code> for numbers, <code>Field(min_length=1)</code> for messages and <code>Field(max_length=4)</code> for stop.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>model_config = ConfigDict(extra="forbid")</code> on <strong>both</strong> models. <code>default_factory=list</code> creates a new list each time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Message(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    role: Literal[&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;]
+    content: str
+
+
+class CompletionRequest(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    model: str
+    messages: list[Message] = Field(min_length=1)
+    temperature: float = Field(default=1.0, ge=0, le=2)
+    max_tokens: int = Field(default=512, ge=1, le=32_000)
+    stop: list[str] = Field(default_factory=list, max_length=4)</code></pre></div><p>Every bug was a missing declaration, which is the point: with Pydantic, validation <strong>is</strong> the declarations. A plain <code>str</code> role accepted anything; a <code>Literal</code> accepts only real roles. Unconstrained numbers let 7 and 0 through to the provider (which fails later, with a worse error, or clamps silently); <code>Field(ge, le)</code> rejects them at the gateway with a precise location. Without <code>extra="forbid"</code>, <code>max_token</code> was dropped and the request ran with the default, and an unknown <code>name</code> key inside a message disappeared too, so the setting must be on the nested model as well. An empty message list now fails <code>min_length</code>. And <code>default_factory=lambda: STOP</code> returned the <strong>same</strong> global list each time, so one request's stop sequence leaked into every later request (9.1); <code>default_factory=list</code> creates a new one.</p></div></details>
+</article>
+<article class="prob" id="p-validate-tagged-events-with-a-discrimina" data-pid="m11-4-validate-tagged-events-with-a-discrimina" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Validate tagged events with a discriminator</h3></header>
+<div class="prob-q"><p>Define three models with a <code>type</code> tag: <code>TextDelta(type: Literal["text"], text: str)</code>, <code>ToolUse(type: Literal["tool_use"], name: str, input: dict)</code>, <code>Stop(type: Literal["stop"], reason: Literal["end", "max_tokens"])</code>. Build <code>Event = Annotated[TextDelta | ToolUse | Stop, Field(discriminator="type")]</code> and a <code>TypeAdapter(list[Event])</code>. Write <code>parse_events(json_text)</code> returning the list of validated event objects, and <code>summarise(events)</code> returning <code>{"text": joined text, "tools": [tool names], "stop": reason or None}</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">from typing import Annotated, Literal
+from pydantic import BaseModel, Field, TypeAdapter
+
+def parse_events(json_text):
+    pass
+
+def summarise(events):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+raw = '[{"type": "text", "text": "Refunds "}, {"type": "tool_use", "name": "search", "input": {"q": "refund"}}, {"type": "text", "text": "take 5 days."}, {"type": "stop", "reason": "end"}]'
+events = parse_events(raw)
+assert [type(e).__name__ for e in events] == ["TextDelta", "ToolUse", "TextDelta", "Stop"]
+assert summarise(events) == {"text": "Refunds take 5 days.", "tools": ["search"], "stop": "end"}
+try:
+    parse_events('[{"type": "tool_use", "name": "x"}, {"type": "ping"}]')
+    assert False
+except ValidationError as e:
+    locs = [err["loc"] for err in e.errors()]
+    assert locs[0] == (0, "tool_use", "input") and locs[1][0] == 1 and e.errors()[1]["type"] == "union_tag_invalid"
+assert summarise(parse_events("[]")) == {"text": "", "tools": [], "stop": None}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+raw = &#x27;[{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Refunds &quot;}, {&quot;type&quot;: &quot;tool_use&quot;, &quot;name&quot;: &quot;search&quot;, &quot;input&quot;: {&quot;q&quot;: &quot;refund&quot;}}, {&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;take 5 days.&quot;}, {&quot;type&quot;: &quot;stop&quot;, &quot;reason&quot;: &quot;end&quot;}]&#x27;
+events = parse_events(raw)
+assert [type(e).__name__ for e in events] == [&quot;TextDelta&quot;, &quot;ToolUse&quot;, &quot;TextDelta&quot;, &quot;Stop&quot;]
+assert summarise(events) == {&quot;text&quot;: &quot;Refunds take 5 days.&quot;, &quot;tools&quot;: [&quot;search&quot;], &quot;stop&quot;: &quot;end&quot;}
+try:
+    parse_events(&#x27;[{&quot;type&quot;: &quot;tool_use&quot;, &quot;name&quot;: &quot;x&quot;}, {&quot;type&quot;: &quot;ping&quot;}]&#x27;)
+    assert False
+except ValidationError as e:
+    locs = [err[&quot;loc&quot;] for err in e.errors()]
+    assert locs[0] == (0, &quot;tool_use&quot;, &quot;input&quot;) and locs[1][0] == 1 and e.errors()[1][&quot;type&quot;] == &quot;union_tag_invalid&quot;
+assert summarise(parse_events(&quot;[]&quot;)) == {&quot;text&quot;: &quot;&quot;, &quot;tools&quot;: [], &quot;stop&quot;: None}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define the three models first, then <code>Event</code> and <code>EVENTS = TypeAdapter(list[Event])</code> at module level; <code>parse_events</code> is <code>EVENTS.validate_json(json_text)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>summarise</code>, dispatch on <code>isinstance</code> (or <code>e.type</code>).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Annotated, Literal
+from pydantic import BaseModel, Field, TypeAdapter
+
+
+class TextDelta(BaseModel):
+    type: Literal[&quot;text&quot;]
+    text: str
+
+
+class ToolUse(BaseModel):
+    type: Literal[&quot;tool_use&quot;]
+    name: str
+    input: dict
+
+
+class Stop(BaseModel):
+    type: Literal[&quot;stop&quot;]
+    reason: Literal[&quot;end&quot;, &quot;max_tokens&quot;]
+
+
+Event = Annotated[TextDelta | ToolUse | Stop, Field(discriminator=&quot;type&quot;)]
+EVENTS = TypeAdapter(list[Event])
+
+
+def parse_events(json_text):
+    return EVENTS.validate_json(json_text)
+
+
+def summarise(events):
+    text, tools, stop = [], [], None
+    for e in events:
+        if isinstance(e, TextDelta):
+            text.append(e.text)
+        elif isinstance(e, ToolUse):
+            tools.append(e.name)
+        elif isinstance(e, Stop):
+            stop = e.reason
+    return {&quot;text&quot;: &quot;&quot;.join(text), &quot;tools&quot;: tools, &quot;stop&quot;: stop}</code></pre></div><p>The discriminator tells Pydantic to read the <code>type</code> field first and validate the rest against <strong>only</strong> the matching model, which is faster than trying every member of the union and gives far better errors: the missing <code>input</code> is reported at <code>(0, "tool_use", "input")</code>, inside the tool-use branch, and an unknown tag gets a dedicated <code>union_tag_invalid</code> error instead of three confusing failures. A <code>TypeAdapter</code> validates a type that is not a model, here a top-level list, and is built once at module level because constructing it compiles the validator. The result is a list of real objects, so <code>summarise</code> can dispatch with <code>isinstance</code> and a type checker narrows each branch (11.2). Streaming APIs deliver events in exactly this tagged form.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-and-is-not-validated" data-pid="m11-4-what-is-and-is-not-validated" data-type="predict" data-level="hard" data-answer="-5 oops
+assignment rejected: greater_than_equal
+frozen: frozen_instance
+True -1">
+<header class="prob-head"><h3>16. What is and is not validated</h3></header>
+<div class="code"><pre><code class="py">from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+class Plain(BaseModel):
+    n: int = Field(ge=0)
+
+class Checked(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+    n: int = Field(ge=0)
+
+class Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    n: int = 0
+
+p = Plain(n=1)
+p.n = -5
+print(p.n, p.model_copy(update={&quot;n&quot;: &quot;oops&quot;}).n)
+c = Checked(n=1)
+try:
+    c.n = -5
+except ValidationError as e:
+    print(&quot;assignment rejected:&quot;, e.errors()[0][&quot;type&quot;])
+f = Frozen()
+try:
+    f.n = 1
+except ValidationError as e:
+    print(&quot;frozen:&quot;, e.errors()[0][&quot;type&quot;])
+print(hash(f) == hash(Frozen()), Plain.model_construct(n=-1).n)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>By default only construction and <code>model_validate</code> validate; assignment, <code>model_copy(update=...)</code> and <code>model_construct</code> do not.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>-5 oops
+assignment rejected: greater_than_equal
+frozen: frozen_instance
+True -1</pre></div><p>Validation happens when a model is <strong>created</strong> from input. Assigning a field afterwards is not checked by default, so <code>p.n</code> becomes -5, and <code>model_copy(update=...)</code> copies values in without validation, so the copy holds a string in an <code>int</code> field. <code>validate_assignment=True</code> re-validates on assignment, rejecting -5 with <code>greater_than_equal</code>. Frozen models refuse assignment entirely (a <code>frozen_instance</code> error) and become hashable by value. <code>model_construct</code> skips validation by design. To keep the "every instance is valid" guarantee, freeze models or turn on assignment validation, and avoid the unvalidated paths for untrusted data.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-pydantic-models-or-dataclasses-how-do-yo" data-pid="m11-4-pydantic-models-or-dataclasses-how-do-yo" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Pydantic models or dataclasses: how do you choose?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Both describe structured data with type hints. Dataclasses generate <code>__init__</code>, <code>__repr__</code> and <code>__eq__</code> but trust their inputs completely: no validation, no conversion, minimal overhead, and they are part of the standard library. Pydantic models validate and convert at run time, collect every error with precise locations, serialise to and from JSON, and generate JSON Schema, at a cost per instance and with a dependency. So use Pydantic at the <strong>boundaries</strong>, wherever data comes from outside the program: HTTP requests and responses (FastAPI), configuration and environment, files and queues, and LLM structured output. Use dataclasses (or plain classes) for internal objects that your own code creates from already-valid data. Pydantic can also validate dataclasses and <code>TypedDict</code>s via <code>TypeAdapter</code>, which lets internal types be checked at a boundary without converting the whole codebase.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-the-difference-between-lax-and-s" data-pid="m11-4-what-is-the-difference-between-lax-and-s" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What is the difference between lax and strict validation, and when would you use strict?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Lax mode, Pydantic's default, accepts values that can be converted without losing information: the string <code>"5"</code> for an <code>int</code>, <code>"0.5"</code> for a <code>float</code>, <code>"yes"</code> or <code>1</code> for a <code>bool</code>, a whole float like <code>3.0</code> for an <code>int</code>, a list where a tuple is declared. It rejects lossy conversions such as <code>7.5</code> to an <code>int</code>. That suits data from text-based sources such as query strings, form fields, environment variables and CSV files. Strict mode accepts only the exact types (with a few JSON exceptions), so <code>"5"</code> is an error for an <code>int</code>. Use strict where a type mismatch signals a bug or an attack rather than formatting, for example internal service-to-service JSON, financial amounts, or identifiers where <code>"1"</code> versus <code>1</code> matters; it can be set per model (<code>ConfigDict(strict=True)</code>), per field (<code>Field(strict=True)</code>) or per call (<code>model_validate(data, strict=True)</code>).</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-validate-llm-outputs-relia" data-pid="m11-4-how-would-you-validate-llm-outputs-relia" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you validate LLM outputs reliably at scale?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Describe each expected output as a Pydantic model with tight types (<code>Literal</code> labels, numeric ranges, list lengths, required versus nullable fields), and generate the JSON Schema from it for the provider's structured-output or tool-calling mode, so the model is constrained up front. Parse every reply with <code>model_validate_json</code>, which catches malformed JSON, missing fields and out-of-range values in one step, and add validators for rules schemas cannot express (citations must refer to retrieved sources, dates must be ordered). On failure, retry a bounded number of times with the compact validation errors fed back, and record each failure with the raw reply, the error types and the model and prompt versions. Track failure and retry rates per model and prompt as metrics, since a jump usually means a prompt or model change. Version the output models: changing a schema changes what deployed prompts produce, so evolve them compatibly (new optional fields) and evaluate before rolling out. Finally, remember that valid is not correct: schema validation guarantees shape, and evaluation datasets are still needed to check the content.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Pydantic models validate and convert input from type hints; <code>ValidationError</code> lists every problem with <code>loc</code>, <code>msg</code> and <code>type</code>.</li><li>Lax mode converts compatible values (<code>"5"</code> to 5) but never loses information; strict mode accepts exact types only.</li><li><code>Field(...)</code> adds constraints, defaults, descriptions and aliases; a <code>str | None</code> field without a default is still required.</li><li><code>field_validator</code> (before or after) and <code>model_validator</code> hold custom rules; <code>extra="forbid"</code>, <code>frozen</code> and <code>validate_assignment</code> tighten models.</li><li><code>model_validate_json</code>, <code>model_dump</code>, <code>model_json_schema</code> and <code>TypeAdapter</code> (with discriminated unions) are the tools for structured LLM output.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

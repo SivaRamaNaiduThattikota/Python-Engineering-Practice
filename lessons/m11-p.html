@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11.P · Module 11 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m11-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 11 · Typing, dataclasses and Pydantic</span></div>
+  <h1>11.P Module 11 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 11: type hints and what they do not check, protocols, generics and <code>TypedDict</code>, dataclasses and their options, and Pydantic validation. Then a mini project that needs all of it: a typed evaluation run that loads test cases from JSON Lines, grades answers through a protocol and reports results as validated models.</p>
+  <div class="chips"><span class="chip">14 problems</span><span class="chip">3 easy · 6 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For every piece of data, ask two questions. <strong>Who creates it?</strong> If your own code does, from values that are already valid, a dataclass (or a <code>TypedDict</code> for plain dicts) describes it at almost no cost, and the type checker guards it (11.1 to 11.3). If it comes from outside, a file, an environment variable, a request or a model's reply, validate it at the boundary with Pydantic (11.4), then pass the validated object inward. <strong>Who uses it?</strong> If callers only need some behaviour, describe that behaviour with a <code>Protocol</code> rather than a base class, and write generic code with type parameters when the same logic serves several types (11.2).</p>
+<p>The problems mix the lessons on purpose, and the mini project combines all four in the kind of evaluation harness every LLM team runs before changing a prompt or a model.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-hints-dataclasses-and-models-on-the-same" data-pid="m11-p-hints-dataclasses-and-models-on-the-same" data-type="predict" data-level="easy" data-answer="&#x27;5&#x27; [&#x27;a&#x27;] 5 (&#x27;a&#x27;,)
+abab True">
+<header class="prob-head"><h3>1. Hints, dataclasses and models on the same input</h3></header>
+<div class="code"><pre><code class="py">from dataclasses import dataclass
+from pydantic import BaseModel
+
+@dataclass
+class D:
+    n: int
+    tags: tuple[str, ...] = ()
+
+class M(BaseModel):
+    n: int
+    tags: tuple[str, ...] = ()
+
+def double(x: int) -&gt; int:
+    return x * 2
+
+d = D(&quot;5&quot;, [&quot;a&quot;])
+m = M(n=&quot;5&quot;, tags=[&quot;a&quot;])
+print(repr(d.n), d.tags, repr(m.n), m.tags)
+print(double(&quot;ab&quot;), D.__annotations__[&quot;n&quot;] is M.model_fields[&quot;n&quot;].annotation)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only one of the three checks anything at run time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>&#x27;5&#x27; [&#x27;a&#x27;] 5 (&#x27;a&#x27;,)
+abab True</pre></div><p>Type hints are not checked when the program runs (11.1): <code>double("ab")</code> happily repeats the string. A dataclass uses its annotations only to generate methods, so it stores the string <code>"5"</code> and the list exactly as given (11.3). The Pydantic model validates and converts, storing the integer 5 and a tuple (11.4). Both classes read the same annotation, <code>int</code>, which is the point: the same type hints, with or without enforcement.</p></div></details>
+</article>
+<article class="prob" id="p-comparable-model-versions" data-pid="m11-p-comparable-model-versions" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Comparable model versions</h3></header>
+<div class="prob-q"><p>Write a frozen, ordered dataclass <code>ModelVersion(major, minor, patch=0)</code> of ints. <code>__post_init__</code> raises <code>ValueError</code> if any part is negative. Add a class method <code>parse(text)</code> accepting <code>"1.2"</code>, <code>"1.2.3"</code> and an optional leading <code>"v"</code> (raising <code>ValueError</code> for anything else), a <code>__str__</code> returning <code>"v1.2.3"</code>, and <code>bump(part)</code> returning a new version with <code>"major"</code>, <code>"minor"</code> or <code>"patch"</code> increased and the lower parts reset to 0.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from dataclasses import dataclass, replace
+
+@dataclass(frozen=True, order=True)
+class ModelVersion:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">vs = [ModelVersion.parse(t) for t in ["v1.10.0", "1.2", "v1.2.3", "0.9.9"]]
+assert [str(v) for v in sorted(vs)] == ["v0.9.9", "v1.2.0", "v1.2.3", "v1.10.0"]
+assert max(vs) == ModelVersion(1, 10) and len({ModelVersion(1, 2), ModelVersion.parse("1.2.0")}) == 1
+v = ModelVersion(2, 3, 4)
+assert (str(v.bump("major")), str(v.bump("minor")), str(v.bump("patch")), str(v)) == ("v3.0.0", "v2.4.0", "v2.3.5", "v2.3.4")
+for bad in ["1", "1.2.3.4", "v1.x", "", "1.-2"]:
+    try:
+        ModelVersion.parse(bad)
+        assert False, bad
+    except ValueError:
+        pass
+try:
+    ModelVersion(1, -1)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">vs = [ModelVersion.parse(t) for t in [&quot;v1.10.0&quot;, &quot;1.2&quot;, &quot;v1.2.3&quot;, &quot;0.9.9&quot;]]
+assert [str(v) for v in sorted(vs)] == [&quot;v0.9.9&quot;, &quot;v1.2.0&quot;, &quot;v1.2.3&quot;, &quot;v1.10.0&quot;]
+assert max(vs) == ModelVersion(1, 10) and len({ModelVersion(1, 2), ModelVersion.parse(&quot;1.2.0&quot;)}) == 1
+v = ModelVersion(2, 3, 4)
+assert (str(v.bump(&quot;major&quot;)), str(v.bump(&quot;minor&quot;)), str(v.bump(&quot;patch&quot;)), str(v)) == (&quot;v3.0.0&quot;, &quot;v2.4.0&quot;, &quot;v2.3.5&quot;, &quot;v2.3.4&quot;)
+for bad in [&quot;1&quot;, &quot;1.2.3.4&quot;, &quot;v1.x&quot;, &quot;&quot;, &quot;1.-2&quot;]:
+    try:
+        ModelVersion.parse(bad)
+        assert False, bad
+    except ValueError:
+        pass
+try:
+    ModelVersion(1, -1)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Order compares fields in declaration order, so <code>major, minor, patch</code> sorts versions numerically, unlike strings (<code>"1.10" &lt; "1.2"</code>).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>int("-2")</code> succeeds, so negative parts must be caught by <code>__post_init__</code>, which runs for <code>parse</code> too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, replace
+
+
+@dataclass(frozen=True, order=True)
+class ModelVersion:
+    major: int
+    minor: int
+    patch: int = 0
+
+    def __post_init__(self):
+        if min(self.major, self.minor, self.patch) &lt; 0:
+            raise ValueError(f&quot;negative version part in {self.major}.{self.minor}.{self.patch}&quot;)
+
+    @classmethod
+    def parse(cls, text):
+        parts = text.removeprefix(&quot;v&quot;).split(&quot;.&quot;)
+        if len(parts) not in (2, 3):
+            raise ValueError(f&quot;bad version: {text!r}&quot;)
+        try:
+            numbers = [int(p) for p in parts]
+        except ValueError:
+            raise ValueError(f&quot;bad version: {text!r}&quot;) from None
+        return cls(*numbers)
+
+    def __str__(self):
+        return f&quot;v{self.major}.{self.minor}.{self.patch}&quot;
+
+    def bump(self, part):
+        if part == &quot;major&quot;:
+            return replace(self, major=self.major + 1, minor=0, patch=0)
+        if part == &quot;minor&quot;:
+            return replace(self, minor=self.minor + 1, patch=0)
+        if part == &quot;patch&quot;:
+            return replace(self, patch=self.patch + 1)
+        raise ValueError(f&quot;unknown part: {part!r}&quot;)</code></pre></div><p><code>order=True</code> generates comparisons that compare the fields as a tuple, in declaration order, so versions sort numerically: <code>v1.10.0</code> after <code>v1.2.3</code>, which plain strings get wrong. <code>frozen=True</code> makes instances immutable and, with the generated <code>__eq__</code>, hashable, so equal versions collapse in a set. <code>replace</code> builds the bumped copy and runs <code>__post_init__</code> again, so every way of making a version is checked. The parser turns <code>int</code>'s error into one clear message with <code>from None</code> (7.2). Model registries and artefact stores compare versions exactly like this.</p></div></details>
+</article>
+<article class="prob" id="p-a-template-with-shared-defaults" data-pid="m11-p-a-template-with-shared-defaults" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A template with shared defaults</h3></header>
+<div class="prob-q"><p><code>PromptTemplate</code> fails as soon as the module is imported, with "mutable default &lt;class 'list'&gt; for field variables is not allowed". Fix it so each template gets its own list and dict, and keep the <code>render</code> behaviour.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from dataclasses import dataclass
+
+@dataclass
+class PromptTemplate:
+    name: str
+    text: str
+    variables: list[str] = []
+    defaults: dict[str, str] = {}
+
+    def render(self, **values):
+        merged = {**self.defaults, **values}
+        missing = [v for v in self.variables if v not in merged]
+        if missing:
+            raise KeyError(f&quot;missing variables: {missing}&quot;)
+        return self.text.format(**merged)
+</textarea>
+<script type="text/plain" class="prob-tests">a = PromptTemplate("qa", "Answer {question} in {lang}.", ["question", "lang"], {"lang": "English"})
+b = PromptTemplate("plain", "Hello")
+b.variables.append("x")
+assert PromptTemplate("other", "Hi").variables == [] and a.render(question="refunds?") == "Answer refunds? in English."
+assert b.defaults == {} and b.defaults is not PromptTemplate("p", "q").defaults</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">a = PromptTemplate(&quot;qa&quot;, &quot;Answer {question} in {lang}.&quot;, [&quot;question&quot;, &quot;lang&quot;], {&quot;lang&quot;: &quot;English&quot;})
+b = PromptTemplate(&quot;plain&quot;, &quot;Hello&quot;)
+b.variables.append(&quot;x&quot;)
+assert PromptTemplate(&quot;other&quot;, &quot;Hi&quot;).variables == [] and a.render(question=&quot;refunds?&quot;) == &quot;Answer refunds? in English.&quot;
+assert b.defaults == {} and b.defaults is not PromptTemplate(&quot;p&quot;, &quot;q&quot;).defaults</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>field(default_factory=list)</code> and <code>field(default_factory=dict)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class PromptTemplate:
+    name: str
+    text: str
+    variables: list[str] = field(default_factory=list)
+    defaults: dict[str, str] = field(default_factory=dict)
+
+    def render(self, **values):
+        merged = {**self.defaults, **values}
+        missing = [v for v in self.variables if v not in merged]
+        if missing:
+            raise KeyError(f&quot;missing variables: {missing}&quot;)
+        return self.text.format(**merged)</code></pre></div><p>A default value in a class body is created once and would be shared by every instance (9.1), so dataclasses refuse unhashable defaults such as lists and dicts at class creation time, which is why the error appears on import rather than at the first bug. <code>default_factory</code> is called for each new instance, so <code>b.variables.append</code> no longer changes every other template. Pydantic, by contrast, accepts <code>= []</code> because it copies defaults (11.4): the same intent, two different mechanisms.</p></div></details>
+</article>
+<article class="prob" id="p-typeddict-at-run-time-and-under-pydantic" data-pid="m11-p-typeddict-at-run-time-and-under-pydantic" data-type="predict" data-level="medium" data-answer="dict 1212 True
+dict {&#x27;role&#x27;: &#x27;user&#x27;, &#x27;tokens&#x27;: 12}
+(&#x27;tokens&#x27;,) missing">
+<header class="prob-head"><h3>4. TypedDict at run time and under Pydantic</h3></header>
+<div class="code"><pre><code class="py">from typing import NotRequired, TypedDict
+from pydantic import TypeAdapter, ValidationError
+
+class Msg(TypedDict):
+    role: str
+    tokens: int
+    name: NotRequired[str]
+
+m: Msg = {&quot;role&quot;: &quot;user&quot;, &quot;tokens&quot;: &quot;12&quot;}
+print(type(m).__name__, m[&quot;tokens&quot;] * 2, Msg.__required_keys__ == {&quot;role&quot;, &quot;tokens&quot;})
+ta = TypeAdapter(Msg)
+v = ta.validate_python({&quot;role&quot;: &quot;user&quot;, &quot;tokens&quot;: &quot;12&quot;, &quot;extra&quot;: 1})
+print(type(v).__name__, v)
+try:
+    ta.validate_python({&quot;role&quot;: &quot;user&quot;})
+except ValidationError as e:
+    print(e.errors()[0][&quot;loc&quot;], e.errors()[0][&quot;type&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>TypedDict</code> creates ordinary dicts. A <code>TypeAdapter</code> validates and converts a dict against it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>dict 1212 True
+dict {&#x27;role&#x27;: &#x27;user&#x27;, &#x27;tokens&#x27;: 12}
+(&#x27;tokens&#x27;,) missing</pre></div><p>A <code>TypedDict</code> is only a description for the type checker (11.2): the value is a plain <code>dict</code>, and nothing stops the string <code>"12"</code> from being stored, so <code>"12" * 2</code> is <code>"1212"</code>. The class does record which keys are required, as a frozenset that compares equal to the set. Under a <code>TypeAdapter</code>, Pydantic validates the dict, converting <code>"12"</code> to 12 and returning a plain dict again, with unknown keys dropped by default; a missing required key is reported at its location with the <code>missing</code> type.</p></div></details>
+</article>
+<article class="prob" id="p-embedders-as-a-protocol" data-pid="m11-p-embedders-as-a-protocol" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Embedders as a protocol</h3></header>
+<div class="prob-q"><p>Define a <code>runtime_checkable</code> protocol <code>Embedder</code> with an attribute <code>dim: int</code> and a method <code>embed(self, texts: list[str]) -&gt; list[list[float]]</code>. Write <code>embed_all(embedder, texts, batch_size=2)</code> that raises <code>TypeError</code> if <code>embedder</code> does not satisfy the protocol, embeds the texts in batches, checks that each batch returns one vector per text (<code>ValueError("expected N vectors, got M")</code>) and that every vector has <code>dim</code> numbers (<code>ValueError("expected D dims, got K")</code>), and returns all vectors in order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from typing import Protocol, runtime_checkable
+
+def embed_all(embedder, texts, batch_size=2):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">class Chars:
+    dim = 2
+    def __init__(self):
+        self.calls = []
+    def embed(self, texts):
+        self.calls.append(len(texts))
+        return [[float(len(t)), float(t.count("a"))] for t in texts]
+
+e = Chars()
+assert embed_all(e, ["a", "banana", "kiwi", "pear", "fig"]) == [[1.0, 1.0], [6.0, 3.0], [4.0, 0.0], [4.0, 1.0], [3.0, 0.0]]
+assert e.calls == [2, 2, 1] and isinstance(e, Embedder) and embed_all(e, []) == []
+
+class NoDim:
+    def embed(self, texts):
+        return [[0.0] for _ in texts]
+class Drops(Chars):
+    def embed(self, texts):
+        return super().embed(texts)[:-1]
+class Wide(Chars):
+    dim = 3
+for bad, err, text in [(NoDim(), TypeError, ""), (Drops(), ValueError, "expected 2 vectors, got 1"), (Wide(), ValueError, "expected 3 dims, got 2")]:
+    try:
+        embed_all(bad, ["x", "y"])
+        assert False
+    except err as ex:
+        assert text in str(ex)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class Chars:
+    dim = 2
+    def __init__(self):
+        self.calls = []
+    def embed(self, texts):
+        self.calls.append(len(texts))
+        return [[float(len(t)), float(t.count(&quot;a&quot;))] for t in texts]
+
+e = Chars()
+assert embed_all(e, [&quot;a&quot;, &quot;banana&quot;, &quot;kiwi&quot;, &quot;pear&quot;, &quot;fig&quot;]) == [[1.0, 1.0], [6.0, 3.0], [4.0, 0.0], [4.0, 1.0], [3.0, 0.0]]
+assert e.calls == [2, 2, 1] and isinstance(e, Embedder) and embed_all(e, []) == []
+
+class NoDim:
+    def embed(self, texts):
+        return [[0.0] for _ in texts]
+class Drops(Chars):
+    def embed(self, texts):
+        return super().embed(texts)[:-1]
+class Wide(Chars):
+    dim = 3
+for bad, err, text in [(NoDim(), TypeError, &quot;&quot;), (Drops(), ValueError, &quot;expected 2 vectors, got 1&quot;), (Wide(), ValueError, &quot;expected 3 dims, got 2&quot;)]:
+    try:
+        embed_all(bad, [&quot;x&quot;, &quot;y&quot;])
+        assert False
+    except err as ex:
+        assert text in str(ex)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Neither <code>Chars</code> nor the others inherit from <code>Embedder</code>: <code>isinstance</code> with a runtime-checkable protocol checks that the members exist.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Batch with <code>texts[i:i + batch_size]</code> for <code>i</code> in <code>range(0, len(texts), batch_size)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    dim: int
+
+    def embed(self, texts: list[str]) -&gt; list[list[float]]: ...
+
+
+def embed_all(embedder: Embedder, texts: list[str], batch_size: int = 2) -&gt; list[list[float]]:
+    if not isinstance(embedder, Embedder):
+        raise TypeError(f&quot;{type(embedder).__name__} is not an Embedder&quot;)
+    vectors: list[list[float]] = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        out = embedder.embed(batch)
+        if len(out) != len(batch):
+            raise ValueError(f&quot;expected {len(batch)} vectors, got {len(out)}&quot;)
+        for vec in out:
+            if len(vec) != embedder.dim:
+                raise ValueError(f&quot;expected {embedder.dim} dims, got {len(vec)}&quot;)
+        vectors.extend(out)
+    return vectors</code></pre></div><p>The protocol describes what <code>embed_all</code> needs, a <code>dim</code> and an <code>embed</code> method, so any embedder works without inheriting from anything: a local model, an API client, or this test fake (11.2). <code>runtime_checkable</code> adds an <code>isinstance</code> check that only verifies the members <strong>exist</strong>, not their signatures or types, so the shape checks on the actual output are still needed; they catch the two real failures of embedding services, a batch that comes back short (a dropped input would silently shift every later vector to the wrong text) and a dimension mismatch after a model change, which would corrupt a vector index (5.P).</p></div></details>
+</article>
+<article class="prob" id="p-config-overrides-from-the-command-line" data-pid="m11-p-config-overrides-from-the-command-line" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Config overrides from the command line</h3></header>
+<div class="prob-q"><p>Write Pydantic models <code>Optimizer(name: Literal["adam", "sgd"] = "adam", lr: float in (0, 1], default 1e-3)</code> and <code>TrainConfig(epochs: int &gt;= 1 = 10, batch_size: int = 32, optimizer: Optimizer)</code> (a fresh default <code>Optimizer</code>), both forbidding extra fields. Write <code>apply_overrides(cfg, overrides)</code> taking strings like <code>"epochs=3"</code> or <code>"optimizer.lr=0.01"</code> and returning a new validated <code>TrainConfig</code>. A string without <code>=</code> raises <code>ValueError</code>, and so does a dotted path whose parent is not a nested object; unknown names and bad values raise <code>ValidationError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+def apply_overrides(cfg, overrides):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+cfg = TrainConfig()
+new = apply_overrides(cfg, ["epochs=3", "optimizer.lr=0.01", "optimizer.name=sgd"])
+assert (new.epochs, new.optimizer.lr, new.optimizer.name, new.batch_size) == (3, 0.01, "sgd", 32)
+assert cfg.epochs == 10 and cfg.optimizer.lr == 0.001 and TrainConfig().optimizer is not cfg.optimizer
+for bad, loc in [(["optimizer.lr=2"], ("optimizer", "lr")), (["epoch=3"], ("epoch",)), (["optimizer.momentum=0.9"], ("optimizer", "momentum")), (["epochs=0"], ("epochs",))]:
+    try:
+        apply_overrides(cfg, bad)
+        assert False, bad
+    except ValidationError as e:
+        assert e.errors()[0]["loc"] == loc
+for bad in [["epochs"], ["epochs.x=1"]]:
+    try:
+        apply_overrides(cfg, bad)
+        assert False, bad
+    except ValueError as e:
+        assert not isinstance(e, ValidationError)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+cfg = TrainConfig()
+new = apply_overrides(cfg, [&quot;epochs=3&quot;, &quot;optimizer.lr=0.01&quot;, &quot;optimizer.name=sgd&quot;])
+assert (new.epochs, new.optimizer.lr, new.optimizer.name, new.batch_size) == (3, 0.01, &quot;sgd&quot;, 32)
+assert cfg.epochs == 10 and cfg.optimizer.lr == 0.001 and TrainConfig().optimizer is not cfg.optimizer
+for bad, loc in [([&quot;optimizer.lr=2&quot;], (&quot;optimizer&quot;, &quot;lr&quot;)), ([&quot;epoch=3&quot;], (&quot;epoch&quot;,)), ([&quot;optimizer.momentum=0.9&quot;], (&quot;optimizer&quot;, &quot;momentum&quot;)), ([&quot;epochs=0&quot;], (&quot;epochs&quot;,))]:
+    try:
+        apply_overrides(cfg, bad)
+        assert False, bad
+    except ValidationError as e:
+        assert e.errors()[0][&quot;loc&quot;] == loc
+for bad in [[&quot;epochs&quot;], [&quot;epochs.x=1&quot;]]:
+    try:
+        apply_overrides(cfg, bad)
+        assert False, bad
+    except ValueError as e:
+        assert not isinstance(e, ValidationError)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start from <code>data = cfg.model_dump()</code> (nested dicts), set each override in it, then <code>TrainConfig.model_validate(data)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Walk the dotted path with <code>node = node.setdefault(part, {})</code>, checking the node is a dict; the values stay strings and Pydantic converts them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Optimizer(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    name: Literal[&quot;adam&quot;, &quot;sgd&quot;] = &quot;adam&quot;
+    lr: float = Field(default=1e-3, gt=0, le=1)
+
+
+class TrainConfig(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    epochs: int = Field(default=10, ge=1)
+    batch_size: int = 32
+    optimizer: Optimizer = Field(default_factory=Optimizer)
+
+
+def apply_overrides(cfg, overrides):
+    data = cfg.model_dump()
+    for item in overrides:
+        key, sep, value = item.partition(&quot;=&quot;)
+        if not sep:
+            raise ValueError(f&quot;override must look like key=value: {item!r}&quot;)
+        *parents, last = key.split(&quot;.&quot;)
+        node = data
+        for part in parents:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise ValueError(f&quot;{key!r}: {part!r} is not a nested section&quot;)
+        node[last] = value
+    return TrainConfig.model_validate(data)</code></pre></div><p>The function never converts a value itself: it edits the plain-dict form of the config with strings, exactly as they arrive from the command line, and lets the model do all conversion and checking in one place. Lax mode turns <code>"3"</code> and <code>"0.01"</code> into numbers, the literal and the range reject bad values, and <code>extra="forbid"</code> turns misspelt names (<code>epoch</code>, <code>momentum</code>) into errors with their full path instead of silently ignored settings, which is how a training run with the wrong learning rate happens. The original is untouched because a new model is built. Tools such as Hydra and pydantic-settings implement this pattern at scale.</p></div></details>
+</article>
+<article class="prob" id="p-a-subclass-with-required-fields-after-de" data-pid="m11-p-a-subclass-with-required-fields-after-de" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A subclass with required fields after defaults</h3></header>
+<div class="prob-q"><p>Importing the module fails with "non-default argument 'tool' follows default argument". <code>ToolEvent</code> must add a required <code>tool</code> and an optional <code>args</code> to <code>BaseEvent</code>, whose <code>ts</code> has a default. Fix it without giving <code>tool</code> a default or changing <code>BaseEvent</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from dataclasses import dataclass, field
+
+@dataclass
+class BaseEvent:
+    id: str
+    ts: float = 0.0
+
+@dataclass
+class ToolEvent(BaseEvent):
+    tool: str
+    args: dict = field(default_factory=dict)
+</textarea>
+<script type="text/plain" class="prob-tests">e = ToolEvent("e1", tool="search")
+assert (e.id, e.ts, e.tool, e.args) == ("e1", 0.0, "search", {})
+assert ToolEvent(id="e2", ts=1.5, tool="calc", args={"x": 1}).args == {"x": 1}
+try:
+    ToolEvent("e3")
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">e = ToolEvent(&quot;e1&quot;, tool=&quot;search&quot;)
+assert (e.id, e.ts, e.tool, e.args) == (&quot;e1&quot;, 0.0, &quot;search&quot;, {})
+assert ToolEvent(id=&quot;e2&quot;, ts=1.5, tool=&quot;calc&quot;, args={&quot;x&quot;: 1}).args == {&quot;x&quot;: 1}
+try:
+    ToolEvent(&quot;e3&quot;)
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@dataclass(kw_only=True)</code> on the subclass makes its new fields keyword-only, which may come after defaulted positional ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass, field
+
+@dataclass
+class BaseEvent:
+    id: str
+    ts: float = 0.0
+
+@dataclass(kw_only=True)
+class ToolEvent(BaseEvent):
+    tool: str
+    args: dict = field(default_factory=dict)</code></pre></div><p>A dataclass <code>__init__</code> takes fields in order, parents first, so <code>tool</code> would come after <code>ts=0.0</code> as a positional parameter without a default, which Python syntax forbids. Making the subclass's fields keyword-only moves them out of the positional order: the generated signature becomes <code>(id, ts=0.0, *, tool, args=...)</code>, where a required keyword-only argument after a default is fine (3.1). It is also clearer at the call site, which is why many codebases make every field of event and message classes keyword-only.</p></div></details>
+</article>
+<article class="prob" id="p-equality-hashing-and-replace" data-pid="m11-p-equality-hashing-and-replace" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Equality, hashing and replace</h3></header>
+<div class="prob-q"><p>Fill in <code>eq</code> and <code>size</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from dataclasses import dataclass, field, replace
+
+@dataclass(frozen=True)
+class Chunk:
+    doc: str
+    idx: int
+    text: str = field(compare=False)
+
+a = Chunk(&quot;faq&quot;, 0, &quot;Refunds&quot;)
+b = Chunk(&quot;faq&quot;, 0, &quot;Refunds take 5 days&quot;)
+c = replace(a, idx=1)
+d = replace(c, idx=0, text=&quot;other&quot;)
+eq, size = a == b, len({a, b})
+eq, size = a == c, len({a, b, c})
+eq, size = d == a, len({a, b, c, d})</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>eq</code></th><th><code>size</code></th></tr><tr><td>text not compared</td><td><input class="cell" data-a="True" data-s="True" aria-label="eq at text not compared" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="size at text not compared" autocomplete="off"></td></tr><tr><td>after replace</td><td><input class="cell" data-a="False" data-s="False" aria-label="eq at after replace" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at after replace" autocomplete="off"></td></tr><tr><td>back to idx 0</td><td><input class="cell" data-a="True" data-s="True" aria-label="eq at back to idx 0" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="size at back to idx 0" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>compare=False</code> removes a field from both <code>__eq__</code> and <code>__hash__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>eq</code></th><th><code>size</code></th></tr><tr><td>text not compared</td><td><code>True</code></td><td><code>1</code></td></tr><tr><td>after replace</td><td><code>False</code></td><td><code>2</code></td></tr><tr><td>back to idx 0</td><td><code>True</code></td><td><code>2</code></td></tr></table></div><p>With <code>compare=False</code>, chunks are identified by <code>(doc, idx)</code> only, so <code>a</code> and <code>b</code> are equal and hash alike, and the set keeps one of them. <code>replace</code> builds a new instance with changed fields: <code>c</code> has index 1 and is different. <code>d</code> returns to index 0 with other text, so it equals <code>a</code> and the set still has two members. This is a deliberate design for deduplicating retrieved chunks by identity rather than content (11.3).</p></div></details>
+</article>
+<article class="prob" id="p-a-generic-result-for-parsing" data-pid="m11-p-a-generic-result-for-parsing" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. A generic Result for parsing</h3></header>
+<div class="prob-q"><p>Write a frozen generic dataclass <code>class Result[T]</code> with <code>value: T | None = None</code> and <code>error: str | None = None</code> (<code>__post_init__</code> rejects both being set), a property <code>ok</code> (no error), class methods <code>success(value)</code> and <code>failure(error)</code>, <code>map(fn)</code> (applies <code>fn</code> to the value of a success, turning an exception into a failure <code>"&lt;ExceptionName&gt;: &lt;message&gt;"</code>; failures pass through unchanged) and <code>unwrap()</code> (the value, or <code>ValueError(error)</code>). Then write <code>parse_all(texts, model_cls)</code> returning a <code>Result</code> per text from <code>model_validate_json</code>, where a failure's error lists <code>"&lt;loc&gt;: &lt;type&gt;"</code> for each validation error, joined with <code>"; "</code>, with <code>reply</code> for an empty location.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">from dataclasses import dataclass
+from pydantic import BaseModel, ValidationError
+
+def parse_all(texts, model_cls):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from typing import Literal
+from pydantic import BaseModel
+
+class Verdict(BaseModel):
+    label: Literal["spam", "ham"]
+    confidence: float
+
+rs = parse_all(['{"label": "spam", "confidence": 0.9}', '{"label": "x"}', "oops"], Verdict)
+assert [r.ok for r in rs] == [True, False, False]
+assert rs[1].error == "label: literal_error; confidence: missing" and rs[2].error == "reply: json_invalid"
+assert rs[0].map(lambda v: v.confidence * 100).value == 90.0 and rs[1].map(lambda v: 1) is rs[1]
+assert rs[0].map(lambda v: 1 / 0).error == "ZeroDivisionError: division by zero"
+assert rs[0].unwrap().label == "spam" and Result.success(None).ok
+for bad in [lambda: rs[2].unwrap(), lambda: Result(1, "both")]:
+    try:
+        bad()
+        assert False
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from typing import Literal
+from pydantic import BaseModel
+
+class Verdict(BaseModel):
+    label: Literal[&quot;spam&quot;, &quot;ham&quot;]
+    confidence: float
+
+rs = parse_all([&#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;confidence&quot;: 0.9}&#x27;, &#x27;{&quot;label&quot;: &quot;x&quot;}&#x27;, &quot;oops&quot;], Verdict)
+assert [r.ok for r in rs] == [True, False, False]
+assert rs[1].error == &quot;label: literal_error; confidence: missing&quot; and rs[2].error == &quot;reply: json_invalid&quot;
+assert rs[0].map(lambda v: v.confidence * 100).value == 90.0 and rs[1].map(lambda v: 1) is rs[1]
+assert rs[0].map(lambda v: 1 / 0).error == &quot;ZeroDivisionError: division by zero&quot;
+assert rs[0].unwrap().label == &quot;spam&quot; and Result.success(None).ok
+for bad in [lambda: rs[2].unwrap(), lambda: Result(1, &quot;both&quot;)]:
+    try:
+        bad()
+        assert False
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Python 3.12 syntax: <code>@dataclass(frozen=True)</code> above <code>class Result[T]:</code>; methods can return <code>Result[T]</code> without quotes because annotations are lazy in 3.14.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>map</code> returns <code>self</code> for a failure, so the test's <code>is</code> check holds.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from dataclasses import dataclass
+from pydantic import BaseModel, ValidationError
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class Result[T]:
+    value: T | None = None
+    error: str | None = None
+
+    def __post_init__(self):
+        if self.value is not None and self.error is not None:
+            raise ValueError(&quot;a result has a value or an error, not both&quot;)
+
+    @property
+    def ok(self) -&gt; bool:
+        return self.error is None
+
+    @classmethod
+    def success(cls, value: T) -&gt; Result[T]:
+        return cls(value=value)
+
+    @classmethod
+    def failure(cls, error: str) -&gt; Result[T]:
+        return cls(error=error)
+
+    def map[U](self, fn: Callable[[T], U]) -&gt; Result[U]:
+        if not self.ok:
+            return self
+        try:
+            return Result.success(fn(self.value))
+        except Exception as e:
+            return Result.failure(f&quot;{type(e).__name__}: {e}&quot;)
+
+    def unwrap(self) -&gt; T:
+        if not self.ok:
+            raise ValueError(self.error)
+        return self.value
+
+
+def parse_all[M: BaseModel](texts: list[str], model_cls: type[M]) -&gt; list[Result[M]]:
+    results = []
+    for text in texts:
+        try:
+            results.append(Result.success(model_cls.model_validate_json(text)))
+        except ValidationError as e:
+            parts = [f&quot;{&#x27;.&#x27;.join(map(str, err[&#x27;loc&#x27;])) or &#x27;reply&#x27;}: {err[&#x27;type&#x27;]}&quot; for err in e.errors()]
+            results.append(Result.failure(&quot;; &quot;.join(parts)))
+    return results</code></pre></div><p>Batch jobs over model outputs should not stop at the first bad reply, and should not hide failures either. A <code>Result</code> makes success and failure explicit values that travel through the pipeline together: <code>map</code> chains transformations that only run on successes and turn their exceptions into failures, so later steps never see half-processed data, and the caller decides at the end whether to <code>unwrap</code> or report. The type parameters make the intent checkable (11.2): <code>parse_all(texts, Verdict)</code> returns <code>list[Result[Verdict]]</code>, and <code>map</code> changes <code>T</code> into <code>U</code>. The error format uses Pydantic's stable error <strong>types</strong> rather than messages, which makes failures easy to count and group in a dashboard.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-settings-from-the-environm" data-pid="m11-p-read-the-code-settings-from-the-environm" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Read the code: settings from the environment</h3></header>
+<div class="prob-q"><p><code>load_settings</code> builds the service's settings from environment variables with the prefix <code>APP_</code>. In production, <code>APP_DEBUG=false</code> turns debug <strong>on</strong>, <code>APP_TEMPERATURE=0.7</code> is stored as a string and breaks the client, <code>APP_ALLOWED_TOOLS=search, calc</code> is one string, a temperature of 5 is accepted, and a misspelt <code>APP_COLOUR</code> crashes with a <code>TypeError</code>. Rewrite it with a Pydantic model so values are converted and validated (temperature in <code>[0, 2]</code>, <code>max_retries</code> an int from 0 to 10, tools split on commas and stripped) and any unknown <code>APP_</code> variable is a <code>ValidationError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from dataclasses import dataclass, field
+
+
+@dataclass
+class Settings:
+    model: str = &quot;small&quot;
+    temperature: float = 0.0
+    debug: bool = False
+    allowed_tools: list = field(default_factory=list)
+    max_retries: int = 3
+
+
+def load_settings(environ, prefix=&quot;APP_&quot;):
+    values = {}
+    for key, value in environ.items():
+        if key.startswith(prefix):
+            values[key[len(prefix):].lower()] = value
+    s = Settings(**values)
+    s.debug = bool(s.debug)
+    return s
+</textarea>
+<script type="text/plain" class="prob-tests">from pydantic import ValidationError
+s = load_settings({"APP_MODEL": "large", "APP_TEMPERATURE": "0.7", "APP_DEBUG": "false", "APP_ALLOWED_TOOLS": "search, calc", "HOME": "/x"})
+assert (s.model, s.temperature, s.debug, s.allowed_tools, s.max_retries) == ("large", 0.7, False, ["search", "calc"], 3)
+assert load_settings({"APP_DEBUG": "1", "APP_MAX_RETRIES": "5"}).debug is True and load_settings({}).allowed_tools == []
+for bad in [{"APP_TEMPERATURE": "5"}, {"APP_MAX_RETRIES": "3.5"}, {"APP_COLOUR": "red"}, {"APP_DEBUG": "maybe"}, {"APP_MAX_RETRIES": "11"}]:
+    try:
+        load_settings(bad)
+        assert False, bad
+    except ValidationError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from pydantic import ValidationError
+s = load_settings({&quot;APP_MODEL&quot;: &quot;large&quot;, &quot;APP_TEMPERATURE&quot;: &quot;0.7&quot;, &quot;APP_DEBUG&quot;: &quot;false&quot;, &quot;APP_ALLOWED_TOOLS&quot;: &quot;search, calc&quot;, &quot;HOME&quot;: &quot;/x&quot;})
+assert (s.model, s.temperature, s.debug, s.allowed_tools, s.max_retries) == (&quot;large&quot;, 0.7, False, [&quot;search&quot;, &quot;calc&quot;], 3)
+assert load_settings({&quot;APP_DEBUG&quot;: &quot;1&quot;, &quot;APP_MAX_RETRIES&quot;: &quot;5&quot;}).debug is True and load_settings({}).allowed_tools == []
+for bad in [{&quot;APP_TEMPERATURE&quot;: &quot;5&quot;}, {&quot;APP_MAX_RETRIES&quot;: &quot;3.5&quot;}, {&quot;APP_COLOUR&quot;: &quot;red&quot;}, {&quot;APP_DEBUG&quot;: &quot;maybe&quot;}, {&quot;APP_MAX_RETRIES&quot;: &quot;11&quot;}]:
+    try:
+        load_settings(bad)
+        assert False, bad
+    except ValidationError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Replace the dataclass with a <code>BaseModel</code> using <code>extra="forbid"</code>, <code>Field</code> ranges and a <code>mode="before"</code> validator that splits a string of tools.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the dict of prefixed variables as before, then call <code>Settings.model_validate(values)</code>; Pydantic already parses <code>"false"</code>, <code>"0"</code> and <code>"yes"</code> for a <code>bool</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class Settings(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;)
+    model: str = &quot;small&quot;
+    temperature: float = Field(default=0.0, ge=0, le=2)
+    debug: bool = False
+    allowed_tools: list[str] = []
+    max_retries: int = Field(default=3, ge=0, le=10)
+
+    @field_validator(&quot;allowed_tools&quot;, mode=&quot;before&quot;)
+    @classmethod
+    def split_tools(cls, v):
+        if isinstance(v, str):
+            return [t.strip() for t in v.split(&quot;,&quot;) if t.strip()]
+        return v
+
+
+def load_settings(environ, prefix=&quot;APP_&quot;):
+    values = {key[len(prefix):].lower(): value for key, value in environ.items() if key.startswith(prefix)}
+    return Settings.model_validate(values)</code></pre></div><p>Environment variables are always strings, and the dataclass trusted them: <code>temperature</code> stayed <code>"0.7"</code>, and <code>bool("false")</code> is <code>True</code> because every non-empty string is truthy, the most common configuration bug in Python services. Pydantic's lax mode parses booleans properly (<code>"false"</code>, <code>"0"</code>, <code>"no"</code> and <code>"off"</code> are <code>False</code>; <code>"maybe"</code> is an error), numbers from strings, and refuses <code>"3.5"</code> for an int. The range constraints catch dangerous values at start-up instead of at the first request, the <code>before</code> validator accepts the comma-separated format, and <code>extra="forbid"</code> turns a misspelt variable into a clear validation error naming it. Failing at start-up with every problem listed is the goal of settings validation. The <code>pydantic-settings</code> package packages this pattern (prefixes, <code>.env</code> files, secrets) as <code>BaseSettings</code>.</p></div></details>
+</article>
+<article class="prob" id="p-pydantic-with-enums-dataclasses-and-date" data-pid="m11-p-pydantic-with-enums-dataclasses-and-date" data-type="predict" data-level="hard" data-answer="Level.HIGH Span Span(start=1, end=4)
+{&#x27;level&#x27;: &lt;Level.HIGH: &#x27;high&#x27;&gt;, &#x27;span&#x27;: {&#x27;start&#x27;: 1, &#x27;end&#x27;: 4}, &#x27;day&#x27;: datetime.date(2025, 3, 1)}
+{&#x27;level&#x27;: &#x27;high&#x27;, &#x27;span&#x27;: {&#x27;start&#x27;: 1, &#x27;end&#x27;: 4}, &#x27;day&#x27;: &#x27;2025-03-01&#x27;}
+{&quot;level&quot;:&quot;high&quot;,&quot;span&quot;:{&quot;start&quot;:1,&quot;end&quot;:4},&quot;day&quot;:&quot;2025-03-01&quot;}">
+<header class="prob-head"><h3>11. Pydantic with enums, dataclasses and dates</h3></header>
+<div class="code"><pre><code class="py">from dataclasses import dataclass
+from datetime import date
+from enum import Enum
+from pydantic import BaseModel
+
+class Level(Enum):
+    LOW = &quot;low&quot;
+    HIGH = &quot;high&quot;
+
+@dataclass
+class Span:
+    start: int
+    end: int
+
+class Alert(BaseModel):
+    level: Level
+    span: Span
+    day: date
+
+a = Alert(level=&quot;high&quot;, span={&quot;start&quot;: &quot;1&quot;, &quot;end&quot;: 4}, day=&quot;2025-03-01&quot;)
+print(a.level, type(a.span).__name__, a.span)
+print(a.model_dump())
+print(a.model_dump(mode=&quot;json&quot;))
+print(a.model_dump_json())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pydantic validates standard dataclasses used as field types. <code>model_dump()</code> keeps Python objects; <code>mode="json"</code> converts them to JSON-friendly values.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>Level.HIGH Span Span(start=1, end=4)
+{&#x27;level&#x27;: &lt;Level.HIGH: &#x27;high&#x27;&gt;, &#x27;span&#x27;: {&#x27;start&#x27;: 1, &#x27;end&#x27;: 4}, &#x27;day&#x27;: datetime.date(2025, 3, 1)}
+{&#x27;level&#x27;: &#x27;high&#x27;, &#x27;span&#x27;: {&#x27;start&#x27;: 1, &#x27;end&#x27;: 4}, &#x27;day&#x27;: &#x27;2025-03-01&#x27;}
+{&quot;level&quot;:&quot;high&quot;,&quot;span&quot;:{&quot;start&quot;:1,&quot;end&quot;:4},&quot;day&quot;:&quot;2025-03-01&quot;}</pre></div><p>Pydantic converts the string <code>"high"</code> into the enum member by value, builds a real <code>Span</code> dataclass from the dict (converting <code>"1"</code> to 1, because Pydantic validates dataclass fields too), and parses the ISO date. <code>model_dump()</code> converts models and dataclasses into dicts but keeps other Python objects as they are, the enum member and the <code>date</code>. <code>mode="json"</code> goes all the way to JSON-compatible values, the enum's value and the ISO string, which is what <code>model_dump_json()</code> writes. Use <code>mode="json"</code> when the dict will be sent somewhere that only understands JSON types, such as a message queue.</p></div></details>
+</article>
+<article class="prob" id="p-type-hints-dataclasses-typeddict-and-pyd" data-pid="m11-p-type-hints-dataclasses-typeddict-and-pyd" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>12. Type hints, dataclasses, TypedDict and Pydantic: which one where?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>They solve different problems and work together. <strong>Type hints</strong> everywhere document intent and let a type checker (mypy, pyright) catch mistakes before the code runs, at no run-time cost. <strong>Dataclasses</strong> for internal objects with behaviour or identity that your code creates: domain records, results, configuration already validated, using <code>frozen</code>, <code>slots</code> and <code>kw_only</code> where useful. <strong><code>TypedDict</code></strong> when the data must stay a plain dict, such as JSON passed through to a library or API payload types, giving checked keys without a class. <strong>Pydantic</strong> at every boundary where untrusted data enters: requests, settings, files, queues and LLM output, where it validates, converts, reports every error and produces JSON Schema. <strong>Protocols</strong> for the interfaces between components, such as an embedder or a retriever, so implementations can be swapped and faked in tests. The rule of thumb: validate once at the edge with Pydantic, then pass typed, trusted objects inward.</p></div></details>
+</article>
+<article class="prob" id="p-your-llm-output-model-needs-a-new-field-" data-pid="m11-p-your-llm-output-model-needs-a-new-field-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Your LLM output model needs a new field. How do you change it without breaking things?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Treat the model as a contract between prompts, parsing code and stored data. Add the field as <strong>optional</strong> (with a default or <code>None</code>), so replies from the old prompt and records already stored still validate, and new code can start using it; only make it required after every producer emits it. Never rename or retype a field in place: add the new one, read both for a while (a <code>mode="before"</code> validator can map the old name), then remove the old one. Version the schema explicitly, for example a <code>schema_version</code> literal or a discriminated union of <code>V1 | V2</code> when shapes really differ, and store the version with each output. Because the JSON Schema sent to the model changes, also re-run the evaluation set (as in the project below) before rollout, since a schema change can shift the model's behaviour, and watch the validation failure rate after deployment. Keep <code>extra="ignore"</code> (the default) when reading outputs from newer producers, and <code>extra="forbid"</code> for inputs you control, such as requests and settings.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a typed evaluation run</h2>
+<p>Before changing a prompt or a model, an LLM team runs an evaluation set: questions with expected facts, answered by the system and graded. The cases live in a JSON Lines file maintained by hand, so they must be validated; graders are interchangeable; and the report must be a well-defined object that can be stored as JSON and compared between runs. Build it from the pieces of this module.</p>
+<article class="prob" id="p-eval-run" data-pid="m11-p-eval-run" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>14. Load, run and report an evaluation set</h3></header>
+<div class="prob-q"><p>Implement the following.</p>
+<ul><li><strong><code>EvalCase</code></strong>: a Pydantic model forbidding extras and stripping strings, with <code>id</code> and <code>question</code> (non-empty strings), <code>expected</code> (a list of at least one string) and <code>tags</code> (a list of strings, default empty).</li><li><strong><code>load_cases(text)</code></strong>: parse JSON Lines, skipping blank lines, and return <code>(cases, errors)</code>. Invalid lines add one error per validation error, <code>f"line {n}: {loc}: {type}"</code> (loc dotted, <code>line</code> if empty); a repeated id adds <code>f"line {n}: id: duplicate {id!r}"</code> and skips the case.</li><li><strong><code>Grader</code></strong>: a <code>Protocol</code> with <code>grade(self, case: EvalCase, answer: str) -&gt; float</code>.</li><li><strong><code>ContainsGrader</code></strong>: a frozen dataclass with <code>case_sensitive: bool = False</code> whose <code>grade</code> returns the fraction of <code>expected</code> strings found in the answer.</li><li><strong><code>CaseResult</code></strong>: a frozen dataclass <code>(case_id, score, passed, error=None)</code>.</li><li><strong><code>RunReport</code></strong>: a Pydantic model with <code>total</code>, <code>passed</code>, <code>mean_score</code> (rounded to 3 places), <code>by_tag</code> (tag to mean score rounded to 3, tags sorted), <code>failures</code> (ids that did not pass, in order) and <code>results: list[CaseResult]</code>, plus a property <code>pass_rate</code> (0.0 for an empty run).</li><li><strong><code>run_eval(cases, answer_fn, grader, threshold=0.5)</code></strong>: answer and grade every case; if <code>answer_fn</code> raises, the case scores 0, fails and records <code>f"{ExceptionName}: {message}"</code> as its error; a case passes when its score is at least <code>threshold</code>.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import json
+from dataclasses import dataclass
+from typing import Protocol
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+class EvalCase(BaseModel):
+    pass
+
+
+def load_cases(text):
+    pass
+
+
+def run_eval(cases, answer_fn, grader, threshold=0.5):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json
+lines = [
+    '{"id": "r1", "question": "How long do refunds take?", "expected": ["5 days"], "tags": ["billing"]}',
+    '',
+    '{"id": "r2", "question": "Refund after 30 days?", "expected": ["no", "30 days"], "tags": ["policy", "billing"]}',
+    '{"id": "r1", "question": "dup", "expected": ["x"]}',
+    '{"id": "r3", "question": "  ", "expected": []}',
+    'not json',
+    '{"id": "r4", "question": "Who do I contact?", "expected": ["support"], "priority": 1}',
+    '{"id": "r5", "question": "Do you ship to the EU?", "expected": ["Yes"], "tags": ["shipping"]}',
+]
+cases, errors = load_cases("\n".join(lines))
+assert [c.id for c in cases] == ["r1", "r2", "r5"]
+assert errors == ["line 4: id: duplicate 'r1'", "line 5: question: string_too_short", "line 5: expected: too_short",
+                  "line 6: line: json_invalid", "line 7: priority: extra_forbidden"]
+
+answers = {"How long do refunds take?": "Refunds take 5 days.", "Refund after 30 days?": "No refunds after 30 Days."}
+def answer_fn(question):
+    if question not in answers:
+        raise ConnectionError("timeout")
+    return answers[question]
+
+report = run_eval(cases, answer_fn, ContainsGrader())
+assert (report.total, report.passed, report.mean_score, report.failures) == (3, 2, 0.667, ["r5"])
+assert report.by_tag == {"billing": 1.0, "policy": 1.0, "shipping": 0.0} and list(report.by_tag) == ["billing", "policy", "shipping"]
+assert report.results[2] == CaseResult("r5", 0.0, False, "ConnectionError: timeout") and abs(report.pass_rate - 2 / 3) < 1e-9
+dumped = json.loads(report.model_dump_json())
+assert dumped["results"][0] == {"case_id": "r1", "score": 1.0, "passed": True, "error": None} and "pass_rate" not in dumped
+
+strict = run_eval(cases[:2], answer_fn, ContainsGrader(case_sensitive=True), threshold=0.5)
+assert [r.score for r in strict.results] == [1.0, 0.0] and strict.failures == ["r2"]
+
+class ExactGrader:
+    def grade(self, case, answer):
+        return float(answer.strip() == case.expected[0])
+half = run_eval([cases[1]], lambda q: "the answer is no", ContainsGrader(), threshold=0.5)
+assert half.results[0].score == 0.5 and half.passed == 1
+assert run_eval([cases[0]], lambda q: "5 days", ExactGrader()).passed == 1
+empty = run_eval([], answer_fn, ContainsGrader())
+assert (empty.total, empty.mean_score, empty.by_tag, empty.pass_rate) == (0, 0.0, {}, 0.0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 10 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json
+lines = [
+    &#x27;{&quot;id&quot;: &quot;r1&quot;, &quot;question&quot;: &quot;How long do refunds take?&quot;, &quot;expected&quot;: [&quot;5 days&quot;], &quot;tags&quot;: [&quot;billing&quot;]}&#x27;,
+    &#x27;&#x27;,
+    &#x27;{&quot;id&quot;: &quot;r2&quot;, &quot;question&quot;: &quot;Refund after 30 days?&quot;, &quot;expected&quot;: [&quot;no&quot;, &quot;30 days&quot;], &quot;tags&quot;: [&quot;policy&quot;, &quot;billing&quot;]}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;r1&quot;, &quot;question&quot;: &quot;dup&quot;, &quot;expected&quot;: [&quot;x&quot;]}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;r3&quot;, &quot;question&quot;: &quot;  &quot;, &quot;expected&quot;: []}&#x27;,
+    &#x27;not json&#x27;,
+    &#x27;{&quot;id&quot;: &quot;r4&quot;, &quot;question&quot;: &quot;Who do I contact?&quot;, &quot;expected&quot;: [&quot;support&quot;], &quot;priority&quot;: 1}&#x27;,
+    &#x27;{&quot;id&quot;: &quot;r5&quot;, &quot;question&quot;: &quot;Do you ship to the EU?&quot;, &quot;expected&quot;: [&quot;Yes&quot;], &quot;tags&quot;: [&quot;shipping&quot;]}&#x27;,
+]
+cases, errors = load_cases(&quot;\n&quot;.join(lines))
+assert [c.id for c in cases] == [&quot;r1&quot;, &quot;r2&quot;, &quot;r5&quot;]
+assert errors == [&quot;line 4: id: duplicate &#x27;r1&#x27;&quot;, &quot;line 5: question: string_too_short&quot;, &quot;line 5: expected: too_short&quot;,
+                  &quot;line 6: line: json_invalid&quot;, &quot;line 7: priority: extra_forbidden&quot;]
+
+answers = {&quot;How long do refunds take?&quot;: &quot;Refunds take 5 days.&quot;, &quot;Refund after 30 days?&quot;: &quot;No refunds after 30 Days.&quot;}
+def answer_fn(question):
+    if question not in answers:
+        raise ConnectionError(&quot;timeout&quot;)
+    return answers[question]
+
+report = run_eval(cases, answer_fn, ContainsGrader())
+assert (report.total, report.passed, report.mean_score, report.failures) == (3, 2, 0.667, [&quot;r5&quot;])
+assert report.by_tag == {&quot;billing&quot;: 1.0, &quot;policy&quot;: 1.0, &quot;shipping&quot;: 0.0} and list(report.by_tag) == [&quot;billing&quot;, &quot;policy&quot;, &quot;shipping&quot;]
+assert report.results[2] == CaseResult(&quot;r5&quot;, 0.0, False, &quot;ConnectionError: timeout&quot;) and abs(report.pass_rate - 2 / 3) &lt; 1e-9
+dumped = json.loads(report.model_dump_json())
+assert dumped[&quot;results&quot;][0] == {&quot;case_id&quot;: &quot;r1&quot;, &quot;score&quot;: 1.0, &quot;passed&quot;: True, &quot;error&quot;: None} and &quot;pass_rate&quot; not in dumped
+
+strict = run_eval(cases[:2], answer_fn, ContainsGrader(case_sensitive=True), threshold=0.5)
+assert [r.score for r in strict.results] == [1.0, 0.0] and strict.failures == [&quot;r2&quot;]
+
+class ExactGrader:
+    def grade(self, case, answer):
+        return float(answer.strip() == case.expected[0])
+half = run_eval([cases[1]], lambda q: &quot;the answer is no&quot;, ContainsGrader(), threshold=0.5)
+assert half.results[0].score == 0.5 and half.passed == 1
+assert run_eval([cases[0]], lambda q: &quot;5 days&quot;, ExactGrader()).passed == 1
+empty = run_eval([], answer_fn, ContainsGrader())
+assert (empty.total, empty.mean_score, empty.by_tag, empty.pass_rate) == (0, 0.0, {}, 0.0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>load_cases</code>: <code>enumerate(text.splitlines(), start=1)</code>, <code>EvalCase.model_validate_json(line)</code>, and a <code>seen</code> set of ids.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>run_eval</code>: collect <code>CaseResult</code>s, then compute the summary; for <code>by_tag</code>, gather scores per tag in a dict of lists and build the result from <code>sorted(...)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pydantic validates a field typed <code>list[CaseResult]</code> with a standard dataclass, and dumps it as dicts.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from dataclasses import dataclass
+from typing import Callable, Protocol
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+class EvalCase(BaseModel):
+    model_config = ConfigDict(extra=&quot;forbid&quot;, str_strip_whitespace=True)
+    id: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    expected: list[str] = Field(min_length=1)
+    tags: list[str] = []
+
+
+def load_cases(text: str) -&gt; tuple[list[EvalCase], list[str]]:
+    cases: list[EvalCase] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for n, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            case = EvalCase.model_validate_json(line)
+        except ValidationError as e:
+            for err in e.errors():
+                loc = &quot;.&quot;.join(map(str, err[&quot;loc&quot;])) or &quot;line&quot;
+                errors.append(f&quot;line {n}: {loc}: {err[&#x27;type&#x27;]}&quot;)
+            continue
+        if case.id in seen:
+            errors.append(f&quot;line {n}: id: duplicate {case.id!r}&quot;)
+            continue
+        seen.add(case.id)
+        cases.append(case)
+    return cases, errors
+
+
+class Grader(Protocol):
+    def grade(self, case: EvalCase, answer: str) -&gt; float: ...
+
+
+@dataclass(frozen=True)
+class ContainsGrader:
+    case_sensitive: bool = False
+
+    def grade(self, case: EvalCase, answer: str) -&gt; float:
+        if not self.case_sensitive:
+            answer = answer.lower()
+        found = sum((e if self.case_sensitive else e.lower()) in answer for e in case.expected)
+        return found / len(case.expected)
+
+
+@dataclass(frozen=True)
+class CaseResult:
+    case_id: str
+    score: float
+    passed: bool
+    error: str | None = None
+
+
+class RunReport(BaseModel):
+    total: int
+    passed: int
+    mean_score: float
+    by_tag: dict[str, float]
+    failures: list[str]
+    results: list[CaseResult]
+
+    @property
+    def pass_rate(self) -&gt; float:
+        return self.passed / self.total if self.total else 0.0
+
+
+def run_eval(cases: list[EvalCase], answer_fn: Callable[[str], str], grader: Grader, threshold: float = 0.5) -&gt; RunReport:
+    results: list[CaseResult] = []
+    tag_scores: dict[str, list[float]] = {}
+    for case in cases:
+        try:
+            answer = answer_fn(case.question)
+        except Exception as e:
+            result = CaseResult(case.id, 0.0, False, f&quot;{type(e).__name__}: {e}&quot;)
+        else:
+            score = grader.grade(case, answer)
+            result = CaseResult(case.id, score, score &gt;= threshold)
+        results.append(result)
+        for tag in case.tags:
+            tag_scores.setdefault(tag, []).append(result.score)
+    total = len(results)
+    return RunReport(
+        total=total,
+        passed=sum(r.passed for r in results),
+        mean_score=round(sum(r.score for r in results) / total, 3) if total else 0.0,
+        by_tag={tag: round(sum(s) / len(s), 3) for tag, s in sorted(tag_scores.items())},
+        failures=[r.case_id for r in results if not r.passed],
+        results=results,
+    )</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Pydantic at the boundary (11.4):</strong> the hand-edited JSONL file is untrusted, so each line goes through <code>model_validate_json</code>, and every problem is reported with its line number and Pydantic's error type: blank questions, empty expectations, broken JSON and misspelt keys (<code>extra="forbid"</code>) are all caught before the run, not halfway through it. The report is a model too, so it serialises to JSON with its nested results in one call and can be stored and compared across runs.</li><li><strong>Dataclasses inside (11.3):</strong> results are created by our own code from trusted values, so a frozen dataclass is enough, and Pydantic still validates and dumps them as part of the report.</li><li><strong>Protocols and hints (11.1, 11.2):</strong> <code>run_eval</code> needs only "something with <code>grade</code>", so <code>ContainsGrader</code> and the test's <code>ExactGrader</code> both work without a shared base class, and an LLM-as-judge grader could be added the same way. The annotations on every function document the data flow for the type checker.</li></ul>
+<p>Failures of the system under test are data, not crashes: a timeout becomes a failed case with its error recorded, so one flaky call cannot lose the whole run. <code>pass_rate</code> is a property, so it is derived rather than stored, and does not appear in the JSON. Production harnesses add concurrency, LLM-graded scores and comparisons with the previous run, but keep exactly this split between validated inputs, pluggable graders and a typed report.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Type hints describe and a type checker enforces before run time; nothing checks them while the program runs unless you validate.</li><li>Dataclasses (with <code>frozen</code>, <code>order</code>, <code>kw_only</code>, <code>default_factory</code>) model trusted internal data; <code>TypedDict</code> types plain dicts.</li><li>Protocols describe the behaviour a function needs, so implementations and test fakes plug in without inheritance; generics keep types flowing through.</li><li>Pydantic validates and converts at boundaries (files, environment, requests, LLM output), reporting every error with its location and type.</li><li>Validate once at the edge, pass typed trusted objects inward, and evolve schemas by adding optional fields and versioning them.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

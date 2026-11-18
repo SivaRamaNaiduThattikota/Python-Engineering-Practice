@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11.2 · Advanced typing</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m11-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 11 · Typing, dataclasses and Pydantic</span></div>
+  <h1>11.2 Advanced typing</h1>
+  <p>The typing tools that describe real data and APIs: <code>TypedDict</code> for JSON-shaped dicts, <code>Literal</code> for fixed sets of values, <code>Callable</code> for callbacks, generic functions and classes with type parameters, <code>NewType</code>, <code>Annotated</code> metadata and <code>Final</code>, and exhaustiveness checks with <code>assert_never</code>. What each does at run time (often nothing) and how libraries read them. Applied to chat messages, events, tool schemas and structured LLM output.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="typeddict">
+<h2><span class="n">1</span><code>TypedDict</code>: the shape of a dict</h2>
+<p>Much data in Python code is a dict with a fixed set of string keys: a chat message <code>{"role": ..., "content": ...}</code>, a JSON payload, a row from a database, an API response. <code>dict[str, str]</code> cannot describe it, because the keys are not arbitrary and the values have different types. <strong><code>TypedDict</code></strong> does: you declare the keys and their types in class syntax, and a type checker then knows that <code>msg["role"]</code> is a string, that <code>msg["contnet"]</code> is a typo, and that a dict missing <code>content</code> is not a valid message.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">typeddict.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import TypedDict, NotRequired, get_type_hints
+
+class ChatMessage(TypedDict):
+    role: str
+    content: str
+    name: NotRequired[str]          # may be absent
+
+msg: ChatMessage = {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;}
+print(msg, type(msg).__name__, isinstance(msg, dict))
+print(sorted(ChatMessage.__required_keys__), sorted(ChatMessage.__optional_keys__))
+print(get_type_hints(ChatMessage))
+bad: ChatMessage = {&quot;role&quot;: 1}      # a type checker reports this; Python does not
+print(bad)</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;role&#x27;: &#x27;user&#x27;, &#x27;content&#x27;: &#x27;Refund?&#x27;} dict True
+[&#x27;content&#x27;, &#x27;role&#x27;] [&#x27;name&#x27;]
+{&#x27;role&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;content&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;name&#x27;: &lt;class &#x27;str&#x27;&gt;}
+{&#x27;role&#x27;: 1}</pre></div></div>
+<p>At run time a <code>TypedDict</code> is <strong>just a dict</strong>: <code>ChatMessage(...)</code> builds a plain dict, nothing is validated, and <code>isinstance(x, ChatMessage)</code> is not allowed. Its value is static: the checker verifies every place that builds or reads such dicts. Keys are required by default; <code>NotRequired[...]</code> marks one as optional, and <code>class Options(TypedDict, total=False)</code> makes all keys optional (with <code>Required[...]</code> for exceptions). The class keeps <code>__required_keys__</code>, <code>__optional_keys__</code> and its hints, which is enough for a runtime validator (problem 5). Choose a <code>TypedDict</code> for data that stays a dict (JSON in and out); choose a dataclass or a Pydantic model for objects with behaviour or validation (11.3, 11.4).</p>
+</section>
+<section class="sec" id="literal">
+<h2><span class="n">2</span><code>Literal</code>: a fixed set of values</h2>
+<p>Many strings in real code are not arbitrary: a message role is <code>"system"</code>, <code>"user"</code>, <code>"assistant"</code> or <code>"tool"</code>; a finish reason is one of a few values; a mode is <code>"fast"</code> or <code>"accurate"</code>. <strong><code>Literal["user", "assistant"]</code></strong> is a type whose only members are those exact values, so a type checker rejects <code>role="admin"</code> or the typo <code>"asistant"</code> at the call site. It works with strings, integers, booleans, enums and <code>None</code>, and combines with unions. Give the type a name with an alias so the set of values is defined once.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">literal.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal, get_args
+
+Role = Literal[&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;]
+FinishReason = Literal[&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;]
+
+def message(role: Role, content: str) -&gt; dict:
+    if role not in get_args(Role):              # runtime check from the same definition
+        raise ValueError(f&quot;role must be one of {get_args(Role)}, got {role!r}&quot;)
+    return {&quot;role&quot;: role, &quot;content&quot;: content}
+
+print(get_args(Role), message(&quot;user&quot;, &quot;hi&quot;))
+try:
+    message(&quot;admin&quot;, &quot;x&quot;)
+except ValueError as e:
+    print(&quot;ValueError:&quot;, e)
+print(get_args(Literal[&quot;a&quot;, 1, None]))</code></pre><div class="out"><span class="ol">Output</span><pre>(&#x27;system&#x27;, &#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;tool&#x27;) {&#x27;role&#x27;: &#x27;user&#x27;, &#x27;content&#x27;: &#x27;hi&#x27;}
+ValueError: role must be one of (&#x27;system&#x27;, &#x27;user&#x27;, &#x27;assistant&#x27;, &#x27;tool&#x27;), got &#x27;admin&#x27;
+(&#x27;a&#x27;, 1, None)</pre></div></div>
+<p>Because <code>get_args</code> returns the allowed values, the same alias can drive both static checking and runtime validation: there is one source of truth, so adding <code>"tool"</code> to the alias updates the validator too. A separate hard-coded list of valid roles is a classic drift bug: someone adds a role to the type and forgets the list (problem 3). LLM structured-output schemas turn <code>Literal</code> into a JSON Schema <code>enum</code>, which constrains the model to the listed values (problem 12).</p>
+</section>
+<section class="sec" id="callable">
+<h2><span class="n">3</span><code>Callable</code>: functions as values</h2>
+<p>Functions passed as arguments (callbacks, key functions, scorers, hooks, retry predicates) are typed with <strong><code>Callable[[arg types], return type]</code></strong> from <code>collections.abc</code>: <code>Callable[[str], None]</code> is "a function taking one string and returning nothing", like a streaming <code>on_token</code> callback; <code>Callable[[str, list[str]], float]</code> is a scorer. <code>Callable[..., T]</code> accepts any arguments. The checker then verifies both sides: that you pass a compatible function, and that you call it with the right arguments (problem 9). Objects with <code>__call__</code> (9.2) satisfy <code>Callable</code> too.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">callable.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Callable
+
+def stream(text: str, on_token: Callable[[str], None]) -&gt; int:
+    count = 0
+    for token in text.split():
+        on_token(token)
+        count += 1
+    return count
+
+def rank(docs: list[str], score: Callable[[str], float], k: int = 2) -&gt; list[str]:
+    return sorted(docs, key=score, reverse=True)[:k]
+
+received: list[str] = []
+print(stream(&quot;refunds take five days&quot;, received.append), received)
+print(rank([&quot;short&quot;, &quot;a much longer document&quot;, &quot;medium one&quot;], score=len))</code></pre><div class="out"><span class="ol">Output</span><pre>4 [&#x27;refunds&#x27;, &#x27;take&#x27;, &#x27;five&#x27;, &#x27;days&#x27;]
+[&#x27;a much longer document&#x27;, &#x27;medium one&#x27;]</pre></div></div>
+<p>For decorators, which must accept "any function" and return "a function with the same signature", plain <code>Callable[..., Any]</code> loses the parameter types; <code>typing.ParamSpec</code> captures them, so a type checker still knows the decorated function's arguments. Library code uses it; in application code, <code>functools.wraps</code> plus <code>Callable</code> is usually enough.</p>
+</section>
+<section class="sec" id="generics">
+<h2><span class="n">4</span>Generics: functions and classes with type parameters</h2>
+<p>Some functions work for <strong>any</strong> element type but connect their inputs and outputs: <code>first(items)</code> returns an element of the same type as the items; a cache maps keys of one type to values of another. Writing <code>def first(items: list[Any]) -&gt; Any</code> loses that connection, so the checker no longer knows that <code>first(["a"])</code> is a string. A <strong>type parameter</strong> keeps it: <code>def first[T](items: Iterable[T]) -&gt; T | None</code> says "for some type <code>T</code>, given items of type <code>T</code>, return a <code>T</code> (or <code>None</code>)". The square brackets after the name are Python 3.12 syntax (PEP 695); older code declares <code>T = TypeVar("T")</code> at module level and uses it the same way.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">generics.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Iterable, Hashable
+
+def first[T](items: Iterable[T]) -&gt; T | None:
+    for item in items:
+        return item
+    return None
+
+def group_by[K: Hashable, V](items: Iterable[V], key) -&gt; dict[K, list[V]]:
+    out: dict = {}
+    for item in items:
+        out.setdefault(key(item), []).append(item)
+    return out
+
+class Registry[K, V]:
+    def __init__(self) -&gt; None:
+        self._items: dict[K, V] = {}
+    def add(self, key: K, value: V) -&gt; None:
+        self._items[key] = value
+    def get(self, key: K) -&gt; V | None:
+        return self._items.get(key)
+
+print(first([&quot;refund&quot;, &quot;reset&quot;]), first([]), first(x * 2 for x in [3, 4]))
+print(group_by([&quot;refund&quot;, &quot;reset&quot;, &quot;invoice&quot;], key=lambda w: w[0]))
+r: Registry[str, float] = Registry()
+r.add(&quot;small&quot;, 0.002)
+print(r.get(&quot;small&quot;), first.__type_params__, Registry.__type_params__)</code></pre><div class="out"><span class="ol">Output</span><pre>refund None 6
+{&#x27;r&#x27;: [&#x27;refund&#x27;, &#x27;reset&#x27;], &#x27;i&#x27;: [&#x27;invoice&#x27;]}
+0.002 (T,) (K, V)</pre></div></div>
+<p><code>[K: Hashable, V]</code> adds a <strong>bound</strong>: <code>K</code> may be any type that is hashable, because it is used as a dict key. A <strong>constraint</strong> list, <code>[T: (int, float)]</code>, allows exactly the listed types. At run time the parameters exist as objects (<code>__type_params__</code>) but nothing is checked; generics are for the type checker, which can now tell that <code>r.get("small")</code> returns <code>float | None</code>, and that <code>r.add(1, "x")</code> is wrong. Library containers are generic in the same way: <code>list[T]</code>, <code>dict[K, V]</code>, and the <code>Sequence</code> and <code>Mapping</code> of 11.1.</p>
+</section>
+<section class="sec" id="extras">
+<h2><span class="n">5</span><code>NewType</code>, <code>Annotated</code> and <code>Final</code></h2>
+<p><strong><code>NewType("UserId", str)</code></strong> creates a distinct type for the checker that is the same as <code>str</code> at run time: a function taking a <code>UserId</code> rejects a plain <code>str</code> (or an <code>OrderId</code>) unless you wrap it with <code>UserId(value)</code>, which simply returns the value. It is a zero-cost way to stop ids, tokens or currencies of different kinds being mixed up. <strong><code>Final</code></strong> marks a name as a constant that must not be reassigned, and the checker enforces it. <strong><code>Annotated[T, metadata...]</code></strong> is the type <code>T</code> for the checker, with arbitrary extra metadata attached for libraries: Pydantic reads <code>Annotated[int, Field(gt=0)]</code> as "a positive int", FastAPI reads <code>Annotated[str, Query(max_length=50)]</code> as a query parameter constraint, and you can read it yourself with <code>get_type_hints(func, include_extras=True)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">extras.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Annotated, Final, NewType, get_args, get_type_hints
+
+UserId = NewType(&quot;UserId&quot;, str)
+MAX_TOKENS: Final = 4096
+
+def load_profile(user: UserId) -&gt; str:
+    return f&quot;profile of {user}&quot;
+
+uid = UserId(&quot;u-123&quot;)
+print(load_profile(uid), uid == &quot;u-123&quot;, type(uid).__name__, UserId.__name__)
+
+def search(query: Annotated[str, &quot;the user&#x27;s question&quot;], k: Annotated[int, &quot;between 1 and 20&quot;] = 5) -&gt; list[str]:
+    return []
+
+plain = get_type_hints(search)
+extras = get_type_hints(search, include_extras=True)
+print(plain[&quot;k&quot;], extras[&quot;k&quot;])
+print(get_args(extras[&quot;query&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>profile of u-123 True str UserId
+&lt;class &#x27;int&#x27;&gt; typing.Annotated[int, &#x27;between 1 and 20&#x27;]
+(&lt;class &#x27;str&#x27;&gt;, &quot;the user&#x27;s question&quot;)</pre></div></div>
+<p>Without <code>include_extras=True</code>, <code>get_type_hints</code> strips the metadata and returns the plain type; with it, <code>get_args</code> returns the type followed by its metadata. That is how a schema generator can take parameter descriptions from <code>Annotated</code> instead of parsing docstrings, and how LLM tool frameworks let you write <code>city: Annotated[str, "city name, e.g. Paris"]</code> (problem 12).</p>
+</section>
+<section class="sec" id="exhaustive">
+<h2><span class="n">6</span>Exhaustiveness with <code>assert_never</code></h2>
+<p>When code branches on a <code>Literal</code> or a union, you want to know that <strong>every</strong> case is handled, especially when a new case is added later (a new finish reason, a new event type). <code>typing.assert_never(value)</code> is the tool: put it in the final <code>else</code> branch. A type checker narrows the value through the earlier branches; if any member remains unhandled, the checker reports an error at <code>assert_never</code>, pointing at the forgotten case. At run time, reaching it raises <code>AssertionError</code>, which is the right behaviour for a value that should be impossible (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">assert_never.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal, assert_never
+
+Finish = Literal[&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;]
+
+def handle(reason: Finish, text: str) -&gt; str:
+    if reason == &quot;stop&quot;:
+        return text
+    elif reason == &quot;length&quot;:
+        return text + &quot; [truncated]&quot;
+    elif reason == &quot;tool_calls&quot;:
+        return &quot;(calling a tool)&quot;
+    else:
+        assert_never(reason)          # a checker errors here if a case is missing
+
+print(handle(&quot;stop&quot;, &quot;done&quot;), &quot;|&quot;, handle(&quot;length&quot;, &quot;half&quot;))
+try:
+    handle(&quot;content_filter&quot;, &quot;&quot;)      # a value the type does not allow
+except AssertionError as e:
+    print(&quot;AssertionError:&quot;, str(e)[:40])</code></pre><div class="out"><span class="ol">Output</span><pre>done | half [truncated]
+AssertionError: Expected code to be unreachable, but got</pre></div></div>
+<p><code>match</code> statements (Python 3.10) work the same way: <code>case _: assert_never(reason)</code>. Together with <code>Literal</code> aliases and tagged <code>TypedDict</code>s (a <code>"type"</code> key whose value is a literal), this gives "discriminated unions", the pattern used for events in streaming APIs and for tool-call payloads: the tag says which shape the rest of the data has (problem 14).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-typeddict-at-run-time" data-pid="m11-2-typeddict-at-run-time" data-type="predict" data-level="easy" data-answer="{&#x27;prompt_tokens&#x27;: 10, &#x27;completion_tokens&#x27;: 5} True
+[&#x27;completion_tokens&#x27;, &#x27;prompt_tokens&#x27;] [&#x27;cached_tokens&#x27;]
+{&#x27;prompt_tokens&#x27;: &#x27;ten&#x27;}
+isinstance is not supported">
+<header class="prob-head"><h3>1. TypedDict at run time</h3></header>
+<div class="code"><pre><code class="py">from typing import TypedDict, NotRequired
+
+class Usage(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: NotRequired[int]
+
+u = Usage(prompt_tokens=10, completion_tokens=5)
+print(u, type(u) is dict)
+print(sorted(Usage.__required_keys__), sorted(Usage.__optional_keys__))
+wrong = Usage(prompt_tokens=&quot;ten&quot;)
+print(wrong)
+try:
+    isinstance(u, Usage)
+except TypeError:
+    print(&quot;isinstance is not supported&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Calling a <code>TypedDict</code> class builds a plain dict and checks nothing.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;prompt_tokens&#x27;: 10, &#x27;completion_tokens&#x27;: 5} True
+[&#x27;completion_tokens&#x27;, &#x27;prompt_tokens&#x27;] [&#x27;cached_tokens&#x27;]
+{&#x27;prompt_tokens&#x27;: &#x27;ten&#x27;}
+isinstance is not supported</pre></div><p><code>Usage(...)</code> returns an ordinary <code>dict</code>, so printing it shows a dict and <code>type(u) is dict</code> is true. The class records which keys are required and which are optional, but nothing enforces either, so a dict with a missing key and a string value is created without complaint: a type checker would flag it, Python does not. <code>isinstance</code> is refused because a <code>TypedDict</code> describes a shape, not a class that objects belong to.</p></div></details>
+</article>
+<article class="prob" id="p-messages-with-a-literal-role" data-pid="m11-2-messages-with-a-literal-role" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Messages with a Literal role</h3></header>
+<div class="prob-q"><p>Define <code>Role = Literal["system", "user", "assistant", "tool"]</code> and a <code>TypedDict</code> <code>Message</code> with <code>role: Role</code> and <code>content: str</code>. Write <code>make_message(role, content)</code> that validates the role at run time <strong>using <code>get_args(Role)</code></strong> (not a separate list), raises <code>ValueError</code> for an empty content, and returns a <code>Message</code>. Annotate it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from typing import Literal, TypedDict, get_args
+
+def make_message(role, content):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert make_message("user", "Refund?") == {"role": "user", "content": "Refund?"}
+assert make_message("tool", "{}")["role"] == "tool"
+for role, content in [("admin", "x"), ("user", "  ")]:
+    try:
+        make_message(role, content)
+        assert False, role
+    except ValueError:
+        pass
+assert typing.get_args(Role) == ("system", "user", "assistant", "tool")
+assert typing.get_type_hints(make_message) == {"role": Role, "content": str, "return": Message}
+assert typing.get_type_hints(Message) == {"role": Role, "content": str}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert make_message(&quot;user&quot;, &quot;Refund?&quot;) == {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Refund?&quot;}
+assert make_message(&quot;tool&quot;, &quot;{}&quot;)[&quot;role&quot;] == &quot;tool&quot;
+for role, content in [(&quot;admin&quot;, &quot;x&quot;), (&quot;user&quot;, &quot;  &quot;)]:
+    try:
+        make_message(role, content)
+        assert False, role
+    except ValueError:
+        pass
+assert typing.get_args(Role) == (&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;)
+assert typing.get_type_hints(make_message) == {&quot;role&quot;: Role, &quot;content&quot;: str, &quot;return&quot;: Message}
+assert typing.get_type_hints(Message) == {&quot;role&quot;: Role, &quot;content&quot;: str}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define <code>Role</code> and <code>Message</code> at module level, before the function.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal, TypedDict, get_args
+
+Role = Literal[&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;, &quot;tool&quot;]
+
+
+class Message(TypedDict):
+    role: Role
+    content: str
+
+
+def make_message(role: Role, content: str) -&gt; Message:
+    if role not in get_args(Role):
+        raise ValueError(f&quot;role must be one of {get_args(Role)}, got {role!r}&quot;)
+    if not content.strip():
+        raise ValueError(&quot;content must not be empty&quot;)
+    return {&quot;role&quot;: role, &quot;content&quot;: content}</code></pre></div><p>The <code>Literal</code> alias is the single source of truth for valid roles: the type checker uses it at every call site, and the runtime check reads the same values with <code>get_args</code>, so the two can never disagree. The <code>TypedDict</code> describes the dict the function returns, so code that reads <code>msg["role"]</code> later is checked too. Returning a plain dict keeps the message ready to send to a chat API, which expects exactly this JSON shape. The SDKs of OpenAI and Anthropic define their message parameters as <code>TypedDict</code>s with <code>Literal</code> roles for this reason.</p></div></details>
+</article>
+<article class="prob" id="p-a-validation-list-that-drifted-from-the-" data-pid="m11-2-a-validation-list-that-drifted-from-the-" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A validation list that drifted from the type</h3></header>
+<div class="prob-q"><p>The team added <code>"tool_calls"</code> and <code>"content_filter"</code> to the <code>Finish</code> type, but <code>is_valid</code> still uses an old hard-coded list, so valid finish reasons are rejected. Make <code>is_valid</code> derive the allowed values from the <code>Finish</code> type itself.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from typing import Literal, get_args
+
+Finish = Literal[&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;]
+VALID = [&quot;stop&quot;, &quot;length&quot;]
+
+def is_valid(reason: str) -&gt; bool:
+    return reason in VALID
+</textarea>
+<script type="text/plain" class="prob-tests">assert all(is_valid(r) for r in ["stop", "length", "tool_calls", "content_filter"])
+assert not is_valid("done") and not is_valid("")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert all(is_valid(r) for r in [&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;])
+assert not is_valid(&quot;done&quot;) and not is_valid(&quot;&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>get_args(Finish)</code> returns the tuple of allowed values.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal, get_args
+
+Finish = Literal[&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;]
+
+def is_valid(reason: str) -&gt; bool:
+    return reason in get_args(Finish)</code></pre></div><p>Two definitions of the same set of values will eventually disagree, and here they did: the type knew four reasons, the check only two, so tool-calling responses were treated as invalid. Reading the values from the <code>Literal</code> with <code>get_args</code> leaves one definition to maintain. The same rule applies to enums (<code>Enum</code> classes iterate over their members) and to Pydantic models, whose JSON schema is generated from the same types that validate the data.</p></div></details>
+</article>
+<article class="prob" id="p-annotated-metadata" data-pid="m11-2-annotated-metadata" data-type="predict" data-level="easy" data-answer="&lt;class &#x27;int&#x27;&gt; typing.Annotated[int, &#x27;must be &gt; 0&#x27;]
+True (&lt;class &#x27;str&#x27;&gt;, &#x27;label&#x27;, &#x27;max 20 chars&#x27;)
+(&#x27;must be &gt; 0&#x27;,) &lt;class &#x27;int&#x27;&gt;">
+<header class="prob-head"><h3>4. Annotated metadata</h3></header>
+<div class="code"><pre><code class="py">from typing import Annotated, get_args, get_origin, get_type_hints
+
+Positive = Annotated[int, &quot;must be &gt; 0&quot;]
+
+def batch(size: Positive, name: Annotated[str, &quot;label&quot;, &quot;max 20 chars&quot;] = &quot;run&quot;) -&gt; None:
+    pass
+
+print(get_type_hints(batch)[&quot;size&quot;], get_type_hints(batch, include_extras=True)[&quot;size&quot;])
+h = get_type_hints(batch, include_extras=True)[&quot;name&quot;]
+print(get_origin(h) is Annotated, get_args(h))
+print(Positive.__metadata__, Positive.__origin__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>include_extras=True</code>, the metadata is stripped. <code>get_args</code> of an <code>Annotated</code> type is the type followed by its metadata.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>&lt;class &#x27;int&#x27;&gt; typing.Annotated[int, &#x27;must be &gt; 0&#x27;]
+True (&lt;class &#x27;str&#x27;&gt;, &#x27;label&#x27;, &#x27;max 20 chars&#x27;)
+(&#x27;must be &gt; 0&#x27;,) &lt;class &#x27;int&#x27;&gt;</pre></div><p>For type checkers, <code>Annotated[int, ...]</code> is simply <code>int</code>, and <code>get_type_hints</code> returns that by default. With <code>include_extras=True</code> the full annotation is kept; its origin is <code>Annotated</code>, and <code>get_args</code> returns the underlying type followed by every metadata item, which here are plain strings. An <code>Annotated</code> object also exposes <code>__origin__</code> (the type) and <code>__metadata__</code> (the extras), which is what Pydantic and FastAPI read.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-validate-a-dict-against-a-typeddict" data-pid="m11-2-validate-a-dict-against-a-typeddict" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Validate a dict against a TypedDict</h3></header>
+<div class="prob-q"><p>Write <code>check(data, td)</code> that validates a dict against a <code>TypedDict</code> class at run time and returns a list of problems (empty if valid): <code>"missing key: k"</code> for each required key that is absent, <code>"unknown key: k"</code> for keys not declared, and <code>"k: expected T, got U"</code> for values whose type is wrong. Support value hints that are plain classes, <code>Literal[...]</code> (the value must be one of the options), and <code>X | None</code>. Report problems in this order: missing keys, then unknown keys, then type problems, each sorted by key. Treat <code>bool</code> as <strong>not</strong> an <code>int</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import types, typing
+
+def check(data, td):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from typing import Literal, NotRequired, TypedDict
+
+class ToolCall(TypedDict):
+    name: str
+    arguments: str
+    id: NotRequired[str]
+    kind: Literal["function", "builtin"]
+    index: int | None
+
+good = {"name": "search", "arguments": "{}", "kind": "function", "index": None}
+assert check(good, ToolCall) == [] and check({**good, "id": "c1", "index": 0}, ToolCall) == []
+bad = {"name": 3, "kind": "other", "extra": 1, "index": True}
+assert check(bad, ToolCall) == [
+    "missing key: arguments", "unknown key: extra",
+    "index: expected int | None, got bool", "kind: expected one of ('function', 'builtin'), got 'other'", "name: expected str, got int",
+]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from typing import Literal, NotRequired, TypedDict
+
+class ToolCall(TypedDict):
+    name: str
+    arguments: str
+    id: NotRequired[str]
+    kind: Literal[&quot;function&quot;, &quot;builtin&quot;]
+    index: int | None
+
+good = {&quot;name&quot;: &quot;search&quot;, &quot;arguments&quot;: &quot;{}&quot;, &quot;kind&quot;: &quot;function&quot;, &quot;index&quot;: None}
+assert check(good, ToolCall) == [] and check({**good, &quot;id&quot;: &quot;c1&quot;, &quot;index&quot;: 0}, ToolCall) == []
+bad = {&quot;name&quot;: 3, &quot;kind&quot;: &quot;other&quot;, &quot;extra&quot;: 1, &quot;index&quot;: True}
+assert check(bad, ToolCall) == [
+    &quot;missing key: arguments&quot;, &quot;unknown key: extra&quot;,
+    &quot;index: expected int | None, got bool&quot;, &quot;kind: expected one of (&#x27;function&#x27;, &#x27;builtin&#x27;), got &#x27;other&#x27;&quot;, &quot;name: expected str, got int&quot;,
+]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>td.__required_keys__</code>, <code>typing.get_type_hints(td)</code> for the declared keys, and <code>typing.get_origin</code> to recognise <code>Literal</code> and unions.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Format union hints with <code>str(hint)</code> and literals with their <code>get_args</code> tuple.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import types, typing
+
+
+def _ok(value, hint):
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Literal:
+        return value in args
+    if origin in (types.UnionType, typing.Union):
+        return any(_ok(value, a) for a in args)
+    if hint is type(None):
+        return value is None
+    if hint is int and isinstance(value, bool):
+        return False
+    return isinstance(value, hint)
+
+
+def _describe(hint):
+    if typing.get_origin(hint) is typing.Literal:
+        return f&quot;one of {typing.get_args(hint)}&quot;
+    return getattr(hint, &quot;__name__&quot;, str(hint)) if typing.get_origin(hint) is None else str(hint)
+
+
+def check(data, td):
+    hints = typing.get_type_hints(td)
+    problems = [f&quot;missing key: {k}&quot; for k in sorted(td.__required_keys__ - data.keys())]
+    problems += [f&quot;unknown key: {k}&quot; for k in sorted(data.keys() - hints.keys())]
+    for key in sorted(data.keys() &amp; hints.keys()):
+        value, hint = data[key], hints[key]
+        if not _ok(value, hint):
+            problems.append(f&quot;{key}: expected {_describe(hint)}, got {value!r}&quot; if typing.get_origin(hint) is typing.Literal
+                            else f&quot;{key}: expected {_describe(hint)}, got {type(value).__name__}&quot;)
+    return problems</code></pre></div><p>A <code>TypedDict</code> carries everything a validator needs: its hints (types per key) and its required and optional key sets, with <code>NotRequired</code> keys allowed to be absent. Literals are checked by membership in their options, unions by trying each member, and <code>bool</code> is excluded from <code>int</code> because JSON booleans should not pass as indexes. Collecting <strong>all</strong> problems in a predictable order produces one complete error report, which is far more useful when the data came from a model and you want to send the errors back for repair (7.4). This is a small version of what Pydantic's <code>TypeAdapter(ToolCall).validate_python(data)</code> does, including turning the <code>TypedDict</code> into a validator.</p></div></details>
+</article>
+<article class="prob" id="p-a-helper-that-forgets-what-type-it-retur" data-pid="m11-2-a-helper-that-forgets-what-type-it-retur" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A helper that forgets what type it returns</h3></header>
+<div class="prob-q"><p><code>first</code> and <code>pick</code> are annotated with <code>Any</code>, so a type checker cannot tell that <code>first(["a"])</code> is a <code>str</code>. Rewrite their annotations as <strong>generic</strong> functions with type parameters (Python 3.12 syntax): <code>first[T](items: Iterable[T]) -&gt; T | None</code> and <code>pick[K, V](mapping: Mapping[K, V], keys: Iterable[K]) -&gt; dict[K, V]</code>. Keep the behaviour.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from collections.abc import Iterable, Mapping
+from typing import Any
+
+def first(items: Iterable[Any]) -&gt; Any:
+    for item in items:
+        return item
+    return None
+
+def pick(mapping: Mapping[Any, Any], keys: Iterable[Any]) -&gt; dict[Any, Any]:
+    return {k: mapping[k] for k in keys if k in mapping}
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+from collections.abc import Iterable, Mapping
+assert first(["a", "b"]) == "a" and first([]) is None and pick({"a": 1, "b": 2}, ["b", "z"]) == {"b": 2}
+(T,) = first.__type_params__
+assert T.__name__ == "T" and typing.get_type_hints(first) == {"items": Iterable[T], "return": T | None}
+K, V = pick.__type_params__
+assert typing.get_type_hints(pick) == {"mapping": Mapping[K, V], "keys": Iterable[K], "return": dict[K, V]}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+from collections.abc import Iterable, Mapping
+assert first([&quot;a&quot;, &quot;b&quot;]) == &quot;a&quot; and first([]) is None and pick({&quot;a&quot;: 1, &quot;b&quot;: 2}, [&quot;b&quot;, &quot;z&quot;]) == {&quot;b&quot;: 2}
+(T,) = first.__type_params__
+assert T.__name__ == &quot;T&quot; and typing.get_type_hints(first) == {&quot;items&quot;: Iterable[T], &quot;return&quot;: T | None}
+K, V = pick.__type_params__
+assert typing.get_type_hints(pick) == {&quot;mapping&quot;: Mapping[K, V], &quot;keys&quot;: Iterable[K], &quot;return&quot;: dict[K, V]}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def first[T](items: Iterable[T]) -&gt; T | None:</code> declares <code>T</code> for this function only.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Iterable, Mapping
+
+def first[T](items: Iterable[T]) -&gt; T | None:
+    for item in items:
+        return item
+    return None
+
+def pick[K, V](mapping: Mapping[K, V], keys: Iterable[K]) -&gt; dict[K, V]:
+    return {k: mapping[k] for k in keys if k in mapping}</code></pre></div><p><code>Any</code> switches checking off, so the information "the result has the same type as the elements" was lost, and a caller doing <code>first(names).upper()</code> or <code>first(scores) + 1</code> got no help at all. Type parameters keep the link: for <code>first(["a"])</code> the checker solves <code>T = str</code> and knows the result is <code>str | None</code>, so it also insists on the <code>None</code> check. <code>pick</code> relates three types at once: the keys you pass must match the mapping's key type, and the result keeps both. The parameters are visible at run time in <code>__type_params__</code>, but only the checker uses them.</p></div></details>
+</article>
+<article class="prob" id="p-a-typed-cache-class" data-pid="m11-2-a-typed-cache-class" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. A typed cache class</h3></header>
+<div class="prob-q"><p>Write a generic class <code>LRU[K, V]</code> (Python 3.12 syntax) with <code>__init__(self, maxsize: int)</code>, <code>get(self, key: K) -&gt; V | None</code> (marks the key as recently used), <code>put(self, key: K, value: V) -&gt; None</code> (evicts the least recently used key when full), <code>__len__</code> and <code>__contains__</code>. Annotate every method.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class LRU:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+c: "LRU[str, list[float]]" = LRU(2)
+c.put("a", [0.1]); c.put("b", [0.2])
+assert c.get("a") == [0.1]
+c.put("c", [0.3])
+assert "b" not in c and "a" in c and len(c) == 2 and c.get("b") is None
+K, V = LRU.__type_params__
+assert typing.get_type_hints(LRU.get) == {"key": K, "return": V | None}
+assert typing.get_type_hints(LRU.put) == {"key": K, "value": V, "return": type(None)}
+assert typing.get_type_hints(LRU.__init__) == {"maxsize": int, "return": type(None)}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+c: &quot;LRU[str, list[float]]&quot; = LRU(2)
+c.put(&quot;a&quot;, [0.1]); c.put(&quot;b&quot;, [0.2])
+assert c.get(&quot;a&quot;) == [0.1]
+c.put(&quot;c&quot;, [0.3])
+assert &quot;b&quot; not in c and &quot;a&quot; in c and len(c) == 2 and c.get(&quot;b&quot;) is None
+K, V = LRU.__type_params__
+assert typing.get_type_hints(LRU.get) == {&quot;key&quot;: K, &quot;return&quot;: V | None}
+assert typing.get_type_hints(LRU.put) == {&quot;key&quot;: K, &quot;value&quot;: V, &quot;return&quot;: type(None)}
+assert typing.get_type_hints(LRU.__init__) == {&quot;maxsize&quot;: int, &quot;return&quot;: type(None)}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>class LRU[K, V]:</code> declares the parameters for the whole class. Store <code>self._data: dict[K, V] = {}</code>; dict order tracks recency (9.2).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LRU[K, V]:
+    def __init__(self, maxsize: int) -&gt; None:
+        self.maxsize = maxsize
+        self._data: dict[K, V] = {}
+
+    def get(self, key: K) -&gt; V | None:
+        if key not in self._data:
+            return None
+        value = self._data.pop(key)
+        self._data[key] = value
+        return value
+
+    def put(self, key: K, value: V) -&gt; None:
+        if key in self._data:
+            del self._data[key]
+        elif len(self._data) &gt;= self.maxsize:
+            del self._data[next(iter(self._data))]
+        self._data[key] = value
+
+    def __len__(self) -&gt; int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -&gt; bool:
+        return key in self._data</code></pre></div><p>With the class parameterised, a variable annotated <code>LRU[str, list[float]]</code> lets the checker verify every use: <code>put(1, [0.1])</code> is a wrong key type, <code>get("a")</code> returns <code>list[float] | None</code>, so callers must handle a miss. The implementation is the dict-ordering LRU of 9.2. <code>__contains__</code> takes <code>object</code> because <code>in</code> may be asked about anything; restricting it to <code>K</code> would make harmless checks a type error. Generic containers are everywhere in library code (vector stores keyed by id, caches, registries), and typing them once makes every user's code checked.</p></div></details>
+</article>
+<article class="prob" id="p-literal-annotated-and-generics-at-run-ti" data-pid="m11-2-literal-annotated-and-generics-at-run-ti" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Literal, Annotated and generics at run time</h3></header>
+<div class="prob-q"><p>Fill in <code>r</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import typing
+from typing import Annotated, Literal
+
+Mode = Literal[&quot;fast&quot;, &quot;accurate&quot;]
+Score = Annotated[float, &quot;0 to 1&quot;]
+
+def f[T](x: T) -&gt; list[T]:
+    return [x]
+
+r = typing.get_args(Mode)
+r = typing.get_args(Score)
+r = [p.__name__ for p in f.__type_params__]
+r = f(&quot;x&quot;) + f(1)
+r = typing.get_args(Literal[&quot;a&quot;] | Literal[&quot;b&quot;] | None)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>Literal options</td><td><input class="cell" data-a="(&#x27;fast&#x27;, &#x27;accurate&#x27;)" data-s="(&#x27;fast&#x27;, &#x27;accurate&#x27;)" aria-label="r at Literal options" autocomplete="off"></td></tr><tr><td>Annotated parts</td><td><input class="cell" data-a="(&lt;class &#x27;float&#x27;&gt;, &#x27;0 to 1&#x27;)" data-s="(&lt;class &#x27;float&#x27;&gt;, &#x27;0 to 1&#x27;)" aria-label="r at Annotated parts" autocomplete="off"></td></tr><tr><td>type params</td><td><input class="cell" data-a="[&#x27;T&#x27;]" data-s="[&#x27;T&#x27;]" aria-label="r at type params" autocomplete="off"></td></tr><tr><td>calling a generic</td><td><input class="cell" data-a="[&#x27;x&#x27;, 1]" data-s="[&#x27;x&#x27;, 1]" aria-label="r at calling a generic" autocomplete="off"></td></tr><tr><td>combined literals</td><td><input class="cell" data-a="(typing.Literal[&#x27;a&#x27;], typing.Literal[&#x27;b&#x27;], &lt;class &#x27;NoneType&#x27;&gt;)" data-s="(typing.Literal[&#x27;a&#x27;], typing.Literal[&#x27;b&#x27;], &lt;class &#x27;NoneType&#x27;&gt;)" aria-label="r at combined literals" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Generics are not checked at run time, so <code>f</code> works for any value. A union keeps each of its members, literals included.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>r</code></th></tr><tr><td>Literal options</td><td><code>(&#x27;fast&#x27;, &#x27;accurate&#x27;)</code></td></tr><tr><td>Annotated parts</td><td><code>(&lt;class &#x27;float&#x27;&gt;, &#x27;0 to 1&#x27;)</code></td></tr><tr><td>type params</td><td><code>[&#x27;T&#x27;]</code></td></tr><tr><td>calling a generic</td><td><code>[&#x27;x&#x27;, 1]</code></td></tr><tr><td>combined literals</td><td><code>(typing.Literal[&#x27;a&#x27;], typing.Literal[&#x27;b&#x27;], &lt;class &#x27;NoneType&#x27;&gt;)</code></td></tr></table></div><p><code>get_args</code> gives a literal's options and an <code>Annotated</code> type's base type plus metadata. Type parameters are real objects with names. Calling the generic function with different types works, because nothing is checked at run time; a type checker would infer <code>list[str]</code> and <code>list[int]</code>. A union of literals keeps each <code>Literal</code> as a separate member at run time (a type checker treats it like <code>Literal["a", "b"]</code>), followed by <code>NoneType</code>.</p></div></details>
+</article>
+<article class="prob" id="p-a-callback-called-with-the-wrong-argumen" data-pid="m11-2-a-callback-called-with-the-wrong-argumen" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. A callback called with the wrong arguments</h3></header>
+<div class="prob-q"><p><code>stream_reply</code> is documented (and typed) to call <code>on_token</code> with <strong>one</strong> argument, the token text, but it calls it with two, so every callback written to the hint fails with <code>TypeError</code>. Fix the call so it matches the <code>Callable[[str], None]</code> hint, and keep the token count as the return value.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">from collections.abc import Callable
+
+def stream_reply(tokens: list[str], on_token: Callable[[str], None]) -&gt; int:
+    for i, token in enumerate(tokens):
+        on_token(i, token)
+    return len(tokens)
+</textarea>
+<script type="text/plain" class="prob-tests">seen = []
+assert stream_reply(["Refunds", " take", " 5 days."], seen.append) == 3 and seen == ["Refunds", " take", " 5 days."]
+printed = []
+assert stream_reply([], printed.append) == 0 and printed == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">seen = []
+assert stream_reply([&quot;Refunds&quot;, &quot; take&quot;, &quot; 5 days.&quot;], seen.append) == 3 and seen == [&quot;Refunds&quot;, &quot; take&quot;, &quot; 5 days.&quot;]
+printed = []
+assert stream_reply([], printed.append) == 0 and printed == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The hint says the callback takes exactly one string.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Callable
+
+def stream_reply(tokens: list[str], on_token: Callable[[str], None]) -&gt; int:
+    for token in tokens:
+        on_token(token)
+    return len(tokens)</code></pre></div><p><code>Callable[[str], None]</code> is a contract in both directions: callers may pass any function that takes one string, and the function promises to call it that way. Calling it with an index as well broke every conforming callback, here <code>list.append</code>, which takes exactly one argument. A type checker would report the call <code>on_token(i, token)</code> as having too many arguments, before the code ever ran. If the index were really needed, the right change is to the hint, <code>Callable[[int, str], None]</code>, and to every caller, which the checker would then list.</p></div></details>
+</article>
+<article class="prob" id="p-handle-every-finish-reason" data-pid="m11-2-handle-every-finish-reason" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. Handle every finish reason</h3></header>
+<div class="prob-q"><p>Define <code>Finish = Literal["stop", "length", "tool_calls", "content_filter"]</code> and write <code>postprocess(reason: Finish, text: str) -&gt; str</code>: <code>"stop"</code> returns the text stripped; <code>"length"</code> returns the stripped text plus <code>" ..."</code>; <code>"tool_calls"</code> returns <code>""</code>; <code>"content_filter"</code> returns <code>"[filtered]"</code>. End the branches with <code>typing.assert_never(reason)</code>, so a missing case is a type error and an unknown value raises <code>AssertionError</code> at run time. Use a <code>match</code> statement.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from typing import Literal, assert_never
+
+def postprocess(reason, text):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert postprocess("stop", " Done. ") == "Done." and postprocess("length", "The policy says ") == "The policy says ..."
+assert postprocess("tool_calls", "x") == "" and postprocess("content_filter", "y") == "[filtered]"
+try:
+    postprocess("end_turn", "z")
+    assert False
+except AssertionError:
+    pass
+assert typing.get_args(Finish) == ("stop", "length", "tool_calls", "content_filter")
+assert typing.get_type_hints(postprocess)["reason"] == Finish</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert postprocess(&quot;stop&quot;, &quot; Done. &quot;) == &quot;Done.&quot; and postprocess(&quot;length&quot;, &quot;The policy says &quot;) == &quot;The policy says ...&quot;
+assert postprocess(&quot;tool_calls&quot;, &quot;x&quot;) == &quot;&quot; and postprocess(&quot;content_filter&quot;, &quot;y&quot;) == &quot;[filtered]&quot;
+try:
+    postprocess(&quot;end_turn&quot;, &quot;z&quot;)
+    assert False
+except AssertionError:
+    pass
+assert typing.get_args(Finish) == (&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;)
+assert typing.get_type_hints(postprocess)[&quot;reason&quot;] == Finish</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>match reason:</code> with <code>case "stop":</code> and so on, and <code>case _: assert_never(reason)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Literal, assert_never
+
+Finish = Literal[&quot;stop&quot;, &quot;length&quot;, &quot;tool_calls&quot;, &quot;content_filter&quot;]
+
+def postprocess(reason: Finish, text: str) -&gt; str:
+    match reason:
+        case &quot;stop&quot;:
+            return text.strip()
+        case &quot;length&quot;:
+            return text.strip() + &quot; ...&quot;
+        case &quot;tool_calls&quot;:
+            return &quot;&quot;
+        case &quot;content_filter&quot;:
+            return &quot;[filtered]&quot;
+        case _:
+            assert_never(reason)</code></pre></div><p>The checker narrows <code>reason</code> through each <code>case</code>; if someone later adds <code>"end_turn"</code> to <code>Finish</code> without a new case, <code>assert_never</code> receives a value whose type is not <code>Never</code>, and the checker reports it right there, so the forgotten case is caught before deployment. At run time, a value outside the type (an unexpected string from a new API version) reaches <code>assert_never</code>, which raises <code>AssertionError</code> instead of silently returning <code>None</code>. Different providers name finish reasons differently (<code>end_turn</code>, <code>max_tokens</code>), so a mapping into one internal <code>Literal</code> plus an exhaustive handler is a robust way to support several (7.4).</p></div></details>
+</article>
+<article class="prob" id="p-newtype-and-final-at-run-time" data-pid="m11-2-newtype-and-final-at-run-time" data-type="predict" data-level="medium" data-answer="True str True
+UserId str
+20
+isinstance not supported">
+<header class="prob-head"><h3>11. NewType and Final at run time</h3></header>
+<div class="code"><pre><code class="py">from typing import Final, NewType
+
+UserId = NewType(&quot;UserId&quot;, str)
+OrderId = NewType(&quot;OrderId&quot;, str)
+LIMIT: Final = 10
+
+u = UserId(&quot;u-1&quot;)
+o = OrderId(&quot;u-1&quot;)
+print(u == o, type(u).__name__, UserId(&quot;x&quot;) == &quot;x&quot;)
+print(UserId.__name__, UserId.__supertype__.__name__)
+LIMIT = 20
+print(LIMIT)
+try:
+    isinstance(u, UserId)
+except TypeError:
+    print(&quot;isinstance not supported&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>NewType</code> returns its argument unchanged at run time; only the checker sees a distinct type. <code>Final</code> is not enforced at run time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True str True
+UserId str
+20
+isinstance not supported</pre></div><p>At run time a <code>NewType</code> is an identity function: <code>UserId("u-1")</code> is just the string, so a user id and an order id with the same text compare equal and are both <code>str</code>. The distinction exists only for the type checker, which would reject passing an <code>OrderId</code> where a <code>UserId</code> is expected. <code>__supertype__</code> records the underlying type. Reassigning a <code>Final</code> name works at run time; the checker reports it. And <code>isinstance</code> refuses a <code>NewType</code>, since there is no class to test against.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-json-schema-from-a-typeddict" data-pid="m11-2-a-json-schema-from-a-typeddict" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. A JSON schema from a TypedDict</h3></header>
+<div class="prob-q"><p>Structured-output and tool APIs take a JSON Schema. Write <code>json_schema(td)</code> for a <code>TypedDict</code> class whose value hints may be <code>str</code>, <code>int</code>, <code>float</code>, <code>bool</code>, <code>list[X]</code>, <code>Literal[...]</code> (becomes <code>{"type": "string", "enum": [...]}</code> for string literals), <code>X | None</code> (adds <code>"null"</code> to the type), and any of these wrapped in <code>Annotated[X, "description"]</code> (adds <code>"description"</code>). Return <code>{"type": "object", "properties": {...}, "required": [...], "additionalProperties": False}</code> with <code>required</code> from the class's required keys, sorted.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import types, typing
+
+def json_schema(td):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">from typing import Annotated, Literal, NotRequired, TypedDict
+
+class Classification(TypedDict):
+    label: Annotated[Literal["spam", "ham", "phish"], "the predicted class"]
+    confidence: Annotated[float, "between 0 and 1"]
+    reasons: list[str]
+    language: NotRequired[str | None]
+
+assert json_schema(Classification) == {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "enum": ["spam", "ham", "phish"], "description": "the predicted class"},
+        "confidence": {"type": "number", "description": "between 0 and 1"},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "language": {"type": ["string", "null"]},
+    },
+    "required": ["confidence", "label", "reasons"],
+    "additionalProperties": False,
+}
+
+class Tiny(TypedDict):
+    n: int
+assert json_schema(Tiny) == {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"], "additionalProperties": False}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">from typing import Annotated, Literal, NotRequired, TypedDict
+
+class Classification(TypedDict):
+    label: Annotated[Literal[&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;], &quot;the predicted class&quot;]
+    confidence: Annotated[float, &quot;between 0 and 1&quot;]
+    reasons: list[str]
+    language: NotRequired[str | None]
+
+assert json_schema(Classification) == {
+    &quot;type&quot;: &quot;object&quot;,
+    &quot;properties&quot;: {
+        &quot;label&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;], &quot;description&quot;: &quot;the predicted class&quot;},
+        &quot;confidence&quot;: {&quot;type&quot;: &quot;number&quot;, &quot;description&quot;: &quot;between 0 and 1&quot;},
+        &quot;reasons&quot;: {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}},
+        &quot;language&quot;: {&quot;type&quot;: [&quot;string&quot;, &quot;null&quot;]},
+    },
+    &quot;required&quot;: [&quot;confidence&quot;, &quot;label&quot;, &quot;reasons&quot;],
+    &quot;additionalProperties&quot;: False,
+}
+
+class Tiny(TypedDict):
+    n: int
+assert json_schema(Tiny) == {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;n&quot;: {&quot;type&quot;: &quot;integer&quot;}}, &quot;required&quot;: [&quot;n&quot;], &quot;additionalProperties&quot;: False}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Read hints with <code>typing.get_type_hints(td, include_extras=True)</code> so <code>Annotated</code> metadata survives.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A recursive <code>_schema(hint)</code>: unwrap <code>NotRequired</code> and <code>Annotated</code> (both survive <code>include_extras</code>), then handle unions, <code>Literal</code>, <code>list</code> and plain classes.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import types, typing
+
+SIMPLE = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def _schema(hint):
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (typing.NotRequired, typing.Required):
+        return _schema(args[0])               # kept by include_extras; the key set already says it
+    if origin is typing.Annotated:
+        schema = _schema(args[0])
+        descriptions = [m for m in args[1:] if isinstance(m, str)]
+        if descriptions:
+            schema[&quot;description&quot;] = descriptions[0]
+        return schema
+    if origin in (types.UnionType, typing.Union):
+        members = [a for a in args if a is not type(None)]
+        if len(members) != 1 or len(members) == len(args):
+            raise TypeError(f&quot;only X | None unions are supported: {hint!r}&quot;)
+        schema = _schema(members[0])
+        schema[&quot;type&quot;] = [schema[&quot;type&quot;], &quot;null&quot;]
+        return schema
+    if origin is typing.Literal:
+        return {&quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: list(args)}
+    if origin is list:
+        return {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: _schema(args[0])}
+    if hint in SIMPLE:
+        return {&quot;type&quot;: SIMPLE[hint]}
+    raise TypeError(f&quot;unsupported type: {hint!r}&quot;)
+
+
+def json_schema(td):
+    hints = typing.get_type_hints(td, include_extras=True)
+    return {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: {name: _schema(h) for name, h in hints.items()},
+        &quot;required&quot;: sorted(td.__required_keys__),
+        &quot;additionalProperties&quot;: False,
+    }</code></pre></div><p>This is the bridge between Python types and constrained LLM output: the <code>TypedDict</code> describes the answer you want, and the generated schema is what you send as the response format or tool parameters, so the model can only produce the listed labels (<code>enum</code>), a number for confidence, and a list of strings for reasons. <code>Annotated</code> carries the per-field descriptions into the schema, where they act as instructions to the model. <code>include_extras=True</code> is essential, or the metadata is stripped; it also keeps the <code>NotRequired</code> wrapper, which the schema unwraps because the class's key sets already record which keys are optional. <code>NotRequired</code> keys are left out of <code>required</code>, and <code>additionalProperties: False</code> forbids invented fields, which strict structured-output modes require. Pydantic's <code>model_json_schema()</code> and <code>TypeAdapter(...).json_schema()</code> do this generation for you (11.4), but this is what they produce.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-event-dispatcher" data-pid="m11-2-read-the-code-an-event-dispatcher" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Read the code: an event dispatcher</h3></header>
+<div class="prob-q"><p>Streaming events have a <code>"type"</code> tag, declared as <code>EventType = Literal["text", "tool_call", "error", "done"]</code>. <code>dispatch</code> should route each event to the handler registered for its type, reject event types outside <code>EventType</code>, and require every type to have a handler at <strong>registration</strong> time (<code>build_dispatcher</code> checks completeness). Unknown types are silently ignored, a missing handler is only discovered when such an event arrives, and the descriptions printed by <code>describe_handlers</code> are always empty because the code reads the <code>Annotated</code> metadata wrongly. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from typing import Annotated, Literal, get_args, get_type_hints
+
+EventType = Literal[&quot;text&quot;, &quot;tool_call&quot;, &quot;error&quot;, &quot;done&quot;]
+
+
+def build_dispatcher(handlers):
+    def dispatch(event):
+        handler = handlers.get(event[&quot;type&quot;])
+        if handler is None:
+            return None
+        return handler(event)
+    return dispatch
+
+
+def describe_handlers(handlers):
+    out = {}
+    for etype, fn in handlers.items():
+        hint = get_type_hints(fn).get(&quot;event&quot;)
+        meta = getattr(hint, &quot;__metadata__&quot;, ())
+        out[etype] = meta[0] if meta else &quot;&quot;
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">def on_text(event: Annotated[dict, "append text to the reply"]):
+    return "text:" + event["text"]
+def on_tool(event: Annotated[dict, "run the requested tool"]):
+    return "tool:" + event["name"]
+def on_error(event: Annotated[dict, "surface the error"]):
+    return "error:" + event["message"]
+def on_done(event: Annotated[dict, "finish the turn"]):
+    return "done"
+
+handlers = {"text": on_text, "tool_call": on_tool, "error": on_error, "done": on_done}
+dispatch = build_dispatcher(handlers)
+assert dispatch({"type": "text", "text": "Hi"}) == "text:Hi" and dispatch({"type": "done"}) == "done"
+try:
+    dispatch({"type": "ping"})
+    assert False, "unknown event types must be rejected"
+except ValueError as e:
+    assert "ping" in str(e)
+try:
+    build_dispatcher({"text": on_text, "done": on_done})
+    assert False, "missing handlers must be caught at build time"
+except ValueError as e:
+    assert "error" in str(e) and "tool_call" in str(e)
+assert describe_handlers(handlers) == {"text": "append text to the reply", "tool_call": "run the requested tool",
+                                       "error": "surface the error", "done": "finish the turn"}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def on_text(event: Annotated[dict, &quot;append text to the reply&quot;]):
+    return &quot;text:&quot; + event[&quot;text&quot;]
+def on_tool(event: Annotated[dict, &quot;run the requested tool&quot;]):
+    return &quot;tool:&quot; + event[&quot;name&quot;]
+def on_error(event: Annotated[dict, &quot;surface the error&quot;]):
+    return &quot;error:&quot; + event[&quot;message&quot;]
+def on_done(event: Annotated[dict, &quot;finish the turn&quot;]):
+    return &quot;done&quot;
+
+handlers = {&quot;text&quot;: on_text, &quot;tool_call&quot;: on_tool, &quot;error&quot;: on_error, &quot;done&quot;: on_done}
+dispatch = build_dispatcher(handlers)
+assert dispatch({&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Hi&quot;}) == &quot;text:Hi&quot; and dispatch({&quot;type&quot;: &quot;done&quot;}) == &quot;done&quot;
+try:
+    dispatch({&quot;type&quot;: &quot;ping&quot;})
+    assert False, &quot;unknown event types must be rejected&quot;
+except ValueError as e:
+    assert &quot;ping&quot; in str(e)
+try:
+    build_dispatcher({&quot;text&quot;: on_text, &quot;done&quot;: on_done})
+    assert False, &quot;missing handlers must be caught at build time&quot;
+except ValueError as e:
+    assert &quot;error&quot; in str(e) and &quot;tool_call&quot; in str(e)
+assert describe_handlers(handlers) == {&quot;text&quot;: &quot;append text to the reply&quot;, &quot;tool_call&quot;: &quot;run the requested tool&quot;,
+                                       &quot;error&quot;: &quot;surface the error&quot;, &quot;done&quot;: &quot;finish the turn&quot;}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare <code>set(handlers)</code> with <code>set(get_args(EventType))</code> when building; report missing types sorted.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>dispatch</code>, an event type outside <code>get_args(EventType)</code> raises <code>ValueError</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>get_type_hints</code> strips <code>Annotated</code> unless you pass <code>include_extras=True</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from typing import Annotated, Literal, get_args, get_type_hints
+
+EventType = Literal[&quot;text&quot;, &quot;tool_call&quot;, &quot;error&quot;, &quot;done&quot;]
+EVENT_TYPES = frozenset(get_args(EventType))
+
+
+def build_dispatcher(handlers):
+    missing = EVENT_TYPES - handlers.keys()
+    extra = handlers.keys() - EVENT_TYPES
+    if missing or extra:
+        raise ValueError(f&quot;handlers do not match EventType: missing {sorted(missing)}, unknown {sorted(extra)}&quot;)
+
+    def dispatch(event):
+        etype = event.get(&quot;type&quot;)
+        if etype not in EVENT_TYPES:
+            raise ValueError(f&quot;unknown event type {etype!r}&quot;)
+        return handlers[etype](event)
+    return dispatch
+
+
+def describe_handlers(handlers):
+    out = {}
+    for etype, fn in handlers.items():
+        hint = get_type_hints(fn, include_extras=True).get(&quot;event&quot;)
+        meta = getattr(hint, &quot;__metadata__&quot;, ())
+        out[etype] = meta[0] if meta else &quot;&quot;
+    return out</code></pre></div><p>Three bugs. Unknown event types returned <code>None</code> silently, so a new event type from a provider (or a typo in your own code) disappeared without a trace; rejecting values outside the <code>Literal</code> turns it into an immediate, named error. Completeness was only discovered at run time, when an <code>error</code> event finally arrived and found no handler; checking the registered types against <code>get_args(EventType)</code> when the dispatcher is built is the runtime version of <code>assert_never</code>'s exhaustiveness, and it also catches handlers registered under misspelt types. And <code>get_type_hints</code> strips <code>Annotated</code> metadata by default, so <code>__metadata__</code> was never there; <code>include_extras=True</code> keeps it. The <code>Literal</code> alias is the single source of truth for all three checks.</p></div></details>
+</article>
+<article class="prob" id="p-parse-a-tagged-union-of-events" data-pid="m11-2-parse-a-tagged-union-of-events" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Parse a tagged union of events</h3></header>
+<div class="prob-q"><p>Define three <code>TypedDict</code>s that share a <code>type</code> key with a <code>Literal</code> tag: <code>TextEvent</code> (<code>type: Literal["text"]</code>, <code>text: str</code>), <code>ToolEvent</code> (<code>type: Literal["tool"]</code>, <code>name: str</code>, <code>args: dict</code>), <code>DoneEvent</code> (<code>type: Literal["done"]</code>, <code>tokens: int</code>). Write <code>parse_event(data)</code> that picks the <code>TypedDict</code> whose tag matches <code>data["type"]</code> (build the mapping from the classes' hints, not by hand), checks that the required keys are present with the right plain types (<code>bool</code> is not an <code>int</code>), and returns <code>(class_name, data)</code>. Raise <code>ValueError</code> with a clear message for an unknown or missing tag, a missing key, or a wrong type.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import typing
+from typing import Literal, TypedDict
+
+def parse_event(data):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert parse_event({"type": "text", "text": "Hi"}) == ("TextEvent", {"type": "text", "text": "Hi"})
+assert parse_event({"type": "tool", "name": "search", "args": {"q": "x"}})[0] == "ToolEvent"
+assert parse_event({"type": "done", "tokens": 42})[0] == "DoneEvent"
+for bad, word in [({"type": "ping"}, "ping"), ({"text": "x"}, "type"), ({"type": "tool", "name": "s"}, "args"),
+                  ({"type": "done", "tokens": "42"}, "tokens"), ({"type": "done", "tokens": True}, "tokens")]:
+    try:
+        parse_event(bad)
+        assert False, bad
+    except ValueError as e:
+        assert word in str(e), (bad, str(e))
+assert sorted(EVENTS) == ["done", "text", "tool"] and EVENTS["tool"] is ToolEvent</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert parse_event({&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Hi&quot;}) == (&quot;TextEvent&quot;, {&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Hi&quot;})
+assert parse_event({&quot;type&quot;: &quot;tool&quot;, &quot;name&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;x&quot;}})[0] == &quot;ToolEvent&quot;
+assert parse_event({&quot;type&quot;: &quot;done&quot;, &quot;tokens&quot;: 42})[0] == &quot;DoneEvent&quot;
+for bad, word in [({&quot;type&quot;: &quot;ping&quot;}, &quot;ping&quot;), ({&quot;text&quot;: &quot;x&quot;}, &quot;type&quot;), ({&quot;type&quot;: &quot;tool&quot;, &quot;name&quot;: &quot;s&quot;}, &quot;args&quot;),
+                  ({&quot;type&quot;: &quot;done&quot;, &quot;tokens&quot;: &quot;42&quot;}, &quot;tokens&quot;), ({&quot;type&quot;: &quot;done&quot;, &quot;tokens&quot;: True}, &quot;tokens&quot;)]:
+    try:
+        parse_event(bad)
+        assert False, bad
+    except ValueError as e:
+        assert word in str(e), (bad, str(e))
+assert sorted(EVENTS) == [&quot;done&quot;, &quot;text&quot;, &quot;tool&quot;] and EVENTS[&quot;tool&quot;] is ToolEvent</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build <code>EVENTS = {typing.get_args(typing.get_type_hints(cls)["type"])[0]: cls for cls in (TextEvent, ToolEvent, DoneEvent)}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the other keys, compare <code>type(value)</code>-compatibility with <code>isinstance</code>, excluding <code>bool</code> for <code>int</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import typing
+from typing import Literal, TypedDict
+
+
+class TextEvent(TypedDict):
+    type: Literal[&quot;text&quot;]
+    text: str
+
+
+class ToolEvent(TypedDict):
+    type: Literal[&quot;tool&quot;]
+    name: str
+    args: dict
+
+
+class DoneEvent(TypedDict):
+    type: Literal[&quot;done&quot;]
+    tokens: int
+
+
+EVENTS = {typing.get_args(typing.get_type_hints(cls)[&quot;type&quot;])[0]: cls for cls in (TextEvent, ToolEvent, DoneEvent)}
+
+
+def parse_event(data):
+    if &quot;type&quot; not in data:
+        raise ValueError(&quot;event has no &#x27;type&#x27; tag&quot;)
+    cls = EVENTS.get(data[&quot;type&quot;])
+    if cls is None:
+        raise ValueError(f&quot;unknown event type {data[&#x27;type&#x27;]!r}; expected one of {sorted(EVENTS)}&quot;)
+    hints = typing.get_type_hints(cls)
+    for key in sorted(cls.__required_keys__ - {&quot;type&quot;}):
+        if key not in data:
+            raise ValueError(f&quot;{cls.__name__}: missing key {key!r}&quot;)
+        expected, value = hints[key], data[key]
+        if (expected is int and isinstance(value, bool)) or not isinstance(value, expected):
+            raise ValueError(f&quot;{cls.__name__}: {key!r} must be {expected.__name__}, got {type(value).__name__}&quot;)
+    return cls.__name__, data</code></pre></div><p>A <strong>discriminated union</strong> is a set of shapes distinguished by one tag field, and the tag tells you which shape to validate against: exactly how streaming events, tool calls and many JSON APIs are structured. Building the tag-to-class mapping from the classes' own <code>Literal</code> hints keeps it in sync with the definitions, so adding a fourth event type is a new class plus one name in the tuple. Each kind of failure gets its own message (unknown tag, missing key, wrong type), which is what you want in logs when a provider changes its format. For a type checker, after checking <code>data["type"] == "tool"</code> on a <code>TextEvent | ToolEvent | DoneEvent</code>, the value narrows to <code>ToolEvent</code>, so <code>data["name"]</code> is known to be a string. Pydantic supports this pattern directly with <code>Field(discriminator="type")</code> (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-type-parameters-and-type-aliases-at-run-" data-pid="m11-2-type-parameters-and-type-aliases-at-run-" data-type="predict" data-level="hard" data-answer="(2, 1) (3, &#x27;a&#x27;)
+T TypeVar Pair T
+list[list[float]] tuple[T, T]
+TypeAliasType Pair[str]">
+<header class="prob-head"><h3>15. Type parameters and type aliases at run time</h3></header>
+<div class="code"><pre><code class="py">type Pair[T] = tuple[T, T]
+type Matrix = list[list[float]]
+
+def swap[T](p: Pair[T]) -&gt; Pair[T]:
+    return (p[1], p[0])
+
+print(swap((1, 2)), swap((&quot;a&quot;, 3)))
+(T,) = swap.__type_params__
+print(T.__name__, type(T).__name__, Pair.__name__, Pair.__type_params__[0].__name__)
+print(Matrix.__value__, Pair[int].__value__ if hasattr(Pair[int], &quot;__value__&quot;) else Pair.__value__)
+print(type(Matrix).__name__, Pair[str])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>type</code> statement creates a <code>TypeAliasType</code> whose value is evaluated lazily and available as <code>__value__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Nothing about type parameters is checked when the function runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(2, 1) (3, &#x27;a&#x27;)
+T TypeVar Pair T
+list[list[float]] tuple[T, T]
+TypeAliasType Pair[str]</pre></div><p><code>swap</code> runs for any tuple, including the mixed <code>("a", 3)</code>, which a type checker would reject for <code>Pair[T]</code> (both items must share a type). The type parameter is a <code>TypeVar</code> object named <code>T</code>. The <code>type</code> statement creates a <code>TypeAliasType</code> with its own name and parameters, whose value is evaluated on demand and exposed as <code>__value__</code>; subscripting it, <code>Pair[int]</code> or <code>Pair[str]</code>, gives a parameterised alias that prints as written. <code>Pair[int]</code> forwards attribute access to the alias, so its <code>__value__</code> is the alias's own value, <code>tuple[T, T]</code>, not <code>tuple[int, int]</code>: substituting <code>int</code> for <code>T</code> is something only the type checker does.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-when-would-you-use-a-typeddict-a-datacla" data-pid="m11-2-when-would-you-use-a-typeddict-a-datacla" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. When would you use a <code>TypedDict</code>, a dataclass, or a Pydantic model?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A <code>TypedDict</code> is for data that should <strong>stay a dict</strong>: JSON payloads, API parameters, messages passed straight to an SDK. It costs nothing at run time and gives static checking of keys and value types, but no validation, no methods and no defaults. A <strong>dataclass</strong> is for structured objects inside your program: it generates <code>__init__</code>, <code>__repr__</code> and <code>__eq__</code> from typed fields, supports defaults, immutability and slots, and is fast, but it does not validate or convert input. A <strong>Pydantic model</strong> is for data crossing a boundary: requests, configuration, files, LLM output; it validates and converts at run time, collects errors, serialises to and from JSON and generates JSON Schema, at some cost per object. A common architecture validates external data into Pydantic models at the edges, uses dataclasses or plain typed objects internally, and keeps TypedDicts for the exact JSON shapes that third-party SDKs expect.</p></div></details>
+</article>
+<article class="prob" id="p-what-are-generic-types-and-type-paramete" data-pid="m11-2-what-are-generic-types-and-type-paramete" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What are generic types and type parameters for?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>They let one piece of code work for many types while keeping the relationships between types visible to the checker. Without them, a function like <code>first(items)</code> or a container like a cache must use <code>Any</code>, and the checker forgets that <code>first(list_of_str)</code> returns a <code>str</code> or that <code>cache.get(key)</code> returns the cached value's type, so errors downstream go unnoticed. With a type parameter, <code>def first[T](items: Iterable[T]) -&gt; T | None</code>, the checker solves <code>T</code> from each call; with a generic class, <code>class Cache[K, V]</code>, each instance is checked against its declared key and value types. Bounds (<code>[K: Hashable]</code>) and constraints (<code>[T: (int, float)]</code>) restrict what <code>T</code> may be. The standard collections (<code>list[T]</code>, <code>dict[K, V]</code>, <code>Sequence[T]</code>) are generic in exactly this way. At run time nothing is enforced: generics are a static tool, introspectable through <code>__type_params__</code>.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-python-types-relate-to-structured" data-pid="m11-2-how-do-python-types-relate-to-structured" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How do Python types relate to structured output from LLMs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Structured output (JSON mode with a schema, tool calling, "response format") constrains the model to produce JSON matching a JSON Schema, and that schema is best generated from Python types rather than written by hand: a <code>TypedDict</code>, dataclass or Pydantic model describes the fields, <code>Literal</code> becomes an <code>enum</code> so the model can only choose valid labels, <code>X | None</code> becomes nullable, <code>list[X]</code> becomes an array, and <code>Annotated</code> metadata or field descriptions become instructions the model reads. Required keys and <code>additionalProperties: false</code> keep it from omitting or inventing fields. The reply must still be <strong>validated</strong> against the same types (constraints can fail or be unsupported on some models, and values can be semantically wrong), usually by parsing into a Pydantic model, with a repair or retry loop that sends the validation errors back (7.4). Using the types as the single source of truth keeps the prompt, the schema, the validator and the code that consumes the result in agreement.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>TypedDict</code> types JSON-shaped dicts (required and <code>NotRequired</code> keys); at run time it is a plain dict and validates nothing.</li><li><code>Literal[...]</code> lists exact allowed values; read them with <code>get_args</code> so runtime checks and the type share one definition.</li><li><code>Callable[[args], ret]</code> types callbacks; type parameters (<code>def f[T]</code>, <code>class C[K, V]</code>) keep input and output types linked.</li><li><code>NewType</code> makes distinct ids for the checker at zero cost; <code>Annotated</code> attaches metadata for libraries; <code>Final</code> marks constants.</li><li><code>assert_never</code> makes branches over literals and unions exhaustive; tagged <code>TypedDict</code>s form discriminated unions.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

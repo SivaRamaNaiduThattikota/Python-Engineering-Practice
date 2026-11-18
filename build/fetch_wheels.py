@@ -18,6 +18,7 @@ pkgs = lock["packages"]
 
 
 def deps(name, seen):
+    name = name.lower().replace("_", "-")     # lock keys use hyphens, "depends" lists sometimes use underscores
     if name in seen:
         return
     seen.add(name)

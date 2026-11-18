@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11.1 · Type hints</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m11-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 11 · Typing, dataclasses and Pydantic</span></div>
+  <h1>11.1 Type hints</h1>
+  <p>Type hints describe what a function accepts and returns. What they are and are not (Python does not enforce them), the syntax for variables, parameters, returns and built-in generics, unions and <code>None</code>, narrowing, accepting abstract types and returning concrete ones, what a type checker such as mypy or pyright reports, and how libraries read hints at run time. Applied to text utilities, tool schemas, settings and validation.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="what">
+<h2><span class="n">1</span>What type hints are, and what they are not</h2>
+<p>A <strong>type hint</strong> (or annotation) states the type a value is expected to have: <code>def chunk(text: str, size: int) -&gt; list[str]:</code> says that <code>text</code> is a string, <code>size</code> an integer, and that the function returns a list of strings. Hints serve three audiences. <strong>People</strong> read them as precise documentation of the interface. <strong>Editors</strong> use them for completion and inline errors. <strong>Type checkers</strong>, such as mypy and pyright, analyse the whole program without running it and report calls that pass the wrong type, return values that do not match, attributes that do not exist, and possible <code>None</code> values used carelessly.</p>
+<p>What hints are <strong>not</strong> is a run-time check. Python stores them (in <code>func.__annotations__</code>) and otherwise ignores them: calling the function with the wrong type runs exactly as it would without hints, and fails, or worse, does not fail, wherever the wrong value is first used. Checking at run time is the job of libraries that <strong>read</strong> the hints, such as Pydantic (11.4), FastAPI and the tool-schema generators of 8.4.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">not_enforced.py</span><button class="copy">Copy</button></div><pre><code class="py">import typing
+
+def chunk(text: str, size: int = 200) -&gt; list[str]:
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+print(chunk(&quot;abcdefg&quot;, 3))
+print(chunk([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;], 2))         # the wrong type: Python does not stop it
+print(chunk.__annotations__)
+print(typing.get_type_hints(chunk))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;abc&#x27;, &#x27;def&#x27;, &#x27;g&#x27;]
+[[&#x27;a&#x27;, &#x27;b&#x27;], [&#x27;c&#x27;, &#x27;d&#x27;]]
+{&#x27;text&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;size&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: list[str]}
+{&#x27;text&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;size&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: list[str]}</pre></div></div>
+<p>The second call passed a list where a string was expected and quietly returned a list of lists: the hint documented the mistake, but only a type checker (before running) or validation code (while running) would have caught it. In Python 3.14, annotations are also evaluated <strong>lazily</strong> (PEP 649): the expressions are computed only when something asks for them, so a hint can refer to a class defined later in the file without quotes. <code>typing.get_type_hints(func)</code> is still the reliable way to get them as real types (8.4).</p>
+</section>
+<section class="sec" id="syntax">
+<h2><span class="n">2</span>The syntax: variables, parameters, returns and containers</h2>
+<p>Parameters are annotated with a colon, <code>name: type</code>, with the default after it, <code>size: int = 200</code>. The return type follows an arrow before the colon of the <code>def</code>, <code>-&gt; list[str]</code>; a function that returns nothing is annotated <code>-&gt; None</code>. Variables can be annotated too, <code>count: int = 0</code>, which is mostly useful for attributes in classes (11.3) and for empty containers whose type cannot be guessed: <code>seen: set[str] = set()</code>.</p>
+<p>Containers take their element types in square brackets, using the built-in names directly (Python 3.9+): <code>list[str]</code> (a list of strings), <code>dict[str, float]</code> (keys and values), <code>set[int]</code>, <code>tuple[str, int]</code> (a pair: a string then an int, fixed length) and <code>tuple[int, ...]</code> (any number of ints). Nesting works as you would expect: <code>dict[str, list[tuple[int, float]]]</code>. For readability, give complex types a name, a <strong>type alias</strong>: <code>type Vector = list[float]</code> (Python 3.12+) or simply <code>Vector = list[float]</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">syntax.py</span><button class="copy">Copy</button></div><pre><code class="py">import typing
+
+type Vector = list[float]
+Scores = dict[str, float]
+
+def top_k(scores: Scores, k: int = 3) -&gt; list[tuple[str, float]]:
+    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
+
+def mean_vector(vectors: list[Vector]) -&gt; Vector:
+    n = len(vectors)
+    return [sum(col) / n for col in zip(*vectors)]
+
+def log_event(name: str, **fields: str | int) -&gt; None:
+    print(&quot;event&quot;, name, fields)
+
+print(top_k({&quot;faq&quot;: 0.9, &quot;terms&quot;: 0.4, &quot;blog&quot;: 0.7}, 2))
+print(mean_vector([[1.0, 2.0], [3.0, 4.0]]))
+log_event(&quot;search&quot;, query=&quot;refund&quot;, k=3)
+print(typing.get_type_hints(top_k)[&quot;return&quot;], typing.get_type_hints(log_event))</code></pre><div class="out"><span class="ol">Output</span><pre>[(&#x27;faq&#x27;, 0.9), (&#x27;blog&#x27;, 0.7)]
+[2.0, 3.0]
+event search {&#x27;query&#x27;: &#x27;refund&#x27;, &#x27;k&#x27;: 3}
+list[tuple[str, float]] {&#x27;name&#x27;: &lt;class &#x27;str&#x27;&gt;, &#x27;fields&#x27;: str | int, &#x27;return&#x27;: &lt;class &#x27;NoneType&#x27;&gt;}</pre></div></div>
+<p><code>**fields: str | int</code> annotates the type of <strong>each</strong> keyword value, not of the dict, and <code>*args: int</code> likewise annotates each positional extra. Hints describe what the code accepts; they should be true. A hint that claims <code>-&gt; list[str]</code> while one branch returns <code>None</code> is worse than no hint, because it tells readers and tools something false (problem 3).</p>
+</section>
+<section class="sec" id="unions">
+<h2><span class="n">3</span>Unions, <code>None</code> and narrowing</h2>
+<p>A value that can be one of several types has a <strong>union</strong> type, written <code>A | B</code> (Python 3.10+; older code writes <code>Union[A, B]</code>). The most common union is "a value or nothing": <code>str | None</code>, which older code writes as <code>Optional[str]</code>. The name <code>Optional</code> misleads: it does not mean "an optional argument" (that is a default value), it means "<strong>may be <code>None</code></strong>". <code>def find(q: str) -&gt; Doc | None</code> warns every caller that the result must be checked before use.</p>
+<p>Type checkers follow your code's checks, which is called <strong>narrowing</strong>. After <code>if doc is None: return</code>, the checker knows <code>doc</code> is a <code>Doc</code> in the rest of the function; after <code>if isinstance(x, str):</code>, it treats <code>x</code> as a string inside the branch. That is exactly how you should write code with unions: check, then use. Using a <code>str | None</code> value without a check is the single most common error type checkers find in real code, because it is the <code>AttributeError: 'NoneType' object has no attribute ...</code> of production.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">unions.py</span><button class="copy">Copy</button></div><pre><code class="py">def find_doc(docs: dict[str, str], doc_id: str) -&gt; str | None:
+    return docs.get(doc_id)
+
+def title_of(docs: dict[str, str], doc_id: str) -&gt; str:
+    text = find_doc(docs, doc_id)
+    if text is None:                      # narrowing: after this, text is a str
+        return &quot;(missing)&quot;
+    return text.split(&quot;\n&quot;, 1)[0].strip()
+
+def describe(value: int | str | list[str]) -&gt; str:
+    if isinstance(value, int):
+        return f&quot;number {value}&quot;
+    if isinstance(value, str):
+        return f&quot;text of {len(value)} chars&quot;
+    return f&quot;list of {len(value)} items&quot;
+
+docs = {&quot;faq&quot;: &quot;Refunds\nTake 5 days.&quot;}
+print(title_of(docs, &quot;faq&quot;), &quot;|&quot;, title_of(docs, &quot;nope&quot;))
+print([describe(v) for v in [3, &quot;abc&quot;, [&quot;a&quot;, &quot;b&quot;]]])
+print(isinstance(3, int | str), isinstance(None, str | None))</code></pre><div class="out"><span class="ol">Output</span><pre>Refunds | (missing)
+[&#x27;number 3&#x27;, &#x27;text of 3 chars&#x27;, &#x27;list of 2 items&#x27;]
+True True</pre></div></div>
+<p>Deciding between returning <code>None</code> and raising is a design choice (7.3): return <code>X | None</code> when "not found" is a normal outcome callers will handle, raise when it is an error. Since Python 3.10, <code>isinstance</code> accepts a union directly, as the last line shows, but not a parameterised generic: <code>isinstance(x, list[str])</code> raises <code>TypeError</code>, because checking every element is not what <code>isinstance</code> does (problem 4).</p>
+</section>
+<section class="sec" id="abstract">
+<h2><span class="n">4</span>Accept general types, return specific ones</h2>
+<p>For parameters, annotate with the <strong>most general type your code actually needs</strong>. A function that only loops over its input needs an <code>Iterable[str]</code>, so it accepts lists, tuples, sets, generators and files; one that indexes and takes <code>len</code> needs a <code>Sequence[str]</code>; one that only reads keys needs a <code>Mapping[str, float]</code>, which also accepts read-only mappings. These come from <code>collections.abc</code> (9.5). Annotating <code>list[str]</code> instead makes the type checker reject a perfectly good tuple or generator, the static twin of the <code>isinstance(x, list)</code> mistake of 9.5 (problem 6). For return values, be <strong>specific</strong>: return <code>list[str]</code>, not <code>Iterable[str]</code>, so callers know they can index and append.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">abstract_types.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Iterable, Mapping, Sequence
+
+def count_tokens(texts: Iterable[str]) -&gt; int:
+    return sum(len(t.split()) for t in texts)
+
+def last(items: Sequence[str]) -&gt; str:
+    return items[-1]
+
+def total_cost(prices: Mapping[str, float], usage: Mapping[str, int]) -&gt; float:
+    return round(sum(prices[m] * n for m, n in usage.items()), 4)
+
+print(count_tokens([&quot;a b&quot;, &quot;c&quot;]), count_tokens((&quot;x&quot;,)), count_tokens(t for t in [&quot;one two&quot;]))
+print(last((&quot;a&quot;, &quot;b&quot;)), last(&quot;xyz&quot;), total_cost({&quot;small&quot;: 0.002}, {&quot;small&quot;: 1500}))</code></pre><div class="out"><span class="ol">Output</span><pre>3 1 2
+b z 3.0</pre></div></div>
+<p>Two special types complete the picture. <strong><code>Any</code></strong> switches type checking off for a value: anything can be assigned to it and anything can be done with it, which is how untyped code and JSON-like data enter a typed program; use it sparingly, at boundaries. <strong><code>object</code></strong> is the opposite in spirit: it accepts any value too, but the checker then lets you do almost nothing with it until you narrow it, which makes it the honest type for "I accept anything and will check what it is".</p>
+</section>
+<section class="sec" id="checker">
+<h2><span class="n">5</span>What a type checker reports</h2>
+<p>A type checker reads your code and the hints, infers types for everything it can (local variables, expressions, return values), and reports places where they cannot fit together. You run it like a linter, <code>mypy src/</code> or <code>pyright</code>, locally and in CI; nothing changes at run time. Typical reports look like this:</p>
+<div class="tbl"><table>
+      <tr><th>Code</th><th>What the checker says</th></tr>
+      <tr><td><code>chunk(["a", "b"], 2)</code></td><td>Argument 1 has incompatible type "list[str]"; expected "str"</td></tr>
+      <tr><td><code>title = find_doc(docs, "x").upper()</code></td><td>Item "None" of "str | None" has no attribute "upper"</td></tr>
+      <tr><td><code>def f() -> int: return "3"</code></td><td>Incompatible return value type (got "str", expected "int")</td></tr>
+      <tr><td><code>cfg.temprature</code></td><td>"Config" has no attribute "temprature"</td></tr>
+      <tr><td><code>scores: dict[str, float] = {}; scores[1] = 0.5</code></td><td>Invalid index type "int" for "dict[str, float]"</td></tr>
+    </table></div>
+<p>Each of these is a bug that would otherwise surface at run time, often only on a rare path (the missing document, the failed request). Type checking is <strong>gradual</strong>: unannotated functions are treated leniently, so you can add hints module by module, starting with the code that matters most, and tighten settings (mypy's <code>--strict</code>) as coverage grows. Third-party libraries ship their own hints (<code>py.typed</code>) or have stub packages (<code>pandas-stubs</code>), and NumPy, pandas, Pydantic and the LLM SDKs are well typed, which makes editors and checkers useful on ML code too. This page's in-browser Python cannot run mypy, so the problems here check hints the way libraries do: by reading them at run time.</p>
+</section>
+<section class="sec" id="runtime">
+<h2><span class="n">6</span>Reading hints at run time</h2>
+<p>Because hints are stored as data, code can read them, and a large part of the modern Python ecosystem does: <code>dataclasses</code> builds <code>__init__</code> from annotated class attributes (11.3); Pydantic validates and converts data according to field types (11.4); FastAPI decides which parameters are path, query or body values from their annotations; Typer builds command-line interfaces; agent frameworks generate tool schemas (8.4). The tools are <code>typing.get_type_hints(obj)</code> for the evaluated hints, and <code>typing.get_origin</code> and <code>typing.get_args</code> to take generic types apart: <code>list[int]</code> has origin <code>list</code> and arguments <code>(int,)</code>; <code>int | None</code> has the union type as origin (<code>typing.Union</code>, which since Python 3.14 is the same object as <code>types.UnionType</code>, so either name works in comparisons) and arguments <code>(int, NoneType)</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">runtime_hints.py</span><button class="copy">Copy</button></div><pre><code class="py">import types, typing
+
+def search(query: str, k: int = 5, tags: list[str] | None = None, weights: dict[str, float] | None = None) -&gt; list[str]:
+    return []
+
+for name, hint in typing.get_type_hints(search).items():
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    print(f&quot;{name:8} {str(hint):26} origin={getattr(origin, &#x27;__name__&#x27;, origin)} args={args}&quot;)
+print(typing.get_origin(int | None) is types.UnionType, type(None) in typing.get_args(int | None))</code></pre><div class="out"><span class="ol">Output</span><pre>query    &lt;class &#x27;str&#x27;&gt;              origin=None args=()
+k        &lt;class &#x27;int&#x27;&gt;              origin=None args=()
+tags     list[str] | None           origin=Union args=(list[str], &lt;class &#x27;NoneType&#x27;&gt;)
+weights  dict[str, float] | None    origin=Union args=(dict[str, float], &lt;class &#x27;NoneType&#x27;&gt;)
+return   list[str]                  origin=list args=(&lt;class &#x27;str&#x27;&gt;,)
+True True</pre></div></div>
+<p>Walking hints like this is how a small runtime validator works (problem 7): plain classes are checked with <code>isinstance</code>, and generic types are checked by recursing into their arguments. Real validators also convert values (the string <code>"5"</code> to the int 5) and report every problem at once, which is exactly what Pydantic adds.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-hints-are-stored-not-enforced" data-pid="m11-1-hints-are-stored-not-enforced" data-type="predict" data-level="easy" data-answer="[2.0, 5.0] [&#x27;aaa&#x27;, &#x27;bbb&#x27;]
+list[float] &lt;class &#x27;float&#x27;&gt;
+not an int str
+[&#x27;factor&#x27;, &#x27;return&#x27;, &#x27;values&#x27;]">
+<header class="prob-head"><h3>1. Hints are stored, not enforced</h3></header>
+<div class="code"><pre><code class="py">import typing
+
+def scale(values: list[float], factor: float = 2.0) -&gt; list[float]:
+    return [v * factor for v in values]
+
+print(scale([1.0, 2.5]), scale(&quot;ab&quot;, 3))
+print(scale.__annotations__[&quot;return&quot;], typing.get_type_hints(scale)[&quot;factor&quot;])
+x: int = &quot;not an int&quot;
+print(x, type(x).__name__)
+print(sorted(typing.get_type_hints(scale)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Python stores annotations and runs the code normally. Multiplying a string by an int repeats it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[2.0, 5.0] [&#x27;aaa&#x27;, &#x27;bbb&#x27;]
+list[float] &lt;class &#x27;float&#x27;&gt;
+not an int str
+[&#x27;factor&#x27;, &#x27;return&#x27;, &#x27;values&#x27;]</pre></div><p>Calling with a string is not prevented: <code>"a" * 3</code> and <code>"b" * 3</code> are valid operations, so the function returns a list of repeated strings, despite the hint. The annotations are ordinary data, available through <code>__annotations__</code> and <code>get_type_hints</code>. A variable annotation does not check the assigned value either. Only a type checker, before running, would flag both mistakes.</p></div></details>
+</article>
+<article class="prob" id="p-annotate-and-implement-a-chunker" data-pid="m11-1-annotate-and-implement-a-chunker" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">RAG</span><h3>2. Annotate and implement a chunker</h3></header>
+<div class="prob-q"><p>Write <code>split_words(text, max_words=50, overlap=0)</code> that splits a text into chunks of at most <code>max_words</code> words, each chunk starting <code>max_words - overlap</code> words after the previous one (no chunk for empty text), returned as a list of strings. Annotate it fully: <code>text</code> is a <code>str</code>, the two counts are <code>int</code>, and it returns a <code>list[str]</code>. Raise <code>ValueError</code> unless <code>0 &lt;= overlap &lt; max_words</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">def split_words(text, max_words=50, overlap=0):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert typing.get_type_hints(split_words) == {"text": str, "max_words": int, "overlap": int, "return": list[str]}
+assert split_words("a b c d e", 2) == ["a b", "c d", "e"]
+assert split_words("a b c d e", 3, overlap=1) == ["a b c", "c d e"]
+assert split_words("", 3) == [] and split_words("one", 5) == ["one"]
+try:
+    split_words("a b", 2, overlap=2)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert typing.get_type_hints(split_words) == {&quot;text&quot;: str, &quot;max_words&quot;: int, &quot;overlap&quot;: int, &quot;return&quot;: list[str]}
+assert split_words(&quot;a b c d e&quot;, 2) == [&quot;a b&quot;, &quot;c d&quot;, &quot;e&quot;]
+assert split_words(&quot;a b c d e&quot;, 3, overlap=1) == [&quot;a b c&quot;, &quot;c d e&quot;]
+assert split_words(&quot;&quot;, 3) == [] and split_words(&quot;one&quot;, 5) == [&quot;one&quot;]
+try:
+    split_words(&quot;a b&quot;, 2, overlap=2)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Step through the word list with <code>range(0, len(words), step)</code> and stop once a chunk has reached the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def split_words(text: str, max_words: int = 50, overlap: int = 0) -&gt; list[str]:
+    if not 0 &lt;= overlap &lt; max_words:
+        raise ValueError(&quot;need 0 &lt;= overlap &lt; max_words&quot;)
+    words = text.split()
+    step = max_words - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(&quot; &quot;.join(words[start:start + max_words]))
+        if start + max_words &gt;= len(words):
+            break
+    return chunks</code></pre></div><p>The hints state the contract in one line: give me a string and two ints, get back a list of strings. A type checker now flags <code>split_words(doc)</code> where <code>doc</code> might be <code>None</code>, or a caller that treats the result as a single string. The <code>break</code> stops once a chunk reaches the end, so with overlap the last window is not repeated as a smaller duplicate. <code>get_type_hints</code> returns real types, so the test (and tools such as tool-schema generators) can compare them directly.</p></div></details>
+</article>
+<article class="prob" id="p-a-hint-that-lies-about-none" data-pid="m11-1-a-hint-that-lies-about-none" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A hint that lies about None</h3></header>
+<div class="prob-q"><p><code>extract_answer(reply)</code> returns the text after <code>"Answer:"</code>, or nothing if the marker is missing. Its hint promises <code>-&gt; str</code>, but one path returns <code>None</code>, so callers (and the type checker) are misled. Fix the hint to tell the truth, and keep the behaviour.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">def extract_answer(reply: str) -&gt; str:
+    marker = &quot;Answer:&quot;
+    if marker not in reply:
+        return None
+    return reply.split(marker, 1)[1].strip()
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert extract_answer("Thinking...\nAnswer: 5 days") == "5 days"
+assert extract_answer("no marker") is None
+assert typing.get_type_hints(extract_answer)["return"] == str | None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert extract_answer(&quot;Thinking...\nAnswer: 5 days&quot;) == &quot;5 days&quot;
+assert extract_answer(&quot;no marker&quot;) is None
+assert typing.get_type_hints(extract_answer)[&quot;return&quot;] == str | None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A value that can be <code>None</code> has the type <code>str | None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def extract_answer(reply: str) -&gt; str | None:
+    marker = &quot;Answer:&quot;
+    if marker not in reply:
+        return None
+    return reply.split(marker, 1)[1].strip()</code></pre></div><p>With <code>-&gt; str</code>, a type checker would accept <code>extract_answer(r).upper()</code> everywhere, which crashes on replies without the marker. Declaring <code>str | None</code> makes every caller handle the missing case (<code>if answer is None: ...</code>), which is the whole value of the hint. A checker would also have flagged the original, since <code>return None</code> does not fit <code>str</code>. Whether to return <code>None</code> or raise is a design decision (7.3); the hint must simply describe the decision that was made.</p></div></details>
+</article>
+<article class="prob" id="p-unions-and-isinstance" data-pid="m11-1-unions-and-isinstance" data-type="predict" data-level="easy" data-answer="True True False
+TypeError
+(&lt;class &#x27;str&#x27;&gt;, &lt;class &#x27;NoneType&#x27;&gt;) True
+True True">
+<header class="prob-head"><h3>4. Unions and isinstance</h3></header>
+<div class="code"><pre><code class="py">import typing
+
+print(isinstance(5, int | str), isinstance(None, int | None), isinstance(2.5, int | str))
+try:
+    isinstance([1, 2], list[int])
+except TypeError as e:
+    print(&quot;TypeError&quot;)
+print(typing.get_args(str | None), typing.get_origin(list[int]) is list)
+print(int | str == str | int, (int | None) | None == int | None)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>isinstance</code> accepts classes and unions of classes, not parameterised generics like <code>list[int]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True True False
+TypeError
+(&lt;class &#x27;str&#x27;&gt;, &lt;class &#x27;NoneType&#x27;&gt;) True
+True True</pre></div><p>Since Python 3.10, <code>isinstance</code> accepts a union and checks each member, so <code>None</code> matches <code>int | None</code> (the <code>None</code> in a union means <code>NoneType</code>). A parameterised generic is refused, because <code>isinstance</code> checks only the outer type and cannot promise anything about the elements. Unions are sets of types: their order does not matter and duplicates collapse.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-the-first-usable-text" data-pid="m11-1-the-first-usable-text" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. The first usable text</h3></header>
+<div class="prob-q"><p>Write <code>first_text(items)</code> returning the first item that is a non-blank string, stripped, or <code>None</code> if there is none. Items may be strings, <code>None</code>, or other values, and <code>items</code> can be any iterable (lists, tuples, generators). Annotate it as accepting an <code>Iterable[object]</code> and returning <code>str | None</code>, with <code>Iterable</code> from <code>collections.abc</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from collections.abc import Iterable
+
+def first_text(items):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+from collections.abc import Iterable
+assert first_text([None, "  ", 3, " Refund window ", "later"]) == "Refund window"
+assert first_text(x for x in [None, ""]) is None and first_text(()) is None
+assert first_text(("a",)) == "a"
+assert typing.get_type_hints(first_text) == {"items": Iterable[object], "return": str | None}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+from collections.abc import Iterable
+assert first_text([None, &quot;  &quot;, 3, &quot; Refund window &quot;, &quot;later&quot;]) == &quot;Refund window&quot;
+assert first_text(x for x in [None, &quot;&quot;]) is None and first_text(()) is None
+assert first_text((&quot;a&quot;,)) == &quot;a&quot;
+assert typing.get_type_hints(first_text) == {&quot;items&quot;: Iterable[object], &quot;return&quot;: str | None}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Narrow with <code>isinstance(item, str)</code> before calling <code>.strip()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Iterable
+
+def first_text(items: Iterable[object]) -&gt; str | None:
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            return item.strip()
+    return None</code></pre></div><p><code>Iterable[object]</code> is the most honest parameter type: the function accepts any iterable of anything, and because the elements are <code>object</code>, a type checker insists on the <code>isinstance</code> check before <code>.strip()</code> is called, which is exactly the check that protects the code from <code>None</code> and numbers at run time. After <code>isinstance(item, str)</code>, the checker narrows <code>item</code> to <code>str</code>. The return type tells callers they must handle <code>None</code>. This kind of helper is common when cleaning model outputs or optional fields from JSON.</p></div></details>
+</article>
+<article class="prob" id="p-a-parameter-type-that-is-too-narrow" data-pid="m11-1-a-parameter-type-that-is-too-narrow" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A parameter type that is too narrow</h3></header>
+<div class="prob-q"><p><code>average_length(texts: list[str])</code> only loops over its argument, but the hint makes a type checker reject tuples, sets and generators, and <code>keys: dict[str, str]</code> rejects any read-only mapping. Fix the annotations to the most general types the function needs (from <code>collections.abc</code>), and keep the return type specific.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def average_length(texts: list[str]) -&gt; float:
+    texts = list(texts)
+    return sum(len(t) for t in texts) / len(texts) if texts else 0.0
+
+def lookup_all(keys: list[str], table: dict[str, str]) -&gt; list[str]:
+    return [table[k] for k in keys if k in table]
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+from collections.abc import Iterable, Mapping
+assert typing.get_type_hints(average_length) == {"texts": Iterable[str], "return": float}
+assert typing.get_type_hints(lookup_all) == {"keys": Iterable[str], "table": Mapping[str, str], "return": list[str]}
+assert average_length(t for t in ["ab", "abcd"]) == 3.0 and average_length(()) == 0.0
+from types import MappingProxyType
+assert lookup_all(("a", "z"), MappingProxyType({"a": "x"})) == ["x"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+from collections.abc import Iterable, Mapping
+assert typing.get_type_hints(average_length) == {&quot;texts&quot;: Iterable[str], &quot;return&quot;: float}
+assert typing.get_type_hints(lookup_all) == {&quot;keys&quot;: Iterable[str], &quot;table&quot;: Mapping[str, str], &quot;return&quot;: list[str]}
+assert average_length(t for t in [&quot;ab&quot;, &quot;abcd&quot;]) == 3.0 and average_length(()) == 0.0
+from types import MappingProxyType
+assert lookup_all((&quot;a&quot;, &quot;z&quot;), MappingProxyType({&quot;a&quot;: &quot;x&quot;})) == [&quot;x&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Looping needs <code>Iterable[str]</code>; reading keys and <code>in</code> needs <code>Mapping[str, str]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections.abc import Iterable, Mapping
+
+def average_length(texts: Iterable[str]) -&gt; float:
+    texts = list(texts)
+    return sum(len(t) for t in texts) / len(texts) if texts else 0.0
+
+def lookup_all(keys: Iterable[str], table: Mapping[str, str]) -&gt; list[str]:
+    return [table[k] for k in keys if k in table]</code></pre></div><p>A parameter hint is a promise about what the function <strong>needs</strong>, and <code>list[str]</code> over-promised: it demanded a list when any iterable works, so a type checker would reject correct calls with generators or tuples, pushing callers to write pointless <code>list(...)</code> conversions. <code>Mapping</code> is the read-only interface of a dict, so it accepts dicts, <code>MappingProxyType</code> views and custom mappings (9.5). The return types stay concrete (<code>float</code>, <code>list[str]</code>) so callers can rely on everything a list offers. "Accept the most general, return the most specific" is the rule.</p></div></details>
+</article>
+<article class="prob" id="p-check-a-value-against-a-hint" data-pid="m11-1-check-a-value-against-a-hint" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Check a value against a hint</h3></header>
+<div class="prob-q"><p>Write <code>matches(value, hint)</code> returning whether <code>value</code> conforms to the type hint. Support: plain classes (<code>int</code>, <code>str</code>, ...; <code>bool</code> does <strong>not</strong> count as <code>int</code>, and an <code>int</code> counts as a <code>float</code>); <code>None</code> / <code>type(None)</code>; unions <code>X | Y</code>; <code>list[X]</code>; <code>dict[K, V]</code>; <code>tuple[X, ...]</code> (any length) and <code>tuple[X, Y]</code> (fixed length); and <code>typing.Any</code> (always true). Raise <code>TypeError</code> for other hints.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import types, typing
+
+def matches(value, hint):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert matches(3, int) and not matches(True, int) and matches(2, float) and matches(2.5, float) and not matches("3", int)
+assert matches(None, None) and matches(None, str | None) and matches("a", str | None) and not matches(1, str | None)
+assert matches([1, 2], list[int]) and not matches([1, "2"], list[int]) and matches([], list[str])
+assert matches({"a": [0.5]}, dict[str, list[float]]) and not matches({1: [0.5]}, dict[str, list[float]])
+assert matches((1, 2, 3), tuple[int, ...]) and matches(("a", 1), tuple[str, int]) and not matches(("a",), tuple[str, int])
+assert matches(object(), typing.Any) and matches([None, 1], list[int | None])
+try:
+    matches(1, set[int])
+    assert False
+except TypeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert matches(3, int) and not matches(True, int) and matches(2, float) and matches(2.5, float) and not matches(&quot;3&quot;, int)
+assert matches(None, None) and matches(None, str | None) and matches(&quot;a&quot;, str | None) and not matches(1, str | None)
+assert matches([1, 2], list[int]) and not matches([1, &quot;2&quot;], list[int]) and matches([], list[str])
+assert matches({&quot;a&quot;: [0.5]}, dict[str, list[float]]) and not matches({1: [0.5]}, dict[str, list[float]])
+assert matches((1, 2, 3), tuple[int, ...]) and matches((&quot;a&quot;, 1), tuple[str, int]) and not matches((&quot;a&quot;,), tuple[str, int])
+assert matches(object(), typing.Any) and matches([None, 1], list[int | None])
+try:
+    matches(1, set[int])
+    assert False
+except TypeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start with <code>typing.Any</code> and <code>None</code>; then <code>origin = typing.get_origin(hint)</code> and <code>args = typing.get_args(hint)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For unions, <code>origin</code> is <code>types.UnionType</code> (or <code>typing.Union</code>): check any of the args. Plain classes have no origin.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import types, typing
+
+def matches(value, hint):
+    if hint is typing.Any:
+        return True
+    if hint is None or hint is type(None):
+        return value is None
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (types.UnionType, typing.Union):
+        return any(matches(value, a) for a in args)
+    if origin is None:
+        if hint is float:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if hint is int:
+            return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, hint)
+    if origin is list:
+        return isinstance(value, list) and all(matches(v, args[0]) for v in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(matches(k, args[0]) and matches(v, args[1]) for k, v in value.items())
+    if origin is tuple:
+        if not isinstance(value, tuple):
+            return False
+        if len(args) == 2 and args[1] is Ellipsis:
+            return all(matches(v, args[0]) for v in value)
+        return len(value) == len(args) and all(matches(v, a) for v, a in zip(value, args))
+    raise TypeError(f&quot;unsupported hint: {hint!r}&quot;)</code></pre></div><p>The function recurses through the structure of the hint, which is what every runtime validator does: plain classes are an <code>isinstance</code> check, unions succeed if any member matches, and containers check themselves and then each element against the inner type. The special cases follow the conventions of type checkers and JSON: <code>bool</code> is excluded from <code>int</code> (1.2) and <code>int</code> is accepted where <code>float</code> is expected. Checking every element is O(n), which is why <code>isinstance(x, list[int])</code> refuses to do it, and why validation belongs at boundaries (API input, model output) rather than in every function. Pydantic implements this, much faster, in Rust, plus conversion and error reporting (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-taking-hints-apart" data-pid="m11-1-taking-hints-apart" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Taking hints apart</h3></header>
+<div class="prob-q"><p>Fill in <code>origin</code> and <code>args</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import typing
+
+def parts(hint):
+    o = typing.get_origin(hint)
+    return (getattr(o, &quot;__name__&quot;, None), tuple(getattr(a, &quot;__name__&quot;, str(a)) for a in typing.get_args(hint)))
+
+origin, args = parts(int)
+origin, args = parts(list[str])
+origin, args = parts(dict[str, list[int]])
+origin, args = parts(int | None)
+origin, args = parts(tuple[float, ...])</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>origin</code></th><th><code>args</code></th></tr><tr><td>int</td><td><input class="cell" data-a="None" data-s="None" aria-label="origin at int" autocomplete="off"></td><td><input class="cell" data-a="()" data-s="()" aria-label="args at int" autocomplete="off"></td></tr><tr><td>list[str]</td><td><input class="cell" data-a="&#x27;list&#x27;" data-s="list" aria-label="origin at list[str]" autocomplete="off"></td><td><input class="cell" data-a="(&#x27;str&#x27;,)" data-s="(&#x27;str&#x27;,)" aria-label="args at list[str]" autocomplete="off"></td></tr><tr><td>nested dict</td><td><input class="cell" data-a="&#x27;dict&#x27;" data-s="dict" aria-label="origin at nested dict" autocomplete="off"></td><td><input class="cell" data-a="(&#x27;str&#x27;, &#x27;list&#x27;)" data-s="(&#x27;str&#x27;, &#x27;list&#x27;)" aria-label="args at nested dict" autocomplete="off"></td></tr><tr><td>int | None</td><td><input class="cell" data-a="&#x27;Union&#x27;" data-s="Union" aria-label="origin at int | None" autocomplete="off"></td><td><input class="cell" data-a="(&#x27;int&#x27;, &#x27;NoneType&#x27;)" data-s="(&#x27;int&#x27;, &#x27;NoneType&#x27;)" aria-label="args at int | None" autocomplete="off"></td></tr><tr><td>variable tuple</td><td><input class="cell" data-a="&#x27;tuple&#x27;" data-s="tuple" aria-label="origin at variable tuple" autocomplete="off"></td><td><input class="cell" data-a="(&#x27;float&#x27;, &#x27;Ellipsis&#x27;)" data-s="(&#x27;float&#x27;, &#x27;Ellipsis&#x27;)" aria-label="args at variable tuple" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Plain classes have no origin and no args. The <code>...</code> in <code>tuple[float, ...]</code> is the <code>Ellipsis</code> object.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>origin</code></th><th><code>args</code></th></tr><tr><td>int</td><td><code>None</code></td><td><code>()</code></td></tr><tr><td>list[str]</td><td><code>&#x27;list&#x27;</code></td><td><code>(&#x27;str&#x27;,)</code></td></tr><tr><td>nested dict</td><td><code>&#x27;dict&#x27;</code></td><td><code>(&#x27;str&#x27;, &#x27;list&#x27;)</code></td></tr><tr><td>int | None</td><td><code>&#x27;Union&#x27;</code></td><td><code>(&#x27;int&#x27;, &#x27;NoneType&#x27;)</code></td></tr><tr><td>variable tuple</td><td><code>&#x27;tuple&#x27;</code></td><td><code>(&#x27;float&#x27;, &#x27;Ellipsis&#x27;)</code></td></tr></table></div><p>A plain class is not generic, so both functions return nothing for it. A parameterised container's origin is the container class and its args are the parameters, which may themselves be generic: the second argument of the dict hint is <code>list[int]</code>, shown here by its <code>__name__</code>, which for a generic alias is just the name of its origin, <code>"list"</code>. A union's origin is the union type, named <code>Union</code> in Python 3.14, and <code>None</code> appears as <code>NoneType</code>. The <code>...</code> of a variable-length tuple is a real object, <code>Ellipsis</code>, passed as the second argument.</p></div></details>
+</article>
+<article class="prob" id="p-validate-calls-against-their-hints" data-pid="m11-1-validate-calls-against-their-hints" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Validate calls against their hints</h3></header>
+<div class="prob-q"><p>Using the <code>matches</code> function provided in the starter, write a decorator <code>validated</code> that, on every call, binds the arguments to the function's signature (with defaults applied) and raises <code>TypeError(f"{name} must be {hint}, got {type(value).__name__}")</code> for the first argument that does not match its hint (unannotated parameters are not checked); it also checks the <strong>return value</strong> against the return hint, raising <code>TypeError</code> mentioning <code>"return"</code>. Compute the hints once, at decoration time. Use <code>functools.wraps</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import functools, inspect, types, typing
+
+def matches(value, hint):
+    if hint is typing.Any:
+        return True
+    if hint is None or hint is type(None):
+        return value is None
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (types.UnionType, typing.Union):
+        return any(matches(value, a) for a in args)
+    if origin is None:
+        if hint in (int, float) and isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float)) if hint is float else isinstance(value, hint)
+    if origin is list:
+        return isinstance(value, list) and all(matches(v, args[0]) for v in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(matches(k, args[0]) and matches(v, args[1]) for k, v in value.items())
+    raise TypeError(f&quot;unsupported hint: {hint!r}&quot;)
+
+def validated(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">@validated
+def search(query: str, k: int = 3, tags: list[str] | None = None) -> list[str]:
+    return [f"{query}-{i}" for i in range(k)]
+
+assert search("refund", 2) == ["refund-0", "refund-1"] and search("x", tags=["eu"]) == ["x-0", "x-1", "x-2"]
+for args, kwargs, word in [(("refund", "2"), {}, "k"), ((42,), {}, "query"), (("x",), {"tags": ["eu", 1]}, "tags")]:
+    try:
+        search(*args, **kwargs)
+        assert False, word
+    except TypeError as e:
+        assert str(e).startswith(word + " must be")
+
+@validated
+def broken(n: int) -> str:
+    return n * 2
+try:
+    broken(2)
+    assert False
+except TypeError as e:
+    assert "return" in str(e)
+assert search.__name__ == "search"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">@validated
+def search(query: str, k: int = 3, tags: list[str] | None = None) -&gt; list[str]:
+    return [f&quot;{query}-{i}&quot; for i in range(k)]
+
+assert search(&quot;refund&quot;, 2) == [&quot;refund-0&quot;, &quot;refund-1&quot;] and search(&quot;x&quot;, tags=[&quot;eu&quot;]) == [&quot;x-0&quot;, &quot;x-1&quot;, &quot;x-2&quot;]
+for args, kwargs, word in [((&quot;refund&quot;, &quot;2&quot;), {}, &quot;k&quot;), ((42,), {}, &quot;query&quot;), ((&quot;x&quot;,), {&quot;tags&quot;: [&quot;eu&quot;, 1]}, &quot;tags&quot;)]:
+    try:
+        search(*args, **kwargs)
+        assert False, word
+    except TypeError as e:
+        assert str(e).startswith(word + &quot; must be&quot;)
+
+@validated
+def broken(n: int) -&gt; str:
+    return n * 2
+try:
+    broken(2)
+    assert False
+except TypeError as e:
+    assert &quot;return&quot; in str(e)
+assert search.__name__ == &quot;search&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>hints = typing.get_type_hints(func)</code>, <code>ret = hints.pop("return", None)</code>, <code>sig = inspect.signature(func)</code> once in the decorator.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the wrapper: <code>bound = sig.bind(*args, **kwargs)</code>, <code>bound.apply_defaults()</code>, check each <code>name, value</code> that has a hint.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, inspect, types, typing
+
+def matches(value, hint):
+    if hint is typing.Any:
+        return True
+    if hint is None or hint is type(None):
+        return value is None
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (types.UnionType, typing.Union):
+        return any(matches(value, a) for a in args)
+    if origin is None:
+        if hint in (int, float) and isinstance(value, bool):
+            return False
+        return isinstance(value, (int, float)) if hint is float else isinstance(value, hint)
+    if origin is list:
+        return isinstance(value, list) and all(matches(v, args[0]) for v in value)
+    if origin is dict:
+        return isinstance(value, dict) and all(matches(k, args[0]) and matches(v, args[1]) for k, v in value.items())
+    raise TypeError(f&quot;unsupported hint: {hint!r}&quot;)
+
+def validated(func):
+    hints = typing.get_type_hints(func)
+    return_hint = hints.pop(&quot;return&quot;, inspect.Signature.empty)
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        for name, value in bound.arguments.items():
+            hint = hints.get(name)
+            if hint is not None and not matches(value, hint):
+                raise TypeError(f&quot;{name} must be {hint}, got {type(value).__name__}&quot;)
+        result = func(*args, **kwargs)
+        if return_hint is not inspect.Signature.empty and not matches(result, return_hint):
+            raise TypeError(f&quot;return value must be {return_hint}, got {type(result).__name__}&quot;)
+        return result
+    return wrapper</code></pre></div><p>This combines three earlier tools: a decorator (8.1), signature binding (8.4) and hint introspection. Binding with defaults applied means default values are validated too, and each argument is matched to its parameter however it was passed. Computing the hints and signature once keeps each call cheap. Checking the return value catches a function that violates its own contract (<code>broken</code> returns an <code>int</code> while promising <code>str</code>). Pydantic's <code>@validate_call</code> is the production version: it also <strong>converts</strong> compatible values (<code>"2"</code> to <code>2</code> when the mode allows), and collects all errors in one exception. Use such validation at boundaries, where untrusted data enters; inside the program, a static type checker gives the same safety at no run-time cost.</p></div></details>
+</article>
+<article class="prob" id="p-annotations-that-lie-about-the-return-va" data-pid="m11-1-annotations-that-lie-about-the-return-va" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Annotations that lie about the return value</h3></header>
+<div class="prob-q"><p>A team decorates every public function with the provided <code>@check_return</code>, which raises if a result does not match the return hint. <code>label_counts</code> now fails, because its hint does not describe what it returns (a dict from label to count, not a list). Fix the <strong>hint</strong>, not the code.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import functools, typing
+from collections import Counter
+
+def check_return(func):
+    hint = typing.get_type_hints(func)[&quot;return&quot;]
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+
+    @functools.wraps(func)
+    def wrapper(*args_, **kwargs):
+        result = func(*args_, **kwargs)
+        ok = isinstance(result, origin or hint)
+        if ok and origin is dict:
+            ok = all(isinstance(k, args[0]) and isinstance(v, args[1]) for k, v in result.items())
+        if not ok:
+            raise TypeError(f&quot;{func.__name__} returned {type(result).__name__}, expected {hint}&quot;)
+        return result
+    return wrapper
+
+@check_return
+def label_counts(labels: list[str]) -&gt; list[tuple[str, int]]:
+    return dict(Counter(labels))
+</textarea>
+<script type="text/plain" class="prob-tests">import typing
+assert label_counts(["spam", "ham", "spam"]) == {"spam": 2, "ham": 1}
+assert label_counts([]) == {}
+assert typing.get_type_hints(label_counts.__wrapped__)["return"] == dict[str, int]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import typing
+assert label_counts([&quot;spam&quot;, &quot;ham&quot;, &quot;spam&quot;]) == {&quot;spam&quot;: 2, &quot;ham&quot;: 1}
+assert label_counts([]) == {}
+assert typing.get_type_hints(label_counts.__wrapped__)[&quot;return&quot;] == dict[str, int]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The function returns a <code>dict</code> whose keys are labels and values are counts.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, typing
+from collections import Counter
+
+def check_return(func):
+    hint = typing.get_type_hints(func)[&quot;return&quot;]
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+
+    @functools.wraps(func)
+    def wrapper(*args_, **kwargs):
+        result = func(*args_, **kwargs)
+        ok = isinstance(result, origin or hint)
+        if ok and origin is dict:
+            ok = all(isinstance(k, args[0]) and isinstance(v, args[1]) for k, v in result.items())
+        if not ok:
+            raise TypeError(f&quot;{func.__name__} returned {type(result).__name__}, expected {hint}&quot;)
+        return result
+    return wrapper
+
+@check_return
+def label_counts(labels: list[str]) -&gt; dict[str, int]:
+    return dict(Counter(labels))</code></pre></div><p>The hint promised a list of pairs (the shape of <code>Counter.most_common()</code>), but the function returns a dict. Without the decorator nothing would fail at run time, and every caller writing <code>for label, n in label_counts(x)</code> would get keys only, while a type checker, believing the hint, would approve it. Hints are only useful if they are true, which is why tools that <strong>read</strong> them (this decorator, Pydantic, FastAPI) are valuable: they turn a wrong hint into an immediate error. <code>__wrapped__</code> (8.1) lets the test read the original function's hints.</p></div></details>
+</article>
+<article class="prob" id="p-any-object-and-default-none" data-pid="m11-1-any-object-and-default-none" data-type="predict" data-level="medium" data-answer="{&#x27;x&#x27;: typing.Any, &#x27;return&#x27;: &lt;class &#x27;NoneType&#x27;&gt;} &lt;class &#x27;object&#x27;&gt;
+{&#x27;x&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: int | None}
+None 5 None">
+<header class="prob-head"><h3>11. Any, object and default None</h3></header>
+<div class="code"><pre><code class="py">import typing
+
+def a(x: typing.Any) -&gt; None: ...
+def b(x: object = None) -&gt; None: ...
+def c(x: int = None) -&gt; int | None:
+    return x
+
+print(typing.get_type_hints(a), typing.get_type_hints(b)[&quot;x&quot;])
+print(typing.get_type_hints(c))
+print(c(), c(5), a.__annotations__[&quot;return&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>get_type_hints</code> returns the annotations as written; it does not add <code>| None</code> for a default of <code>None</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;x&#x27;: typing.Any, &#x27;return&#x27;: &lt;class &#x27;NoneType&#x27;&gt;} &lt;class &#x27;object&#x27;&gt;
+{&#x27;x&#x27;: &lt;class &#x27;int&#x27;&gt;, &#x27;return&#x27;: int | None}
+None 5 None</pre></div><p><code>Any</code> and <code>object</code> are both stored as written. <code>-&gt; None</code> appears as <code>NoneType</code> in <code>get_type_hints</code> (and as <code>None</code> in the raw annotations). A parameter annotated <code>int</code> with a default of <code>None</code> keeps the hint <code>int</code>: older type checkers used to infer <code>int | None</code> implicitly, but mypy and pyright no longer do and report the default as an error, so write <code>x: int | None = None</code> explicitly. The function itself runs either way.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-convert-strings-to-hinted-types" data-pid="m11-1-convert-strings-to-hinted-types" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Convert strings to hinted types</h3></header>
+<div class="prob-q"><p>Settings arrive as strings (environment variables, query parameters, CSV cells). Write <code>coerce(raw, hint)</code> converting a string to the hinted type: <code>str</code> (unchanged), <code>int</code>, <code>float</code>, <code>bool</code> (<code>true/false/yes/no/1/0</code>, any case), <code>list[X]</code> (comma-separated, items stripped, empty string gives <code>[]</code>), and <code>X | None</code> (an empty or blank string, or <code>"none"</code>/<code>"null"</code> in any case, gives <code>None</code>; otherwise convert to <code>X</code>). Raise <code>ValueError</code> naming the hint for strings that cannot be converted, and <code>TypeError</code> for unsupported hints. Then write <code>load_settings(cls_hints, env)</code> that converts every key of the dict <code>cls_hints</code> (name to hint) present in <code>env</code>, and returns a dict.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import types, typing
+
+def coerce(raw, hint):
+    pass
+
+def load_settings(cls_hints, env):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert coerce("42", int) == 42 and coerce(" 0.5 ", float) == 0.5 and coerce("Yes", bool) is True and coerce("0", bool) is False
+assert coerce("a, b ,c", list[str]) == ["a", "b", "c"] and coerce("1,2", list[int]) == [1, 2] and coerce("", list[int]) == []
+assert coerce("", int | None) is None and coerce("NULL", float | None) is None and coerce("7", int | None) == 7
+for raw, hint in [("x", int), ("maybe", bool), ("1,a", list[int])]:
+    try:
+        coerce(raw, hint)
+        assert False, (raw, hint)
+    except ValueError as e:
+        assert str(hint) in str(e)
+try:
+    coerce("a", dict[str, str])
+    assert False
+except TypeError:
+    pass
+hints = {"model": str, "temperature": float, "max_tokens": int, "stream": bool, "stop": list[str], "seed": int | None}
+env = {"model": "large", "temperature": "0.2", "stream": "no", "stop": "User:,###", "seed": "", "extra": "ignored"}
+assert load_settings(hints, env) == {"model": "large", "temperature": 0.2, "stream": False, "stop": ["User:", "###"], "seed": None}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert coerce(&quot;42&quot;, int) == 42 and coerce(&quot; 0.5 &quot;, float) == 0.5 and coerce(&quot;Yes&quot;, bool) is True and coerce(&quot;0&quot;, bool) is False
+assert coerce(&quot;a, b ,c&quot;, list[str]) == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;] and coerce(&quot;1,2&quot;, list[int]) == [1, 2] and coerce(&quot;&quot;, list[int]) == []
+assert coerce(&quot;&quot;, int | None) is None and coerce(&quot;NULL&quot;, float | None) is None and coerce(&quot;7&quot;, int | None) == 7
+for raw, hint in [(&quot;x&quot;, int), (&quot;maybe&quot;, bool), (&quot;1,a&quot;, list[int])]:
+    try:
+        coerce(raw, hint)
+        assert False, (raw, hint)
+    except ValueError as e:
+        assert str(hint) in str(e)
+try:
+    coerce(&quot;a&quot;, dict[str, str])
+    assert False
+except TypeError:
+    pass
+hints = {&quot;model&quot;: str, &quot;temperature&quot;: float, &quot;max_tokens&quot;: int, &quot;stream&quot;: bool, &quot;stop&quot;: list[str], &quot;seed&quot;: int | None}
+env = {&quot;model&quot;: &quot;large&quot;, &quot;temperature&quot;: &quot;0.2&quot;, &quot;stream&quot;: &quot;no&quot;, &quot;stop&quot;: &quot;User:,###&quot;, &quot;seed&quot;: &quot;&quot;, &quot;extra&quot;: &quot;ignored&quot;}
+assert load_settings(hints, env) == {&quot;model&quot;: &quot;large&quot;, &quot;temperature&quot;: 0.2, &quot;stream&quot;: False, &quot;stop&quot;: [&quot;User:&quot;, &quot;###&quot;], &quot;seed&quot;: None}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Handle unions first: if <code>None</code> is among the args, blank/none/null gives <code>None</code>; otherwise coerce to the other member.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap the <code>int</code>/<code>float</code> conversions in <code>try</code> and re-raise <code>ValueError(f"cannot convert {raw!r} to {hint}")</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import types, typing
+
+TRUE, FALSE = {&quot;true&quot;, &quot;yes&quot;, &quot;1&quot;}, {&quot;false&quot;, &quot;no&quot;, &quot;0&quot;}
+
+def coerce(raw, hint):
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (types.UnionType, typing.Union):
+        if type(None) in args and raw.strip().lower() in (&quot;&quot;, &quot;none&quot;, &quot;null&quot;):
+            return None
+        others = [a for a in args if a is not type(None)]
+        if len(others) != 1:
+            raise TypeError(f&quot;unsupported union: {hint!r}&quot;)
+        return coerce(raw, others[0])
+    if origin is list:
+        items = [part.strip() for part in raw.split(&quot;,&quot;)] if raw.strip() else []
+        try:
+            return [coerce(item, args[0]) for item in items]
+        except ValueError:
+            raise ValueError(f&quot;cannot convert {raw!r} to {hint}&quot;) from None
+    if hint is str:
+        return raw
+    if hint is bool:
+        text = raw.strip().lower()
+        if text in TRUE:
+            return True
+        if text in FALSE:
+            return False
+        raise ValueError(f&quot;cannot convert {raw!r} to {hint}&quot;)
+    if hint in (int, float):
+        try:
+            return hint(raw.strip())
+        except ValueError:
+            raise ValueError(f&quot;cannot convert {raw!r} to {hint}&quot;) from None
+    raise TypeError(f&quot;unsupported hint: {hint!r}&quot;)
+
+def load_settings(cls_hints, env):
+    return {name: coerce(env[name], hint) for name, hint in cls_hints.items() if name in env}</code></pre></div><p>Strings are what the outside world gives you, and hints say what the program needs, so a converter driven by hints is the bridge: one table of field types replaces a hand-written parse per setting. Unions with <code>None</code> are resolved first, so an empty variable can mean "not set"; lists convert each item with the element type, recursively. <code>bool</code> needs an explicit vocabulary because <code>bool("false")</code> is <code>True</code> (8.P). Errors name both the bad value and the expected type, which is what a person fixing a configuration needs. Pydantic's settings models and Typer's CLI parsing implement this same conversion, driven by class annotations (11.4).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-schema-generator-that-ig" data-pid="m11-1-read-the-code-a-schema-generator-that-ig" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Read the code: a schema generator that ignores Optional</h3></header>
+<div class="prob-q"><p>This generates JSON schemas for agent tools from type hints (8.4). Parameters annotated <code>X | None</code> crash it with <code>KeyError</code>, and parameters with defaults are wrongly marked as required. A parameter <code>p: X | None = None</code> should produce <code>{"type": [&lt;X's type&gt;, "null"]}</code> and not be required; any parameter with a default is not required. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import inspect, types, typing
+
+JSON = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def tool_schema(func):
+    hints = typing.get_type_hints(func)
+    props, required = {}, []
+    for name, param in inspect.signature(func).parameters.items():
+        hint = hints[name]
+        if typing.get_origin(hint) is list:
+            props[name] = {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: JSON[typing.get_args(hint)[0]]}}
+        else:
+            props[name] = {&quot;type&quot;: JSON[hint]}
+        required.append(name)
+    return {&quot;name&quot;: func.__name__, &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: props, &quot;required&quot;: required}}
+</textarea>
+<script type="text/plain" class="prob-tests">def search(query: str, k: int = 5, lang: str | None = None, tags: list[str] | None = None) -> list[str]:
+    return []
+
+s = tool_schema(search)["parameters"]
+assert s["required"] == ["query"]
+assert s["properties"] == {
+    "query": {"type": "string"}, "k": {"type": "integer"},
+    "lang": {"type": ["string", "null"]},
+    "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+}
+def strict(flag: bool, ids: list[int]):
+    return None
+assert tool_schema(strict)["parameters"]["required"] == ["flag", "ids"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def search(query: str, k: int = 5, lang: str | None = None, tags: list[str] | None = None) -&gt; list[str]:
+    return []
+
+s = tool_schema(search)[&quot;parameters&quot;]
+assert s[&quot;required&quot;] == [&quot;query&quot;]
+assert s[&quot;properties&quot;] == {
+    &quot;query&quot;: {&quot;type&quot;: &quot;string&quot;}, &quot;k&quot;: {&quot;type&quot;: &quot;integer&quot;},
+    &quot;lang&quot;: {&quot;type&quot;: [&quot;string&quot;, &quot;null&quot;]},
+    &quot;tags&quot;: {&quot;type&quot;: [&quot;array&quot;, &quot;null&quot;], &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}},
+}
+def strict(flag: bool, ids: list[int]):
+    return None
+assert tool_schema(strict)[&quot;parameters&quot;][&quot;required&quot;] == [&quot;flag&quot;, &quot;ids&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Unwrap <code>X | None</code> first: if the hint is a union containing <code>NoneType</code>, build the schema for <code>X</code>, then make its <code>"type"</code> a list <code>[t, "null"]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Required means <code>param.default is inspect.Parameter.empty</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, types, typing
+
+JSON = {str: &quot;string&quot;, int: &quot;integer&quot;, float: &quot;number&quot;, bool: &quot;boolean&quot;}
+
+
+def _schema(hint):
+    if typing.get_origin(hint) is list:
+        return {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: _schema(typing.get_args(hint)[0])}
+    return {&quot;type&quot;: JSON[hint]}
+
+
+def tool_schema(func):
+    hints = typing.get_type_hints(func)
+    props, required = {}, []
+    for name, param in inspect.signature(func).parameters.items():
+        hint = hints[name]
+        nullable = False
+        if typing.get_origin(hint) in (types.UnionType, typing.Union):
+            members = [a for a in typing.get_args(hint) if a is not type(None)]
+            nullable = len(members) &lt; len(typing.get_args(hint))
+            if len(members) != 1:
+                raise TypeError(f&quot;{name}: only X | None unions are supported&quot;)
+            hint = members[0]
+        schema = _schema(hint)
+        if nullable:
+            schema[&quot;type&quot;] = [schema[&quot;type&quot;], &quot;null&quot;]
+        props[name] = schema
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+    return {&quot;name&quot;: func.__name__, &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: props, &quot;required&quot;: required}}</code></pre></div><p>Two bugs. A union such as <code>str | None</code> is not a key of the <code>JSON</code> dict, so the lookup raised <code>KeyError</code>; unions must be unwrapped first, keeping the non-<code>None</code> member for the schema and recording that <code>null</code> is allowed, which JSON Schema expresses as a list of types. And every parameter was appended to <code>required</code>, so the model was told it must always send <code>k</code>, <code>lang</code> and <code>tags</code>, even though they have defaults; required means "no default". Both mistakes change how an LLM calls the tool: missing nullability makes it invent values, wrong required lists make it fill parameters it should omit. Moving the per-type logic into <code>_schema</code> makes nested lists work too. Unsupported unions raise a clear error instead of producing a wrong schema.</p></div></details>
+</article>
+<article class="prob" id="p-a-readable-signature-from-hints" data-pid="m11-1-a-readable-signature-from-hints" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. A readable signature from hints</h3></header>
+<div class="prob-q"><p>Write <code>describe(func)</code> returning a one-line description such as <code>search(query: str, k: int = 5, tags: list[str] | None = None) -&gt; list[str]</code>, using <code>inspect.signature</code> and <code>typing.get_type_hints</code>. Format types as written in modern syntax: plain classes by <code>__name__</code>, generics as <code>name[args]</code>, unions with <code>|</code>, <code>None</code> for <code>NoneType</code>, <code>...</code> for <code>Ellipsis</code>. Defaults use <code>repr</code>, with spaces around <code>=</code> only for annotated parameters, as PEP 8 recommends (<code>k: int = 5</code> but <code>y='z'</code>). Unannotated parameters show only the name; <code>*args</code> and <code>**kwargs</code> keep their stars. Omit the arrow when there is no return hint.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import inspect, types, typing
+
+def describe(func):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def search(query: str, k: int = 5, tags: list[str] | None = None, *, weights: dict[str, float] | None = None) -> list[str]:
+    return []
+assert describe(search) == "search(query: str, k: int = 5, tags: list[str] | None = None, weights: dict[str, float] | None = None) -> list[str]"
+
+def misc(a, b: tuple[int, ...] = (1,), *args: str, **kwargs: int) -> None:
+    pass
+assert describe(misc) == "misc(a, b: tuple[int, ...] = (1,), *args: str, **kwargs: int) -> None"
+
+def plain(x, y="z"):
+    pass
+assert describe(plain) == "plain(x, y='z')"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def search(query: str, k: int = 5, tags: list[str] | None = None, *, weights: dict[str, float] | None = None) -&gt; list[str]:
+    return []
+assert describe(search) == &quot;search(query: str, k: int = 5, tags: list[str] | None = None, weights: dict[str, float] | None = None) -&gt; list[str]&quot;
+
+def misc(a, b: tuple[int, ...] = (1,), *args: str, **kwargs: int) -&gt; None:
+    pass
+assert describe(misc) == &quot;misc(a, b: tuple[int, ...] = (1,), *args: str, **kwargs: int) -&gt; None&quot;
+
+def plain(x, y=&quot;z&quot;):
+    pass
+assert describe(plain) == &quot;plain(x, y=&#x27;z&#x27;)&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A recursive <code>fmt(hint)</code>: <code>None</code>/<code>NoneType</code> gives <code>"None"</code>, <code>Ellipsis</code> gives <code>"..."</code>, unions join members with <code>" | "</code>, generics are <code>f"{origin.__name__}[{', '.join(...)}]"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The keyword-only marker <code>*</code> is not part of the expected output; just list the parameters.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect, types, typing
+
+def fmt(hint):
+    if hint is None or hint is type(None):
+        return &quot;None&quot;
+    if hint is Ellipsis:
+        return &quot;...&quot;
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin in (types.UnionType, typing.Union):
+        return &quot; | &quot;.join(fmt(a) for a in args)
+    if origin is not None:
+        return f&quot;{origin.__name__}[{&#x27;, &#x27;.join(fmt(a) for a in args)}]&quot;
+    return getattr(hint, &quot;__name__&quot;, repr(hint))
+
+def describe(func):
+    hints = typing.get_type_hints(func)
+    parts = []
+    for name, p in inspect.signature(func).parameters.items():
+        prefix = {p.VAR_POSITIONAL: &quot;*&quot;, p.VAR_KEYWORD: &quot;**&quot;}.get(p.kind, &quot;&quot;)
+        text = prefix + name
+        if name in hints:
+            text += f&quot;: {fmt(hints[name])}&quot;
+        if p.default is not p.empty:
+            text += (&quot; = &quot; if name in hints else &quot;=&quot;) + repr(p.default)
+        parts.append(text)
+    result = f&quot;{func.__name__}({&#x27;, &#x27;.join(parts)})&quot;
+    if &quot;return&quot; in hints:
+        result += f&quot; -&gt; {fmt(hints[&#x27;return&#x27;])}&quot;
+    return result</code></pre></div><p>The formatter mirrors how hints are built: a union is a set of members, a generic is an origin with arguments, and both recurse, so <code>dict[str, float] | None</code> comes out exactly as written. <code>NoneType</code> and <code>Ellipsis</code> need special cases because they are values standing in for types. Walking the signature gives parameter kinds and defaults, and the hints give the types; the two are separate because a parameter can have a default without an annotation and vice versa. Documentation generators, CLI help (Typer, Click) and tool descriptions for LLMs are all built from exactly these two sources.</p></div></details>
+</article>
+<article class="prob" id="p-lazy-annotations-in-python-3-14" data-pid="m11-1-lazy-annotations-in-python-3-14" data-type="predict" data-level="hard" data-answer="defined without NameError
+NameError: name &#x27;Document&#x27; is not defined
+{&#x27;doc&#x27;: &#x27;Document&#x27;, &#x27;store&#x27;: &#x27;VectorStore | None&#x27;, &#x27;return&#x27;: &#x27;Report&#x27;}
+[&#x27;doc&#x27;, &#x27;return&#x27;, &#x27;store&#x27;] Document">
+<header class="prob-head"><h3>15. Lazy annotations in Python 3.14</h3></header>
+<div class="code"><pre><code class="py">import annotationlib
+
+def ingest(doc: Document, store: &quot;VectorStore | None&quot; = None) -&gt; Report:
+    return None
+
+print(&quot;defined without NameError&quot;)
+try:
+    ingest.__annotations__
+except NameError as e:
+    print(&quot;NameError:&quot;, e)
+strings = annotationlib.get_annotations(ingest, format=annotationlib.Format.STRING)
+print(strings)
+
+class Document: pass
+class Report: pass
+print(sorted(ingest.__annotations__), ingest.__annotations__[&quot;doc&quot;].__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Python 3.14 evaluates annotations only when they are requested (PEP 649), so names used in hints may be defined later.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>defined without NameError
+NameError: name &#x27;Document&#x27; is not defined
+{&#x27;doc&#x27;: &#x27;Document&#x27;, &#x27;store&#x27;: &#x27;VectorStore | None&#x27;, &#x27;return&#x27;: &#x27;Report&#x27;}
+[&#x27;doc&#x27;, &#x27;return&#x27;, &#x27;store&#x27;] Document</pre></div><p>Defining the function does not evaluate its annotations, so using <code>Document</code> before the class exists is fine. Asking for <code>__annotations__</code> evaluates them, and fails while <code>Document</code> is still undefined. <code>annotationlib.get_annotations</code> with the <code>STRING</code> format returns the annotations as source text without evaluating anything, which is what documentation tools use. Once the classes exist, evaluating succeeds. The quoted <code>"VectorStore | None"</code> stays a string even when evaluated, since a string annotation is just a string value: quoting forward references was the old workaround, and with lazy annotations it is no longer needed.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-are-type-hints-enforced-in-python-then-w" data-pid="m11-1-are-type-hints-enforced-in-python-then-w" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Are type hints enforced in Python? Then what are they for?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>No: the interpreter stores annotations (in <code>__annotations__</code>) and otherwise ignores them, so passing a wrong type runs exactly as it would without hints. They are for three things. Documentation that cannot drift as easily as comments, because tools read it. Static analysis: type checkers such as mypy and pyright analyse the code without running it and catch mismatched arguments, wrong return types, missing attributes and unhandled <code>None</code> values before production, and editors use the same information for completion and refactoring. And runtime use by libraries that read the hints on purpose: dataclasses generate methods from them, Pydantic validates and converts data, FastAPI and Typer build APIs and CLIs, agent frameworks build tool schemas. A good practice is static checking inside the program and explicit validation at its boundaries, where untrusted data enters.</p></div></details>
+</article>
+<article class="prob" id="p-what-does-str-none-or-optional-str-mean-" data-pid="m11-1-what-does-str-none-or-optional-str-mean-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What does <code>str | None</code> (or <code>Optional[str]</code>) mean, and how should code handle it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It means the value is either a string or <code>None</code>; <code>Optional</code> does not mean the parameter is optional (that is a default value), it means "may be None". A function returning <code>str | None</code> tells every caller that a missing result is a normal outcome they must handle. Code handles it by <strong>narrowing</strong>: checking <code>if value is None:</code> (and returning, raising or using a fallback) before using it as a string, after which the type checker treats it as <code>str</code>; <code>isinstance</code> checks narrow the same way. A parameter that defaults to <code>None</code> should be annotated <code>X | None = None</code> explicitly. Unhandled <code>None</code> is the most common bug type checkers catch, because in production it shows up as <code>AttributeError: 'NoneType' object has no attribute ...</code> on the rare path where a lookup failed.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-introduce-type-checking-in" data-pid="m11-1-how-would-you-introduce-type-checking-in" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. How would you introduce type checking into an existing ML codebase?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Gradually. Add a type checker (mypy or pyright) to the editor and CI in a lenient mode first, so unannotated code is not flagged, and fix the errors it already finds in annotated code. Then annotate the boundaries that matter most: public functions of shared modules, data loading and feature pipelines, configuration, and the code that calls model APIs, using precise types for inputs (<code>Iterable[str]</code>, <code>Mapping[str, float]</code>), <code>X | None</code> where values can be missing, dataclasses or Pydantic models instead of loose dicts for structured records, and protocols for pluggable components. Enable stricter settings per module as coverage grows (mypy's per-module <code>strict</code>), and install stub packages such as <code>pandas-stubs</code>; for array shapes and dtypes, which types capture poorly, keep runtime assertions. Avoid <code>Any</code> except at real boundaries, and validate external data (API payloads, model output, files) at run time with Pydantic, since static types cannot check data that arrives while the program runs. Measure progress by the share of typed modules and the number of production bugs caught earlier.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Type hints (<code>x: int</code>, <code>-&gt; list[str]</code>) document types for people, editors and type checkers; Python does not enforce them.</li><li>Use built-in generics (<code>list[str]</code>, <code>dict[str, float]</code>, <code>tuple[int, ...]</code>) and aliases for long types; annotate <code>-&gt; None</code> for functions returning nothing.</li><li><code>X | None</code> means "may be None"; handle it by narrowing (<code>if x is None:</code>, <code>isinstance</code>) before use. Keep hints truthful.</li><li>Accept the most general types (<code>Iterable</code>, <code>Sequence</code>, <code>Mapping</code>), return specific ones; <code>Any</code> disables checking, <code>object</code> forces narrowing.</li><li>Libraries read hints at run time with <code>typing.get_type_hints</code>, <code>get_origin</code> and <code>get_args</code>: dataclasses, Pydantic, FastAPI and tool schemas.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
