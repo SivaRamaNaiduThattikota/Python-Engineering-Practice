@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>14.2 · Threads and futures</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m14-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 14 · Concurrency and async</span></div>
+  <h1>14.2 Threads and futures</h1>
+  <p>Threads are the simplest way to overlap I/O in Python: calls to model APIs, downloads, database queries. <code>threading</code> briefly, then <code>concurrent.futures</code>, which is what you should use: executors, futures, <code>submit</code>, <code>map</code> and <code>as_completed</code>, error handling, keeping results out of shared state, locks for the state you must share, and how many threads to use. On this site executors run each task immediately and in order (14.1), so problems check correctness; run them locally for real overlap.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 8 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="threading">
+<h2><span class="n">1</span><code>threading.Thread</code> in brief</h2>
+<p>A <code>threading.Thread(target=fn, args=(...))</code> runs <code>fn</code> in a new thread once you call <code>start()</code>; <code>join()</code> waits for it to finish. The calling code continues immediately after <code>start()</code>, which is the point: while one thread waits for a network reply, others run. Raw threads have two awkward properties. They <strong>return nothing</strong>: a target's return value is discarded, so results must be passed back through shared structures. And an exception in a thread does <strong>not</strong> reach the code that started it: it is printed by <code>threading.excepthook</code> and the thread ends, while <code>join()</code> returns normally (problem 10). <code>daemon=True</code> threads are killed abruptly when the program exits, which suits background helpers but loses work in progress.</p>
+<p>For almost all application code, use <strong><code>concurrent.futures</code></strong> instead: it manages a pool of threads, passes return values and exceptions back, and fits in a <code>with</code> block. Reach for raw threads only for long-lived background workers (a log shipper, a heartbeat), usually communicating through a <code>queue.Queue</code>.</p>
+</section>
+<section class="sec" id="executors">
+<h2><span class="n">2</span>Executors and futures</h2>
+<p><strong><code>ThreadPoolExecutor(max_workers=n)</code></strong> keeps <code>n</code> worker threads. <code>executor.submit(fn, *args, **kwargs)</code> schedules one call and immediately returns a <strong><code>Future</code></strong>. <code>future.result(timeout=None)</code> waits for the call and returns its value, or <strong>re-raises its exception</strong> in the calling thread, with the original traceback; <code>future.exception()</code> returns the exception instead of raising, <code>future.done()</code> tells whether it finished, <code>future.cancel()</code> cancels a call that has not started, and <code>add_done_callback(fn)</code> runs <code>fn(future)</code> when it finishes. Using the executor in a <code>with</code> block calls <code>shutdown(wait=True)</code> at the end, so the block does not exit until every submitted call is done, and no new work can be submitted afterwards.</p>
+<p>Two ways to collect results. <strong><code>executor.map(fn, items)</code></strong> returns an iterator of results <strong>in input order</strong>, like the built-in <code>map</code>, and if a call raised, iterating re-raises that exception when its turn comes, so results after it are lost unless you handle errors inside <code>fn</code>. <strong><code>as_completed(futures)</code></strong> yields futures <strong>as they finish</strong>, fastest first, which lets you process or report results early, show progress, and handle each error separately; keep a dict from future to input to know which input each result belongs to. <code>concurrent.futures.wait(futures, return_when=FIRST_EXCEPTION)</code> waits until the first failure, for fail-fast batches.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">futures.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def classify(text):
+    if not text:
+        raise ValueError(&quot;empty message&quot;)
+    return &quot;spam&quot; if &quot;prize&quot; in text.lower() else &quot;ham&quot;
+
+messages = [&quot;Win a PRIZE&quot;, &quot;Lunch?&quot;, &quot;&quot;, &quot;Prize draw today&quot;]
+with ThreadPoolExecutor(max_workers=4) as pool:
+    futures = {pool.submit(classify, m): i for i, m in enumerate(messages)}
+    results = [None] * len(messages)
+    for future in as_completed(futures):
+        i = futures[future]
+        error = future.exception()
+        results[i] = f&quot;error: {error}&quot; if error else future.result()
+print(results)
+
+with ThreadPoolExecutor(max_workers=4) as pool:
+    it = pool.map(classify, messages)
+    print(next(it), next(it))
+    try:
+        next(it)
+    except ValueError as e:
+        print(&quot;map raised:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;spam&#x27;, &#x27;ham&#x27;, &#x27;error: empty message&#x27;, &#x27;spam&#x27;]
+spam ham
+map raised: empty message</pre></div></div>
+<p>The dict from future to index puts every result back in its place whatever the completion order, and each failure is recorded rather than aborting the batch. With <code>map</code>, the first two results arrive normally, and the third raises when iterated.</p>
+</section>
+<section class="sec" id="state">
+<h2><span class="n">3</span>Results instead of shared state</h2>
+<p>The safest concurrent code shares nothing mutable: each task receives its inputs, returns its result, and the caller combines results after collecting them. Then there is nothing to race on. When tasks must update shared state, protect it with <strong><code>threading.Lock</code></strong>: <code>with lock:</code> around every read-modify-write of that state, kept as short as possible (never around a network call, or the threads queue behind the lock and you are back to sequential). <code>RLock</code> can be re-acquired by the thread that holds it. <code>queue.Queue</code> is a thread-safe FIFO for producer and consumer threads, with blocking <code>put</code> and <code>get</code>. Individual operations on built-in containers, such as <code>list.append</code>, happen to be safe in CPython, but compound ones (<code>if key not in d: d[key] = ...</code>, <code>counter += 1</code>) are not, and code should not rely on implementation details, especially with free-threaded Python arriving.</p>
+<p>Clients deserve a note: most HTTP and LLM SDK clients (<code>httpx.Client</code>, <code>requests.Session</code>, the OpenAI and Anthropic clients) are designed to be shared across threads and reuse connections; create one and pass it to the tasks rather than one per call. Check each library's documentation, because some objects (such as database connections or SQLite cursors) must not be shared.</p>
+</section>
+<section class="sec" id="sizing">
+<h2><span class="n">4</span>How many threads</h2>
+<p>For I/O-bound work, the right number of threads is set by what you are waiting on, not by CPU cores: Little's law (14.1) gives the concurrency needed for a target throughput, and the provider's rate limits and the remote service's capacity cap it. The default <code>max_workers</code> is <code>min(32, os.cpu_count() + 4)</code>, a reasonable start for mixed workloads. Too many threads waste memory (each has its own stack), increase contention, and can overload the service you call; for thousands of concurrent requests, asyncio (14.4) scales better. Always set <strong>timeouts</strong> on network calls made from threads: a thread stuck on a request without a timeout is a worker lost for good.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-futures-from-submit-and-map" data-pid="m14-2-futures-from-submit-and-map" data-type="predict" data-level="easy" data-answer="42 ValueError True
+re-raised: invalid literal for int() with base 10: &#x27;forty&#x27;
+[1, 2, 3] [10, 40, 90]
+RuntimeError: cannot schedule new futures after shutdown">
+<header class="prob-head"><h3>1. Futures from submit and map</h3></header>
+<div class="code"><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+def parse(x):
+    return int(x)
+
+with ThreadPoolExecutor(max_workers=2) as pool:
+    f1 = pool.submit(parse, &quot;42&quot;)
+    f2 = pool.submit(parse, &quot;forty&quot;)
+    print(f1.result(), type(f2.exception()).__name__, f2.done())
+    try:
+        f2.result()
+    except ValueError as e:
+        print(&quot;re-raised:&quot;, e)
+    print(list(pool.map(parse, [&quot;1&quot;, &quot;2&quot;, &quot;3&quot;])), list(pool.map(lambda a, b: a * b, [1, 2, 3], [10, 20, 30])))
+try:
+    pool.submit(parse, &quot;7&quot;)
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>result()</code> re-raises the call's exception; <code>exception()</code> returns it. <code>map</code> with several iterables passes one item from each. A shut-down executor refuses new work.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>42 ValueError True
+re-raised: invalid literal for int() with base 10: &#x27;forty&#x27;
+[1, 2, 3] [10, 40, 90]
+RuntimeError: cannot schedule new futures after shutdown</pre></div><p>A future holds either a value or an exception: <code>result()</code> returns the value or raises the stored exception in the calling thread, and <code>exception()</code> hands the exception back for inspection. <code>map</code> returns results in input order, and with several iterables it zips them like the built-in. After the <code>with</code> block the executor is shut down, so <code>submit</code> raises <code>RuntimeError</code>, which catches code that accidentally schedules work after the batch.</p></div></details>
+</article>
+<article class="prob" id="p-fetch-many-urls-keeping-errors" data-pid="m14-2-fetch-many-urls-keeping-errors" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Fetch many URLs, keeping errors</h3></header>
+<div class="prob-q"><p>Write <code>fetch_all(fetch, urls, max_workers=8)</code> that calls <code>fetch(url)</code> for every URL on a <code>ThreadPoolExecutor</code> and returns a dict mapping each URL, <strong>in input order</strong>, to either the result or the string <code>f"error: {ExceptionName}: {message}"</code>. Duplicate URLs are fetched once.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def fetch_all(fetch, urls, max_workers=8):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def fetch(url):
+    calls.append(url)
+    if "bad" in url:
+        raise ConnectionError("reset by peer")
+    return f"<html>{url}</html>"
+urls = ["https://a.io/1", "https://bad.io", "https://a.io/2", "https://a.io/1"]
+out = fetch_all(fetch, urls, max_workers=3)
+assert list(out) == ["https://a.io/1", "https://bad.io", "https://a.io/2"]
+assert out["https://bad.io"] == "error: ConnectionError: reset by peer" and out["https://a.io/2"] == "<html>https://a.io/2</html>"
+assert sorted(calls) == sorted(set(urls)) and fetch_all(fetch, []) == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def fetch(url):
+    calls.append(url)
+    if &quot;bad&quot; in url:
+        raise ConnectionError(&quot;reset by peer&quot;)
+    return f&quot;&lt;html&gt;{url}&lt;/html&gt;&quot;
+urls = [&quot;https://a.io/1&quot;, &quot;https://bad.io&quot;, &quot;https://a.io/2&quot;, &quot;https://a.io/1&quot;]
+out = fetch_all(fetch, urls, max_workers=3)
+assert list(out) == [&quot;https://a.io/1&quot;, &quot;https://bad.io&quot;, &quot;https://a.io/2&quot;]
+assert out[&quot;https://bad.io&quot;] == &quot;error: ConnectionError: reset by peer&quot; and out[&quot;https://a.io/2&quot;] == &quot;&lt;html&gt;https://a.io/2&lt;/html&gt;&quot;
+assert sorted(calls) == sorted(set(urls)) and fetch_all(fetch, []) == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>unique = list(dict.fromkeys(urls))</code> removes duplicates and keeps order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Map each future to its URL, collect with <code>as_completed</code>, then build the result dict in <code>unique</code> order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def fetch_all(fetch, urls, max_workers=8):
+    unique = list(dict.fromkeys(urls))
+    results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(fetch, url): url for url in unique}
+        for future in as_completed(futures):
+            url = futures[future]
+            error = future.exception()
+            results[url] = f&quot;error: {type(error).__name__}: {error}&quot; if error else future.result()
+    return {url: results[url] for url in unique}</code></pre></div><p>Each URL becomes one future, and the dict from future to URL tells the collector which result is which, whatever the completion order; rebuilding the output in input order makes the function's result deterministic even though threads finish in any order. Using <code>exception()</code> turns each failure into data instead of aborting the batch, which is what a crawler or an evaluation run needs. Deduplicating first avoids paying twice for the same call.</p></div></details>
+</article>
+<article class="prob" id="p-errors-that-vanish-with-the-futures" data-pid="m14-2-errors-that-vanish-with-the-futures" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Errors that vanish with the futures</h3></header>
+<div class="prob-q"><p><code>process_all(fn, items)</code> submits every item but never looks at the futures, so it returns nothing and failures go unnoticed. Make it return the results in input order, and if any call failed, raise <code>RuntimeError(f"{n} of {total} items failed")</code> chained from the <strong>first</strong> failure (in input order) after all calls have finished.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from concurrent.futures import ThreadPoolExecutor
+
+def process_all(fn, items, max_workers=4):
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for item in items:
+            pool.submit(fn, item)
+</textarea>
+<script type="text/plain" class="prob-tests">assert process_all(lambda x: x * 2, [1, 2, 3]) == [2, 4, 6]
+def risky(x):
+    if x % 2:
+        raise ValueError(f"odd {x}")
+    return x
+try:
+    process_all(risky, [2, 3, 4, 5])
+    assert False
+except RuntimeError as e:
+    assert str(e) == "2 of 4 items failed" and isinstance(e.__cause__, ValueError) and str(e.__cause__) == "odd 3"
+assert process_all(risky, []) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert process_all(lambda x: x * 2, [1, 2, 3]) == [2, 4, 6]
+def risky(x):
+    if x % 2:
+        raise ValueError(f&quot;odd {x}&quot;)
+    return x
+try:
+    process_all(risky, [2, 3, 4, 5])
+    assert False
+except RuntimeError as e:
+    assert str(e) == &quot;2 of 4 items failed&quot; and isinstance(e.__cause__, ValueError) and str(e.__cause__) == &quot;odd 3&quot;
+assert process_all(risky, []) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the futures in a list in input order; after the <code>with</code> block every one is done.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect <code>f.exception()</code> for each, then <code>raise RuntimeError(...) from errors[0]</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+def process_all(fn, items, max_workers=4):
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(fn, item) for item in items]
+    errors = [f.exception() for f in futures if f.exception() is not None]
+    if errors:
+        raise RuntimeError(f&quot;{len(errors)} of {len(futures)} items failed&quot;) from errors[0]
+    return [f.result() for f in futures]</code></pre></div><p>An exception raised inside a submitted call is stored in its future; if nobody calls <code>result()</code> or <code>exception()</code>, it is simply garbage-collected with the future, and the failure leaves no trace, a common reason a "parallel" job silently processes half its data. Keeping the futures, in input order, makes every outcome inspectable after the <code>with</code> block (which waited for all of them). Reporting the count and chaining the first error (7.2) keeps the summary short while preserving a full traceback for debugging.</p></div></details>
+</article>
+<article class="prob" id="p-map-errors-and-order" data-pid="m14-2-map-errors-and-order" data-type="predict" data-level="easy" data-answer="[3, 5, &#x27;stopped: cannot parse&#x27;]
+[3, 5, &#x27;error: cannot parse&#x27;, 6]">
+<header class="prob-head"><h3>4. map, errors and order</h3></header>
+<div class="code"><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+def score(doc):
+    if doc == &quot;corrupt&quot;:
+        raise ValueError(&quot;cannot parse&quot;)
+    return len(doc)
+
+docs = [&quot;faq&quot;, &quot;terms&quot;, &quot;corrupt&quot;, &quot;policy&quot;]
+got = []
+with ThreadPoolExecutor(max_workers=2) as pool:
+    try:
+        for value in pool.map(score, docs):
+            got.append(value)
+    except ValueError as e:
+        got.append(f&quot;stopped: {e}&quot;)
+print(got)
+
+def safe(doc):
+    try:
+        return score(doc)
+    except ValueError as e:
+        return f&quot;error: {e}&quot;
+
+with ThreadPoolExecutor(max_workers=2) as pool:
+    print(list(pool.map(safe, docs)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>map</code> yields results in input order and raises a call's exception when that position is reached.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[3, 5, &#x27;stopped: cannot parse&#x27;]
+[3, 5, &#x27;error: cannot parse&#x27;, 6]</pre></div><p><code>map</code> yields results in order, and when it reaches a call that raised, it re-raises the exception there, so iteration stops and the later result is never seen (it was computed, but the loop ended). Catching errors <strong>inside</strong> the mapped function turns them into values, so every position gets a result: a simple, common pattern when you want <code>map</code>'s ordering without losing the batch.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-a-parallel-map-with-retries" data-pid="m14-2-a-parallel-map-with-retries" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. A parallel map with retries</h3></header>
+<div class="prob-q"><p>Write <code>map_with_retry(fn, items, attempts=3, retry_on=(TimeoutError, ConnectionError), max_workers=8)</code> that calls <code>fn(item)</code> for each item on a thread pool, retrying each item up to <code>attempts</code> times in total when it raises one of <code>retry_on</code>. Return a list in input order of <code>{"item": ..., "ok": bool, "value": ... or None, "error": None or "ExceptionName: message", "attempts": n}</code>. Other exceptions are not retried.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from concurrent.futures import ThreadPoolExecutor
+
+def map_with_retry(fn, items, attempts=3, retry_on=(TimeoutError, ConnectionError), max_workers=8):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">tries = {}
+def flaky(x):
+    tries[x] = tries.get(x, 0) + 1
+    if x == "slow" and tries[x] < 3:
+        raise TimeoutError("timed out")
+    if x == "down":
+        raise ConnectionError("refused")
+    if x == "bad":
+        raise ValueError("bad input")
+    return x.upper()
+out = map_with_retry(flaky, ["ok", "slow", "down", "bad"], attempts=3)
+assert out[0] == {"item": "ok", "ok": True, "value": "OK", "error": None, "attempts": 1}
+assert out[1] == {"item": "slow", "ok": True, "value": "SLOW", "error": None, "attempts": 3}
+assert out[2] == {"item": "down", "ok": False, "value": None, "error": "ConnectionError: refused", "attempts": 3}
+assert out[3] == {"item": "bad", "ok": False, "value": None, "error": "ValueError: bad input", "attempts": 1}
+assert tries == {"ok": 1, "slow": 3, "down": 3, "bad": 1}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tries = {}
+def flaky(x):
+    tries[x] = tries.get(x, 0) + 1
+    if x == &quot;slow&quot; and tries[x] &lt; 3:
+        raise TimeoutError(&quot;timed out&quot;)
+    if x == &quot;down&quot;:
+        raise ConnectionError(&quot;refused&quot;)
+    if x == &quot;bad&quot;:
+        raise ValueError(&quot;bad input&quot;)
+    return x.upper()
+out = map_with_retry(flaky, [&quot;ok&quot;, &quot;slow&quot;, &quot;down&quot;, &quot;bad&quot;], attempts=3)
+assert out[0] == {&quot;item&quot;: &quot;ok&quot;, &quot;ok&quot;: True, &quot;value&quot;: &quot;OK&quot;, &quot;error&quot;: None, &quot;attempts&quot;: 1}
+assert out[1] == {&quot;item&quot;: &quot;slow&quot;, &quot;ok&quot;: True, &quot;value&quot;: &quot;SLOW&quot;, &quot;error&quot;: None, &quot;attempts&quot;: 3}
+assert out[2] == {&quot;item&quot;: &quot;down&quot;, &quot;ok&quot;: False, &quot;value&quot;: None, &quot;error&quot;: &quot;ConnectionError: refused&quot;, &quot;attempts&quot;: 3}
+assert out[3] == {&quot;item&quot;: &quot;bad&quot;, &quot;ok&quot;: False, &quot;value&quot;: None, &quot;error&quot;: &quot;ValueError: bad input&quot;, &quot;attempts&quot;: 1}
+assert tries == {&quot;ok&quot;: 1, &quot;slow&quot;: 3, &quot;down&quot;: 3, &quot;bad&quot;: 1}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write a per-item function <code>one(item)</code> that loops over attempts and returns the record dict; then <code>list(pool.map(one, items))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>retry_on</code> and retry; catch other <code>Exception</code>s and stop at once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+
+def map_with_retry(fn, items, attempts=3, retry_on=(TimeoutError, ConnectionError), max_workers=8):
+    def one(item):
+        for attempt in range(1, attempts + 1):
+            try:
+                return {&quot;item&quot;: item, &quot;ok&quot;: True, &quot;value&quot;: fn(item), &quot;error&quot;: None, &quot;attempts&quot;: attempt}
+            except retry_on as e:
+                last = e
+            except Exception as e:
+                return {&quot;item&quot;: item, &quot;ok&quot;: False, &quot;value&quot;: None, &quot;error&quot;: f&quot;{type(e).__name__}: {e}&quot;, &quot;attempts&quot;: attempt}
+        return {&quot;item&quot;: item, &quot;ok&quot;: False, &quot;value&quot;: None, &quot;error&quot;: f&quot;{type(last).__name__}: {last}&quot;, &quot;attempts&quot;: attempts}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        return list(pool.map(one, items))</code></pre></div><p>Putting the retry loop <strong>inside</strong> the task keeps each item's retries on its own worker, so one slow item does not delay the others, and wrapping every outcome in a record makes <code>map</code>'s ordered results safe to collect: no exception escapes, so nothing is lost. Retrying only transient errors (timeouts, dropped connections) and failing fast on others (a <code>ValueError</code> from bad input will fail every time) saves time and money. A production version adds backoff with jitter between attempts (13.3) and a shared rate limiter (problem 9).</p></div></details>
+</article>
+<article class="prob" id="p-workers-that-update-a-shared-counter" data-pid="m14-2-workers-that-update-a-shared-counter" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Workers that update a shared counter</h3></header>
+<div class="prob-q"><p><code>count_words_parallel(docs)</code> lets every worker add its counts into the module-level <code>TOTALS</code> dict with a read-modify-write, a race with real threads, and the totals keep growing across calls. Rewrite it so each worker <strong>returns</strong> its own <code>Counter</code> from <code>count_words(doc)</code> (a pure function that changes nothing outside) and the caller merges them; remove <code>TOTALS</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+
+TOTALS = {}
+
+
+def count_words(doc):
+    for word in doc.lower().split():
+        TOTALS[word] = TOTALS.get(word, 0) + 1
+
+
+def count_words_parallel(docs, max_workers=4):
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(count_words, docs))
+    return dict(TOTALS)
+</textarea>
+<script type="text/plain" class="prob-tests">docs = ["Refunds take five days", "refunds after thirty days", "Shipping is free"]
+first = count_words_parallel(docs)
+assert first["refunds"] == 2 and first["days"] == 2 and first["shipping"] == 1
+assert count_words_parallel(docs) == first
+assert count_words("a b a") == Counter({"a": 2, "b": 1}) and "TOTALS" not in globals()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = [&quot;Refunds take five days&quot;, &quot;refunds after thirty days&quot;, &quot;Shipping is free&quot;]
+first = count_words_parallel(docs)
+assert first[&quot;refunds&quot;] == 2 and first[&quot;days&quot;] == 2 and first[&quot;shipping&quot;] == 1
+assert count_words_parallel(docs) == first
+assert count_words(&quot;a b a&quot;) == Counter({&quot;a&quot;: 2, &quot;b&quot;: 1}) and &quot;TOTALS&quot; not in globals()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>count_words</code> returns <code>Counter(doc.lower().split())</code>; the caller sums the counters with <code>sum(..., Counter())</code> or <code>update</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+
+
+def count_words(doc):
+    return Counter(doc.lower().split())
+
+
+def count_words_parallel(docs, max_workers=4):
+    total = Counter()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for counts in pool.map(count_words, docs):
+            total.update(counts)
+    return dict(total)</code></pre></div><p><code>TOTALS[word] = TOTALS.get(word, 0) + 1</code> is a read followed by a write, so two threads counting the same word can both read 3 and both write 4 (14.1), and the module-level dict also carried counts over from earlier calls, so the second call returned doubled numbers. Returning results and merging them in the caller removes the shared state entirely: workers are pure functions, which are trivially thread-safe and easy to test, and the merge happens in one thread. This map-then-reduce shape is how distributed systems such as Spark and MapReduce avoid shared counters too. (Word counting is CPU-bound, so in practice it belongs on processes, 14.3; the pattern is the same.)</p></div></details>
+</article>
+<article class="prob" id="p-the-life-of-a-future" data-pid="m14-2-the-life-of-a-future" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. The life of a Future</h3></header>
+<div class="prob-q"><p>Fill in <code>state</code> after each marked line. These futures are created by hand, as executors do internally.</p></div>
+<div class="code"><pre><code class="py">from concurrent.futures import Future, CancelledError
+
+seen = []
+f = Future()
+f.add_done_callback(lambda fut: seen.append(fut.result()))
+state = (f.done(), f.running(), seen)
+f.set_result(42)
+state = (f.done(), f.result(), seen)
+f.add_done_callback(lambda fut: seen.append(&quot;late&quot;))
+state = (f.cancel(), seen)
+g = Future()
+state = (g.cancel(), g.cancelled(), g.done())
+try:
+    g.result()
+except CancelledError:
+    state = &quot;CancelledError&quot;</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>new future</td><td><input class="cell" data-a="(False, False, [])" data-s="(False, False, [])" aria-label="state at new future" autocomplete="off"></td></tr><tr><td>after set_result</td><td><input class="cell" data-a="(True, 42, [42])" data-s="(True, 42, [42])" aria-label="state at after set_result" autocomplete="off"></td></tr><tr><td>late callback, then cancel</td><td><input class="cell" data-a="(False, [42, &#x27;late&#x27;])" data-s="(False, [42, &#x27;late&#x27;])" aria-label="state at late callback, then cancel" autocomplete="off"></td></tr><tr><td>cancel a pending future</td><td><input class="cell" data-a="(True, True, True)" data-s="(True, True, True)" aria-label="state at cancel a pending future" autocomplete="off"></td></tr><tr><td>result of a cancelled future</td><td><input class="cell" data-a="&#x27;CancelledError&#x27;" data-s="CancelledError" aria-label="state at result of a cancelled future" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Callbacks run when the result is set; a callback added after completion runs immediately. A finished future cannot be cancelled; a pending one can.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>state</code></th></tr><tr><td>new future</td><td><code>(False, False, [])</code></td></tr><tr><td>after set_result</td><td><code>(True, 42, [42])</code></td></tr><tr><td>late callback, then cancel</td><td><code>(False, [42, &#x27;late&#x27;])</code></td></tr><tr><td>cancel a pending future</td><td><code>(True, True, True)</code></td></tr><tr><td>result of a cancelled future</td><td><code>&#x27;CancelledError&#x27;</code></td></tr></table></div><p>A future starts pending; <code>set_result</code> (which the executor's worker calls) completes it and runs its callbacks with the future as argument. A callback added later runs at once, which is why callbacks are safe to add at any time. Cancelling a finished future fails and returns <code>False</code>; cancelling a pending one succeeds, marks it done and cancelled, and <code>result()</code> then raises <code>CancelledError</code>. In an executor, only calls that have not started can be cancelled, which is what <code>shutdown(cancel_futures=True)</code> relies on.</p></div></details>
+</article>
+<article class="prob" id="p-embed-a-corpus-in-parallel-batches" data-pid="m14-2-embed-a-corpus-in-parallel-batches" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>8. Embed a corpus in parallel batches</h3></header>
+<div class="prob-q"><p>Write <code>embed_corpus(texts, embed_batch, batch_size=32, max_workers=4)</code>: split <code>texts</code> into batches of <code>batch_size</code>, call <code>embed_batch(batch)</code> (returning one vector per text) for the batches on a thread pool, and return all vectors in the <strong>original order</strong>. Raise <code>ValueError(f"batch {i} returned {m} vectors for {n} texts")</code> if a batch returns the wrong number of vectors.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">from concurrent.futures import ThreadPoolExecutor
+
+def embed_corpus(texts, embed_batch, batch_size=32, max_workers=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">batches_seen = []
+def embed_batch(batch):
+    batches_seen.append(len(batch))
+    return [[float(len(t)), float(t.count("a"))] for t in batch]
+texts = [f"doc {'a' * i}" for i in range(10)]
+vecs = embed_corpus(texts, embed_batch, batch_size=4, max_workers=2)
+assert vecs == [[float(len(t)), float(t.count("a"))] for t in texts]
+assert sorted(batches_seen) == [2, 4, 4] and embed_corpus([], embed_batch) == []
+def short(batch):
+    return embed_batch(batch)[:-1] if len(batch) == 4 else embed_batch(batch)
+try:
+    embed_corpus(texts, short, batch_size=4)
+    assert False
+except ValueError as e:
+    assert str(e) == "batch 0 returned 3 vectors for 4 texts"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">batches_seen = []
+def embed_batch(batch):
+    batches_seen.append(len(batch))
+    return [[float(len(t)), float(t.count(&quot;a&quot;))] for t in batch]
+texts = [f&quot;doc {&#x27;a&#x27; * i}&quot; for i in range(10)]
+vecs = embed_corpus(texts, embed_batch, batch_size=4, max_workers=2)
+assert vecs == [[float(len(t)), float(t.count(&quot;a&quot;))] for t in texts]
+assert sorted(batches_seen) == [2, 4, 4] and embed_corpus([], embed_batch) == []
+def short(batch):
+    return embed_batch(batch)[:-1] if len(batch) == 4 else embed_batch(batch)
+try:
+    embed_corpus(texts, short, batch_size=4)
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;batch 0 returned 3 vectors for 4 texts&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]</code>; <code>pool.map(embed_batch, batches)</code> keeps batch order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check each batch's output length against its input as you collect, using <code>enumerate</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+
+def embed_corpus(texts, embed_batch, batch_size=32, max_workers=4):
+    batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+    vectors = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for i, (batch, out) in enumerate(zip(batches, pool.map(embed_batch, batches))):
+            if len(out) != len(batch):
+                raise ValueError(f&quot;batch {i} returned {len(out)} vectors for {len(batch)} texts&quot;)
+            vectors.extend(out)
+    return vectors</code></pre></div><p>Embedding APIs accept batches, so the work splits naturally into batch calls that overlap their network waits on a thread pool. <code>map</code> returns batch results in submission order, so concatenating them restores the original text order without any bookkeeping, which is essential: a vector paired with the wrong text silently corrupts a search index. The length check guards against a provider dropping an input, which would otherwise shift every later vector by one. <code>batch_size</code> is set by the provider's limits (texts and tokens per request) and <code>max_workers</code> by its rate limits.</p></div></details>
+</article>
+<article class="prob" id="p-a-thread-safe-token-bucket" data-pid="m14-2-a-thread-safe-token-bucket" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. A thread-safe token bucket</h3></header>
+<div class="prob-q"><p>Write <code>TokenBucket(rate, capacity, clock=time.monotonic)</code> for client-side rate limiting shared by many threads: it starts full, refills at <code>rate</code> tokens per second up to <code>capacity</code>, and <code>try_acquire(n=1)</code> takes <code>n</code> tokens and returns <code>True</code> if available, else returns <code>False</code> without taking any. Protect the state with a <code>threading.Lock</code>, since several threads call it. Also add <code>wait_time(n=1)</code>, the seconds until <code>n</code> tokens would be available (0.0 if now).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import threading, time
+
+class TokenBucket:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">now = [100.0]
+b = TokenBucket(rate=2.0, capacity=4, clock=lambda: now[0])
+assert [b.try_acquire() for _ in range(5)] == [True, True, True, True, False]
+assert b.wait_time() == 0.5
+now[0] += 1.0
+assert b.try_acquire(2) and not b.try_acquire()
+now[0] += 10
+assert b.try_acquire(4) and not b.try_acquire(1) and b.wait_time(3) == 1.5
+assert isinstance(b._lock, type(threading.Lock()))
+try:
+    b.try_acquire(5)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">now = [100.0]
+b = TokenBucket(rate=2.0, capacity=4, clock=lambda: now[0])
+assert [b.try_acquire() for _ in range(5)] == [True, True, True, True, False]
+assert b.wait_time() == 0.5
+now[0] += 1.0
+assert b.try_acquire(2) and not b.try_acquire()
+now[0] += 10
+assert b.try_acquire(4) and not b.try_acquire(1) and b.wait_time(3) == 1.5
+assert isinstance(b._lock, type(threading.Lock()))
+try:
+    b.try_acquire(5)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>tokens</code> and <code>last</code> (the clock reading of the last refill); a private <code>_refill()</code> adds <code>(now - last) * rate</code>, capped at capacity.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Do the refill and the check-and-take inside one <code>with self._lock:</code> block. Requests larger than <code>capacity</code> can never succeed: raise <code>ValueError</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import threading, time
+
+
+class TokenBucket:
+    def __init__(self, rate, capacity, clock=time.monotonic):
+        self.rate, self.capacity, self.clock = rate, capacity, clock
+        self.tokens = float(capacity)
+        self.last = clock()
+        self._lock = threading.Lock()
+
+    def _refill(self):
+        now = self.clock()
+        self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
+        self.last = now
+
+    def try_acquire(self, n=1):
+        if n &gt; self.capacity:
+            raise ValueError(f&quot;cannot acquire {n} tokens from a bucket of {self.capacity}&quot;)
+        with self._lock:
+            self._refill()
+            if self.tokens &gt;= n:
+                self.tokens -= n
+                return True
+            return False
+
+    def wait_time(self, n=1):
+        with self._lock:
+            self._refill()
+            return max(0.0, (n - self.tokens) / self.rate)</code></pre></div><p>A token bucket allows short bursts (up to <code>capacity</code>) while holding the long-run rate to <code>rate</code> per second, which is how most API rate limits behave. The refill is computed lazily from elapsed time, so no background thread is needed. The lock makes "refill, check, take" one atomic step: without it, two threads could both see one remaining token and both take it, exceeding the limit. The injected clock makes the class deterministic to test (13.3). In a thread pool, a worker calls <code>try_acquire</code> before each request and sleeps for <code>wait_time()</code> when it fails; the asyncio version in 14.5 has the same logic.</p></div></details>
+</article>
+<article class="prob" id="p-exceptions-in-raw-threads" data-pid="m14-2-exceptions-in-raw-threads" data-type="predict" data-level="medium" data-answer="[0, 10, 30] [(&#x27;ValueError&#x27;, &#x27;bad item&#x27;, &#x27;worker-2&#x27;)]
+main thread continues MainThread">
+<header class="prob-head"><h3>10. Exceptions in raw threads</h3></header>
+<div class="code"><pre><code class="py">import threading
+
+results = []
+
+def work(x):
+    if x == 2:
+        raise ValueError(&quot;bad item&quot;)
+    results.append(x * 10)
+    return &quot;returned values are discarded&quot;
+
+caught = []
+threading.excepthook = lambda args: caught.append((args.exc_type.__name__, str(args.exc_value), args.thread.name))
+threads = [threading.Thread(target=work, args=(i,), name=f&quot;worker-{i}&quot;) for i in range(4)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+print(sorted(results), caught)
+print(&quot;main thread continues&quot;, threading.current_thread().name)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception in a thread's target is passed to <code>threading.excepthook</code>; it does not propagate to the code that started or joined the thread.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0, 10, 30] [(&#x27;ValueError&#x27;, &#x27;bad item&#x27;, &#x27;worker-2&#x27;)]
+main thread continues MainThread</pre></div><p>The failing thread's exception goes to <code>threading.excepthook</code> (by default it prints a traceback to standard error), <code>join()</code> returns normally, and the main thread never learns about it unless something records it, which is how errors disappear in thread-based code. Return values are discarded too, so results travel through shared structures. Executors solve both problems by storing the result or the exception in a future (problem 3).</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-a-pipeline-of-parallel-stages" data-pid="m14-2-a-pipeline-of-parallel-stages" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. A pipeline of parallel stages</h3></header>
+<div class="prob-q"><p>Write <code>run_pipeline(items, stages, max_workers=4)</code> where <code>stages</code> is a list of <code>(name, fn)</code>. Each stage runs <code>fn</code> on every item still alive, in parallel on a thread pool, in input order. An item whose stage raises is dropped from later stages and recorded. Return <code>{"results": [final values of surviving items, in input order], "failed": [(index, stage_name, "ExceptionName: message"), ...] in index order}</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">from concurrent.futures import ThreadPoolExecutor
+
+def run_pipeline(items, stages, max_workers=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def fetch(url):
+    if "404" in url:
+        raise LookupError("not found")
+    return f"<p>{url.split('/')[-1]} text</p>"
+
+def clean(html):
+    text = html.replace("<p>", "").replace("</p>", "")
+    if text.startswith("empty"):
+        raise ValueError("no content")
+    return text
+
+def chunk(text):
+    return text.split()
+
+urls = ["https://x.io/faq", "https://x.io/404", "https://x.io/empty", "https://x.io/terms"]
+out = run_pipeline(urls, [("fetch", fetch), ("clean", clean), ("chunk", chunk)], max_workers=2)
+assert out["results"] == [["faq", "text"], ["terms", "text"]]
+assert out["failed"] == [(1, "fetch", "LookupError: not found"), (2, "clean", "ValueError: no content")]
+assert run_pipeline([], [("fetch", fetch)]) == {"results": [], "failed": []}
+assert run_pipeline([1, 2], []) == {"results": [1, 2], "failed": []}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def fetch(url):
+    if &quot;404&quot; in url:
+        raise LookupError(&quot;not found&quot;)
+    return f&quot;&lt;p&gt;{url.split(&#x27;/&#x27;)[-1]} text&lt;/p&gt;&quot;
+
+def clean(html):
+    text = html.replace(&quot;&lt;p&gt;&quot;, &quot;&quot;).replace(&quot;&lt;/p&gt;&quot;, &quot;&quot;)
+    if text.startswith(&quot;empty&quot;):
+        raise ValueError(&quot;no content&quot;)
+    return text
+
+def chunk(text):
+    return text.split()
+
+urls = [&quot;https://x.io/faq&quot;, &quot;https://x.io/404&quot;, &quot;https://x.io/empty&quot;, &quot;https://x.io/terms&quot;]
+out = run_pipeline(urls, [(&quot;fetch&quot;, fetch), (&quot;clean&quot;, clean), (&quot;chunk&quot;, chunk)], max_workers=2)
+assert out[&quot;results&quot;] == [[&quot;faq&quot;, &quot;text&quot;], [&quot;terms&quot;, &quot;text&quot;]]
+assert out[&quot;failed&quot;] == [(1, &quot;fetch&quot;, &quot;LookupError: not found&quot;), (2, &quot;clean&quot;, &quot;ValueError: no content&quot;)]
+assert run_pipeline([], [(&quot;fetch&quot;, fetch)]) == {&quot;results&quot;: [], &quot;failed&quot;: []}
+assert run_pipeline([1, 2], []) == {&quot;results&quot;: [1, 2], &quot;failed&quot;: []}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Track <code>alive</code> as a list of <code>(index, value)</code> pairs. For each stage, submit <code>fn(value)</code> for each, then rebuild <code>alive</code> from the futures in order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>future.exception()</code> tells you whether to keep the item or record the failure.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+
+def run_pipeline(items, stages, max_workers=4):
+    alive = list(enumerate(items))
+    failed = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for name, fn in stages:
+            futures = [(i, pool.submit(fn, value)) for i, value in alive]
+            alive = []
+            for i, future in futures:
+                error = future.exception()
+                if error is None:
+                    alive.append((i, future.result()))
+                else:
+                    failed.append((i, name, f&quot;{type(error).__name__}: {error}&quot;))
+    return {&quot;results&quot;: [value for _, value in alive], &quot;failed&quot;: sorted(failed)}</code></pre></div><p>Ingestion jobs are pipelines (fetch, clean, chunk, embed), and each stage is a batch of independent calls, so each runs in parallel on one shared pool. Carrying the original index with every value is what lets results and failures be reported in input order and traced back to the input, however the threads interleave; failed items leave the pipeline at the stage that failed and are recorded with that stage's name, which tells the operator where to look. Processing stage by stage is simple and keeps memory bounded per stage; a streaming design (each item flows on as soon as it finishes a stage) improves latency and is what queues between stages or asyncio tasks (14.5) provide.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-thread-per-document-scra" data-pid="m14-2-read-the-code-a-thread-per-document-scra" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Read the code: a thread-per-document scraper</h3></header>
+<div class="prob-q"><p>This scraper starts one raw <code>Thread</code> per URL (thousands of threads for a big crawl), collects results in a global list in completion order, loses every exception (the thread just dies), and returns before checking that all threads finished. Rewrite <code>scrape(urls, fetch, parse, max_workers=8)</code> with a <code>ThreadPoolExecutor</code> so it returns <code>{"pages": [parsed result per URL, in input order, None for failures], "errors": {url: "ExceptionName: message"}}</code>, with no module-level state and no raw threads.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import threading
+
+PAGES = []
+
+
+def _work(url, fetch, parse):
+    html = fetch(url)
+    PAGES.append(parse(html))
+
+
+def scrape(urls, fetch, parse, max_workers=8):
+    threads = [threading.Thread(target=_work, args=(u, fetch, parse)) for u in urls]
+    for t in threads:
+        t.start()
+    return {&quot;pages&quot;: PAGES, &quot;errors&quot;: {}}
+</textarea>
+<script type="text/plain" class="prob-tests">import threading
+threading.excepthook = lambda args: None
+def fetch(url):
+    if url.endswith("down"):
+        raise ConnectionError("refused")
+    return f"<title>{url.rsplit('/', 1)[-1]}</title>"
+def parse(html):
+    if "broken" in html:
+        raise ValueError("no title")
+    return html[7:-8]
+urls = ["https://s.io/a", "https://s.io/down", "https://s.io/broken", "https://s.io/b"]
+out = scrape(urls, fetch, parse, max_workers=3)
+assert out == {"pages": ["a", None, None, "b"], "errors": {"https://s.io/down": "ConnectionError: refused", "https://s.io/broken": "ValueError: no title"}}
+assert scrape(urls[:1], fetch, parse) == {"pages": ["a"], "errors": {}}
+assert "threading.Thread(" not in __source__ and "PAGES" not in __source__</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import threading
+threading.excepthook = lambda args: None
+def fetch(url):
+    if url.endswith(&quot;down&quot;):
+        raise ConnectionError(&quot;refused&quot;)
+    return f&quot;&lt;title&gt;{url.rsplit(&#x27;/&#x27;, 1)[-1]}&lt;/title&gt;&quot;
+def parse(html):
+    if &quot;broken&quot; in html:
+        raise ValueError(&quot;no title&quot;)
+    return html[7:-8]
+urls = [&quot;https://s.io/a&quot;, &quot;https://s.io/down&quot;, &quot;https://s.io/broken&quot;, &quot;https://s.io/b&quot;]
+out = scrape(urls, fetch, parse, max_workers=3)
+assert out == {&quot;pages&quot;: [&quot;a&quot;, None, None, &quot;b&quot;], &quot;errors&quot;: {&quot;https://s.io/down&quot;: &quot;ConnectionError: refused&quot;, &quot;https://s.io/broken&quot;: &quot;ValueError: no title&quot;}}
+assert scrape(urls[:1], fetch, parse) == {&quot;pages&quot;: [&quot;a&quot;], &quot;errors&quot;: {}}
+assert &quot;threading.Thread(&quot; not in __source__ and &quot;PAGES&quot; not in __source__</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One task per URL that does <code>parse(fetch(url))</code>; submit them all, keep the futures in input order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The executor's <code>with</code> block waits for every task, so no <code>join</code> bookkeeping is needed.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ThreadPoolExecutor
+
+
+def _work(url, fetch, parse):
+    return parse(fetch(url))
+
+
+def scrape(urls, fetch, parse, max_workers=8):
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [(url, pool.submit(_work, url, fetch, parse)) for url in urls]
+    pages, errors = [], {}
+    for url, future in futures:
+        error = future.exception()
+        if error is None:
+            pages.append(future.result())
+        else:
+            pages.append(None)
+            errors[url] = f&quot;{type(error).__name__}: {error}&quot;
+    return {&quot;pages&quot;: pages, &quot;errors&quot;: errors}</code></pre></div><p>Each defect is a lesson section. A thread per URL creates thousands of threads, each with its own stack, and hammers the target site; a pool of 8 bounds both memory and load. The global list mixed results from different calls and stored them in completion order, so page <code>i</code> was not URL <code>i</code>; returning values through futures and rebuilding in input order fixes both. Raw threads swallow exceptions into <code>excepthook</code>, so failures were invisible; futures keep them for the caller. And <code>scrape</code> returned before the threads finished, so callers saw a partial list; the executor's <code>with</code> block waits for all tasks.</p></div></details>
+</article>
+<article class="prob" id="p-as-completed-wait-and-timeouts" data-pid="m14-2-as-completed-wait-and-timeouts" data-type="predict" data-level="hard" data-answer="5 0 [0, 1, 4, 16]
+True [&#x27;RuntimeError&#x27;]
+[0, 1, 4, 16] 4
+5 True">
+<header class="prob-head"><h3>13. as_completed, wait and timeouts</h3></header>
+<div class="code"><pre><code class="py">from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_EXCEPTION, ALL_COMPLETED
+
+def job(x):
+    if x == 3:
+        raise RuntimeError(&quot;job 3 failed&quot;)
+    return x * x
+
+with ThreadPoolExecutor(max_workers=4) as pool:
+    futures = [pool.submit(job, x) for x in range(5)]
+    done, pending = wait(futures, return_when=ALL_COMPLETED)
+    print(len(done), len(pending), sorted(f.result() for f in done if f.exception() is None))
+    done, pending = wait(futures, return_when=FIRST_EXCEPTION)
+    print(len(done) &gt;= 1, [type(f.exception()).__name__ for f in futures if f.exception()])
+    values = sorted(f.result() for f in as_completed(futures) if not f.exception())
+    print(values, futures[2].result(timeout=1))
+    print(sum(1 for _ in as_completed(futures, timeout=5)), all(f.done() for f in futures))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>wait</code> returns two sets, done and not done. <code>as_completed</code> yields each future once, in completion order. On this site every future completes at submission.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>5 0 [0, 1, 4, 16]
+True [&#x27;RuntimeError&#x27;]
+[0, 1, 4, 16] 4
+5 True</pre></div><p><code>wait</code> splits futures into finished and unfinished sets; with all of them complete, everything is in <code>done</code>, and the failed one is among them, holding its exception. <code>FIRST_EXCEPTION</code> returns as soon as one future has failed (or all are done). Sorting the results from <code>as_completed</code> makes the output independent of the completion order, which varies between runs with real threads, a habit worth keeping whenever results are printed or asserted. <code>result(timeout=...)</code> and <code>as_completed(timeout=...)</code> raise <code>TimeoutError</code> if futures do not finish in time, the tools for bounding how long a batch may wait.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-why-use-a-threadpoolexecutor-rather-than" data-pid="m14-2-why-use-a-threadpoolexecutor-rather-than" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. Why use a ThreadPoolExecutor rather than creating threads yourself?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>An executor bounds concurrency with a fixed pool, so a list of 10,000 items does not create 10,000 threads or overload the service being called; it reuses threads instead of paying creation costs per task; it returns <strong>futures</strong>, so each call's return value or exception comes back to the caller with its traceback, where raw threads discard return values and only print exceptions; it offers <code>map</code> (ordered results) and <code>as_completed</code> (completion order), timeouts, cancellation of not-yet-started work and <code>wait</code> policies; and as a context manager it guarantees all work has finished (or been cancelled) when the block ends. Swapping <code>ThreadPoolExecutor</code> for <code>ProcessPoolExecutor</code> moves CPU-bound work to processes with the same code. Raw threads remain appropriate for long-lived background loops.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-make-code-safe-to-call-from-s" data-pid="m14-2-how-do-you-make-code-safe-to-call-from-s" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How do you make code safe to call from several threads?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>First minimise shared mutable state: make tasks pure functions of their inputs that return results, and combine results in one thread afterwards; use immutable data (tuples, frozen dataclasses) for shared configuration. For state that must be shared (caches, counters, rate limiters, connection pools), guard every compound operation with a <code>threading.Lock</code>, keeping critical sections short and never holding a lock across slow I/O; acquire several locks in one global order to avoid deadlocks. Use thread-safe structures (<code>queue.Queue</code> for hand-offs, <code>threading.Event</code> for signals) instead of hand-made flags. Check that the libraries you share are documented as thread-safe (HTTP clients usually are; database connections often are not, so use a pool or one per thread, or <code>threading.local</code>). Test with stress tests and deterministic interleaving tools, and remember that the GIL never made compound operations atomic, and free-threaded Python removes even the incidental protection it gave.</p></div></details>
+</article>
+<article class="prob" id="p-a-colleague-used-threads-to-speed-up-a-c" data-pid="m14-2-a-colleague-used-threads-to-speed-up-a-c" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. A colleague used threads to speed up a CPU-heavy feature extraction and it got slower. Explain and fix it.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>With the GIL, only one thread executes Python bytecode at a time, so pure-Python CPU work cannot run in parallel on threads; it runs one thread at a time with extra overhead from switching and lock contention, which makes it slower than a plain loop. Threads help only when work waits (I/O) or runs in C code that releases the GIL. The fix depends on the work: vectorise with NumPy or pandas, whose inner loops run in C (often several times faster on its own, and some operations use several cores); move the work to processes with <code>ProcessPoolExecutor</code>, chunking the input so each task is large enough to amortise the cost of sending data between processes (14.3); or, on a free-threaded Python build with compatible libraries, threads do run in parallel. Measure before and after with wall time and CPU time, and check Amdahl's law: if part of the pipeline is serial (reading one file, writing one output), that part bounds the speed-up.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Prefer <code>concurrent.futures</code> to raw threads: executors bound concurrency, and futures carry results and exceptions back.</li><li><code>submit</code> returns a <code>Future</code> (<code>result()</code> re-raises, <code>exception()</code> inspects); <code>map</code> keeps input order and raises at the failing item; <code>as_completed</code> yields in completion order.</li><li>Keep a dict from future to input, rebuild outputs in input order, and turn per-item errors into data so a batch survives failures.</li><li>Avoid shared mutable state: return results and merge them; when state must be shared, guard compound operations with a <code>Lock</code>, briefly.</li><li>Size I/O thread pools by latency and rate limits (Little's law), share thread-safe clients, and always set timeouts.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

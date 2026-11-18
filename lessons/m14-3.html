@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>14.3 · Processes</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m14-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 14 · Concurrency and async</span></div>
+  <h1>14.3 Processes</h1>
+  <p>For CPU-bound Python code, the way past the GIL is several processes, each with its own interpreter on its own core. <code>ProcessPoolExecutor</code> and <code>multiprocessing</code>, what must be picklable, the <code>__main__</code> guard and start methods, task size and chunking, loading a model once per worker with an initializer, sending paths instead of data, and when to vectorise instead. On this site the process pool runs tasks inline but checks picklability the way real processes do.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 7 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="pool">
+<h2><span class="n">1</span><code>ProcessPoolExecutor</code></h2>
+<p><code>concurrent.futures.ProcessPoolExecutor(max_workers=n)</code> has the same interface as the thread pool of 14.2 (<code>submit</code>, <code>map</code>, <code>as_completed</code>, futures), but each worker is a separate <strong>process</strong>. Each has its own interpreter and its own GIL, so pure-Python computation runs truly in parallel, one task per core. The default <code>max_workers</code> is the number of CPUs, which is the right number for CPU-bound work: more processes than cores just compete for them. The lower-level <code>multiprocessing</code> module offers <code>Pool</code>, <code>Process</code>, queues and pipes for the same purpose; for task-based work, the executor is simpler.</p>
+<p>The price of separate memory is <strong>communication</strong>. The parent and the workers share nothing, so the function to call, its arguments, and its return value are <strong>pickled</strong>, sent through a pipe, and unpickled on the other side. This has three consequences, each covered below: what you send must be picklable, sending is not free, and global state in the parent is not visible in the workers unless they create it themselves.</p>
+</section>
+<section class="sec" id="pickle">
+<h2><span class="n">2</span>What can be sent</h2>
+<p><code>pickle</code> sends <strong>functions and classes by name</strong>: it records "the function <code>square</code> in module <code>tasks</code>", and the worker imports that module and looks the name up. So a worker can receive only functions and classes that are defined at the <strong>top level of an importable module</strong>. Lambdas, functions defined inside other functions, and classes defined inside functions have no importable name and fail with <code>PicklingError</code>. <code>functools.partial(top_level_fn, arg)</code> works, and so do bound methods of picklable objects. Arguments and return values must be picklable too: numbers, strings, lists, dicts, dataclasses and NumPy arrays are; open files, locks, sockets, generators and database connections are not (<code>TypeError: cannot pickle ...</code>).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">picklable.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools, threading
+from concurrent.futures import ProcessPoolExecutor
+
+def square(x):
+    return x * x
+
+def make_scaler(factor):
+    def scale(x):
+        return x * factor
+    return scale
+
+candidates = [
+    (&quot;top-level function&quot;, square, (3,)),
+    (&quot;lambda&quot;, lambda x: x * x, (3,)),
+    (&quot;nested function&quot;, make_scaler(2), (3,)),
+    (&quot;partial&quot;, functools.partial(pow, 2), (10,)),
+    (&quot;lock argument&quot;, square, (threading.Lock(),)),
+]
+with ProcessPoolExecutor(max_workers=2) as pool:
+    for label, fn, args in candidates:
+        error = pool.submit(fn, *args).exception()
+        print(f&quot;{label:20} {type(error).__name__ if error else &#x27;ok&#x27;}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>top-level function   ok
+lambda               PicklingError
+nested function      PicklingError
+partial              ok
+lock argument        TypeError</pre></div></div>
+<p>On this site the pool runs tasks in the page, but it pickles the function, arguments and result first, so the same mistakes fail here as on a real machine. The failure is stored in the future, like any task error, and appears when you call <code>result()</code>.</p>
+</section>
+<section class="sec" id="main">
+<h2><span class="n">3</span>The <code>__main__</code> guard and start methods</h2>
+<p>A worker process must import your code to find the function it will run. With the <strong><code>spawn</code></strong> start method, the default on Windows and macOS, the worker is a fresh interpreter that <strong>imports your main script as a module</strong> (under a name other than <code>"__main__"</code>). If the script creates a process pool at top level, each worker would try to create its own pool while importing it, and Python stops this with an error. Hence the rule for any script that uses processes: put the code that starts work under <strong><code>if __name__ == "__main__":</code></strong>, so it runs when the file is executed and not when a worker imports it.</p>
+<p>On Linux, Python historically used <strong><code>fork</code></strong>, which copies the parent process, including its memory, so workers started without importing anything; it is fast but unsafe when the parent has threads (a lock held by another thread is copied in its locked state). Python 3.14 changed the Linux default to <strong><code>forkserver</code></strong>, which forks workers from a clean server process. Write code that works under <code>spawn</code> (top-level functions, the main guard, no reliance on inherited globals) and it will work everywhere. <code>multiprocessing.get_context("spawn")</code> chooses a method explicitly, and <code>ProcessPoolExecutor(mp_context=...)</code> passes it to the executor.</p>
+</section>
+<section class="sec" id="size">
+<h2><span class="n">4</span>Task size, chunking and initializers</h2>
+<p>Every task costs a round trip: pickle the call, send it, unpickle, run, pickle the result, send it back. For a task that takes a microsecond, that overhead dominates, and a process pool is <strong>slower</strong> than a plain loop. Make tasks coarse: send <strong>chunks</strong> of items (a list of 1,000 texts per task rather than one), or use <code>executor.map(fn, items, chunksize=1000)</code>, which batches items for you. The right chunk size balances overhead against load balancing: very large chunks leave workers idle at the end while one finishes the last chunk (problem 11).</p>
+<p>Workers often need an expensive resource: a tokenizer, a vocabulary, a spaCy pipeline, a model. Loading it inside every task repeats the work; passing it as an argument pickles it every time. Instead, give the executor an <strong><code>initializer</code></strong>: <code>ProcessPoolExecutor(initializer=load, initargs=(path,))</code> runs <code>load(path)</code> once in each worker when it starts, and <code>load</code> stores the resource in a module-level global that the task functions read. Similarly, send <strong>paths, ids or offsets, not data</strong>: let each worker open its own file or query its own rows, so only small descriptions cross the process boundary.</p>
+<p>Finally, check whether processes are needed at all. Many CPU-bound loops are faster still when <strong>vectorised</strong> with NumPy or pandas, whose inner loops run in C (problem 8), and some libraries (tokenizers, BLAS in NumPy, PyTorch) already use several cores internally. Measure with <code>cProfile</code> and wall-clock timings first, then parallelise what remains.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-picklable-or-not" data-pid="m14-3-picklable-or-not" data-type="predict" data-level="easy" data-answer="dataclass arg 6
+list of docs [1, 2]
+partial 3
+lambda PicklingError
+generator result TypeError
+local class result PicklingError">
+<header class="prob-head"><h3>1. Picklable or not</h3></header>
+<div class="code"><pre><code class="py">import functools
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
+
+@dataclass
+class Doc:
+    id: str
+    text: str
+
+def length(doc):
+    return len(doc.text)
+
+def chunk_lengths(docs):
+    return [len(d.text) for d in docs]
+
+def make_gen(n):
+    return (i for i in range(n))
+
+def make_counter():
+    class Counter:
+        pass
+    return Counter()
+
+jobs = [
+    (&quot;dataclass arg&quot;, length, (Doc(&quot;a&quot;, &quot;refund&quot;),)),
+    (&quot;list of docs&quot;, chunk_lengths, ([Doc(&quot;a&quot;, &quot;x&quot;), Doc(&quot;b&quot;, &quot;yz&quot;)],)),
+    (&quot;partial&quot;, functools.partial(length, Doc(&quot;c&quot;, &quot;abc&quot;)), ()),
+    (&quot;lambda&quot;, lambda d: d.id, (Doc(&quot;d&quot;, &quot;&quot;),)),
+    (&quot;generator result&quot;, make_gen, (3,)),
+    (&quot;local class result&quot;, make_counter, ()),
+]
+with ProcessPoolExecutor() as pool:
+    for label, fn, args in jobs:
+        f = pool.submit(fn, *args)
+        print(label, type(f.exception()).__name__ if f.exception() else f.result())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Functions and classes travel by name: they must be top-level. Instances of top-level classes are fine. Results are pickled too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>dataclass arg 6
+list of docs [1, 2]
+partial 3
+lambda PicklingError
+generator result TypeError
+local class result PicklingError</pre></div><p>Top-level functions, instances of a top-level dataclass, lists of them and a <code>partial</code> of a top-level function are all picklable, so those tasks succeed. A lambda has no importable name, so pickling the call fails before it runs. The last two fail on the way <strong>back</strong>: a generator cannot be pickled at all (<code>TypeError</code>), and an instance of a class defined inside a function cannot be either, because its class has no importable name. Returning plain data from workers avoids both.</p></div></details>
+</article>
+<article class="prob" id="p-count-tokens-in-parallel-chunks" data-pid="m14-3-count-tokens-in-parallel-chunks" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Count tokens in parallel chunks</h3></header>
+<div class="prob-q"><p>Write <code>chunks(items, size)</code> returning a list of consecutive slices of <code>items</code> of length <code>size</code> (the last may be shorter; <code>size &lt; 1</code> raises <code>ValueError</code>), a top-level worker <code>count_chunk(texts)</code> returning the word counts of a list of texts, and <code>parallel_token_counts(texts, workers=4, chunk_size=100)</code> that sends <strong>chunks</strong> to a <code>ProcessPoolExecutor</code> and returns one count per text, in the original order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">from concurrent.futures import ProcessPoolExecutor
+
+def chunks(items, size):
+    pass
+
+def count_chunk(texts):
+    pass
+
+def parallel_token_counts(texts, workers=4, chunk_size=100):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]] and chunks([], 3) == []
+texts = [f"word {'x ' * i}".strip() for i in range(250)]
+counts = parallel_token_counts(texts, workers=3, chunk_size=64)
+assert counts == [len(t.split()) for t in texts] and len(counts) == 250
+assert count_chunk(["a b", "c"]) == [2, 1]
+try:
+    chunks([1], 0)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert chunks([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]] and chunks([], 3) == []
+texts = [f&quot;word {&#x27;x &#x27; * i}&quot;.strip() for i in range(250)]
+counts = parallel_token_counts(texts, workers=3, chunk_size=64)
+assert counts == [len(t.split()) for t in texts] and len(counts) == 250
+assert count_chunk([&quot;a b&quot;, &quot;c&quot;]) == [2, 1]
+try:
+    chunks([1], 0)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[items[i:i + size] for i in range(0, len(items), size)]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>pool.map(count_chunk, chunks(texts, chunk_size))</code> yields one list per chunk, in order; flatten them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ProcessPoolExecutor
+
+
+def chunks(items, size):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+def count_chunk(texts):
+    return [len(t.split()) for t in texts]
+
+
+def parallel_token_counts(texts, workers=4, chunk_size=100):
+    out = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for counts in pool.map(count_chunk, chunks(texts, chunk_size)):
+            out.extend(counts)
+    return out</code></pre></div><p>Each task carries a chunk of texts, so the per-task overhead of pickling and inter-process communication is paid once per chunk instead of once per text, and the worker function is top-level, so it can be sent by name. Because <code>map</code> returns chunk results in submission order, flattening them restores the text order without extra bookkeeping. In production the worker would call a real tokenizer (loaded once per worker with an initializer, problem 5); the structure is the same.</p></div></details>
+</article>
+<article class="prob" id="p-a-lambda-in-a-process-pool" data-pid="m14-3-a-lambda-in-a-process-pool" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A lambda in a process pool</h3></header>
+<div class="prob-q"><p><code>normalise_all</code> applies a scaling to many feature rows in a process pool, but passes a lambda, so every task fails with <code>PicklingError</code>. Fix it with a top-level function and <code>functools.partial</code> to bind the parameters.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from concurrent.futures import ProcessPoolExecutor
+
+def normalise_all(rows, mean, std, workers=4):
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda row: [(x - mean) / std for x in row], rows))
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [[1.0, 3.0], [5.0, 7.0]]
+assert normalise_all(rows, mean=4.0, std=2.0) == [[-1.5, -0.5], [0.5, 1.5]]
+assert normalise_all([], 0.0, 1.0) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [[1.0, 3.0], [5.0, 7.0]]
+assert normalise_all(rows, mean=4.0, std=2.0) == [[-1.5, -0.5], [0.5, 1.5]]
+assert normalise_all([], 0.0, 1.0) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Define <code>def scale_row(row, mean, std):</code> at top level, then <code>pool.map(functools.partial(scale_row, mean=mean, std=std), rows)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import functools
+from concurrent.futures import ProcessPoolExecutor
+
+def scale_row(row, mean, std):
+    return [(x - mean) / std for x in row]
+
+def normalise_all(rows, mean, std, workers=4):
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(functools.partial(scale_row, mean=mean, std=std), rows))</code></pre></div><p>A worker receives the function by name, and a lambda has none, so it cannot be pickled; the same code works with a thread pool, which is why this bug appears when someone swaps executors. A top-level function plus <code>functools.partial</code> gives a picklable callable with the parameters bound: the partial pickles as "call <code>scale_row</code> with these keyword arguments". For real feature scaling, NumPy on the whole matrix would be faster than any pool, which is the lesson of problem 8.</p></div></details>
+</article>
+<article class="prob" id="p-the-cost-of-small-tasks" data-pid="m14-3-the-cost-of-small-tasks" data-type="predict" data-level="easy" data-answer="0.1
+1 2.525
+10 0.275
+100 0.05
+1000 0.033
+2500 0.026
+10000 0.101">
+<header class="prob-head"><h3>4. The cost of small tasks</h3></header>
+<div class="code"><pre><code class="py">def pool_time(n_items, item_cost, workers, chunk, overhead):
+    tasks = -(-n_items // chunk)
+    rounds = -(-tasks // workers)
+    return rounds * (overhead + chunk * item_cost)
+
+sequential = 10_000 * 0.00001
+print(round(sequential, 3))
+for chunk in (1, 10, 100, 1000, 2500, 10_000):
+    print(chunk, round(pool_time(10_000, 0.00001, workers=4, chunk=chunk, overhead=0.001), 3))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each task pays the overhead once; tasks are spread over 4 workers in rounds.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0.1
+1 2.525
+10 0.275
+100 0.05
+1000 0.033
+2500 0.026
+10000 0.101</pre></div><p>With one item per task, 10,000 tasks each pay a 1 ms overhead for 10 microseconds of work, so the pool is 25 times slower than a plain loop. Larger chunks amortise the overhead until four chunks of 2,500 give one round and the best time, close to a quarter of the sequential time. A single chunk of 10,000 leaves three workers idle and is as slow as sequential plus overhead. Real overheads are usually 0.1 to 1 ms per task, so tasks should take at least tens of milliseconds.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-load-a-vocabulary-once-per-worker" data-pid="m14-3-load-a-vocabulary-once-per-worker" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Load a vocabulary once per worker</h3></header>
+<div class="prob-q"><p>Write <code>init_worker(vocab)</code> that stores the vocabulary (a list of words) in a module-level global <code>VOCAB</code> as a dict word -&gt; index, <code>featurize(text)</code> that returns a bag-of-words count vector (a list with one count per vocabulary word, other words ignored) using <code>VOCAB</code>, and <code>featurize_all(texts, vocab, workers=2)</code> that creates a <code>ProcessPoolExecutor</code> with <code>initializer=init_worker, initargs=(vocab,)</code> and maps <code>featurize</code> over the texts (with <code>chunksize=64</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from concurrent.futures import ProcessPoolExecutor
+
+VOCAB = None
+
+def init_worker(vocab):
+    pass
+
+def featurize(text):
+    pass
+
+def featurize_all(texts, vocab, workers=2):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">vocab = ["refund", "days", "free", "prize"]
+out = featurize_all(["Refund takes 5 days, refund now", "Free prize! FREE", "hello"], vocab)
+assert out == [[2, 1, 0, 0], [0, 0, 2, 1], [0, 0, 0, 0]]
+assert VOCAB == {"refund": 0, "days": 1, "free": 2, "prize": 3}
+init_worker(["a"])
+assert featurize("a a b") == [2]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">vocab = [&quot;refund&quot;, &quot;days&quot;, &quot;free&quot;, &quot;prize&quot;]
+out = featurize_all([&quot;Refund takes 5 days, refund now&quot;, &quot;Free prize! FREE&quot;, &quot;hello&quot;], vocab)
+assert out == [[2, 1, 0, 0], [0, 0, 2, 1], [0, 0, 0, 0]]
+assert VOCAB == {&quot;refund&quot;: 0, &quot;days&quot;: 1, &quot;free&quot;: 2, &quot;prize&quot;: 3}
+init_worker([&quot;a&quot;])
+assert featurize(&quot;a a b&quot;) == [2]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>global VOCAB</code> inside <code>init_worker</code>. In <code>featurize</code>, lower-case, strip punctuation from each word (<code>w.strip(".,!?")</code>), and count indices.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>pool.map(featurize, texts, chunksize=64)</code>; with <code>initializer=init_worker, initargs=(vocab,)</code> each worker builds <code>VOCAB</code> once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ProcessPoolExecutor
+
+VOCAB = None
+
+
+def init_worker(vocab):
+    global VOCAB
+    VOCAB = {word: i for i, word in enumerate(vocab)}
+
+
+def featurize(text):
+    vec = [0] * len(VOCAB)
+    for word in text.lower().split():
+        i = VOCAB.get(word.strip(&quot;.,!?&quot;))
+        if i is not None:
+            vec[i] += 1
+    return vec
+
+
+def featurize_all(texts, vocab, workers=2):
+    with ProcessPoolExecutor(max_workers=workers, initializer=init_worker, initargs=(vocab,)) as pool:
+        return list(pool.map(featurize, texts, chunksize=64))</code></pre></div><p>The initializer runs once in each worker process, when it starts, and puts the resource into that process's module globals, where every task reads it; the vocabulary crosses the process boundary once per worker instead of once per text. The global is the one exception to "avoid global state" in parallel code, because each process has its own copy and nothing is shared. The same pattern loads tokenizers, spaCy pipelines or ONNX models in workers. <code>chunksize</code> batches the small <code>featurize</code> calls to keep per-task overhead low.</p></div></details>
+</article>
+<article class="prob" id="p-name-when-a-module-is-imported" data-pid="m14-3-name-when-a-module-is-imported" data-type="predict" data-level="medium" data-answer="__main__
+importing tasks, __name__ = tasks
+49 tasks">
+<header class="prob-head"><h3>6. __name__ when a module is imported</h3></header>
+<div class="code"><pre><code class="py">from lessontools import make_module
+
+print(__name__)
+tasks = make_module(&quot;tasks&quot;, &#x27;&#x27;&#x27;
+print(&quot;importing tasks, __name__ =&quot;, __name__)
+
+def square(x):
+    return x * x
+
+if __name__ == &quot;__main__&quot;:
+    print(&quot;starting the pool&quot;)
+&#x27;&#x27;&#x27;)
+print(tasks.square(7), tasks.__name__)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>make_module(name, source)</code> imports the source as the module <code>name</code>, the way a spawned worker imports your script. Only the file you run is <code>__main__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>__main__
+importing tasks, __name__ = tasks
+49 tasks</pre></div><p>The code you run directly has <code>__name__ == "__main__"</code>; a module that is imported gets its own name, so the guarded block does not run on import. That is exactly what happens with the <code>spawn</code> start method: each worker imports your script as a module, and everything outside the guard runs again in every worker, so any code that starts work (creating a pool, training a model, reading a large file) must sit under <code>if __name__ == "__main__":</code>.</p></div></details>
+</article>
+<article class="prob" id="p-process-files-by-path" data-pid="m14-3-process-files-by-path" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Process files by path</h3></header>
+<div class="prob-q"><p>Write a top-level worker <code>summarise_file(path)</code> returning <code>(path, lines, words)</code> for a UTF-8 text file, and <code>summarise_files(paths, workers=4)</code> that sends the <strong>paths</strong> (not the contents) to a <code>ProcessPoolExecutor</code> and returns <code>{"files": {path: {"lines": n, "words": m}}, "errors": {path: "ExceptionName"}}</code>, with files in input order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">from concurrent.futures import ProcessPoolExecutor
+
+def summarise_file(path):
+    pass
+
+def summarise_files(paths, workers=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+a, b, missing = os.path.join(d, "a.txt"), os.path.join(d, "b.txt"), os.path.join(d, "nope.txt")
+with open(a, "w", encoding="utf-8") as f:
+    f.write("Refunds take five days.\nContact support.\n")
+with open(b, "w", encoding="utf-8") as f:
+    f.write("one\n\ntwo three\n")
+out = summarise_files([a, missing, b], workers=2)
+assert out == {"files": {a: {"lines": 2, "words": 6}, b: {"lines": 3, "words": 3}}, "errors": {missing: "FileNotFoundError"}}
+assert list(out["files"]) == [a, b]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+a, b, missing = os.path.join(d, &quot;a.txt&quot;), os.path.join(d, &quot;b.txt&quot;), os.path.join(d, &quot;nope.txt&quot;)
+with open(a, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;Refunds take five days.\nContact support.\n&quot;)
+with open(b, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+    f.write(&quot;one\n\ntwo three\n&quot;)
+out = summarise_files([a, missing, b], workers=2)
+assert out == {&quot;files&quot;: {a: {&quot;lines&quot;: 2, &quot;words&quot;: 6}, b: {&quot;lines&quot;: 3, &quot;words&quot;: 3}}, &quot;errors&quot;: {missing: &quot;FileNotFoundError&quot;}}
+assert list(out[&quot;files&quot;]) == [a, b]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The worker opens the file itself: <code>with open(path, encoding="utf-8") as f:</code> and counts lines and words while iterating.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Submit one task per path, keep <code>(path, future)</code> pairs in order, and check <code>future.exception()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ProcessPoolExecutor
+
+
+def summarise_file(path):
+    lines = words = 0
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        for line in f:
+            lines += 1
+            words += len(line.split())
+    return path, lines, words
+
+
+def summarise_files(paths, workers=4):
+    files, errors = {}, {}
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = [(p, pool.submit(summarise_file, p)) for p in paths]
+    for path, future in futures:
+        error = future.exception()
+        if error is not None:
+            errors[path] = type(error).__name__
+        else:
+            _, lines, words = future.result()
+            files[path] = {&quot;lines&quot;: lines, &quot;words&quot;: words}
+    return {&quot;files&quot;: files, &quot;errors&quot;: errors}</code></pre></div><p>Sending a path costs a few dozen bytes; sending the file's contents would pickle and copy every byte from the parent to the worker, which for gigabytes of text can take longer than the processing itself and doubles memory use. Each worker opens its own file and streams it (12.1), and only a small summary travels back. Errors stay per file: a missing file becomes an entry in <code>errors</code>, not a crashed batch. The same principle applies to databases (send ids or ranges, let workers query) and to large arrays (use shared memory or memory-mapped files).</p></div></details>
+</article>
+<article class="prob" id="p-vectorise-before-you-parallelise" data-pid="m14-3-vectorise-before-you-parallelise" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Vectorise before you parallelise</h3></header>
+<div class="prob-q"><p>Both compute the sum of squares of 200,000 floats. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+values = np.random.default_rng(0).random(200_000)
+as_list = values.tolist()</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">total = sum(x * x for x in as_list)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">total = float(np.dot(values, values))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Where does each version's loop run: in the Python interpreter, or in compiled code?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>20.42 ms</td></tr><tr><td>B</td><td>134.05 µs</td></tr></table></div><p>The generator expression runs 200,000 iterations in the interpreter, each creating float objects; <code>np.dot</code> runs one loop in optimised C (often using SIMD instructions), typically tens to hundreds of times faster. A process pool could at best divide the Python version's time by the number of cores, minus overheads, so vectorising wins before parallelism is even considered. Reach for processes when the work cannot be expressed as array operations: parsing, string processing, complex per-item logic.</p></div></details>
+</article>
+<article class="prob" id="p-a-parallel-grid-search" data-pid="m14-3-a-parallel-grid-search" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. A parallel grid search</h3></header>
+<div class="prob-q"><p>Write <code>grid_search(evaluate, grid, workers=4)</code> where <code>grid</code> maps parameter names to lists of values and <code>evaluate(params)</code> (a top-level function) returns a score (higher is better). Evaluate every combination (<code>itertools.product</code>, in the order of the grid's keys and values) on a <code>ProcessPoolExecutor</code> and return <code>(best_params, results)</code>, where <code>results</code> is a list of <code>(params, score)</code> sorted by score descending, ties keeping grid order. A combination whose evaluation raises is left out.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import itertools
+from concurrent.futures import ProcessPoolExecutor
+
+def grid_search(evaluate, grid, workers=4):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def evaluate(params):
+    if params["depth"] == 8 and params["lr"] == 0.3:
+        raise ValueError("diverged")
+    return round(1 - abs(params["lr"] - 0.1) - abs(params["depth"] - 4) / 10, 3)
+best, results = grid_search(evaluate, {"lr": [0.01, 0.1, 0.3], "depth": [2, 4, 8]}, workers=3)
+assert best == {"lr": 0.1, "depth": 4} and len(results) == 8
+assert results[0] == ({"lr": 0.1, "depth": 4}, 1.0) and results[1][1] == 0.91
+assert grid_search(evaluate, {"lr": [0.3], "depth": [8]}) == (None, [])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def evaluate(params):
+    if params[&quot;depth&quot;] == 8 and params[&quot;lr&quot;] == 0.3:
+        raise ValueError(&quot;diverged&quot;)
+    return round(1 - abs(params[&quot;lr&quot;] - 0.1) - abs(params[&quot;depth&quot;] - 4) / 10, 3)
+best, results = grid_search(evaluate, {&quot;lr&quot;: [0.01, 0.1, 0.3], &quot;depth&quot;: [2, 4, 8]}, workers=3)
+assert best == {&quot;lr&quot;: 0.1, &quot;depth&quot;: 4} and len(results) == 8
+assert results[0] == ({&quot;lr&quot;: 0.1, &quot;depth&quot;: 4}, 1.0) and results[1][1] == 0.91
+assert grid_search(evaluate, {&quot;lr&quot;: [0.3], &quot;depth&quot;: [8]}) == (None, [])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>keys = list(grid)</code>; <code>combos = [dict(zip(keys, values)) for values in itertools.product(*grid.values())]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Submit one task per combo, collect <code>(params, score)</code> for the ones without an exception, and <code>sorted(..., key=lambda r: -r[1])</code> keeps ties stable.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import itertools
+from concurrent.futures import ProcessPoolExecutor
+
+
+def grid_search(evaluate, grid, workers=4):
+    keys = list(grid)
+    combos = [dict(zip(keys, values)) for values in itertools.product(*grid.values())]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = [(params, pool.submit(evaluate, params)) for params in combos]
+    results = [(params, f.result()) for params, f in futures if f.exception() is None]
+    results.sort(key=lambda r: -r[1])
+    return (results[0][0] if results else None), results</code></pre></div><p>Hyperparameter search is the textbook embarrassingly parallel CPU job: each combination trains and scores independently, so a process pool divides the wall time by the number of cores. Parameters travel as small dicts and scores come back as floats, so communication is negligible compared with training. Keeping the futures in grid order and sorting with a stable key makes ties reproducible, and failed combinations (a diverging learning rate) are dropped instead of aborting the search. Libraries do the same: scikit-learn's <code>GridSearchCV(n_jobs=-1)</code> runs fits in worker processes through joblib.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-a-chunked-ordered-map-with-per-item-erro" data-pid="m14-3-a-chunked-ordered-map-with-per-item-erro" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. A chunked ordered map with per-item errors</h3></header>
+<div class="prob-q"><p>Write <code>chunked_map(fn, items, workers=4, chunk_size=100)</code> that behaves like <code>map(fn, items)</code> but runs chunks on a <code>ProcessPoolExecutor</code>, returning a list of <code>("ok", value)</code> or <code>("error", "ExceptionName: message")</code> per item, in order. <code>fn</code> must be a top-level function; write the top-level chunk worker <code>_run_chunk(fn, chunk)</code> that applies <code>fn</code> to each item and catches per-item errors, so one bad item does not fail its whole chunk.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from concurrent.futures import ProcessPoolExecutor
+
+def _run_chunk(fn, chunk):
+    pass
+
+def chunked_map(fn, items, workers=4, chunk_size=100):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def parse_score(text):
+    value = float(text)
+    if not 0 <= value <= 1:
+        raise ValueError(f"out of range: {value}")
+    return value
+items = ["0.5", "x", "1.5", "0.25"] * 30
+out = chunked_map(parse_score, items, workers=3, chunk_size=7)
+assert len(out) == 120 and out[:4] == [("ok", 0.5), ("error", "ValueError: could not convert string to float: 'x'"), ("error", "ValueError: out of range: 1.5"), ("ok", 0.25)]
+assert out[4:8] == out[:4] and chunked_map(parse_score, []) == []
+try:
+    chunked_map(lambda t: t, ["a"])
+    assert False
+except Exception as e:
+    assert type(e).__name__ == "PicklingError"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def parse_score(text):
+    value = float(text)
+    if not 0 &lt;= value &lt;= 1:
+        raise ValueError(f&quot;out of range: {value}&quot;)
+    return value
+items = [&quot;0.5&quot;, &quot;x&quot;, &quot;1.5&quot;, &quot;0.25&quot;] * 30
+out = chunked_map(parse_score, items, workers=3, chunk_size=7)
+assert len(out) == 120 and out[:4] == [(&quot;ok&quot;, 0.5), (&quot;error&quot;, &quot;ValueError: could not convert string to float: &#x27;x&#x27;&quot;), (&quot;error&quot;, &quot;ValueError: out of range: 1.5&quot;), (&quot;ok&quot;, 0.25)]
+assert out[4:8] == out[:4] and chunked_map(parse_score, []) == []
+try:
+    chunked_map(lambda t: t, [&quot;a&quot;])
+    assert False
+except Exception as e:
+    assert type(e).__name__ == &quot;PicklingError&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>_run_chunk</code> returns a list of tuples; wrap each <code>fn(item)</code> in <code>try</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Submit <code>_run_chunk(fn, chunk)</code> per chunk with <code>pool.map(functools.partial(_run_chunk, fn), chunks)</code> or <code>submit</code>; a pickling failure of <code>fn</code> surfaces when you collect the result.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ProcessPoolExecutor
+
+
+def _run_chunk(fn, chunk):
+    out = []
+    for item in chunk:
+        try:
+            out.append((&quot;ok&quot;, fn(item)))
+        except Exception as e:
+            out.append((&quot;error&quot;, f&quot;{type(e).__name__}: {e}&quot;))
+    return out
+
+
+def chunked_map(fn, items, workers=4, chunk_size=100):
+    chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+    results = []
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_run_chunk, fn, chunk) for chunk in chunks]
+        for future in futures:
+            results.extend(future.result())
+    return results</code></pre></div><p>Error handling must happen <strong>inside</strong> the chunk: if a worker raised on the first bad item, the whole chunk's result would be lost and the caller could not tell which of its items succeeded. Returning tagged results per item keeps the output aligned with the input, which matters when results are written back next to the records they belong to. The chunk worker and <code>fn</code> both travel by name, which is why a lambda fails at submission time with <code>PicklingError</code>, before any work is done, and <code>future.result()</code> re-raises it to the caller: a configuration bug should stop the job, a bad record should not.</p></div></details>
+</article>
+<article class="prob" id="p-choose-a-chunk-size-from-a-cost-model" data-pid="m14-3-choose-a-chunk-size-from-a-cost-model" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Choose a chunk size from a cost model</h3></header>
+<div class="prob-q"><p>Write <code>pool_time(n, workers, chunk, overhead, item_cost)</code> returning the modelled wall time of processing <code>n</code> items in chunks of <code>chunk</code> on <code>workers</code> processes: tasks are <code>ceil(n / chunk)</code>, each task takes <code>overhead + size * item_cost</code> (the last task may be smaller), and tasks are assigned in order to the first free worker. Then <code>best_chunk(n, workers, overhead, item_cost, candidates)</code> returning the candidate with the lowest time (the smallest candidate on ties).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import heapq
+
+def pool_time(n, workers, chunk, overhead, item_cost):
+    pass
+
+def best_chunk(n, workers, overhead, item_cost, candidates):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert round(pool_time(10_000, 4, 2500, 0.001, 0.00001), 6) == 0.026
+assert round(pool_time(10_000, 4, 1, 0.001, 0.00001), 6) == 2.525
+assert round(pool_time(10, 4, 3, 1.0, 1.0), 6) == 4.0
+assert best_chunk(10_000, 4, 0.001, 0.00001, [1, 10, 100, 1000, 2500, 5000]) == 2500
+assert best_chunk(10_000, 4, 0.0, 0.00001, [1, 100, 2500]) == 1
+assert pool_time(0, 4, 10, 1.0, 1.0) == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert round(pool_time(10_000, 4, 2500, 0.001, 0.00001), 6) == 0.026
+assert round(pool_time(10_000, 4, 1, 0.001, 0.00001), 6) == 2.525
+assert round(pool_time(10, 4, 3, 1.0, 1.0), 6) == 4.0
+assert best_chunk(10_000, 4, 0.001, 0.00001, [1, 10, 100, 1000, 2500, 5000]) == 2500
+assert best_chunk(10_000, 4, 0.0, 0.00001, [1, 100, 2500]) == 1
+assert pool_time(0, 4, 10, 1.0, 1.0) == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build the task durations, then reuse the heap scheduler of 14.1: pop the earliest free worker, push its new finish time.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>min(candidates, key=lambda c: (round(pool_time(...), 12), c))</code> breaks ties by size.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+
+def pool_time(n, workers, chunk, overhead, item_cost):
+    sizes = [min(chunk, n - start) for start in range(0, n, chunk)]
+    free = [0.0] * workers
+    end = 0.0
+    for size in sizes:
+        start = heapq.heappop(free)
+        finish = start + overhead + size * item_cost
+        end = max(end, finish)
+        heapq.heappush(free, finish)
+    return end
+
+
+def best_chunk(n, workers, overhead, item_cost, candidates):
+    return min(candidates, key=lambda c: (round(pool_time(n, workers, c, overhead, item_cost), 12), c))</code></pre></div><p>The model captures the two forces that decide chunk size. Overhead per task pushes towards <strong>large</strong> chunks: with 1-item chunks, 10,000 tasks of 1 ms overhead swamp the 10 microseconds of work each. Load balancing pushes towards <strong>enough</strong> chunks to keep every worker busy until the end: with 10 items in chunks of 3 on 4 workers, the uneven last chunk decides the finish time. With no overhead, the smallest chunks balance best. Real overheads and item costs come from a quick measurement on a sample, and the model then picks a sensible <code>chunksize</code> without trial and error over the full dataset.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-cpu-heavy-preprocessing-on" data-pid="m14-3-read-the-code-cpu-heavy-preprocessing-on" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>12. Read the code: CPU-heavy preprocessing on threads</h3></header>
+<div class="prob-q"><p><code>preprocess_corpus</code> cleans and chunks documents. It uses a <strong>thread</strong> pool for CPU-bound work, reloads the stop-word list for every document, uses a lambda, and sends each document as a separate task. Rewrite it with a <code>ProcessPoolExecutor</code>: an <code>initializer</code> that loads the stop words once per worker into a global, a top-level task function that processes a <strong>chunk</strong> of documents, and results returned in input order. <code>load_stopwords</code> must be called once per worker (the grader counts the calls), not once per document.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">from concurrent.futures import ThreadPoolExecutor
+
+LOADS = []
+
+
+def load_stopwords():
+    LOADS.append(1)
+    return {&quot;the&quot;, &quot;a&quot;, &quot;of&quot;, &quot;to&quot;, &quot;is&quot;}
+
+
+def clean(doc, stopwords):
+    words = [w.strip(&quot;.,!?&quot;).lower() for w in doc.split()]
+    return [w for w in words if w and w not in stopwords]
+
+
+def preprocess_corpus(docs, workers=4):
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda d: clean(d, load_stopwords()), docs))
+</textarea>
+<script type="text/plain" class="prob-tests">import re
+LOADS.clear()
+docs = ["The refund is processed.", "A summary of the policy!", "Refunds to the card"] * 40
+out = preprocess_corpus(docs, workers=2)
+assert out[:3] == [["refund", "processed"], ["summary", "policy"], ["refunds", "card"]] and len(out) == 120
+assert len(LOADS) <= 2
+assert "ProcessPoolExecutor" in __source__ and "lambda" not in __source__ and "initializer" in __source__</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import re
+LOADS.clear()
+docs = [&quot;The refund is processed.&quot;, &quot;A summary of the policy!&quot;, &quot;Refunds to the card&quot;] * 40
+out = preprocess_corpus(docs, workers=2)
+assert out[:3] == [[&quot;refund&quot;, &quot;processed&quot;], [&quot;summary&quot;, &quot;policy&quot;], [&quot;refunds&quot;, &quot;card&quot;]] and len(out) == 120
+assert len(LOADS) &lt;= 2
+assert &quot;ProcessPoolExecutor&quot; in __source__ and &quot;lambda&quot; not in __source__ and &quot;initializer&quot; in __source__</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>STOPWORDS = None</code> at module level; <code>def init_worker(): global STOPWORDS; STOPWORDS = load_stopwords()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def clean_chunk(docs): return [clean(d, STOPWORDS) for d in docs]</code>, mapped over chunks of, say, 32 documents, then flattened.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from concurrent.futures import ProcessPoolExecutor
+
+LOADS = []
+STOPWORDS = None
+
+
+def load_stopwords():
+    LOADS.append(1)
+    return {&quot;the&quot;, &quot;a&quot;, &quot;of&quot;, &quot;to&quot;, &quot;is&quot;}
+
+
+def clean(doc, stopwords):
+    words = [w.strip(&quot;.,!?&quot;).lower() for w in doc.split()]
+    return [w for w in words if w and w not in stopwords]
+
+
+def init_worker():
+    global STOPWORDS
+    STOPWORDS = load_stopwords()
+
+
+def clean_chunk(docs):
+    return [clean(d, STOPWORDS) for d in docs]
+
+
+def preprocess_corpus(docs, workers=4, chunk_size=32):
+    chunks = [docs[i:i + chunk_size] for i in range(0, len(docs), chunk_size)]
+    out = []
+    with ProcessPoolExecutor(max_workers=workers, initializer=init_worker) as pool:
+        for cleaned in pool.map(clean_chunk, chunks):
+            out.extend(cleaned)
+    return out</code></pre></div><p>Each change applies one rule of this lesson. Cleaning text is pure-Python CPU work, so threads give no speed-up under the GIL and processes are the right tool. The stop-word list was loaded 120 times, once per document; the initializer loads it once per worker, which for a real resource (a tokenizer or a spaCy model that takes seconds to load) is the difference between minutes and hours. The lambda becomes a top-level function so it can be pickled, and documents travel in chunks to amortise per-task overhead. <code>map</code> over chunks keeps the output in input order. (On a real machine, <code>LOADS</code> would be filled in the workers, not the parent; the grader counts them here because this site runs workers in the page.)</p></div></details>
+</article>
+<article class="prob" id="p-what-crosses-the-process-boundary" data-pid="m14-3-what-crosses-the-process-boundary" data-type="predict" data-level="hard" data-answer="7.0
+2.5
+[0.5, 2.0]
+TypeError
+PicklingError
+Model [1.0]">
+<header class="prob-head"><h3>13. What crosses the process boundary</h3></header>
+<div class="code"><pre><code class="py">import functools
+from concurrent.futures import ProcessPoolExecutor
+
+class Model:
+    def __init__(self, weights):
+        self.weights = weights
+    def predict(self, x):
+        return sum(w * v for w, v in zip(self.weights, x))
+
+def apply(model, x):
+    return model.predict(x)
+
+model = Model([0.5, 2.0])
+with ProcessPoolExecutor(2) as pool:
+    print(pool.submit(apply, model, [2, 3]).result())
+    print(pool.submit(model.predict, [1, 1]).result())
+    print(list(pool.map(functools.partial(apply, model), [[1, 0], [0, 1]])))
+    print(type(pool.submit(apply, model, (v for v in [1, 2])).exception()).__name__)
+    f = pool.submit(lambda: model)
+    print(type(f.exception()).__name__)
+    g = pool.submit(Model, [1.0])
+    print(type(g.result()).__name__, g.result().weights)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Instances of top-level classes pickle with their attributes; bound methods pickle as (instance, method name). Generators are not picklable (list iterators, surprisingly, are).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>7.0
+2.5
+[0.5, 2.0]
+TypeError
+PicklingError
+Model [1.0]</pre></div><p>A <code>Model</code> instance of a top-level class pickles with its <code>weights</code>, so <code>apply(model, x)</code> works, and so does the bound method, which pickles as the instance plus the method name; <code>partial</code> binds the model for <code>map</code>. Each task receives its <strong>own copy</strong> of the model, which is fine for read-only use and wasteful for large models (use an initializer instead). A generator argument fails with <code>TypeError</code> (a plain list iterator would pickle, generators never do), a lambda with <code>PicklingError</code>. Calling the class itself returns a new instance, which comes back to the parent by pickling, intact.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-when-do-you-use-processes-instead-of-thr" data-pid="m14-3-when-do-you-use-processes-instead-of-thr" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. When do you use processes instead of threads in Python, and what are the costs?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use processes for CPU-bound Python code (parsing, text processing, feature engineering, pure-Python model scoring), because each process has its own interpreter and GIL and runs on its own core; use threads (or asyncio) for I/O-bound work, where waiting dominates and threads are cheaper. The costs of processes: start-up time (especially with <code>spawn</code>), a full interpreter's memory per worker (plus any model loaded in each), and communication by pickling, which requires top-level functions and picklable arguments and makes sending large data slow. Mitigations: coarse tasks with chunking, initializers to load resources once per worker, sending paths or ids instead of data, shared memory for large arrays, and the <code>__main__</code> guard. Before either, vectorise with NumPy or use libraries that already parallelise internally; and note that free-threaded Python makes threads viable for CPU work when the libraries support it.</p></div></details>
+</article>
+<article class="prob" id="p-why-do-scripts-that-use-multiprocessing-" data-pid="m14-3-why-do-scripts-that-use-multiprocessing-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Why do scripts that use multiprocessing need <code>if __name__ == "__main__":</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>With the <code>spawn</code> start method (the default on Windows and macOS) and <code>forkserver</code> (the Linux default since Python 3.14), each worker starts a fresh interpreter that <strong>imports the main script as a module</strong> to find the functions it must run. Everything at the top level of the script runs again in every worker during that import. If the top level creates a process pool or starts the job, each worker would try to do the same, which would recurse; Python detects this and raises an error about starting a new process before bootstrapping finished. Putting the entry-point code under <code>if __name__ == "__main__":</code> makes it run only when the file is executed directly, since imported modules have their own name. Keep worker functions and classes at the top level so they can be found by name, and avoid expensive work at import time.</p></div></details>
+</article>
+<article class="prob" id="p-you-need-to-preprocess-50-million-docume" data-pid="m14-3-you-need-to-preprocess-50-million-docume" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. You need to preprocess 50 million documents on one 32-core machine. How do you design it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Profile a sample first to find the per-document cost and whether it is CPU-bound (likely: cleaning, tokenising, chunking). Store the input in shards (many files or row ranges), and process <strong>shards</strong> as tasks in a <code>ProcessPoolExecutor</code> with about 32 workers (fewer if memory per worker is large): each task receives a shard path, streams it, and writes its output shard itself (JSONL or Parquet), returning only counts and error summaries, so almost nothing crosses the process boundary. Load tokenizers or models once per worker with an initializer. Make it resumable and idempotent: one output file per input shard written atomically, so a restarted job skips finished shards, and a manifest records counts and failures (12.P). Handle bad documents inside the task (quarantine and count them). Track progress with <code>as_completed</code>. Check where the remaining serial parts are (reading a single compressed file, a final merge) using Amdahl's law, and consider vectorised libraries (pandas, Polars, Arrow compute) or a distributed engine (Spark, Ray, Dask) if one machine is not enough.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>ProcessPoolExecutor</code> runs tasks in separate processes, each with its own GIL, so CPU-bound Python code runs in parallel; size it to the number of cores.</li><li>Everything sent is pickled: only top-level functions and classes, <code>partial</code>s of them, and picklable arguments and results; lambdas and generators fail.</li><li>Guard entry-point code with <code>if __name__ == "__main__":</code> because <code>spawn</code> and <code>forkserver</code> workers import your script.</li><li>Make tasks coarse with chunks or <code>chunksize</code>, load resources once per worker with <code>initializer</code>, and send paths or ids rather than data.</li><li>Vectorise with NumPy before parallelising, and measure: overheads can make a pool slower than a loop.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

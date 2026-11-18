@@ -102,6 +102,15 @@ def run_pytest(test_source, modules=None, args=()):
             "failed": values.count("failed") + values.count("error"), "skipped": values.count("skipped"),
             "errors": collector.errors, "output": out.getvalue()}
 
+def make_module(name, source):
+    # Creates an importable module from source, as if it were the file name + ".py".
+    import types
+    mod = types.ModuleType(name)
+    mod.__file__ = name + ".py"
+    sys.modules[name] = mod
+    exec(compile(textwrap.dedent(source), name + ".py", "exec"), mod.__dict__)
+    return mod
+
 def swap_impl(source, impl):
     # Replaces the lines between "# --- code under test" and "# --- tests" with impl.
     lines = source.splitlines(keepends=True)
@@ -118,6 +127,125 @@ def _install_lessontools():
     sys.modules["lessontools"] = mod
 
 _install_lessontools()
+
+# Module 14: the browser cannot start threads or processes, and asyncio.run needs a
+# feature most browsers lack. asyncio.run gets a small event loop that runs on simulated
+# time (sleep(1) returns at once but advances loop.time() by 1), and the executors and
+# Thread.start run each task immediately, in order, with the same API.
+def _install_concurrency():
+    if sys.platform != "emscripten":
+        return
+    import asyncio, asyncio.base_events as _be, asyncio.events as _ev
+    import concurrent.futures as _cf, threading as _th
+
+    class _Selector:
+        def __init__(self, loop):
+            self.loop = loop
+
+        def select(self, timeout=None):
+            if timeout is None:
+                raise RuntimeError("event loop would wait forever: no task can make progress (a deadlock)")
+            if timeout > 0:
+                self.loop._now += timeout
+            return []
+
+    class VirtualTimeLoop(_be.BaseEventLoop):
+        def __init__(self):
+            super().__init__()
+            self._now = 0.0
+            self._selector = _Selector(self)
+
+        def time(self):
+            return self._now
+
+        def _process_events(self, events):
+            pass
+
+        def _write_to_self(self):
+            pass
+
+    def run(main, *, debug=None, loop_factory=None):
+        outer = _ev._get_running_loop()
+        _ev._set_running_loop(None)
+        loop = VirtualTimeLoop()
+        try:
+            return loop.run_until_complete(main)
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
+                _ev._set_running_loop(outer)
+
+    asyncio.run = run
+
+    class InlineExecutor(_cf.Executor):
+        def __init__(self, max_workers=None, *args, initializer=None, initargs=(), **kwargs):
+            self._max_workers = max_workers
+            self._closed = False
+            if initializer is not None:
+                initializer(*initargs)
+
+        def submit(self, fn, /, *args, **kwargs):
+            if self._closed:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            future = _cf.Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except BaseException as e:
+                future.set_exception(e)
+            return future
+
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            self._closed = True
+
+    import io as _io, pickle as _pickle, types as _types
+
+    class _ProcessPickler(_pickle.Pickler):
+        # Real processes receive the function, arguments and results by pickling.
+        # Functions and classes travel by name, so only top-level ones work.
+        def reducer_override(self, obj):
+            if isinstance(obj, (_types.FunctionType, type)):
+                name = getattr(obj, "__qualname__", "")
+                if "<lambda>" in name or "<locals>" in name:
+                    raise _pickle.PicklingError(
+                        f"Can't pickle {obj!r}: a process can only receive functions and classes defined at the top level of a module")
+                if getattr(obj, "__module__", None) == "__main__":
+                    return (str, (name,))
+            return NotImplemented
+
+    def _check_picklable(obj):
+        _ProcessPickler(_io.BytesIO()).dump(obj)
+
+    class InlineProcessExecutor(InlineExecutor):
+        def submit(self, fn, /, *args, **kwargs):
+            if self._closed:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            future = _cf.Future()
+            try:
+                _check_picklable((fn, args, kwargs))
+                result = fn(*args, **kwargs)
+                _check_picklable(result)
+                future.set_result(result)
+            except BaseException as e:
+                future.set_exception(e)
+            return future
+
+    _cf.ThreadPoolExecutor = InlineExecutor
+    _cf.ProcessPoolExecutor = InlineProcessExecutor
+
+    def _start(self):
+        self._started.set()
+        try:
+            self.run()
+        except BaseException as e:
+            _th.excepthook(_th.ExceptHookArgs((type(e), e, e.__traceback__, self)))
+
+    _th.Thread.start = _start
+    _th.Thread.join = lambda self, timeout=None: None
+    _th.Thread.is_alive = lambda self: False
+
+_install_concurrency()
 
 def _time(setup, stmts, number=0):
     # Times each statement after the same setup. Used by the build for "pick the faster one".

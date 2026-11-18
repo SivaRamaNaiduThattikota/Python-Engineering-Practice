@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>14.1 · Concurrency concepts</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m14-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 14 · Concurrency and async</span></div>
+  <h1>14.1 Concurrency concepts</h1>
+  <p>Before any API, the ideas that decide whether concurrency helps: CPU-bound versus I/O-bound work, concurrency versus parallelism, processes, threads and coroutines, the GIL and free-threaded Python, Amdahl's law and Little's law, and what goes wrong when tasks share state: races and deadlocks. Problems model these with small simulations, so the reasoning is exact and repeatable, which is also how you plan the concurrency of an LLM batch job.</p>
+  <div class="chips"><span class="chip">15 problems</span><span class="chip">4 easy · 7 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="kinds">
+<h2><span class="n">1</span>Two kinds of slow</h2>
+<p>A program is slow for one of two reasons, and the cure differs. <strong>I/O-bound</strong> work spends its time <strong>waiting</strong>: for a model API to answer, a database query, a file download, a disk read. The CPU is idle meanwhile, so the cure is to start other work during the wait; ten API calls that each take 2 seconds can finish in about 2 seconds instead of 20. <strong>CPU-bound</strong> work spends its time <strong>computing</strong>: tokenising a corpus, computing features, parsing millions of JSON lines, resizing images. The only way to speed it up, apart from faster code, is to use more CPU cores at once.</p>
+<p>Measure before choosing. Compare wall-clock time (<code>time.perf_counter()</code>) with CPU time (<code>time.process_time()</code>) for a task: if CPU time is close to wall time, it is CPU-bound; if it is a small fraction, the task mostly waits. Profilers (14.3, <code>cProfile</code>) show where the time goes. LLM applications are usually I/O-bound around the model call (network latency dominates) and CPU-bound in data preparation (chunking, embedding-free text processing, evaluation metrics over large sets).</p>
+</section>
+<section class="sec" id="models">
+<h2><span class="n">2</span>Concurrency, parallelism and Python's three tools</h2>
+<p><strong>Concurrency</strong> means several tasks are in progress at once, with their execution interleaved; <strong>parallelism</strong> means several tasks execute at the same instant on different cores. One cook juggling three pots is concurrent; three cooks are parallel. Waiting work needs only concurrency; computing work needs parallelism.</p>
+<p>Python offers three tools. <strong>Processes</strong> (<code>multiprocessing</code>, <code>ProcessPoolExecutor</code>, 14.3) each run their own interpreter with their own memory, so they compute in parallel on several cores; the costs are start-up time, memory, and the need to send data between them by serialising it. <strong>Threads</strong> (<code>threading</code>, <code>ThreadPoolExecutor</code>, 14.2) share one process's memory and are cheap to create; the operating system switches between them, so while one waits for the network, another runs. <strong>Coroutines</strong> (<code>asyncio</code>, 14.4 and 14.5) are functions that pause at <code>await</code> and let an event loop run others, all in one thread; they scale to thousands of concurrent waits with very little overhead, but only cooperate if every slow operation is awaited.</p>
+<p>The rule of thumb: <strong>I/O-bound with a moderate number of tasks: threads; I/O-bound with many tasks, or a codebase that is already async: asyncio; CPU-bound: processes</strong> (or vectorised libraries such as NumPy, which release the GIL and use several cores internally).</p>
+</section>
+<section class="sec" id="gil">
+<h2><span class="n">3</span>The GIL and free-threaded Python</h2>
+<p>Standard CPython has a <strong>Global Interpreter Lock</strong>: a lock that a thread must hold to execute Python bytecode. It keeps the interpreter's internals (such as reference counts) consistent, but it means that in one process only <strong>one thread runs Python code at a time</strong>; the interpreter switches the lock between threads every few milliseconds (<code>sys.getswitchinterval()</code>, 5 ms by default). Two consequences follow. Threads give <strong>no speed-up for pure-Python CPU work</strong>, sometimes a slowdown from the switching. And threads <strong>do</strong> help for I/O, because a thread releases the GIL while it waits for the network or the disk, and C extensions such as NumPy, hashlib, zlib and many tokenizers release it during long computations.</p>
+<p>The GIL does <strong>not</strong> make your code thread-safe. It protects the interpreter, not your data: a thread can be switched out between any two bytecode instructions, so a sequence such as reading a value, adding one, and writing it back can interleave with another thread doing the same (below). Shared mutable state still needs locks.</p>
+<p><strong>Free-threaded Python</strong> removes the GIL. PEP 703 added an optional build without it in Python 3.13 (installed as <code>python3.13t</code>), and Python 3.14 made that build officially supported (PEP 779), though not the default. In it, threads run Python code in parallel on several cores, at the cost of some single-thread overhead and of extensions that must be updated to declare they are safe. <code>sys._is_gil_enabled()</code> reports which mode is active. Python 3.14 also added <code>concurrent.interpreters</code> and <code>InterpreterPoolExecutor</code> (PEP 734): several interpreters in one process, each with its own GIL, a middle ground between threads and processes. For the next few years, expect both builds in production, and code that is correct in either: protect shared state explicitly.</p>
+</section>
+<section class="sec" id="laws">
+<h2><span class="n">4</span>Two laws for planning</h2>
+<p><strong>Amdahl's law</strong> bounds the speed-up from parallelism. If a fraction <code>p</code> of the work can run in parallel and the rest is serial, <code>n</code> workers give a speed-up of <code>1 / ((1 - p) + p / n)</code>. With <code>p = 0.9</code>, eight workers give 4.7 times, and even infinitely many give only 10 times, because the serial 10% remains. Before parallelising a pipeline, find its serial parts: a single writer, a global lock, a step that must see all data.</p>
+<p><strong>Little's law</strong> connects concurrency, throughput and latency for any stable system: <strong>the average number of tasks in progress equals the arrival rate times the average time each spends in the system</strong>, <code>L = lambda * W</code>. For an LLM batch job it answers the planning question directly: to process 50 requests per second when each call takes 2 seconds, you need about <code>50 * 2 = 100</code> calls in flight. Conversely, 10 concurrent workers with 2-second calls can never exceed 5 requests per second, however fast the rest of the code is. Rate limits (requests or tokens per minute) cap the same quantity from the other side, which is why concurrency must be limited, not maximised (14.5).</p>
+</section>
+<section class="sec" id="races">
+<h2><span class="n">5</span>What goes wrong: races and deadlocks</h2>
+<p>A <strong>race condition</strong> happens when tasks share mutable data and the result depends on how their steps interleave. The classic case is the <strong>lost update</strong>: two threads run <code>counter += 1</code>, which is really "read the value, add one, write it back"; if both read 5 before either writes, both write 6, and one increment is lost. The bug appears rarely, under load, and disappears when you add a print to debug it, which is what makes races expensive. The fix is to make the read-modify-write <strong>atomic</strong>: hold a <code>threading.Lock</code> around it, use a structure designed for concurrency (<code>queue.Queue</code>), or avoid shared mutable state altogether by giving each task its own data and combining results at the end (the approach executors encourage).</p>
+<p>A <strong>deadlock</strong> happens when tasks wait for each other forever: thread 1 holds lock A and waits for B while thread 2 holds B and waits for A. The standard prevention is a <strong>global lock order</strong>: every task acquires locks in the same order (for example sorted by id), so a cycle of waiting is impossible (problem 7). Timeouts on acquisition and holding locks for as little time as possible help too. In asyncio, the equivalent is awaiting something that can never happen; this site's event loop reports that instead of hanging.</p>
+<p>Because real interleavings are invisible and non-deterministic, the problems below <strong>simulate</strong> them: each "thread" is a generator whose <code>yield</code> marks a point where the scheduler may switch, and a schedule lists which thread runs next. This is exactly how to reason about races on a whiteboard, and how tools that test concurrent code systematically (model checkers, deterministic schedulers) work.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lost_update.py</span><button class="copy">Copy</button></div><pre><code class="py">state = {&quot;counter&quot;: 0}
+
+def increment():
+    value = state[&quot;counter&quot;]      # read
+    yield                         # the scheduler may switch here
+    state[&quot;counter&quot;] = value + 1  # write
+
+def run(schedule):
+    state[&quot;counter&quot;] = 0
+    threads = {&quot;A&quot;: increment(), &quot;B&quot;: increment()}
+    for name in schedule:
+        next(threads[name], None)
+    return state[&quot;counter&quot;]
+
+print(run([&quot;A&quot;, &quot;A&quot;, &quot;B&quot;, &quot;B&quot;]), run([&quot;A&quot;, &quot;B&quot;, &quot;A&quot;, &quot;B&quot;]), run([&quot;B&quot;, &quot;A&quot;, &quot;A&quot;, &quot;B&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>2 1 1</pre></div></div>
+<p>Run one after the other, the counter reaches 2. Interleaved so that both read before either writes, it ends at 1: an update was lost. Nothing about the code changed, only the timing.</p>
+</section>
+<section class="sec" id="site">
+<h2><span class="n">6</span>Concurrency on this site</h2>
+<p>The browser cannot start threads or processes, and running asyncio needs a browser feature that is not yet universal. So on this site: <code>ThreadPoolExecutor</code>, <code>ProcessPoolExecutor</code> and <code>Thread.start</code> run each task <strong>immediately, in order</strong>, with the same API (results, exceptions, <code>map</code>, <code>submit</code>, <code>as_completed</code>), so your code is checked for correctness but not for speed; and <code>asyncio.run</code> uses an event loop with <strong>simulated time</strong>: <code>await asyncio.sleep(2)</code> returns at once but advances <code>asyncio.get_running_loop().time()</code> by exactly 2 seconds, so timings in the asyncio lessons are exact. Run the code locally to see real parallelism and real timings; the behaviour you are graded on is the same.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-timing-models-for-three-kinds-of-work" data-pid="m14-1-timing-models-for-three-kinds-of-work" data-type="predict" data-level="easy" data-answer="8.0 2.0 4.0
+8.0 2.3 4.3
+3 2">
+<header class="prob-head"><h3>1. Timing models for three kinds of work</h3></header>
+<div class="code"><pre><code class="py">durations = [2.0, 2.0, 2.0, 2.0]      # four tasks of 2 seconds each
+
+def sequential(tasks):
+    return sum(tasks)
+
+def concurrent_io(tasks, workers):
+    # waiting work overlaps: rounds of `workers` tasks
+    rounds = -(-len(tasks) // workers)
+    return rounds * max(tasks)
+
+def cpu_with_gil(tasks, threads):
+    # only one thread computes at a time
+    return sum(tasks)
+
+def cpu_with_processes(tasks, processes, startup=0.3):
+    rounds = -(-len(tasks) // processes)
+    return startup + rounds * max(tasks)
+
+print(sequential(durations), concurrent_io(durations, 4), concurrent_io(durations, 3))
+print(cpu_with_gil(durations, 4), cpu_with_processes(durations, 4), cpu_with_processes(durations, 2))
+print(-(-7 // 3), 7 // 3)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>-(-a // b)</code> is ceiling division. With the GIL, threads take turns for Python computation.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>8.0 2.0 4.0
+8.0 2.3 4.3
+3 2</pre></div><p>Four 2-second waits overlap completely with four workers, taking 2 seconds; with three workers, two rounds are needed. CPU work under the GIL gets no overlap, so four threads take as long as running sequentially, while four processes compute in parallel and pay a start-up cost. These idealised models are the first estimate to make before choosing a tool; real systems add overheads, but the shape holds.</p></div></details>
+</article>
+<article class="prob" id="p-amdahl-s-law" data-pid="m14-1-amdahl-s-law" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Amdahl's law</h3></header>
+<div class="prob-q"><p>Write <code>speedup(p, n)</code> returning Amdahl's speed-up for a parallel fraction <code>p</code> (between 0 and 1, else <code>ValueError</code>) and <code>n &gt;= 1</code> workers, and <code>workers_for(p, target)</code> returning the smallest <code>n</code> reaching at least <code>target</code> (allowing for floating-point rounding), or <code>None</code> when the target is not below the limit <code>1 / (1 - p)</code>; for <code>p == 1</code> there is no limit and the answer is the smallest <code>n &gt;= target</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import math
+
+def speedup(p, n):
+    pass
+
+def workers_for(p, target):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert round(speedup(0.9, 8), 2) == 4.71 and speedup(0.0, 64) == 1.0 and speedup(1.0, 8) == 8.0 and speedup(0.5, 1) == 1.0
+assert workers_for(0.9, 4) == 6 and workers_for(0.9, 4.0001) == 7 and workers_for(0.9, 10) is None and workers_for(0.9, 9.9) is not None and workers_for(1.0, 5) == 5
+assert workers_for(0.5, 1.0) == 1
+for bad in [(-0.1, 2), (1.1, 2), (0.5, 0)]:
+    try:
+        speedup(*bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert round(speedup(0.9, 8), 2) == 4.71 and speedup(0.0, 64) == 1.0 and speedup(1.0, 8) == 8.0 and speedup(0.5, 1) == 1.0
+assert workers_for(0.9, 4) == 6 and workers_for(0.9, 4.0001) == 7 and workers_for(0.9, 10) is None and workers_for(0.9, 9.9) is not None and workers_for(1.0, 5) == 5
+assert workers_for(0.5, 1.0) == 1
+for bad in [(-0.1, 2), (1.1, 2), (0.5, 0)]:
+    try:
+        speedup(*bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Solve <code>1 / ((1 - p) + p / n) &gt;= target</code> for <code>n</code>: <code>n &gt;= p / (1 / target - (1 - p))</code> when the denominator is positive.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>math.ceil</code>, and guard floating-point edge cases by checking <code>speedup(p, n) &gt;= target</code> (and incrementing if needed).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+
+def speedup(p, n):
+    if not 0 &lt;= p &lt;= 1 or n &lt; 1:
+        raise ValueError(&quot;need 0 &lt;= p &lt;= 1 and n &gt;= 1&quot;)
+    return 1 / ((1 - p) + p / n)
+
+
+def workers_for(p, target):
+    if target &lt;= 1:
+        return 1
+    if p == 1:
+        return math.ceil(target)
+    room = 1 / target - (1 - p)
+    if room &lt;= 1e-12:
+        return None
+    n = max(1, math.floor(p / room))
+    while speedup(p, n) &lt; target - 1e-9:
+        n += 1
+    return n</code></pre></div><p>Amdahl's formula says the serial part <code>1 - p</code> is paid in full however many workers you add, so the speed-up approaches <code>1 / (1 - p)</code>: 10 times for a 90% parallel job. Solving for <code>n</code> gives the workers needed, and the solution reports <code>None</code> when the target is beyond the limit, which is the useful answer in a planning discussion: "more machines will not get us there; we must shrink the serial part". The final loop compares with a tiny tolerance because 6 workers give exactly 4 times on paper but <code>3.9999999999999996</code> in floating point; without it, the answer would wrongly be 7. In data pipelines the serial part is often a single writer, a global aggregation, or loading a model once.</p></div></details>
+</article>
+<article class="prob" id="p-little-s-law-the-wrong-way-round" data-pid="m14-1-little-s-law-the-wrong-way-round" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Little's law the wrong way round</h3></header>
+<div class="prob-q"><p><code>concurrency_needed(target_rps, latency_s)</code> should return how many requests must be in flight to sustain <code>target_rps</code> requests per second when each takes <code>latency_s</code> seconds (rounded up), and <code>max_rps(concurrency, latency_s)</code> the best throughput a given concurrency allows. Both formulas are inverted. Fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import math
+
+def concurrency_needed(target_rps, latency_s):
+    return math.ceil(target_rps / latency_s)
+
+def max_rps(concurrency, latency_s):
+    return concurrency * latency_s
+</textarea>
+<script type="text/plain" class="prob-tests">assert concurrency_needed(50, 2.0) == 100 and concurrency_needed(3, 0.5) == 2 and concurrency_needed(1, 0.25) == 1
+assert max_rps(10, 2.0) == 5.0 and max_rps(8, 0.5) == 16.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert concurrency_needed(50, 2.0) == 100 and concurrency_needed(3, 0.5) == 2 and concurrency_needed(1, 0.25) == 1
+assert max_rps(10, 2.0) == 5.0 and max_rps(8, 0.5) == 16.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Little's law: items in flight = arrival rate x time in the system.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+def concurrency_needed(target_rps, latency_s):
+    return math.ceil(target_rps * latency_s)
+
+def max_rps(concurrency, latency_s):
+    return concurrency / latency_s</code></pre></div><p>Each in-flight request occupies a slot for <code>latency_s</code> seconds, so a slot serves <code>1 / latency_s</code> requests per second, and <code>concurrency</code> slots serve <code>concurrency / latency_s</code>; to reach a target rate you need <code>rate * latency</code> slots in flight. Units check the formulas: requests per second times seconds is a count of requests, and a count divided by seconds is a rate. This is why slow models need high concurrency for batch work, and why a provider's concurrency limit, not your code, often caps throughput.</p></div></details>
+</article>
+<article class="prob" id="p-amdahl-in-numbers" data-pid="m14-1-amdahl-in-numbers" data-type="predict" data-level="easy" data-answer="0.5 [1.33, 1.78, 1.97, 2.0]
+0.9 [1.82, 4.71, 8.77, 10.0]
+0.99 [1.98, 7.48, 39.26, 99.99]
+1.54">
+<header class="prob-head"><h3>4. Amdahl in numbers</h3></header>
+<div class="code"><pre><code class="py">def speedup(p, n):
+    return 1 / ((1 - p) + p / n)
+
+for p in (0.5, 0.9, 0.99):
+    print(p, [round(speedup(p, n), 2) for n in (2, 8, 64, 1_000_000)])
+print(round(speedup(0.95, 16) / speedup(0.95, 8), 2))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The limit is <code>1 / (1 - p)</code>: 2, 10 and 100.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0.5 [1.33, 1.78, 1.97, 2.0]
+0.9 [1.82, 4.71, 8.77, 10.0]
+0.99 [1.98, 7.48, 39.26, 99.99]
+1.54</pre></div><p>Speed-ups rise quickly at first and then flatten towards <code>1 / (1 - p)</code>: a half-serial job never gets past 2 times, a 90% parallel job past 10. Even at 99%, 64 workers give under 40 times. Doubling from 8 to 16 workers on a 95% parallel job buys only about 50% more, which is why adding machines has diminishing returns and reducing the serial fraction is usually the bigger win.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-simulate-a-worker-pool" data-pid="m14-1-simulate-a-worker-pool" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Simulate a worker pool</h3></header>
+<div class="prob-q"><p>Write <code>makespan(durations, workers)</code> simulating a pool of <code>workers</code> that takes tasks in order, each task going to the worker that becomes free first. Return <code>(total_time, finish_times)</code> where <code>finish_times[i]</code> is when task <code>i</code> completes. This is what a thread pool achieves for I/O-bound tasks.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import heapq
+
+def makespan(durations, workers):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert makespan([2, 2, 2, 2], 4) == (2, [2, 2, 2, 2])
+assert makespan([2, 2, 2, 2], 3) == (4, [2, 2, 2, 4])
+assert makespan([5, 1, 1, 1, 1, 1], 2) == (5, [5, 1, 2, 3, 4, 5])
+assert makespan([3, 1], 1) == (4, [3, 4]) and makespan([], 3) == (0, [])
+try:
+    makespan([1], 0)
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert makespan([2, 2, 2, 2], 4) == (2, [2, 2, 2, 2])
+assert makespan([2, 2, 2, 2], 3) == (4, [2, 2, 2, 4])
+assert makespan([5, 1, 1, 1, 1, 1], 2) == (5, [5, 1, 2, 3, 4, 5])
+assert makespan([3, 1], 1) == (4, [3, 4]) and makespan([], 3) == (0, [])
+try:
+    makespan([1], 0)
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a min-heap of the times at which each worker becomes free, starting with <code>[0] * workers</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each task, pop the earliest free time, finish = that time + duration, push the finish time back.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+
+def makespan(durations, workers):
+    if workers &lt; 1:
+        raise ValueError(&quot;workers must be at least 1&quot;)
+    free = [0] * workers
+    finish = []
+    for d in durations:
+        start = heapq.heappop(free)
+        end = start + d
+        finish.append(end)
+        heapq.heappush(free, end)
+    return (max(finish) if finish else 0), finish</code></pre></div><p>A heap of "free at" times always yields the worker available soonest, which is how an executor's queue behaves: the next task waits for the first free worker. The third case shows a key effect: one long task occupies a worker while the other handles the five short ones, so the total equals the long task's time. Ordering matters too: putting the longest tasks first (longest processing time first) usually reduces the makespan, which is why batch jobs with uneven tasks, such as documents of very different lengths, often sort by size before submitting.</p></div></details>
+</article>
+<article class="prob" id="p-interleavings-and-the-lost-update" data-pid="m14-1-interleavings-and-the-lost-update" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>6. Interleavings and the lost update</h3></header>
+<div class="prob-q"><p>Fill in <code>result</code> after each marked line. Each thread reads the counter, yields (a possible switch), then writes the value it read plus one.</p></div>
+<div class="code"><pre><code class="py">state = {&quot;counter&quot;: 0}
+
+def increment():
+    value = state[&quot;counter&quot;]
+    yield
+    state[&quot;counter&quot;] = value + 1
+
+def run(schedule, n_threads=2):
+    state[&quot;counter&quot;] = 0
+    threads = {name: increment() for name in &quot;ABC&quot;[:n_threads]}
+    for name in schedule:
+        next(threads[name], None)
+    return state[&quot;counter&quot;]
+
+result = run(&quot;AABB&quot;)
+result = run(&quot;ABAB&quot;)
+result = run(&quot;ABBA&quot;)
+result = run(&quot;ABCABC&quot;, 3)
+result = run(&quot;AABCBC&quot;, 3)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>result</code></th></tr><tr><td>one after the other</td><td><input class="cell" data-a="2" data-s="2" aria-label="result at one after the other" autocomplete="off"></td></tr><tr><td>both read first</td><td><input class="cell" data-a="1" data-s="1" aria-label="result at both read first" autocomplete="off"></td></tr><tr><td>nested</td><td><input class="cell" data-a="1" data-s="1" aria-label="result at nested" autocomplete="off"></td></tr><tr><td>three readers</td><td><input class="cell" data-a="1" data-s="1" aria-label="result at three readers" autocomplete="off"></td></tr><tr><td>A finishes first</td><td><input class="cell" data-a="2" data-s="2" aria-label="result at A finishes first" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each thread's first step reads, its second step writes. Track the value each thread read.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>result</code></th></tr><tr><td>one after the other</td><td><code>2</code></td></tr><tr><td>both read first</td><td><code>1</code></td></tr><tr><td>nested</td><td><code>1</code></td></tr><tr><td>three readers</td><td><code>1</code></td></tr><tr><td>A finishes first</td><td><code>2</code></td></tr></table></div><p>When a thread completes its read and write before the other reads, its increment survives. Whenever both read the same value before either writes, the later write overwrites the earlier with the same number, and an increment is lost: <code>ABAB</code> and <code>ABBA</code> both end at 1. With three threads all reading 0 first, two increments are lost; if A finishes before B and C read, they both read 1 and the result is 2. The final value depends only on the interleaving, which is why race conditions are timing-dependent and hard to reproduce.</p></div></details>
+</article>
+<article class="prob" id="p-locks-taken-in-argument-order" data-pid="m14-1-locks-taken-in-argument-order" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. Locks taken in argument order</h3></header>
+<div class="prob-q"><p><code>transfer(src, dst, amount)</code> locks the source account, then the destination. If one thread runs <code>transfer(a, b, ...)</code> while another runs <code>transfer(b, a, ...)</code>, each can hold one lock and wait for the other forever. Fix it by always acquiring the two locks in a <strong>global order</strong> (by account name), and reject transfers from an account to itself with <code>ValueError</code> (taking the same non-reentrant lock twice would deadlock too). The <code>RecordingLock</code> stands in for <code>threading.Lock</code> and logs the order of acquisition.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class RecordingLock:
+    log = []
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        RecordingLock.log.append(self.name)
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class Account:
+    def __init__(self, name, balance):
+        self.name, self.balance = name, balance
+        self.lock = RecordingLock(name)
+
+
+def transfer(src, dst, amount):
+    with src.lock:
+        with dst.lock:
+            if src.balance &lt; amount:
+                raise ValueError(&quot;insufficient funds&quot;)
+            src.balance -= amount
+            dst.balance += amount
+</textarea>
+<script type="text/plain" class="prob-tests">RecordingLock.log.clear()
+a, b = Account("acct-a", 100), Account("acct-b", 50)
+transfer(a, b, 30)
+transfer(b, a, 10)
+assert RecordingLock.log == ["acct-a", "acct-b", "acct-a", "acct-b"]
+assert (a.balance, b.balance) == (80, 70)
+try:
+    transfer(a, a, 5)
+    assert False
+except ValueError:
+    pass
+try:
+    transfer(b, a, 1000)
+    assert False
+except ValueError:
+    pass
+assert (a.balance, b.balance) == (80, 70)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">RecordingLock.log.clear()
+a, b = Account(&quot;acct-a&quot;, 100), Account(&quot;acct-b&quot;, 50)
+transfer(a, b, 30)
+transfer(b, a, 10)
+assert RecordingLock.log == [&quot;acct-a&quot;, &quot;acct-b&quot;, &quot;acct-a&quot;, &quot;acct-b&quot;]
+assert (a.balance, b.balance) == (80, 70)
+try:
+    transfer(a, a, 5)
+    assert False
+except ValueError:
+    pass
+try:
+    transfer(b, a, 1000)
+    assert False
+except ValueError:
+    pass
+assert (a.balance, b.balance) == (80, 70)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>first, second = sorted((src, dst), key=lambda acct: acct.name)</code>, then <code>with first.lock, second.lock:</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class RecordingLock:
+    log = []
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        RecordingLock.log.append(self.name)
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class Account:
+    def __init__(self, name, balance):
+        self.name, self.balance = name, balance
+        self.lock = RecordingLock(name)
+
+
+def transfer(src, dst, amount):
+    if src is dst:
+        raise ValueError(&quot;cannot transfer to the same account&quot;)
+    first, second = sorted((src, dst), key=lambda acct: acct.name)
+    with first.lock, second.lock:
+        if src.balance &lt; amount:
+            raise ValueError(&quot;insufficient funds&quot;)
+        src.balance -= amount
+        dst.balance += amount</code></pre></div><p>A deadlock needs a cycle of waiting, and a cycle needs two tasks acquiring the same locks in opposite orders. Sorting the accounts gives every transfer the same order, <code>acct-a</code> before <code>acct-b</code>, whichever direction the money flows, so no cycle can form; the recorded log shows exactly that. The balance check sits <strong>inside</strong> the locks, so no other transfer can change the balance between the check and the update (a "check-then-act" race). The same discipline applies to database row locks, file locks and asyncio locks: pick one order and use it everywhere.</p></div></details>
+</article>
+<article class="prob" id="p-throughput-under-a-rate-limit" data-pid="m14-1-throughput-under-a-rate-limit" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Throughput under a rate limit</h3></header>
+<div class="prob-q"><p>An LLM provider allows <code>rpm</code> requests per minute. Write <code>plan(n_requests, latency_s, rpm, max_concurrency)</code> returning a dict with <code>concurrency</code> (the concurrency that saturates the rate limit by Little's law, <code>ceil(rpm / 60 * latency_s)</code>, capped at <code>max_concurrency</code>), <code>rps</code> (the achievable requests per second, the smaller of <code>concurrency / latency_s</code> and <code>rpm / 60</code>), and <code>minutes</code> (the estimated time for the batch, <code>n_requests / rps / 60</code>, rounded to 1 decimal).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">import math
+
+def plan(n_requests, latency_s, rpm, max_concurrency):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">p = plan(10_000, latency_s=3.0, rpm=600, max_concurrency=50)
+assert p == {"concurrency": 30, "rps": 10.0, "minutes": 16.7}
+q = plan(10_000, latency_s=3.0, rpm=600, max_concurrency=12)
+assert q == {"concurrency": 12, "rps": 4.0, "minutes": 41.7}
+assert plan(60, latency_s=0.5, rpm=6000, max_concurrency=100)["concurrency"] == 50
+assert plan(1, latency_s=0.1, rpm=60, max_concurrency=10)["concurrency"] == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">p = plan(10_000, latency_s=3.0, rpm=600, max_concurrency=50)
+assert p == {&quot;concurrency&quot;: 30, &quot;rps&quot;: 10.0, &quot;minutes&quot;: 16.7}
+q = plan(10_000, latency_s=3.0, rpm=600, max_concurrency=12)
+assert q == {&quot;concurrency&quot;: 12, &quot;rps&quot;: 4.0, &quot;minutes&quot;: 41.7}
+assert plan(60, latency_s=0.5, rpm=6000, max_concurrency=100)[&quot;concurrency&quot;] == 50
+assert plan(1, latency_s=0.1, rpm=60, max_concurrency=10)[&quot;concurrency&quot;] == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Rate in requests per second is <code>rpm / 60</code>; multiply by latency for the needed concurrency.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+
+
+def plan(n_requests, latency_s, rpm, max_concurrency):
+    rate_limit = rpm / 60
+    concurrency = min(max(1, math.ceil(rate_limit * latency_s)), max_concurrency)
+    rps = min(concurrency / latency_s, rate_limit)
+    return {&quot;concurrency&quot;: concurrency, &quot;rps&quot;: rps, &quot;minutes&quot;: round(n_requests / rps / 60, 1)}</code></pre></div><p>Little's law turns a rate limit into a concurrency target: 10 requests per second with 3-second calls need 30 in flight. More concurrency would not help (the provider would answer with 429 errors), and less leaves throughput on the table: capped at 12, the batch takes 2.5 times longer. This back-of-the-envelope plan is what you do before writing the async batch runner of 14.5, and it tells you whether a 10,000-document job takes minutes or hours. Token-per-minute limits work the same way with tokens instead of requests.</p></div></details>
+</article>
+<article class="prob" id="p-shared-state-and-atomic-steps" data-pid="m14-1-shared-state-and-atomic-steps" data-type="predict" data-level="medium" data-answer="(1, [&#x27;A&#x27;, &#x27;B&#x27;]) (2, [&#x27;A&#x27;, &#x27;B&#x27;])
+(1, [&#x27;A&#x27;, &#x27;B&#x27;]) (2, [&#x27;B&#x27;, &#x27;A&#x27;])">
+<header class="prob-head"><h3>9. Shared state and atomic steps</h3></header>
+<div class="code"><pre><code class="py">state = {&quot;counter&quot;: 0, &quot;log&quot;: []}
+
+def unsafe(name):
+    value = state[&quot;counter&quot;]
+    yield
+    state[&quot;counter&quot;] = value + 1
+    state[&quot;log&quot;].append(name)
+
+def safe(name):
+    state[&quot;counter&quot;] += 1        # read and write in one step: nothing can interleave
+    state[&quot;log&quot;].append(name)
+    yield
+
+def run(make, schedule):
+    state[&quot;counter&quot;], state[&quot;log&quot;] = 0, []
+    threads = {n: make(n) for n in &quot;AB&quot;}
+    for n in schedule:
+        next(threads[n], None)
+    return state[&quot;counter&quot;], state[&quot;log&quot;]
+
+print(run(unsafe, &quot;ABAB&quot;), run(safe, &quot;ABAB&quot;))
+print(run(unsafe, &quot;BAAB&quot;), run(safe, &quot;BAAB&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the simulation, a thread can only be switched out at <code>yield</code>. <code>safe</code> has no <code>yield</code> between reading and writing.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(1, [&#x27;A&#x27;, &#x27;B&#x27;]) (2, [&#x27;A&#x27;, &#x27;B&#x27;])
+(1, [&#x27;A&#x27;, &#x27;B&#x27;]) (2, [&#x27;B&#x27;, &#x27;A&#x27;])</pre></div><p>In the unsafe version both threads read 0 before either writes, so the counter ends at 1 although both appended to the log, which is the signature of a lost update: two pieces of work done, one counted. The safe version performs the read-modify-write in one uninterrupted step, the simulation's equivalent of holding a lock, so every schedule gives 2. With real threads, <code>+=</code> is <strong>not</strong> one step (it is several bytecodes, and a switch can happen between them), which is why the real fix is a lock, not rewriting the line.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-enumerate-every-interleaving" data-pid="m14-1-enumerate-every-interleaving" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Enumerate every interleaving</h3></header>
+<div class="prob-q"><p>Write <code>interleavings(counts)</code> yielding every schedule (a string) for threads named <code>A</code>, <code>B</code>, <code>C</code>, ... where thread <code>i</code> takes <code>counts[i]</code> steps, each schedule keeping each thread's own steps in order. Then write <code>outcomes(make_thread, counts, reset, read)</code>: for each schedule, call <code>reset()</code>, create one generator per thread with <code>make_thread(name)</code>, run the schedule, and collect <code>read()</code>; return the sorted list of distinct results. This is a tiny model checker.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def interleavings(counts):
+    pass
+
+def outcomes(make_thread, counts, reset, read):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert sorted(interleavings([1, 1])) == ["AB", "BA"]
+assert len(list(interleavings([2, 2]))) == 6 and len(list(interleavings([2, 2, 2]))) == 90
+assert list(interleavings([2])) == ["AA"] and list(interleavings([])) == [""]
+
+state = {"x": 0}
+def reset():
+    state["x"] = 0
+def read():
+    return state["x"]
+
+def racy(name):
+    v = state["x"]
+    yield
+    state["x"] = v + 1
+    yield
+
+def atomic(name):
+    state["x"] += 1
+    yield
+    yield
+
+assert outcomes(racy, [2, 2], reset, read) == [1, 2]
+assert outcomes(atomic, [2, 2], reset, read) == [2]
+assert outcomes(racy, [2, 2, 2], reset, read) == [1, 2, 3]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert sorted(interleavings([1, 1])) == [&quot;AB&quot;, &quot;BA&quot;]
+assert len(list(interleavings([2, 2]))) == 6 and len(list(interleavings([2, 2, 2]))) == 90
+assert list(interleavings([2])) == [&quot;AA&quot;] and list(interleavings([])) == [&quot;&quot;]
+
+state = {&quot;x&quot;: 0}
+def reset():
+    state[&quot;x&quot;] = 0
+def read():
+    return state[&quot;x&quot;]
+
+def racy(name):
+    v = state[&quot;x&quot;]
+    yield
+    state[&quot;x&quot;] = v + 1
+    yield
+
+def atomic(name):
+    state[&quot;x&quot;] += 1
+    yield
+    yield
+
+assert outcomes(racy, [2, 2], reset, read) == [1, 2]
+assert outcomes(atomic, [2, 2], reset, read) == [2]
+assert outcomes(racy, [2, 2, 2], reset, read) == [1, 2, 3]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Recursive generator: if every count is 0, yield <code>""</code>; otherwise for each thread with steps left, yield its letter plus every interleaving of the counts with that one reduced.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>outcomes</code>, use a set of results and <code>next(gen, None)</code> for each scheduled step.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def interleavings(counts):
+    counts = list(counts)
+    if all(c == 0 for c in counts):
+        yield &quot;&quot;
+        return
+    for i, c in enumerate(counts):
+        if c:
+            counts[i] -= 1
+            for rest in interleavings(counts):
+                yield chr(ord(&quot;A&quot;) + i) + rest
+            counts[i] += 1
+
+
+def outcomes(make_thread, counts, reset, read):
+    results = set()
+    for schedule in interleavings(counts):
+        reset()
+        threads = {chr(ord(&quot;A&quot;) + i): make_thread(chr(ord(&quot;A&quot;) + i)) for i in range(len(counts))}
+        for name in schedule:
+            next(threads[name], None)
+        results.add(read())
+    return sorted(results)</code></pre></div><p>Testing concurrent code by running it many times only samples a few interleavings; <strong>enumerating</strong> them all proves what can happen. The number of schedules is the multinomial coefficient (6 for two threads of two steps, 90 for three), which grows fast, so real model checkers prune equivalent schedules, but the idea is this one. The racy increment can end anywhere from 1 to the number of threads, and the atomic one only at the correct total, which is a precise statement of why a critical section must not contain a switch point. The recursive generator mutates <code>counts</code> and restores it after each branch, a standard backtracking pattern (16.5).</p></div></details>
+</article>
+<article class="prob" id="p-schedule-requests-under-a-sliding-window" data-pid="m14-1-schedule-requests-under-a-sliding-window" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Schedule requests under a sliding-window rate limit</h3></header>
+<div class="prob-q"><p>Write <code>schedule_requests(n, concurrency, latency, rpm=None)</code> returning the start time of each of <code>n</code> requests when at most <code>concurrency</code> run at once, each takes <code>latency</code> seconds, and (if <code>rpm</code> is given) at most <code>rpm</code> requests may <strong>start</strong> in any 60-second window. Requests start in order, each as soon as a worker is free and the rate limit allows (request <code>i</code> may not start before <code>starts[i - rpm] + 60</code>). Also write <code>finish_time(starts, latency)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import heapq
+
+def schedule_requests(n, concurrency, latency, rpm=None):
+    pass
+
+def finish_time(starts, latency):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert schedule_requests(5, 2, 1.0) == [0.0, 0.0, 1.0, 1.0, 2.0]
+assert schedule_requests(5, 2, 1.0, rpm=3) == [0.0, 0.0, 1.0, 60.0, 60.0]
+starts = schedule_requests(100, 10, 2.0, rpm=60)
+assert starts[:12] == [0.0] * 10 + [2.0, 2.0] and starts[60] == 60.0 and finish_time(starts, 2.0) == 68.0
+assert schedule_requests(0, 3, 1.0) == [] and finish_time([], 1.0) == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert schedule_requests(5, 2, 1.0) == [0.0, 0.0, 1.0, 1.0, 2.0]
+assert schedule_requests(5, 2, 1.0, rpm=3) == [0.0, 0.0, 1.0, 60.0, 60.0]
+starts = schedule_requests(100, 10, 2.0, rpm=60)
+assert starts[:12] == [0.0] * 10 + [2.0, 2.0] and starts[60] == 60.0 and finish_time(starts, 2.0) == 68.0
+assert schedule_requests(0, 3, 1.0) == [] and finish_time([], 1.0) == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a min-heap of worker free times starting at <code>[0.0] * concurrency</code>; for request <code>i</code>, the start is the popped time, then <code>max</code> it with the rate-limit bound.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Push <code>start + latency</code> back for that worker.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import heapq
+
+
+def schedule_requests(n, concurrency, latency, rpm=None):
+    free = [0.0] * concurrency
+    starts = []
+    for i in range(n):
+        start = heapq.heappop(free)
+        if rpm is not None and i &gt;= rpm:
+            start = max(start, starts[i - rpm] + 60.0)
+        starts.append(start)
+        heapq.heappush(free, start + latency)
+    return starts
+
+
+def finish_time(starts, latency):
+    return max(starts) + latency if starts else 0.0</code></pre></div><p>The simulation combines the two limits a real batch job faces: the pool's concurrency and the provider's rate limit. The rate limit says the <code>i</code>-th start must be at least a minute after the <code>(i - rpm)</code>-th, so once the first window's budget is used, the job waits for the window to slide, as the second case shows: the fourth request waits until second 60 although workers are free. With 60 requests per minute and 10 workers, the first 60 requests are done after 12 seconds, then the job idles until the window slides at second 60 and finishes at 68 seconds instead of 22: it is rate-bound, and more workers would not help. Simulating before running a large batch avoids both 429 storms and pointless over-provisioning, and the same scheduler logic, with real sleeps, becomes the rate limiter of 14.5.</p></div></details>
+</article>
+<article class="prob" id="p-detect-inconsistent-lock-orders" data-pid="m14-1-detect-inconsistent-lock-orders" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Detect inconsistent lock orders</h3></header>
+<div class="prob-q"><p>Write <code>lock_order_conflicts(tasks)</code> where <code>tasks</code> maps a task name to the list of lock names it acquires (holding each until the end, in that order). Return a sorted list of <code>(lock1, lock2, task1, task2)</code> tuples, with <code>lock1 &lt; lock2</code> and <code>task1 &lt; task2</code>, for every pair of locks that some task acquires as <code>lock1</code> before <code>lock2</code> and another acquires as <code>lock2</code> before <code>lock1</code>: each is a potential deadlock. Report each <code>(lock1, lock2, task1, task2)</code> once.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def lock_order_conflicts(tasks):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">tasks = {
+    "transfer_ab": ["acct:a", "acct:b"],
+    "transfer_ba": ["acct:b", "acct:a"],
+    "report": ["acct:a", "acct:b", "acct:c"],
+    "audit": ["acct:c", "acct:a"],
+    "single": ["acct:b"],
+}
+assert lock_order_conflicts(tasks) == [
+    ("acct:a", "acct:b", "report", "transfer_ba"),
+    ("acct:a", "acct:b", "transfer_ab", "transfer_ba"),
+    ("acct:a", "acct:c", "audit", "report"),
+]
+assert lock_order_conflicts({"x": ["l1", "l2"], "y": ["l1", "l2"]}) == [] and lock_order_conflicts({}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">tasks = {
+    &quot;transfer_ab&quot;: [&quot;acct:a&quot;, &quot;acct:b&quot;],
+    &quot;transfer_ba&quot;: [&quot;acct:b&quot;, &quot;acct:a&quot;],
+    &quot;report&quot;: [&quot;acct:a&quot;, &quot;acct:b&quot;, &quot;acct:c&quot;],
+    &quot;audit&quot;: [&quot;acct:c&quot;, &quot;acct:a&quot;],
+    &quot;single&quot;: [&quot;acct:b&quot;],
+}
+assert lock_order_conflicts(tasks) == [
+    (&quot;acct:a&quot;, &quot;acct:b&quot;, &quot;report&quot;, &quot;transfer_ba&quot;),
+    (&quot;acct:a&quot;, &quot;acct:b&quot;, &quot;transfer_ab&quot;, &quot;transfer_ba&quot;),
+    (&quot;acct:a&quot;, &quot;acct:c&quot;, &quot;audit&quot;, &quot;report&quot;),
+]
+assert lock_order_conflicts({&quot;x&quot;: [&quot;l1&quot;, &quot;l2&quot;], &quot;y&quot;: [&quot;l1&quot;, &quot;l2&quot;]}) == [] and lock_order_conflicts({}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each task, record every ordered pair <code>(earlier, later)</code> of its locks, mapping the pair to the set of tasks that use that order.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each pair <code>(x, y)</code> with <code>x &lt; y</code>, conflicts are tasks ordering <code>x</code> before <code>y</code> combined with tasks ordering <code>y</code> before <code>x</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from itertools import combinations
+
+
+def lock_order_conflicts(tasks):
+    orders = {}
+    for task, locks in tasks.items():
+        for earlier, later in combinations(locks, 2):
+            orders.setdefault((earlier, later), set()).add(task)
+    conflicts = set()
+    for (x, y), forward in orders.items():
+        if x &gt;= y:
+            continue
+        for t1 in forward:
+            for t2 in orders.get((y, x), ()):
+                conflicts.add((x, y) + tuple(sorted((t1, t2))))
+    return sorted(conflicts)</code></pre></div><p>A deadlock between two tasks requires them to acquire two locks in opposite orders, so checking every ordered pair of acquisitions finds every potential two-task deadlock <strong>statically</strong>, without waiting for the unlucky timing. <code>combinations</code> yields each pair in acquisition order, so <code>report</code> contributes <code>a</code> before <code>b</code> and <code>a</code> before <code>c</code>, which conflicts with <code>audit</code> taking <code>c</code> first. This is the idea behind lock-order checkers such as the Linux kernel's lockdep and the "potential deadlock" warnings of thread sanitizers; the fix is always the same as in problem 7, one global order.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-gil-and-when-do-threads-help" data-pid="m14-1-what-is-the-gil-and-when-do-threads-help" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. What is the GIL, and when do threads help in Python?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The Global Interpreter Lock is a lock in standard CPython that a thread must hold to execute Python bytecode, so within one process only one thread runs Python code at a time; it simplifies memory management (reference counting) and C-extension safety. Threads therefore do not speed up pure-Python CPU-bound work. They do help for I/O-bound work, because a thread releases the GIL while waiting on sockets, files or sleeps, so other threads run meanwhile; and for code that spends its time in C extensions that release the GIL (NumPy, hashlib, compression, many tokenizers and image libraries). For CPU-bound Python code use processes, or vectorised libraries. The GIL does not make code thread-safe: compound operations can still interleave, so shared state needs locks. Python 3.13 introduced an optional free-threaded build without the GIL (PEP 703), officially supported since 3.14, where threads can run Python in parallel, with some single-thread overhead and extension compatibility caveats.</p></div></details>
+</article>
+<article class="prob" id="p-concurrency-versus-parallelism-explain-t" data-pid="m14-1-concurrency-versus-parallelism-explain-t" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. Concurrency versus parallelism: explain the difference and how you would choose between threads, processes and asyncio.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Concurrency is structuring a program so several tasks make progress in overlapping time, by switching between them, typically while they wait; parallelism is executing several tasks at the same instant on multiple cores. Waiting (I/O-bound) work needs concurrency; computing (CPU-bound) work needs parallelism. In Python: <strong>threads</strong> for I/O-bound work with tens to hundreds of concurrent operations, especially when using blocking libraries; <strong>asyncio</strong> for large numbers of concurrent I/O operations (thousands of HTTP or LLM calls) with async-native libraries, at the cost of making the call chain async; <strong>processes</strong> for CPU-bound work such as parsing, feature extraction or batch inference on CPU, accepting start-up and serialisation costs. Measure first (wall versus CPU time), consider Amdahl's law for the achievable speed-up, and remember external limits such as rate limits, which often matter more than the tool.</p></div></details>
+</article>
+<article class="prob" id="p-you-run-5-000-llm-calls-for-an-evaluatio" data-pid="m14-1-you-run-5-000-llm-calls-for-an-evaluatio" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. You run 5,000 LLM calls for an evaluation and the provider allows 500 requests per minute. How do you plan the concurrency, and what can go wrong?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The rate limit caps throughput at 500/60, about 8.3 requests per second, so the job takes at least 10 minutes whatever the code does. By Little's law, with an average latency of, say, 3 seconds, about 25 requests in flight saturate the limit; more concurrency only produces 429 errors, less wastes time. I would use asyncio (or a thread pool) with a semaphore of about 25, plus a client-side rate limiter (token bucket or sliding window) so bursts stay under the limit, and respect token-per-minute limits too, by estimating tokens per request. Things that go wrong: 429s and timeouts, handled with retries, exponential backoff with jitter and honouring <code>Retry-After</code>; long-tail latency, handled with per-request timeouts; failures halfway, handled by writing results incrementally (JSONL) keyed by request id so the job can resume without repeating paid calls; non-determinism, handled by recording the model version and parameters; and cost, tracked from token usage as results arrive. Many providers also offer batch APIs at a discount with a delivery window, which is often the better choice for offline evaluation.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>I/O-bound work waits and needs concurrency; CPU-bound work computes and needs parallelism; measure wall time against CPU time to tell them apart.</li><li>Threads suit moderate I/O, asyncio suits many I/O operations, processes suit CPU work; the GIL stops threads from running Python code in parallel.</li><li>Free-threaded Python (3.13 experimental, 3.14 supported) removes the GIL; the GIL never made shared state safe.</li><li>Amdahl's law bounds speed-up by the serial fraction; Little's law (in flight = rate x latency) plans concurrency against rate limits.</li><li>Races come from interleaved read-modify-write on shared state; deadlocks from inconsistent lock orders. Use locks, one global order, or no shared state.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

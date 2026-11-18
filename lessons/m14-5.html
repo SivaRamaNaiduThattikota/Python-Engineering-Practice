@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>14.5 · asyncio in practice</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m14-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 14 · Concurrency and async</span></div>
+  <h1>14.5 asyncio in practice</h1>
+  <p>The patterns every async LLM or data client needs: limiting concurrency with semaphores, client-side rate limiting, timeouts, retries with exponential backoff and jitter, worker pools on <code>asyncio.Queue</code>, deduplicating identical in-flight requests, and shutting down cleanly. All of it runs here on simulated time, so the timings in the tests are exact: a rate limiter's schedule or a timeout's effect is checked to the millisecond.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="limits">
+<h2><span class="n">1</span>Bounding concurrency with a semaphore</h2>
+<p><code>gather</code> over 10,000 coroutines starts 10,000 requests at once, which exceeds every provider's rate limit, exhausts connection pools and memory, and gets the client throttled. <strong><code>asyncio.Semaphore(n)</code></strong> fixes the number of tasks allowed inside a block: <code>async with sem:</code> decrements its counter, or waits while it is zero, and increments it on exit. Acquire it <strong>inside</strong> each task, around the request itself, so that all tasks can be created at once but only <code>n</code> call the API at any moment (problem 3 shows the common way to get this wrong). Little's law (14.1) gives <code>n</code>: about the target requests per second times the average latency.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">semaphore.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+async def call(i, sem, active, peak):
+    async with sem:
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        await asyncio.sleep(1.0)
+        active[0] -= 1
+        return i
+
+async def main(limit):
+    sem, active, peak = asyncio.Semaphore(limit), [0], [0]
+    loop = asyncio.get_running_loop()
+    results = await asyncio.gather(*(call(i, sem, active, peak) for i in range(10)))
+    return results == list(range(10)), peak[0], loop.time()
+
+print(asyncio.run(main(3)), asyncio.run(main(10)))</code></pre><div class="out"><span class="ol">Output</span><pre>(True, 3, 4.0) (True, 10, 1.0)</pre></div></div>
+<p>With a limit of 3, ten one-second calls run in four waves and finish at 4 seconds, never more than 3 at once; with 10, all run together. Results stay in order because <code>gather</code> keeps argument order regardless of when each task got its turn.</p>
+</section>
+<section class="sec" id="rate">
+<h2><span class="n">2</span>Rate limits, timeouts and retries</h2>
+<p>A semaphore caps <strong>concurrency</strong>; providers also cap <strong>rate</strong> (requests or tokens per minute). A client-side <strong>token bucket</strong> (14.2) spaces requests out: before each call, acquire a token, sleeping until one is available (problem 6). Combine both, and respect the server: on HTTP 429 or 503 responses, honour a <code>Retry-After</code> header when present.</p>
+<p>Every network call needs a <strong>timeout</strong>: <code>async with asyncio.timeout(seconds):</code> (Python 3.11) or <code>await asyncio.wait_for(aw, seconds)</code> cancels the work and raises <code>TimeoutError</code> when the time is up, so one hung connection cannot stall a batch forever. Choose timeouts from measured latency percentiles (a little above the p99), and for streaming responses time out <strong>between</strong> tokens rather than over the whole stream.</p>
+<p>Transient failures (timeouts, connection resets, 429, 5xx) deserve <strong>retries with exponential backoff</strong>: wait <code>base * 2 ** attempt</code>, capped at a maximum, and add <strong>jitter</strong>, for example a random wait between 0 and that value ("full jitter"), so that a thousand clients that failed at the same moment do not retry in lockstep and knock the service over again. Retry a bounded number of times, never on errors that will not change (400 bad request, 401 unauthorised, validation errors), and only operations that are safe to repeat (idempotent), or that carry an idempotency key.</p>
+</section>
+<section class="sec" id="queues">
+<h2><span class="n">3</span>Worker pools on asyncio.Queue</h2>
+<p>For long or unbounded streams of work (items arriving from a crawler, a message queue, or a file too big to load), use a <strong>producer-consumer</strong> design: an <code>asyncio.Queue(maxsize=...)</code> between producers and a fixed number of <strong>worker tasks</strong>. Producers <code>await queue.put(item)</code>, which waits when the queue is full, giving natural <strong>back-pressure</strong>; each worker loops on <code>item = await queue.get()</code>, processes it, and calls <code>queue.task_done()</code>. <code>await queue.join()</code> waits until every item put has been marked done, after which the workers (stuck waiting on an empty queue) are cancelled. The number of workers is the concurrency limit, so no semaphore is needed, and memory stays bounded however much work arrives. Python 3.13 also added <code>queue.shutdown()</code> for ending consumers explicitly.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">queue_workers.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+async def worker(name, queue, results):
+    while True:
+        item = await queue.get()
+        try:
+            await asyncio.sleep(item[&quot;seconds&quot;])
+            results.append((name, item[&quot;id&quot;], asyncio.get_running_loop().time()))
+        finally:
+            queue.task_done()
+
+async def main():
+    queue, results = asyncio.Queue(maxsize=2), []
+    workers = [asyncio.create_task(worker(f&quot;w{i}&quot;, queue, results)) for i in range(2)]
+    for i, s in enumerate([1.0, 0.5, 0.5, 2.0, 0.5]):
+        await queue.put({&quot;id&quot;: i, &quot;seconds&quot;: s})
+    await queue.join()
+    for w in workers:
+        w.cancel()
+    await asyncio.gather(*workers, return_exceptions=True)
+    return results
+
+for row in asyncio.run(main()):
+    print(row)</code></pre><div class="out"><span class="ol">Output</span><pre>(&#x27;w1&#x27;, 1, 0.5)
+(&#x27;w0&#x27;, 0, 1.0)
+(&#x27;w1&#x27;, 2, 1.0)
+(&#x27;w1&#x27;, 4, 1.5)
+(&#x27;w0&#x27;, 3, 3.0)</pre></div></div>
+</section>
+<section class="sec" id="shutdown">
+<h2><span class="n">4</span>Deduplication and clean shutdown</h2>
+<p>Two more patterns come up constantly. <strong>Single flight</strong>: when many tasks ask for the same thing at the same time (the same prompt, the same embedding, the same document), start one call and let the others await the same task, so the work is done once (problem 12). And <strong>clean shutdown</strong>: on cancellation or exit, stop accepting work, cancel or drain in-flight tasks, let their <code>finally</code> blocks and <code>async with</code> exits close connections and flush partial results, and never swallow <code>CancelledError</code> (14.4). Batch jobs should also write results <strong>incrementally</strong> (one JSONL line per finished request, keyed by request id, 12.2), so a crash or a cancellation loses at most the requests in flight, and a restart can skip what is done.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-semaphores-and-waves" data-pid="m14-5-semaphores-and-waves" data-type="predict" data-level="easy" data-answer="([(0, 0.0), (1, 0.0), (2, 1.0), (3, 2.0), (4, 2.0)], 4.0)
+4.0 2.0">
+<header class="prob-head"><h3>1. Semaphores and waves</h3></header>
+<div class="code"><pre><code class="py">import asyncio
+
+async def job(i, sem, starts):
+    async with sem:
+        starts.append((i, asyncio.get_running_loop().time()))
+        await asyncio.sleep(2 if i % 2 else 1)
+
+async def main(limit, n):
+    sem, starts = asyncio.Semaphore(limit), []
+    await asyncio.gather(*(job(i, sem, starts) for i in range(n)))
+    return starts, asyncio.get_running_loop().time()
+
+print(asyncio.run(main(2, 5)))
+print(asyncio.run(main(1, 3))[1], asyncio.run(main(5, 5))[1])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Even-numbered jobs take 1 second, odd ones 2. A waiting job starts as soon as any slot frees.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>([(0, 0.0), (1, 0.0), (2, 1.0), (3, 2.0), (4, 2.0)], 4.0)
+4.0 2.0</pre></div><p>With two slots, jobs 0 and 1 start at once; job 0 finishes at 1 second and job 2 takes its slot; at 2 seconds both job 1 and job 2 finish, so jobs 3 and 4 start; job 4 ends at 3 and job 3 at 4. A slot is reused the moment it frees, so the waves are not aligned. With one slot everything is sequential (1 + 2 + 1); with five, the total is the longest job.</p></div></details>
+</article>
+<article class="prob" id="p-gather-with-a-concurrency-limit" data-pid="m14-5-gather-with-a-concurrency-limit" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Gather with a concurrency limit</h3></header>
+<div class="prob-q"><p>Write <code>async def bounded_gather(coros, limit)</code> that awaits all the given coroutines with at most <code>limit</code> running at once and returns their results in order, like <code>gather</code>. Raise <code>ValueError</code> if <code>limit &lt; 1</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import asyncio
+
+async def bounded_gather(coros, limit):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+state = {"active": 0, "peak": 0}
+async def call(i):
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    await asyncio.sleep(0.5)
+    state["active"] -= 1
+    return i * i
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await bounded_gather([call(i) for i in range(7)], limit=3)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == [i * i for i in range(7)] and state["peak"] == 3 and t == 1.5
+assert asyncio.run(bounded_gather([], 2)) == []
+try:
+    asyncio.run(bounded_gather([], 0))
+    assert False
+except ValueError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+state = {&quot;active&quot;: 0, &quot;peak&quot;: 0}
+async def call(i):
+    state[&quot;active&quot;] += 1
+    state[&quot;peak&quot;] = max(state[&quot;peak&quot;], state[&quot;active&quot;])
+    await asyncio.sleep(0.5)
+    state[&quot;active&quot;] -= 1
+    return i * i
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await bounded_gather([call(i) for i in range(7)], limit=3)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == [i * i for i in range(7)] and state[&quot;peak&quot;] == 3 and t == 1.5
+assert asyncio.run(bounded_gather([], 2)) == []
+try:
+    asyncio.run(bounded_gather([], 0))
+    assert False
+except ValueError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap each coroutine: <code>async def guarded(c): async with sem: return await c</code>, then <code>gather</code> the wrapped ones.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+async def bounded_gather(coros, limit):
+    if limit &lt; 1:
+        raise ValueError(&quot;limit must be at least 1&quot;)
+    sem = asyncio.Semaphore(limit)
+
+    async def guarded(coro):
+        async with sem:
+            return await coro
+
+    return await asyncio.gather(*(guarded(c) for c in coros))</code></pre></div><p>The coroutine objects are created up front but do nothing until awaited, and each <code>guarded</code> wrapper awaits its coroutine only after acquiring the semaphore, so at most three calls are ever in progress (the grader measured the peak). Seven half-second calls in waves of three take three waves, 1.5 seconds. Order is preserved by <code>gather</code>. This small helper is the most reused piece of async LLM code: it turns "run all of these" into "run all of these politely".</p></div></details>
+</article>
+<article class="prob" id="p-a-semaphore-that-limits-nothing" data-pid="m14-5-a-semaphore-that-limits-nothing" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A semaphore that limits nothing</h3></header>
+<div class="prob-q"><p><code>embed_all</code> intends to keep at most <code>limit</code> embedding calls in flight, but it acquires the semaphore around <code>create_task</code>, which returns immediately, so every call runs at once. Move the limiting to where the call actually happens.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import asyncio
+
+async def embed_all(embed, texts, limit=4):
+    sem = asyncio.Semaphore(limit)
+    tasks = []
+    for text in texts:
+        async with sem:
+            tasks.append(asyncio.create_task(embed(text)))
+    return await asyncio.gather(*tasks)
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+state = {"active": 0, "peak": 0}
+async def embed(text):
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    await asyncio.sleep(1.0)
+    state["active"] -= 1
+    return [float(len(text))]
+out = asyncio.run(embed_all(embed, [f"doc {i}" for i in range(10)], limit=4))
+assert out == [[5.0]] * 10
+assert state["peak"] == 4</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+state = {&quot;active&quot;: 0, &quot;peak&quot;: 0}
+async def embed(text):
+    state[&quot;active&quot;] += 1
+    state[&quot;peak&quot;] = max(state[&quot;peak&quot;], state[&quot;active&quot;])
+    await asyncio.sleep(1.0)
+    state[&quot;active&quot;] -= 1
+    return [float(len(text))]
+out = asyncio.run(embed_all(embed, [f&quot;doc {i}&quot; for i in range(10)], limit=4))
+assert out == [[5.0]] * 10
+assert state[&quot;peak&quot;] == 4</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The <code>async with sem:</code> must surround the <code>await embed(text)</code> inside the task, not the creation of the task.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+async def embed_all(embed, texts, limit=4):
+    sem = asyncio.Semaphore(limit)
+
+    async def one(text):
+        async with sem:
+            return await embed(text)
+
+    return await asyncio.gather(*(one(t) for t in texts))</code></pre></div><p><code>create_task</code> only schedules the coroutine and returns at once, so the semaphore was held for an instant around each scheduling and released before any embedding started: all ten ran together, which is exactly the burst that triggers rate-limit errors. The limit has to cover the <strong>await of the call itself</strong>, so it goes inside the coroutine each task runs. A useful habit, shown by the grader, is to measure peak concurrency in tests with a counter like this one.</p></div></details>
+</article>
+<article class="prob" id="p-timeouts" data-pid="m14-5-timeouts" data-type="predict" data-level="easy" data-answer="finished
+[&#x27;slow(1) cleaned up at 1.0&#x27;, &#x27;slow(5) cleaned up at 3.0&#x27;, &#x27;wait_for timed out at 3.0&#x27;, &#x27;slow(1) cleaned up at 4.0&#x27;, &#x27;slow(1) cleaned up at 4.5&#x27;, &#x27;block timed out at 4.5&#x27;]">
+<header class="prob-head"><h3>4. Timeouts</h3></header>
+<div class="code"><pre><code class="py">import asyncio
+
+async def slow(seconds, log):
+    try:
+        await asyncio.sleep(seconds)
+        return &quot;finished&quot;
+    finally:
+        log.append(f&quot;slow({seconds}) cleaned up at {asyncio.get_running_loop().time()}&quot;)
+
+async def main():
+    log, loop = [], asyncio.get_running_loop()
+    print(await asyncio.wait_for(slow(1, log), timeout=2))
+    try:
+        await asyncio.wait_for(slow(5, log), timeout=2)
+    except TimeoutError:
+        log.append(f&quot;wait_for timed out at {loop.time()}&quot;)
+    try:
+        async with asyncio.timeout(1.5):
+            await slow(1, log)
+            await slow(1, log)
+    except TimeoutError:
+        log.append(f&quot;block timed out at {loop.time()}&quot;)
+    return log
+
+print(asyncio.run(main()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A timeout cancels the work in progress, so its <code>finally</code> runs at the moment of the timeout. <code>asyncio.timeout</code> covers the whole block.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>finished
+[&#x27;slow(1) cleaned up at 1.0&#x27;, &#x27;slow(5) cleaned up at 3.0&#x27;, &#x27;wait_for timed out at 3.0&#x27;, &#x27;slow(1) cleaned up at 4.0&#x27;, &#x27;slow(1) cleaned up at 4.5&#x27;, &#x27;block timed out at 4.5&#x27;]</pre></div><p>The first call finishes within its timeout. The second is cancelled at 2 seconds (3 seconds of loop time in total), its <code>finally</code> runs, and <code>wait_for</code> raises <code>TimeoutError</code>. <code>asyncio.timeout(1.5)</code> covers the whole block: the first one-second call completes, and the second is cancelled half a second in, at 4.5 seconds, which is why a block-level timeout is the right tool for a latency budget across several steps.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-retries-with-exponential-backoff-and-jit" data-pid="m14-5-retries-with-exponential-backoff-and-jit" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Retries with exponential backoff and jitter</h3></header>
+<div class="prob-q"><p>Write <code>async def call_with_retry(fn, attempts=4, base=0.5, cap=8.0, rng=random.random)</code>. It awaits <code>fn()</code>; on <code>TransientError</code> it sleeps and retries, up to <code>attempts</code> calls in total, then re-raises. The wait before retry <code>k</code> (0-based) is <code>rng() * min(cap, base * 2 ** k)</code> ("full jitter"), unless the error has a <code>retry_after</code> attribute that is not <code>None</code>, in which case it waits exactly that many seconds. Other exceptions propagate at once.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import asyncio, random
+
+class TransientError(Exception):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+async def call_with_retry(fn, attempts=4, base=0.5, cap=8.0, rng=random.random):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+def scripted(*outcomes):
+    it = iter(outcomes)
+    calls = []
+    async def fn():
+        calls.append(asyncio.get_running_loop().time())
+        o = next(it)
+        if isinstance(o, BaseException):
+            raise o
+        return o
+    return fn, calls
+fn, calls = scripted(TransientError("429"), TransientError("503"), "ok")
+assert asyncio.run(call_with_retry(fn, rng=lambda: 1.0)) == "ok" and calls == [0.0, 0.5, 1.5]
+fn, calls = scripted(TransientError("429", retry_after=3.0), "ok")
+assert asyncio.run(call_with_retry(fn, rng=lambda: 0.5)) == "ok" and calls == [0.0, 3.0]
+fn, calls = scripted(*[TransientError("down")] * 4)
+try:
+    asyncio.run(call_with_retry(fn, attempts=4, base=4.0, cap=8.0, rng=lambda: 0.5))
+    assert False
+except TransientError:
+    pass
+assert calls == [0.0, 2.0, 6.0, 10.0]
+fn, calls = scripted(ValueError("bad request"))
+try:
+    asyncio.run(call_with_retry(fn))
+    assert False
+except ValueError:
+    assert calls == [0.0]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+def scripted(*outcomes):
+    it = iter(outcomes)
+    calls = []
+    async def fn():
+        calls.append(asyncio.get_running_loop().time())
+        o = next(it)
+        if isinstance(o, BaseException):
+            raise o
+        return o
+    return fn, calls
+fn, calls = scripted(TransientError(&quot;429&quot;), TransientError(&quot;503&quot;), &quot;ok&quot;)
+assert asyncio.run(call_with_retry(fn, rng=lambda: 1.0)) == &quot;ok&quot; and calls == [0.0, 0.5, 1.5]
+fn, calls = scripted(TransientError(&quot;429&quot;, retry_after=3.0), &quot;ok&quot;)
+assert asyncio.run(call_with_retry(fn, rng=lambda: 0.5)) == &quot;ok&quot; and calls == [0.0, 3.0]
+fn, calls = scripted(*[TransientError(&quot;down&quot;)] * 4)
+try:
+    asyncio.run(call_with_retry(fn, attempts=4, base=4.0, cap=8.0, rng=lambda: 0.5))
+    assert False
+except TransientError:
+    pass
+assert calls == [0.0, 2.0, 6.0, 10.0]
+fn, calls = scripted(ValueError(&quot;bad request&quot;))
+try:
+    asyncio.run(call_with_retry(fn))
+    assert False
+except ValueError:
+    assert calls == [0.0]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop <code>for k in range(attempts)</code>; in <code>except TransientError as e</code>, re-raise if <code>k == attempts - 1</code>, else compute the delay and <code>await asyncio.sleep(delay)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio, random
+
+
+class TransientError(Exception):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+async def call_with_retry(fn, attempts=4, base=0.5, cap=8.0, rng=random.random):
+    for k in range(attempts):
+        try:
+            return await fn()
+        except TransientError as e:
+            if k == attempts - 1:
+                raise
+            if e.retry_after is not None:
+                delay = e.retry_after
+            else:
+                delay = rng() * min(cap, base * 2 ** k)
+            await asyncio.sleep(delay)</code></pre></div><p>The exponential part doubles the ceiling of each wait (0.5, 1, 2, 4 seconds, up to <code>cap</code>), giving a failing service more room each time, and the jitter draws the actual wait uniformly below that ceiling, so a crowd of clients that failed together spreads out instead of retrying in synchronised waves (the "thundering herd"). A server's <code>Retry-After</code> overrides the formula because the server knows when it will have capacity. Injecting <code>rng</code> makes the schedule exact in tests: with <code>rng() == 1</code> the calls happen at 0, 0.5 and 1.5 seconds. Non-transient errors fail fast, since retrying a bad request only burns quota.</p></div></details>
+</article>
+<article class="prob" id="p-an-async-token-bucket-rate-limiter" data-pid="m14-5-an-async-token-bucket-rate-limiter" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. An async token-bucket rate limiter</h3></header>
+<div class="prob-q"><p>Write <code>AsyncRateLimiter(rate, capacity)</code> with <code>async def acquire(self)</code> that waits until a token is available and takes it. The bucket starts full and refills at <code>rate</code> tokens per second (up to <code>capacity</code>), measured with the running loop's clock. Concurrent callers must be served in arrival order and never exceed the rate: hold an <code>asyncio.Lock</code> while computing the wait and sleeping.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import asyncio
+
+class AsyncRateLimiter:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+async def main():
+    limiter = AsyncRateLimiter(rate=2.0, capacity=3)
+    loop = asyncio.get_running_loop()
+    starts = []
+    async def request(i):
+        await limiter.acquire()
+        starts.append((i, loop.time()))
+    await asyncio.gather(*(request(i) for i in range(7)))
+    await asyncio.sleep(10)
+    await request(7)
+    return starts
+starts = asyncio.run(main())
+assert starts[:7] == [(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.5), (4, 1.0), (5, 1.5), (6, 2.0)]
+assert starts[7] == (7, 12.0)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+async def main():
+    limiter = AsyncRateLimiter(rate=2.0, capacity=3)
+    loop = asyncio.get_running_loop()
+    starts = []
+    async def request(i):
+        await limiter.acquire()
+        starts.append((i, loop.time()))
+    await asyncio.gather(*(request(i) for i in range(7)))
+    await asyncio.sleep(10)
+    await request(7)
+    return starts
+starts = asyncio.run(main())
+assert starts[:7] == [(0, 0.0), (1, 0.0), (2, 0.0), (3, 0.5), (4, 1.0), (5, 1.5), (6, 2.0)]
+assert starts[7] == (7, 12.0)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Track <code>tokens</code> and <code>last</code>; refill with <code>(now - last) * rate</code>, capped at <code>capacity</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>async with self._lock:</code>, if fewer than one token, <code>await asyncio.sleep((1 - tokens) / rate)</code> then refill again; take one token.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+class AsyncRateLimiter:
+    def __init__(self, rate, capacity):
+        self.rate, self.capacity = rate, capacity
+        self.tokens = float(capacity)
+        self.last = None
+        self._lock = asyncio.Lock()
+
+    def _refill(self):
+        now = asyncio.get_running_loop().time()
+        if self.last is not None:
+            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
+        self.last = now
+
+    async def acquire(self):
+        async with self._lock:
+            self._refill()
+            if self.tokens &lt; 1:
+                await asyncio.sleep((1 - self.tokens) / self.rate)
+                self._refill()
+            self.tokens -= 1</code></pre></div><p>The bucket allows a burst of <code>capacity</code> requests at once, then one every <code>1 / rate</code> seconds, which is how most provider limits behave; the schedule in the test (three at once, then every half second) is exactly that. Holding the lock while sleeping makes waiting callers queue up in arrival order (an <code>asyncio.Lock</code> is fair: waiters acquire it first come, first served), so no two callers can compute a wait from the same token count and both go through. After ten idle seconds the bucket is full again, so request 7 does not wait. The clock is read from the loop, so the limiter works unchanged on this site's simulated time and in production.</p></div></details>
+</article>
+<article class="prob" id="p-one-hung-call-stalls-the-whole-batch" data-pid="m14-5-one-hung-call-stalls-the-whole-batch" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. One hung call stalls the whole batch</h3></header>
+<div class="prob-q"><p><code>ask_all</code> runs all questions concurrently, but a single call that never returns (a stuck connection) keeps the batch waiting forever. Add a per-call timeout of <code>timeout</code> seconds using <code>asyncio.timeout</code>, recording <code>"timeout"</code> for calls that exceed it, and keep the other answers.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import asyncio
+
+async def ask_all(ask, questions, timeout=5.0):
+    return await asyncio.gather(*(ask(q) for q in questions))
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+async def ask(q):
+    await asyncio.sleep(10_000 if "stuck" in q else 1.0)
+    return q.upper()
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await ask_all(ask, ["refund?", "stuck call", "shipping?"], timeout=3.0)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == ["REFUND?", "timeout", "SHIPPING?"]
+assert t == 3.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+async def ask(q):
+    await asyncio.sleep(10_000 if &quot;stuck&quot; in q else 1.0)
+    return q.upper()
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await ask_all(ask, [&quot;refund?&quot;, &quot;stuck call&quot;, &quot;shipping?&quot;], timeout=3.0)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == [&quot;REFUND?&quot;, &quot;timeout&quot;, &quot;SHIPPING?&quot;]
+assert t == 3.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap each call: <code>async def one(q): try: async with asyncio.timeout(timeout): return await ask(q) except TimeoutError: return "timeout"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+async def ask_all(ask, questions, timeout=5.0):
+    async def one(q):
+        try:
+            async with asyncio.timeout(timeout):
+                return await ask(q)
+        except TimeoutError:
+            return &quot;timeout&quot;
+
+    return await asyncio.gather(*(one(q) for q in questions))</code></pre></div><p>Without a timeout, <code>gather</code> waits for its slowest member, and a request with no timeout can be slow forever: the batch here would have finished after 10,000 seconds. A per-call timeout cancels just the stuck call at 3 seconds and turns it into a recorded outcome, so the batch completes at the deadline with every other answer. Timeouts belong on every network call in production, at the client level (connect and read timeouts) and around the logical operation, as here.</p></div></details>
+</article>
+<article class="prob" id="p-producers-consumers-and-join" data-pid="m14-5-producers-consumers-and-join" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Producers, consumers and join</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line. One producer puts three items; one consumer takes 1 second per item.</p></div>
+<div class="code"><pre><code class="py">import asyncio
+
+async def scenario(maxsize):
+    q, log = asyncio.Queue(maxsize=maxsize), []
+    loop = asyncio.get_running_loop()
+
+    async def consumer():
+        while True:
+            item = await q.get()
+            await asyncio.sleep(1.0)
+            log.append(f&quot;done {item} @{loop.time():g}&quot;)
+            q.task_done()
+
+    c = asyncio.create_task(consumer())
+    for item in &quot;abc&quot;:
+        await q.put(item)
+        log.append(f&quot;put {item} @{loop.time():g}&quot;)
+    await q.join()
+    log.append(f&quot;joined @{loop.time():g}&quot;)
+    c.cancel()
+    return log
+
+log = asyncio.run(scenario(0))
+log = asyncio.run(scenario(1))</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>unbounded queue</td><td><input class="cell" data-a="[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;put c @0&#x27;, &#x27;done a @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]" data-s="[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;put c @0&#x27;, &#x27;done a @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]" aria-label="log at unbounded queue" autocomplete="off"></td></tr><tr><td>maxsize=1 back-pressure</td><td><input class="cell" data-a="[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;done a @1&#x27;, &#x27;put c @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]" data-s="[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;done a @1&#x27;, &#x27;put c @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]" aria-label="log at maxsize=1 back-pressure" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>maxsize=0</code> means unbounded: <code>put</code> never waits. With <code>maxsize=1</code>, <code>put</code> waits while an item is in the queue.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The consumer only takes an item out of the queue when it calls <code>get</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>unbounded queue</td><td><code>[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;put c @0&#x27;, &#x27;done a @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]</code></td></tr><tr><td>maxsize=1 back-pressure</td><td><code>[&#x27;put a @0&#x27;, &#x27;put b @0&#x27;, &#x27;done a @1&#x27;, &#x27;put c @1&#x27;, &#x27;done b @2&#x27;, &#x27;done c @3&#x27;, &#x27;joined @3&#x27;]</code></td></tr></table></div><p>With an unbounded queue, the producer puts all three items at time 0 without waiting, and <code>join</code> waits until the consumer has marked each done, at 3 seconds. With <code>maxsize=1</code>, the queue holds one item: <code>a</code> is taken by the consumer at once, <code>b</code> fills the queue, and <code>put c</code> must wait until the consumer takes <code>b</code> after finishing <code>a</code> at 1 second. That waiting is <strong>back-pressure</strong>: a fast producer is slowed to the consumers' pace, so memory stays bounded. The total time is the same, because the consumer was the bottleneck either way.</p></div></details>
+</article>
+<article class="prob" id="p-a-worker-pool-on-a-queue" data-pid="m14-5-a-worker-pool-on-a-queue" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>9. A worker pool on a queue</h3></header>
+<div class="prob-q"><p>Write <code>async def process_all(items, handle, workers=3, maxsize=10)</code> that starts <code>workers</code> worker tasks reading from an <code>asyncio.Queue(maxsize)</code>, puts every item (with its index) on the queue, waits for <code>queue.join()</code>, cancels the workers, and returns a list of results in input order. A handler error is stored as <code>f"error: {ExceptionName}"</code> for that item; it must not kill the worker.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import asyncio
+
+async def process_all(items, handle, workers=3, maxsize=10):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+state = {"active": 0, "peak": 0}
+async def handle(x):
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    try:
+        await asyncio.sleep(1.0)
+        if x < 0:
+            raise ValueError("negative")
+        return x * 10
+    finally:
+        state["active"] -= 1
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await process_all([1, 2, -3, 4, 5, 6, 7], handle, workers=3, maxsize=2)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == [10, 20, "error: ValueError", 40, 50, 60, 70] and state["peak"] == 3 and t == 3.0
+assert asyncio.run(process_all([], handle)) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+state = {&quot;active&quot;: 0, &quot;peak&quot;: 0}
+async def handle(x):
+    state[&quot;active&quot;] += 1
+    state[&quot;peak&quot;] = max(state[&quot;peak&quot;], state[&quot;active&quot;])
+    try:
+        await asyncio.sleep(1.0)
+        if x &lt; 0:
+            raise ValueError(&quot;negative&quot;)
+        return x * 10
+    finally:
+        state[&quot;active&quot;] -= 1
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await process_all([1, 2, -3, 4, 5, 6, 7], handle, workers=3, maxsize=2)
+    return out, loop.time()
+out, t = asyncio.run(main())
+assert out == [10, 20, &quot;error: ValueError&quot;, 40, 50, 60, 70] and state[&quot;peak&quot;] == 3 and t == 3.0
+assert asyncio.run(process_all([], handle)) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each worker loops: <code>i, item = await queue.get()</code>, then <code>try: results[i] = await handle(item) except Exception as e: ...</code>, and <code>queue.task_done()</code> in a <code>finally</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After <code>await queue.join()</code>, cancel the workers and <code>await asyncio.gather(*workers, return_exceptions=True)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+async def process_all(items, handle, workers=3, maxsize=10):
+    queue = asyncio.Queue(maxsize=maxsize)
+    results = [None] * len(items)
+
+    async def worker():
+        while True:
+            i, item = await queue.get()
+            try:
+                results[i] = await handle(item)
+            except Exception as e:
+                results[i] = f&quot;error: {type(e).__name__}&quot;
+            finally:
+                queue.task_done()
+
+    tasks = [asyncio.create_task(worker()) for _ in range(workers)]
+    try:
+        for pair in enumerate(items):
+            await queue.put(pair)
+        await queue.join()
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return results</code></pre></div><p>The number of workers is the concurrency limit (the peak was exactly 3), and the bounded queue makes the producer wait instead of loading every item into memory, which matters when items come from a large file or a crawler. Each item carries its index, so results land in input order whatever the completion order. <code>task_done</code> sits in a <code>finally</code>, so a failing item still counts as processed, otherwise <code>join</code> would wait forever. After <code>join</code>, the workers are idle on <code>get</code> and are cancelled and awaited, in a <code>finally</code> so they are cleaned up even if putting items fails. Seven one-second items on three workers take three rounds, 3 seconds.</p></div></details>
+</article>
+<article class="prob" id="p-completion-order-with-asyncio-as-complet" data-pid="m14-5-completion-order-with-asyncio-as-complet" data-type="predict" data-level="medium" data-answer="([(&#x27;faq&#x27;, 0.3), (&#x27;tickets&#x27;, 0.8), (&#x27;wiki&#x27;, 1.2)], [&#x27;a&#x27;, &#x27;b&#x27;], 3.2)">
+<header class="prob-head"><h3>10. Completion order with asyncio.as_completed</h3></header>
+<div class="code"><pre><code class="py">import asyncio
+
+async def retrieve(source, seconds):
+    await asyncio.sleep(seconds)
+    return source
+
+async def main():
+    loop = asyncio.get_running_loop()
+    jobs = [retrieve(&quot;wiki&quot;, 1.2), retrieve(&quot;faq&quot;, 0.3), retrieve(&quot;tickets&quot;, 0.8)]
+    order = []
+    for next_done in asyncio.as_completed(jobs):
+        source = await next_done
+        order.append((source, loop.time()))
+    first = await asyncio.gather(retrieve(&quot;a&quot;, 2), retrieve(&quot;b&quot;, 1))
+    return order, first, loop.time()
+
+print(asyncio.run(main()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>as_completed</code> yields awaitables in the order they finish; <code>gather</code> returns in argument order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>([(&#x27;faq&#x27;, 0.3), (&#x27;tickets&#x27;, 0.8), (&#x27;wiki&#x27;, 1.2)], [&#x27;a&#x27;, &#x27;b&#x27;], 3.2)</pre></div><p><code>asyncio.as_completed</code> hands back results as soon as each finishes, fastest first, which lets a RAG service start building an answer from the quickest source or show progress in a batch job. <code>gather</code> waits for all and returns results in argument order, so <code>a</code> comes first even though <code>b</code> finished earlier. Loop times are cumulative: the <code>as_completed</code> loop ends at 1.2 seconds and the <code>gather</code> adds 2 more.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-a-resilient-async-batch-runner" data-pid="m14-5-a-resilient-async-batch-runner" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. A resilient async batch runner</h3></header>
+<div class="prob-q"><p>Write <code>async def run_batch(requests, call, limit=4, timeout=10.0, attempts=3, done_ids=())</code> for a list of <code>{"id": ..., "prompt": ...}</code> requests. Skip requests whose id is in <code>done_ids</code> (already processed in an earlier run). Run the rest with at most <code>limit</code> concurrent calls; each attempt has a timeout; retry up to <code>attempts</code> calls in total on <code>TimeoutError</code> or <code>ConnectionError</code>, with no wait between attempts. Append each finished request, <strong>in completion order</strong>, to the returned <code>records</code> list as <code>{"id": ..., "ok": bool, "output": ... or None, "error": None or "ExceptionName", "attempts": n}</code>, and return <code>{"records": records, "skipped": [ids]}</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import asyncio
+
+async def run_batch(requests, call, limit=4, timeout=10.0, attempts=3, done_ids=()):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+tries = {}
+state = {"active": 0, "peak": 0}
+async def call(prompt):
+    tries[prompt] = tries.get(prompt, 0) + 1
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    try:
+        if prompt == "hangs once" and tries[prompt] == 1:
+            await asyncio.sleep(100)
+        if prompt == "always down":
+            raise ConnectionError("refused")
+        if prompt == "bad":
+            raise ValueError("invalid prompt")
+        await asyncio.sleep(len(prompt) / 10)
+        return prompt.upper()
+    finally:
+        state["active"] -= 1
+reqs = [{"id": f"r{i}", "prompt": p} for i, p in enumerate(["short", "hangs once", "always down", "bad", "a longer prompt", "done before"])]
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await run_batch(reqs, call, limit=2, timeout=2.0, attempts=3, done_ids={"r5"})
+    return out, loop.time()
+out, t = asyncio.run(main())
+recs = {r["id"]: r for r in out["records"]}
+assert out["skipped"] == ["r5"] and len(out["records"]) == 5
+assert recs["r0"] == {"id": "r0", "ok": True, "output": "SHORT", "error": None, "attempts": 1}
+assert recs["r1"] == {"id": "r1", "ok": True, "output": "HANGS ONCE", "error": None, "attempts": 2}
+assert recs["r2"] == {"id": "r2", "ok": False, "output": None, "error": "ConnectionError", "attempts": 3}
+assert recs["r3"] == {"id": "r3", "ok": False, "output": None, "error": "ValueError", "attempts": 1}
+assert [r["id"] for r in out["records"]] == ["r0", "r2", "r3", "r4", "r1"] and state["peak"] == 2 and t == 3.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+tries = {}
+state = {&quot;active&quot;: 0, &quot;peak&quot;: 0}
+async def call(prompt):
+    tries[prompt] = tries.get(prompt, 0) + 1
+    state[&quot;active&quot;] += 1
+    state[&quot;peak&quot;] = max(state[&quot;peak&quot;], state[&quot;active&quot;])
+    try:
+        if prompt == &quot;hangs once&quot; and tries[prompt] == 1:
+            await asyncio.sleep(100)
+        if prompt == &quot;always down&quot;:
+            raise ConnectionError(&quot;refused&quot;)
+        if prompt == &quot;bad&quot;:
+            raise ValueError(&quot;invalid prompt&quot;)
+        await asyncio.sleep(len(prompt) / 10)
+        return prompt.upper()
+    finally:
+        state[&quot;active&quot;] -= 1
+reqs = [{&quot;id&quot;: f&quot;r{i}&quot;, &quot;prompt&quot;: p} for i, p in enumerate([&quot;short&quot;, &quot;hangs once&quot;, &quot;always down&quot;, &quot;bad&quot;, &quot;a longer prompt&quot;, &quot;done before&quot;])]
+async def main():
+    loop = asyncio.get_running_loop()
+    out = await run_batch(reqs, call, limit=2, timeout=2.0, attempts=3, done_ids={&quot;r5&quot;})
+    return out, loop.time()
+out, t = asyncio.run(main())
+recs = {r[&quot;id&quot;]: r for r in out[&quot;records&quot;]}
+assert out[&quot;skipped&quot;] == [&quot;r5&quot;] and len(out[&quot;records&quot;]) == 5
+assert recs[&quot;r0&quot;] == {&quot;id&quot;: &quot;r0&quot;, &quot;ok&quot;: True, &quot;output&quot;: &quot;SHORT&quot;, &quot;error&quot;: None, &quot;attempts&quot;: 1}
+assert recs[&quot;r1&quot;] == {&quot;id&quot;: &quot;r1&quot;, &quot;ok&quot;: True, &quot;output&quot;: &quot;HANGS ONCE&quot;, &quot;error&quot;: None, &quot;attempts&quot;: 2}
+assert recs[&quot;r2&quot;] == {&quot;id&quot;: &quot;r2&quot;, &quot;ok&quot;: False, &quot;output&quot;: None, &quot;error&quot;: &quot;ConnectionError&quot;, &quot;attempts&quot;: 3}
+assert recs[&quot;r3&quot;] == {&quot;id&quot;: &quot;r3&quot;, &quot;ok&quot;: False, &quot;output&quot;: None, &quot;error&quot;: &quot;ValueError&quot;, &quot;attempts&quot;: 1}
+assert [r[&quot;id&quot;] for r in out[&quot;records&quot;]] == [&quot;r0&quot;, &quot;r2&quot;, &quot;r3&quot;, &quot;r4&quot;, &quot;r1&quot;] and state[&quot;peak&quot;] == 2 and t == 3.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One coroutine per request: inside <code>async with sem:</code>, loop over attempts with <code>async with asyncio.timeout(timeout):</code> around <code>await call(prompt)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Append the record to <code>records</code> when the request finishes; <code>gather</code> all the per-request coroutines.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+async def run_batch(requests, call, limit=4, timeout=10.0, attempts=3, done_ids=()):
+    done_ids = set(done_ids)
+    sem = asyncio.Semaphore(limit)
+    records, skipped = [], []
+
+    async def one(req):
+        async with sem:
+            error = None
+            for attempt in range(1, attempts + 1):
+                try:
+                    async with asyncio.timeout(timeout):
+                        output = await call(req[&quot;prompt&quot;])
+                    records.append({&quot;id&quot;: req[&quot;id&quot;], &quot;ok&quot;: True, &quot;output&quot;: output, &quot;error&quot;: None, &quot;attempts&quot;: attempt})
+                    return
+                except (TimeoutError, ConnectionError) as e:
+                    error = e
+                except Exception as e:
+                    records.append({&quot;id&quot;: req[&quot;id&quot;], &quot;ok&quot;: False, &quot;output&quot;: None, &quot;error&quot;: type(e).__name__, &quot;attempts&quot;: attempt})
+                    return
+            records.append({&quot;id&quot;: req[&quot;id&quot;], &quot;ok&quot;: False, &quot;output&quot;: None, &quot;error&quot;: type(error).__name__, &quot;attempts&quot;: attempts})
+
+    todo = []
+    for req in requests:
+        if req[&quot;id&quot;] in done_ids:
+            skipped.append(req[&quot;id&quot;])
+        else:
+            todo.append(req)
+    await asyncio.gather(*(one(r) for r in todo))
+    return {&quot;records&quot;: records, &quot;skipped&quot;: skipped}</code></pre></div><p>This is the skeleton of every production batch client, and each feature answers a real failure. The semaphore keeps concurrency at the limit (peak 2). The per-attempt timeout turns the hung first call into a retry after 2 seconds instead of a stalled batch. Retries cover transient errors only; the invalid prompt fails at once. Records are appended as requests finish, in completion order, which is what you write to a JSONL file one line at a time (12.2), so a crash loses only the requests in flight, and <code>done_ids</code> lets the next run skip everything already recorded. Holding the semaphore across retries keeps the retrying request's slot; releasing it between attempts (with a backoff sleep outside the semaphore) is a reasonable alternative when retries are slow.</p></div></details>
+</article>
+<article class="prob" id="p-single-flight-deduplication" data-pid="m14-5-single-flight-deduplication" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Single-flight deduplication</h3></header>
+<div class="prob-q"><p>Write <code>SingleFlight</code> with <code>async def run(self, key, fn)</code>: if a call for <code>key</code> is already in progress, await its result instead of starting another; otherwise start <code>fn()</code> as a task, store it, and remove it when it finishes (success or failure) so a later call starts fresh. All waiters receive the same result or the same exception. Add <code>self.started</code>, counting calls actually made per key.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import asyncio
+
+class SingleFlight:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+sf = SingleFlight()
+calls = []
+def embed(text, fail=False):
+    async def fn():
+        calls.append(text)
+        await asyncio.sleep(1.0)
+        if fail:
+            raise ConnectionError("embedding service down")
+        return [float(len(text))]
+    return fn
+async def main():
+    loop = asyncio.get_running_loop()
+    same = await asyncio.gather(*(sf.run("refund", embed("refund")) for _ in range(5)), sf.run("ship", embed("shipping")))
+    t1 = loop.time()
+    again = await sf.run("refund", embed("refund"))
+    results = await asyncio.gather(sf.run("x", embed("x", fail=True)), sf.run("x", embed("x")), return_exceptions=True)
+    return same, t1, again, results
+same, t1, again, results = asyncio.run(main())
+assert same == [[6.0]] * 5 + [[8.0]] and t1 == 1.0 and again == [6.0]
+assert calls == ["refund", "shipping", "refund", "x"] and sf.started == {"refund": 2, "ship": 1, "x": 1}
+assert all(isinstance(r, ConnectionError) for r in results) and sf._inflight == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+sf = SingleFlight()
+calls = []
+def embed(text, fail=False):
+    async def fn():
+        calls.append(text)
+        await asyncio.sleep(1.0)
+        if fail:
+            raise ConnectionError(&quot;embedding service down&quot;)
+        return [float(len(text))]
+    return fn
+async def main():
+    loop = asyncio.get_running_loop()
+    same = await asyncio.gather(*(sf.run(&quot;refund&quot;, embed(&quot;refund&quot;)) for _ in range(5)), sf.run(&quot;ship&quot;, embed(&quot;shipping&quot;)))
+    t1 = loop.time()
+    again = await sf.run(&quot;refund&quot;, embed(&quot;refund&quot;))
+    results = await asyncio.gather(sf.run(&quot;x&quot;, embed(&quot;x&quot;, fail=True)), sf.run(&quot;x&quot;, embed(&quot;x&quot;)), return_exceptions=True)
+    return same, t1, again, results
+same, t1, again, results = asyncio.run(main())
+assert same == [[6.0]] * 5 + [[8.0]] and t1 == 1.0 and again == [6.0]
+assert calls == [&quot;refund&quot;, &quot;shipping&quot;, &quot;refund&quot;, &quot;x&quot;] and sf.started == {&quot;refund&quot;: 2, &quot;ship&quot;: 1, &quot;x&quot;: 1}
+assert all(isinstance(r, ConnectionError) for r in results) and sf._inflight == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._inflight = {}</code> mapping key to task. If the key is present, <code>return await self._inflight[key]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Otherwise create the task, store it, and remove it with <code>task.add_done_callback(lambda t: self._inflight.pop(key, None))</code>, then await it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+class SingleFlight:
+    def __init__(self):
+        self._inflight = {}
+        self.started = {}
+
+    async def run(self, key, fn):
+        task = self._inflight.get(key)
+        if task is None:
+            self.started[key] = self.started.get(key, 0) + 1
+            task = asyncio.create_task(fn())
+            self._inflight[key] = task
+            task.add_done_callback(lambda t, k=key: self._inflight.pop(k, None))
+        return await task</code></pre></div><p>When five users ask the same question at once, or a batch contains duplicate texts, a cache cannot help because the first answer is not there yet; single flight shares the <strong>in-progress</strong> task, so the expensive call runs once and every waiter awaits the same task, receiving the same value or the same exception. The done callback removes the entry when the task finishes, so failures are not cached forever and a later request starts fresh (the third <code>refund</code> call ran again). Because the event loop runs one task at a time, the check-and-insert in <code>run</code> needs no lock: there is no <code>await</code> between them (14.4). Combined with a result cache (13.3's TTL cache), this removes most duplicate LLM and embedding calls.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-async-ingestion-service" data-pid="m14-5-read-the-code-an-async-ingestion-service" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>13. Read the code: an async ingestion service</h3></header>
+<div class="prob-q"><p><code>ingest</code> embeds documents for a vector store. In production it overwhelms the embedding API (no concurrency limit), hangs forever when one request stalls (no timeout), and cannot be stopped: its broad <code>except BaseException</code> swallows <code>CancelledError</code>, so cancelling the job just moves on to the next document. Fix it: limit concurrency to <code>limit</code> with a semaphore, apply a per-document timeout recording <code>"timeout"</code>, record other <code>Exception</code>s as <code>"error: Name"</code>, and let cancellation propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import asyncio
+
+
+async def ingest(docs, embed, store, limit=4, timeout=5.0):
+    async def one(doc):
+        try:
+            vector = await embed(doc[&quot;text&quot;])
+            store[doc[&quot;id&quot;]] = vector
+            return &quot;ok&quot;
+        except BaseException as e:
+            return f&quot;error: {type(e).__name__}&quot;
+
+    return await asyncio.gather(*(one(d) for d in docs))
+</textarea>
+<script type="text/plain" class="prob-tests">import asyncio
+state = {"active": 0, "peak": 0}
+async def embed(text):
+    state["active"] += 1
+    state["peak"] = max(state["peak"], state["active"])
+    try:
+        await asyncio.sleep(1000 if text == "stall" else 1.0)
+        if text == "bad":
+            raise ValueError("unsupported")
+        return [float(len(text))]
+    finally:
+        state["active"] -= 1
+docs = [{"id": f"d{i}", "text": t} for i, t in enumerate(["refunds", "stall", "bad", "shipping", "returns", "warranty"])]
+async def main():
+    store = {}
+    loop = asyncio.get_running_loop()
+    out = await ingest(docs, embed, store, limit=2, timeout=3.0)
+    return out, store, loop.time()
+out, store, t = asyncio.run(main())
+assert out == ["ok", "timeout", "error: ValueError", "ok", "ok", "ok"] and sorted(store) == ["d0", "d3", "d4", "d5"]
+assert state["peak"] == 2 and t == 4.0
+async def cancel_midway():
+    task = asyncio.create_task(ingest([{"id": str(i), "text": "x" * 5} for i in range(10)], embed, {}, limit=2))
+    await asyncio.sleep(1.5)
+    task.cancel()
+    try:
+        await task
+        return "not cancelled"
+    except asyncio.CancelledError:
+        return "cancelled", asyncio.get_running_loop().time()
+assert asyncio.run(cancel_midway()) == ("cancelled", 1.5)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import asyncio
+state = {&quot;active&quot;: 0, &quot;peak&quot;: 0}
+async def embed(text):
+    state[&quot;active&quot;] += 1
+    state[&quot;peak&quot;] = max(state[&quot;peak&quot;], state[&quot;active&quot;])
+    try:
+        await asyncio.sleep(1000 if text == &quot;stall&quot; else 1.0)
+        if text == &quot;bad&quot;:
+            raise ValueError(&quot;unsupported&quot;)
+        return [float(len(text))]
+    finally:
+        state[&quot;active&quot;] -= 1
+docs = [{&quot;id&quot;: f&quot;d{i}&quot;, &quot;text&quot;: t} for i, t in enumerate([&quot;refunds&quot;, &quot;stall&quot;, &quot;bad&quot;, &quot;shipping&quot;, &quot;returns&quot;, &quot;warranty&quot;])]
+async def main():
+    store = {}
+    loop = asyncio.get_running_loop()
+    out = await ingest(docs, embed, store, limit=2, timeout=3.0)
+    return out, store, loop.time()
+out, store, t = asyncio.run(main())
+assert out == [&quot;ok&quot;, &quot;timeout&quot;, &quot;error: ValueError&quot;, &quot;ok&quot;, &quot;ok&quot;, &quot;ok&quot;] and sorted(store) == [&quot;d0&quot;, &quot;d3&quot;, &quot;d4&quot;, &quot;d5&quot;]
+assert state[&quot;peak&quot;] == 2 and t == 4.0
+async def cancel_midway():
+    task = asyncio.create_task(ingest([{&quot;id&quot;: str(i), &quot;text&quot;: &quot;x&quot; * 5} for i in range(10)], embed, {}, limit=2))
+    await asyncio.sleep(1.5)
+    task.cancel()
+    try:
+        await task
+        return &quot;not cancelled&quot;
+    except asyncio.CancelledError:
+        return &quot;cancelled&quot;, asyncio.get_running_loop().time()
+assert asyncio.run(cancel_midway()) == (&quot;cancelled&quot;, 1.5)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>one</code>, <code>async with sem:</code> then <code>async with asyncio.timeout(timeout):</code> around the embed call.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Catch <code>TimeoutError</code> first, then <code>Exception</code>; never <code>BaseException</code>, so <code>CancelledError</code> propagates.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import asyncio
+
+
+async def ingest(docs, embed, store, limit=4, timeout=5.0):
+    sem = asyncio.Semaphore(limit)
+
+    async def one(doc):
+        async with sem:
+            try:
+                async with asyncio.timeout(timeout):
+                    vector = await embed(doc[&quot;text&quot;])
+            except TimeoutError:
+                return &quot;timeout&quot;
+            except Exception as e:
+                return f&quot;error: {type(e).__name__}&quot;
+            store[doc[&quot;id&quot;]] = vector
+            return &quot;ok&quot;
+
+    return await asyncio.gather(*(one(d) for d in docs))</code></pre></div><p>Three production failures, three fixes. The semaphore keeps the embedding API at 2 concurrent calls instead of all at once. The per-document timeout turns the stalled request into a <code>"timeout"</code> record after 3 seconds, and the batch finishes at 4 seconds instead of 1,000. Most importantly, <code>except BaseException</code> caught the <code>CancelledError</code> that <code>task.cancel()</code> raises inside each awaiting coroutine, so every cancelled document just returned an error string and the job carried on; catching <code>Exception</code> lets cancellation propagate, <code>gather</code> is cancelled, and the job stops at once (at 1.5 seconds in the test). Storing the vector only after a successful call keeps the store free of partial results.</p></div></details>
+</article>
+<article class="prob" id="p-shutting-down-workers" data-pid="m14-5-shutting-down-workers" data-type="predict" data-level="hard" data-answer="([&#x27;CancelledError&#x27;, &#x27;CancelledError&#x27;], [True, True], 3.2) [&#x27;a tick&#x27;, &#x27;b tick&#x27;, &#x27;a tick&#x27;, &#x27;b tick&#x27;, &#x27;a tick&#x27;, &#x27;a flushing&#x27;, &#x27;a closed&#x27;, &#x27;b flushing&#x27;, &#x27;b closed&#x27;]">
+<header class="prob-head"><h3>14. Shutting down workers</h3></header>
+<div class="code"><pre><code class="py">import asyncio
+
+log = []
+
+async def worker(name, delay):
+    try:
+        while True:
+            await asyncio.sleep(delay)
+            log.append(f&quot;{name} tick&quot;)
+    except asyncio.CancelledError:
+        log.append(f&quot;{name} flushing&quot;)
+        raise
+    finally:
+        log.append(f&quot;{name} closed&quot;)
+
+async def main():
+    tasks = [asyncio.create_task(worker(&quot;a&quot;, 1.0)), asyncio.create_task(worker(&quot;b&quot;, 1.5))]
+    await asyncio.sleep(3.2)
+    for t in tasks:
+        t.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [type(r).__name__ for r in results], [t.cancelled() for t in tasks], asyncio.get_running_loop().time()
+
+print(asyncio.run(main()), log)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each worker ticks on its own timer. <code>cancel()</code> raises <code>CancelledError</code> at the next await; <code>gather(..., return_exceptions=True)</code> collects it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>([&#x27;CancelledError&#x27;, &#x27;CancelledError&#x27;], [True, True], 3.2) [&#x27;a tick&#x27;, &#x27;b tick&#x27;, &#x27;a tick&#x27;, &#x27;b tick&#x27;, &#x27;a tick&#x27;, &#x27;a flushing&#x27;, &#x27;a closed&#x27;, &#x27;b flushing&#x27;, &#x27;b closed&#x27;]</pre></div><p>Worker <code>a</code> ticks at 1, 2 and 3 seconds and <code>b</code> at 1.5 and 3, so by 3.2 seconds there are five ticks. Cancelling raises <code>CancelledError</code> inside each worker at its sleep; the handler runs (the place to flush buffered results) and re-raises, then <code>finally</code> closes resources. <code>gather</code> with <code>return_exceptions=True</code> waits for both to finish cancelling and returns the <code>CancelledError</code> instances instead of raising, so a shutdown routine can wait for every worker to clean up before the program exits.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-how-would-you-call-an-llm-api-100-000-ti" data-pid="m14-5-how-would-you-call-an-llm-api-100-000-ti" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How would you call an LLM API 100,000 times as fast as the limits allow, and reliably?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use an async client with <strong>bounded concurrency</strong> (a semaphore or a fixed pool of queue workers) sized by Little's law from the provider's limits and observed latency, plus a client-side <strong>rate limiter</strong> (token bucket) for requests and estimated tokens per minute. Give every call a <strong>timeout</strong>, and retry transient failures (timeouts, connection errors, 429, 5xx) with <strong>exponential backoff and jitter</strong>, honouring <code>Retry-After</code>, a bounded number of times; fail fast on 4xx errors. Stream inputs from a file or queue instead of loading everything, and write each result <strong>as it completes</strong> to durable storage (JSONL keyed by request id), so the job is <strong>resumable</strong> and never pays twice for a request. Track progress, error rates, latency percentiles and token cost as it runs, and stop or slow down automatically if error rates spike. Deduplicate identical prompts (cache and single flight). For offline work, consider the provider's <strong>batch API</strong>, which trades latency (hours) for lower cost and separate limits.</p></div></details>
+</article>
+<article class="prob" id="p-why-add-jitter-to-exponential-backoff" data-pid="m14-5-why-add-jitter-to-exponential-backoff" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Why add jitter to exponential backoff?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When a service fails briefly, many clients fail at the same moment. With plain exponential backoff, they all wait 1, 2, 4 seconds exactly and retry in synchronised waves, so each wave hits the recovering service with the full load at once and can knock it down again (the "thundering herd"). Jitter randomises each client's wait, for example uniformly between 0 and the exponential ceiling ("full jitter"), which spreads retries over the interval and turns spikes into a smooth, lower load, at the cost of slightly less predictable individual delays. It also avoids retries colliding with periodic jobs. Combined with a cap on the wait, a maximum number of attempts, and honouring <code>Retry-After</code>, it is the standard retry policy recommended by cloud providers and implemented by libraries such as <code>tenacity</code> and <code>backoff</code>.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-shut-down-an-asyncio-service-" data-pid="m14-5-how-do-you-shut-down-an-asyncio-service-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How do you shut down an asyncio service gracefully?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Stop taking new work first: stop accepting connections or reading from the input queue, and signal producers (an <code>Event</code>, <code>queue.shutdown()</code> in 3.13+). Then let in-flight work finish within a grace period (<code>asyncio.wait</code> with a timeout, or <code>queue.join()</code>), and cancel what remains; cancellation raises <code>CancelledError</code> at each task's current await, so tasks run their <code>finally</code> blocks and <code>async with</code> exits, flushing buffers, committing or rolling back, and closing clients. Await the cancelled tasks (<code>gather(..., return_exceptions=True)</code>) so cleanup actually completes before closing shared resources such as HTTP clients and database pools, in reverse order of creation. Never swallow <code>CancelledError</code>, and shield the few steps that must finish (writing a checkpoint) with <code>asyncio.shield</code>. Handle SIGTERM by triggering this sequence (<code>loop.add_signal_handler</code> on Unix), because container platforms send it before killing the process; frameworks such as FastAPI expose this as lifespan shutdown hooks. Structured concurrency with <code>TaskGroup</code> makes most of this automatic, since cancelling the group cancels its children.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Bound concurrency with a semaphore acquired inside each task, around the call; measure peak concurrency in tests.</li><li>Respect rate limits with a token bucket, give every call a timeout (<code>asyncio.timeout</code>), and retry transient errors with capped exponential backoff, jitter and <code>Retry-After</code>.</li><li>For streams of work, use worker tasks on a bounded <code>asyncio.Queue</code> (back-pressure), <code>task_done</code> in <code>finally</code>, <code>join</code>, then cancel the workers.</li><li>Deduplicate in-flight work with single flight; write results incrementally so batches are resumable.</li><li>Shut down by stopping intake, draining or cancelling tasks, awaiting their cleanup, and never swallowing <code>CancelledError</code>.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
