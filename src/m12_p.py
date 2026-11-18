@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m12-p", num="12.P", title="Module 12 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(12, "a document ingestion job"), "Module 12 at a glance: files, data formats, logging and configuration, the plumbing every real job needs."),
     p("""Every file-handling task raises the same four questions. **Where is it?** Build paths with `pathlib`, find files with explicit filters, and never trust
     that a folder exists (12.1). **What format, and what types?** CSV gives strings, JSON loses some types, JSONL streams, and every reader must decide what
     a bad record means (12.2). **What happens if it fails halfway?** Write atomically, log the failure with its traceback once, and keep going or stop
@@ -497,6 +499,8 @@ payload = [{"id": i, "text": "refund policy " * 5, "score": i / 2_000, "tags": [
 )
 
 section("project", "Mini project: a document ingestion job",
+    fig(chain(["TOML settings|+ env overrides", "find documents|(sorted)", "read, skip bad,|detect duplicates", "chunk into|JSONL records", ("atomic writes,|manifest, log", "good")]),
+        "The ingestion job: every stage is a lesson from this module."),
     p("""A RAG system needs its documents as chunks with stable ids. The nightly ingestion job reads its settings from TOML with environment overrides, walks the
     corpus, skips what is not a document, detects duplicates by content, writes the chunks as JSONL and a manifest describing the run, both atomically, and
     logs what it did. Build it from the pieces of this module."""),

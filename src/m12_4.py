@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m12-4", num="12.4", title="Configuration and secrets",
@@ -57,6 +58,13 @@ section("env", "Environment variables",
 )
 
 section("dotenv", "`.env` files",
+    fig(flowchart({
+        "line": ("start", 0, 0, "KEY=value in .env"),
+        "set": ("ask", 0, 1, "KEY already in the|real environment?"),
+        "keep": ("good", 1, 1, "keep the real value"),
+        "use": ("step", 0, 2, "use the .env value"),
+    }, [("line", "set"), ("set", "keep", "yes"), ("set", "use", "no")], cell=(240, 80), label="how a .env file is applied by default"),
+        "By default `.env` only fills gaps, so a value set by the deployment always wins over the developer file."),
     p("""Typing a dozen `export` commands before every run is tedious, so development tools read a **`.env`** file in the project folder: one `KEY=value` per
     line, `#` comments, optional quotes. The `python-dotenv` package loads it into `os.environ`; Docker Compose, VS Code and many frameworks read the same
     format. The file holds **real secrets for your machine**, so it is listed in **`.gitignore`** and never committed; instead the repository contains a
@@ -106,6 +114,8 @@ section("toml", "Configuration files with `tomllib`",
 )
 
 section("layers", "Layering and precedence",
+    fig(chain(["defaults|in the code", "config.toml", "environment|variables", ("command-line|flags", "accent")], note="each layer overrides the ones to its left; secrets come only from the environment"),
+        "Configuration layers from most general to most specific; the last one that sets a value wins."),
     p("""Combining the layers is a **merge**, and its rules should be explicit. A shallow merge, `{**defaults, **file_cfg, **env_cfg}` or `defaults | file_cfg`,
     replaces whole nested sections: a file that sets only `model.name` would wipe out the default `model.temperature`. Configuration needs a **deep
     merge**: nested dicts are merged key by key, and other values (including lists) are replaced. `collections.ChainMap(env, file_cfg, defaults)` gives a

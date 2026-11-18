@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m12-2", num="12.2", title="csv, json and JSON Lines",
@@ -46,6 +47,16 @@ section("csv", "CSV with the `csv` module",
 )
 
 section("json", "JSON: type mapping and options",
+    fig(table(["Python", "JSON", "back in Python"], [
+        ["dict", "object", "dict"],
+        ["list, tuple", "array", "list"],
+        ["str", "string", "str"],
+        ["int, float", "number", "int, float"],
+        ["True, False, None", "true, false, null", "True, False, None"],
+        ["non-str dict key 1", "\"1\"", "'1' (a str)"],
+        ["set, datetime, Decimal", "TypeError", ""],
+    ], hl={(1, 2), (5, 2), (6, 1)}, label="how json maps types, there and back"),
+        "JSON has fewer types than Python: tuples come back as lists, keys become strings, and some types need a custom encoder."),
     p("""`json.dumps(obj)` turns Python data into a JSON string and `json.loads(text)` parses one; `json.dump(obj, f)` and `json.load(f)` do the same with a
     file. The mapping is: dict to object, list **and tuple** to array, str to string, int and float to number, `True`/`False` to `true`/`false`, `None` to
     `null`. It is lossy in ways that matter: tuples come back as lists, **dictionary keys become strings** (`{1: "a"}` round-trips to `{"1": "a"}`), and
@@ -114,6 +125,8 @@ section("custom", "Custom encoders and decoders",
 )
 
 section("jsonl", "JSON Lines: streaming records",
+    fig(chain(["one JSON object|per line", "read line by line", "json.loads(line)", ("constant memory,|bad lines skippable", "good")]),
+        "JSON Lines streams records: each line is a complete document, so a reader never needs the whole file in memory."),
     p("""A big JSON array must be parsed whole before you can use its first element. **JSON Lines** puts one JSON object per line instead: a reader handles one
     line at a time with constant memory, a writer appends records as they are produced, a crash loses at most the last line, and files can be split,
     concatenated and counted with ordinary line tools. That is why datasets (Hugging Face), fine-tuning data, LLM batch request and result files,

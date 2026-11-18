@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m12-3", num="12.3", title="logging",
@@ -26,6 +27,17 @@ section("why", "Why logging instead of print",
 )
 
 section("loggers", "Loggers, the hierarchy and levels",
+    fig(flowchart({
+        "call": ("start", 0, 0, "log.info(...) on|myapp.retrieval"),
+        "lvl": ("ask", 0, 1, "INFO at or above the|effective level?"),
+        "drop": ("bad", 1, 1, "dropped, nothing|formatted"),
+        "own": ("step", 0, 2, "filters, then this|logger's handlers"),
+        "prop": ("ask", 0, 3, "propagate is True?"),
+        "stop": ("end", 1, 3, "stop"),
+        "up": ("accent", 0, 4, "handlers of each ancestor,|up to root"),
+    }, [("call", "lvl"), ("lvl", "drop", "no"), ("lvl", "own", "yes"), ("own", "prop"), ("prop", "stop", "no"), ("prop", "up", "yes")],
+        cell=(250, 80), label="what happens to a log record"),
+        "The level is checked once, on the logger you called; after that the record propagates to ancestor handlers, and only each handler's own level can still drop it."),
     p("""Every module gets its own logger with **`log = logging.getLogger(__name__)`**. `__name__` is the module's dotted import name (`myapp.retrieval.search`),
     so loggers form a tree that mirrors the package, and `getLogger` returns the **same** object for the same name, wherever it is called. A record created on
     a logger is checked against that logger's **effective level** (its own level, or if it has none, `NOTSET`, the nearest ancestor's), then passed to the
@@ -60,6 +72,8 @@ section("loggers", "Loggers, the hierarchy and levels",
 )
 
 section("handlers", "Handlers, formatters and configuration",
+    fig(chain(["logger", "record", "handler (its|own level, filters)", "formatter", ("text to a stream,|file or service", "good")]),
+        "Loggers create records, handlers decide where they go, formatters decide how they look."),
     p("""A **handler** delivers records: `StreamHandler` (standard error by default, or any file-like stream), `FileHandler`, `RotatingFileHandler` and
     `TimedRotatingFileHandler` (start a new file at a size or time and keep a fixed number of old ones), `logging.handlers.QueueHandler` for handing records to a
     background thread, and handlers for syslog, HTTP and cloud log services. Each handler has its own level, so one logger can send everything to a file and
@@ -165,6 +179,12 @@ section("context", "Extra fields, filters and request context",
 )
 
 section("structured", "Structured logs",
+    fig(table(["", "text line", "JSON line"], [
+        ["looks like", "INFO answers: done in 812 ms", "{\"level\": \"INFO\", \"latency_ms\": 812}"],
+        ["searching", "regular expressions", "query by field"],
+        ["aggregating", "parse first", "sum or average directly"],
+    ], hl={(1, 2), (2, 2)}, label="text logs versus structured logs"),
+        "Structured logs keep fields as fields, so a log platform can filter and aggregate them without parsing."),
     p("""Text logs are written for people; production logs are read by machines first. Log platforms (Elasticsearch and Kibana, Datadog, Grafana Loki, CloudWatch)
     work best with **structured logs**: one JSON object per line with consistent fields such as `time`, `level`, `logger`, `message`, `request_id`, `model`,
     `latency_ms` and `tokens`, so you can filter "all errors for tenant X with latency above 2 s" instead of grepping. In Python that is a formatter whose

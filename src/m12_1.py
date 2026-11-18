@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m12-1", num="12.1", title="pathlib and files",
@@ -15,6 +16,16 @@ term("Encoding", "The rule that turns text (characters) into bytes and back, suc
 term("Atomic write", "Writing a file so that readers see either the complete old content or the complete new content, never a half-written file: write a temporary file, then rename it over the target.")
 
 section("paths", "Paths as objects",
+    fig(stage_map(12, "a document ingestion job"), "Module 12 at a glance: files, data formats, logging and configuration, the plumbing every real job needs."),
+    fig(table(["expression", "result"], [
+        ["Path('data') / 'raw' / 'a.md'", "data/raw/a.md"],
+        ["p.name", "'a.md'"],
+        ["p.stem", "'a'"],
+        ["p.suffix", "'.md'"],
+        ["p.parent", "data/raw"],
+        ["p.with_suffix('.txt')", "data/raw/a.txt"],
+    ], label="the parts of a path"),
+        "A `Path` is an object with named parts, so you never split strings on slashes by hand."),
     p("""File paths are strings in old code, glued together with `+` or `os.path.join` and taken apart with `split`. **`pathlib.Path`** replaces that with an object
     that knows how paths are built: the `/` operator joins parts (`root / "runs" / name`), and attributes take a path apart: `name` (the last part),
     `stem` (the name without its last suffix), `suffix` and `suffixes`, `parent` and `parents`, `parts`. Methods derive new paths: `with_suffix(".json")`,
@@ -71,6 +82,8 @@ section("explore", "Exploring and changing the file system",
 )
 
 section("text", "Text files and encodings",
+    fig(chain(["bytes on disk", ("decode with an|explicit encoding", "accent"), "str in memory", ("encode on write,|same encoding", "accent")], note="leave out encoding= and the platform default is used"),
+        "Text files are bytes plus an encoding; always pass `encoding=\"utf-8\"` so the result does not depend on the machine."),
     p("""`open(path, mode, encoding=...)` returns a file object. The mode says what you will do: `"r"` read (the default), `"w"` write, truncating any existing
     file to empty **immediately**, `"a"` append to the end, `"x"` create, failing with `FileExistsError` if the file exists, and `"+"` adds the other
     direction (`"r+"`). Always use it in a `with` block so it is closed, which also flushes buffered writes to the operating system. `Path.read_text()`
@@ -133,6 +146,8 @@ section("binary", "Binary files, chunks and seeking",
 )
 
 section("atomic", "Atomic writes",
+    fig(chain(["write to a temp file|in the same folder", "flush and fsync", ("os.replace(tmp, target)", "accent"), ("readers see the old file|or the new one, never half", "good")]),
+        "An atomic write: the target is only replaced once the new content is complete and on disk."),
     p("""Opening a file with `"w"` empties it at once, and the new content is written over time. If the program crashes, is killed, or raises an exception
     halfway through (an unserialisable value at the end of a `json.dump`), the file is left truncated or half-written, and the old content is gone.
     For a model registry, a checkpoint index or a config file, that turns one failed run into a broken system."""),
