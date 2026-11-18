@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m9-4", num="9.4", title="Inheritance and super",
@@ -87,6 +88,8 @@ section("super", "Extending a method with `super()`",
 )
 
 section("mro", "What `super()` really calls: the MRO",
+    fig(chain([("D(B, C)", "accent"), "B(A)", "C(A)", "A", "object"], note="D.__mro__: D, B, C, A, object"),
+        "For the diamond `class D(B, C)` with `B` and `C` both inheriting `A`, the MRO visits each class once; `super()` moves one step along it."),
     p("""With single inheritance, `super()` means "the parent". In general it means something more precise: **the next class in the method
     resolution order** of the instance's class. The MRO is the list Python searches for attributes, available as `Class.__mro__`. For
     multiple inheritance, `class D(B, C)`, Python computes it with the **C3 linearisation** algorithm, which guarantees that every class
@@ -243,6 +246,12 @@ section("special", "Two specialised tools: `__init_subclass__` and subclassing b
 )
 
 section("when", "When not to inherit",
+    fig(flowchart({
+        "isa": ("ask", 0, 0, "is it really a kind of|the parent, usable anywhere|the parent is?"),
+        "inh": ("good", 1, 0, "inherit"),
+        "comp": ("accent", 0, 1, "compose: keep the other|object as an attribute"),
+    }, [("isa", "inh", "yes"), ("isa", "comp", "no")], cell=(270, 100), label="inheritance or composition"),
+        "Inherit only for true is-a relationships that keep every promise of the parent; otherwise hold the other object and delegate to it."),
     p("""Inheritance couples the subclass tightly to the base: every change to the base's internals can break subclasses, subclasses depend on
     which methods the base calls internally, and deep hierarchies make it hard to see where a method comes from. Use it when there is a
     genuine "is a" relationship, a shared contract, and the base was designed for extension (it documents which methods to override).

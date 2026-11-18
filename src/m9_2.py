@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m9-2", num="9.2", title="Dunder methods",
@@ -15,6 +16,16 @@ term("Protocol", "A set of dunder methods that makes an object usable in some wa
 term("NotImplemented", "A special value an operator method returns to say \"I cannot handle this type\", so Python can try the other operand's method.")
 
 section("hooks", "Hooks for syntax and built-ins",
+    fig(table(["you write", "Python calls"], [
+        ["len(x)", "x.__len__()"],
+        ["x == y", "x.__eq__(y)"],
+        ["x + y", "x.__add__(y), then y.__radd__(x)"],
+        ["x[i]", "x.__getitem__(i)"],
+        ["print(x), str(x)", "x.__str__(), falling back to __repr__"],
+        ["x(...)", "x.__call__(...)"],
+        ["if x:", "x.__bool__(), else x.__len__()"],
+    ], label="syntax and built-ins call dunder methods"),
+        "Dunder methods are the hooks behind syntax: implement one and your objects work with the matching operator or built-in."),
     p("""Python's syntax and built-in functions are translated into method calls on your objects. `len(x)` calls `x.__len__()`; `x == y`
     calls `x.__eq__(y)`; `x + y` calls `x.__add__(y)`; `x[i]` calls `x.__getitem__(i)`; `str(x)` calls `x.__str__()`; `if x:` calls
     `x.__bool__()`. These methods are called **dunder** methods ("double underscore") or "special methods", and together they form
@@ -195,6 +206,16 @@ section("containers", "Containers and truthiness",
 )
 
 section("arith", "Arithmetic, `NotImplemented` and calling",
+    fig(flowchart({
+        "start": ("start", 0, 0, "x + y"),
+        "left": ("ask", 0, 1, "x.__add__(y) returns|NotImplemented?"),
+        "res": ("good", 1, 1, "that is the result"),
+        "right": ("ask", 0, 2, "y.__radd__(x) returns|NotImplemented?"),
+        "res2": ("good", 1, 2, "that is the result"),
+        "err": ("bad", 0, 3, "TypeError: unsupported|operand types"),
+    }, [("start", "left"), ("left", "res", "no"), ("left", "right", "yes"), ("right", "res2", "no"), ("right", "err", "yes")], cell=(250, 80),
+        label="how x + y is resolved"),
+        "Returning `NotImplemented` (not raising) lets Python try the other operand's reflected method before giving up."),
     p("""Operators map to methods too: `+` to `__add__`, `-` to `__sub__`, `*` to `__mul__`, `@` to `__matmul__` (matrix product), `abs()` to
     `__abs__`, unary `-` to `__neg__`. For `x + y`, Python first calls `x.__add__(y)`; if that returns `NotImplemented` (or does not
     exist), it calls the **reflected** method `y.__radd__(x)`. That second chance is what makes `2 * vector` work when only the vector

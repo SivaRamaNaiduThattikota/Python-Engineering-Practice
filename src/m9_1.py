@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m9-1", num="9.1", title="Classes and instances",
@@ -16,6 +17,7 @@ term("self", "The first parameter of a method: the instance the method was calle
 term("Attribute", "A name stored on an object (`obj.name`) or on its class. Instance attributes live in `obj.__dict__`.")
 
 section("why", "Why classes",
+    fig(stage_map(9, "a provider layer for LLMs"), "Module 9 at a glance: classes, special methods, properties, inheritance and composition, building up to a provider layer."),
     p("""You have used objects from the first lesson: a list holds items **and** has methods such as `append` and `sort` that work on those
     items; a string has `split` and `upper`. A **class** lets you define your own kind of object in the same way: some **data**
     (attributes) and the **functions that work on that data** (methods), kept together. The class is the blueprint; each object made
@@ -51,6 +53,8 @@ section("why", "Why classes",
 )
 
 section("steps", "What happens when you create an object and call a method",
+    fig(chain(["Ticket('Refund')", "__new__ makes an|empty object", "__init__(self, ...)|fills its attributes", ("the object is bound|to the name", "good")]),
+        "Calling a class creates the object and then runs `__init__` on it; `self` is simply that new object."),
     p("""The `class` statement runs once, like `def`: it executes the class body and creates a **class object** (here `Conversation`)
     that holds the functions defined inside it. Calling the class, `Conversation("Be brief.")`, then does three things in order.
     First Python creates a new, **empty** instance. Then it calls `__init__` with that instance as the first argument, followed by
@@ -86,6 +90,16 @@ section("steps", "What happens when you create an object and call a method",
 )
 
 section("attributes", "Where attributes live, and how Python finds them",
+    fig(flowchart({
+        "start": ("start", 0, 0, "obj.name"),
+        "inst": ("ask", 0, 1, "in the instance's|__dict__?"),
+        "use": ("good", 1, 1, "use it"),
+        "cls": ("ask", 0, 2, "in the class or a base|(following the MRO)?"),
+        "meth": ("good", 1, 2, "use it (a function|becomes a bound method)"),
+        "err": ("bad", 0, 3, "AttributeError"),
+    }, [("start", "inst"), ("inst", "use", "yes"), ("inst", "cls", "no"), ("cls", "meth", "yes"), ("cls", "err", "no")], cell=(250, 80),
+        label="attribute lookup on an instance"),
+        "Attribute lookup checks the instance first, then the class and its bases, which is why a class attribute is shared until an instance shadows it."),
     p("""Instance attributes are stored in a dict on each instance, `obj.__dict__` (also available as `vars(obj)`). Assigning
     `self.messages = [...]` in `__init__` adds the key `"messages"` to that dict. Methods are **not** stored on the instance; they live in
     the class's own namespace, `Conversation.__dict__`, shared by every instance. So each instance carries only its own data."""),

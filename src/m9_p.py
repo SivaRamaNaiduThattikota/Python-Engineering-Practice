@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m9-p", num="9.P", title="Module 9 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(9, "a provider layer for LLMs"), "Module 9 at a glance: classes, special methods, properties, inheritance and composition, building up to a provider layer."),
     p("""For every class you write or read, check four things. **State:** what the instance owns, created in `__init__`, never shared through class
     attributes or mutable defaults (9.1). **Rules:** which invariants hold, guarded by properties and validating methods, with copies instead of
     internal objects handed out (9.3). **Protocol:** which dunders make it behave like the built-ins it resembles, with `__eq__` and
