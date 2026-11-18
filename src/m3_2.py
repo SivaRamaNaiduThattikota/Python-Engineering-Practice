@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-2", num="3.2", title="Flexible arguments",
@@ -16,6 +17,8 @@ term("Positional-only parameter", "A parameter before `/`: it can only be passed
 term("Unpacking a call", "`f(*seq)` spreads a sequence into positional arguments, `f(**mapping)` spreads a dict into keyword arguments.")
 
 section("kinds", "The five kinds of parameters",
+    fig(chain([("a, b, /|positional-only", "accent"), "c|positional or keyword", "*args|extra positionals", ("*, d|keyword-only", "accent2"), "**kwargs|extra keywords"]),
+        "The five kinds of parameters, in the only order Python allows them in a signature."),
     p("""A signature can contain up to five kinds of parameters, always in this order. Each kind answers one question:
     **how may a caller pass this value?**"""),
     html("""<div class="tbl"><table>
@@ -139,6 +142,12 @@ section("markers", "Why `*` and `/` exist",
 )
 
 section("unpacking", "Unpacking at the call site",
+    fig(table(["call", "a", "b", "c"], [
+        ["f(*[1, 2], c=3)", "1", "2", "3"],
+        ["f(*(1, 2, 3))", "1", "2", "3"],
+        ["f(**{'a': 1, 'b': 2, 'c': 3})", "1", "2", "3"],
+    ], label="unpacking a list and a dict into a call"),
+        "`*` spreads a sequence into positional arguments and `**` spreads a dict into keyword arguments; all three calls bind the same values."),
     p("""The same symbols work in the opposite direction in a **call**. `f(*seq)` spreads any iterable into separate
     positional arguments; `f(**mapping)` spreads a dict into keyword arguments. You can use several of each, mixed with
     normal arguments, and Python processes them left to right with the same matching algorithm as always."""),
@@ -167,6 +176,8 @@ section("unpacking", "Unpacking at the call site",
 )
 
 section("forwarding", "Forwarding: wrappers that accept anything",
+    fig(chain(["wrapper(*args, **kwargs)", "do extra work|(log, time, retry)", "fn(*args, **kwargs)", ("result returned|unchanged", "good")]),
+        "A forwarding wrapper accepts any arguments and passes them on untouched, the shape of every decorator in Module 8."),
     p("""Collecting and spreading combine into the **forwarding** pattern: accept `*args, **kwargs` and pass them on
     unchanged with `fn(*args, **kwargs)`. A wrapper written this way works for any function, whatever its signature,
     which is how retry helpers, timers, caches, loggers and decorators (Module 7) are built."""),

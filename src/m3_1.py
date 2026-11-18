@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-1", num="3.1", title="Defining and calling functions",
@@ -14,6 +15,9 @@ term("Signature", "The parameters of a function with their kinds and defaults. `
 term("Recursion", "A function that calls itself on a smaller part of the problem, with a base case that stops it.")
 
 section("def", "What `def` does, step by step",
+    fig(stage_map(3, "a tool runtime for an agent"), "Module 3 at a glance: from defining functions to passing them around as values, building up to a tool runtime."),
+    fig(chain(["def runs", "a function object|is built", "the name is bound|to it", ("the body runs only|when called", "accent")]),
+        "Running `def` does not run the body: it creates a function object and binds the name, like an assignment."),
     p("""`def` is not a declaration that exists before the program starts. It is a **statement that runs**, at the moment
     Python reaches it, like an assignment. Running it does four things, in this order:"""),
     p("""- **1. Evaluate the defaults.** Every default value in the signature is computed now, once (this is the 2.4
@@ -81,6 +85,19 @@ section("def", "What `def` does, step by step",
 )
 
 section("calls", "How a call fills the parameters",
+    fig(flowchart({
+        "call": ("start", 0, 0, "f(1, b=2)"),
+        "pos": ("step", 0, 1, "fill positionals|left to right"),
+        "kw": ("step", 0, 2, "fill keywords by name"),
+        "all": ("ask", 0, 3, "every parameter|filled?"),
+        "run": ("end", 1, 3, "run the body"),
+        "dflt": ("ask", 0, 4, "has a default?"),
+        "use": ("good", 1, 4, "use the default"),
+        "err": ("bad", 0, 5, "TypeError: missing|required argument"),
+    }, [("call", "pos"), ("pos", "kw"), ("kw", "all"), ("all", "run", "yes"), ("all", "dflt", "no"),
+        ("dflt", "use", "yes"), ("use", "run"), ("dflt", "err", "no")], cell=(230, 74),
+        label="how a call fills the parameters"),
+        "How a call fills parameters: positionals first, then keywords, then defaults; anything still empty is an error before the body runs."),
     p("""When you call a function, Python builds the parameter values in a fixed order. Knowing the order lets you
     predict any call, and read any error message, without guessing:"""),
     p("""- **1. Positional arguments** fill the positional parameters from left to right. If there are more positional
@@ -124,6 +141,13 @@ section("calls", "How a call fills the parameters",
 )
 
 section("returns", "What `return` does",
+    fig(table(["the body ends with", "the call gives"], [
+        ["return x", "x"],
+        ["return a, b", "the tuple (a, b)"],
+        ["return  (nothing after it)", "None"],
+        ["no return at all", "None"],
+    ], hl={(2, 1), (3, 1)}, label="what a call returns"),
+        "Every call returns something; a function that never says `return value` gives `None`, the source of many `'NoneType' object has no attribute` errors."),
     p("""`return expression` does three things: it evaluates the expression, **ends the function immediately** (no line
     after it in that call runs), and hands the resulting **object** back to the caller. Nothing is copied: the caller
     receives the very object the function built or was given (2.4). If the function reaches the end of its body without
@@ -218,6 +242,12 @@ section("metadata", "Docstrings, type hints and signatures",
 )
 
 section("recursion", "Recursion, step by step",
+    fig(table(["depth", "call", "waits for", "returns"], [
+        ["1", "fact(3)", "3 * fact(2)", "6"],
+        ["2", "fact(2)", "2 * fact(1)", "2"],
+        ["3", "fact(1)", "nothing: base case", "1"],
+    ], hl={(2, 3)}, label="the call stack of fact(3)"),
+        "Each recursive call waits on the stack until the base case returns; the results then flow back up, 1, then 2, then 6."),
     p("""A function can call itself. **Recursion** fits data that is nested to an unknown depth, such as JSON from an API
     or a document tree: handle one level, call the same function on each child, and stop at a **base case** that needs
     no further call. You already wrote two recursive functions in 2.3 (`freeze` and `with_override`)."""),

@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-5", num="3.5", title="Functions as values",
@@ -16,6 +17,9 @@ term("Key function", "A function passed as `key=` that turns each item into the 
 term("Dispatch table", "A dict from names (or types) to functions, used to pick the code to run instead of a long `if`/`elif` chain.")
 
 section("values", "Functions are values",
+    fig(refs(["shout", "handlers['loud']", "fn (a parameter)"], [("function object: shout", "accent")], [(0, 0), (1, 0), (2, 0)],
+        label="several names for one function object"),
+        "A function is an object like any other: it can be named, stored in a dict and passed as an argument."),
     p("""Since `def` simply binds a name to a function object (3.1), a function can go anywhere a value can go. You can
     assign it to another name, put it in a list or dict, pass it to another function, and return it from a function. A
     function that **takes or returns a function** is called a **higher-order function**. You have already used several:
@@ -65,6 +69,8 @@ section("lambda", "`lambda`: small functions in one expression",
 )
 
 section("key", "Key functions: sort, min, max and group by any rule",
+    fig(chain(["items", "key(item) for each|(once per item)", "sort by the keys", ("items in key order|(ties keep their order)", "good")]),
+        "A key function turns each item into the value to compare; the items themselves are never compared."),
     p("""`sorted`, `list.sort`, `min`, `max` and `itertools.groupby` all accept `key=`. Step by step, `sorted(items,
     key=f)` calls `f` **once per item** to get a key, sorts the items by their keys, and returns the items themselves (not
     the keys). A key can be any comparable value; a **tuple** key sorts by several rules at once, compared element by
@@ -92,6 +98,12 @@ section("key", "Key functions: sort, min, max and group by any rule",
 )
 
 section("mapfilter", "`map`, `filter`, `reduce` and comprehensions",
+    fig(table(["functional form", "comprehension"], [
+        ["map(f, xs)", "[f(x) for x in xs]"],
+        ["filter(p, xs)", "[x for x in xs if p(x)]"],
+        ["reduce(op, xs)", "a loop with an accumulator"],
+    ], label="map, filter and reduce next to comprehensions"),
+        "`map` and `filter` return lazy iterators; the comprehension forms build lists and are usually easier to read."),
     p("""`map(fn, iterable)` calls `fn` on each item; `filter(pred, iterable)` keeps the items for which `pred(item)` is
     truthy. Both return **lazy iterators** (Module 6): nothing is computed until you loop over them or wrap them in `list()`,
     and they can only be consumed **once**. `functools.reduce(fn, iterable, start)` folds the items into one value by
@@ -118,6 +130,9 @@ section("mapfilter", "`map`, `filter`, `reduce` and comprehensions",
 )
 
 section("partial", "`functools.partial` and dispatch tables",
+    fig(refs(["'sum'", "'max'", "'count'"], ["sum", "max", "len"], [(0, 0), (1, 1), (2, 2)], title_names="dict keys", title_objects="functions",
+        label="a dispatch table maps names to functions"),
+        "A dispatch table replaces a long `if` chain: look the function up by name, then call it."),
     p("""`functools.partial(fn, *args, **kwargs)` returns a new callable that remembers some arguments and fills them in
     for you. It is a ready-made factory (3.4): `partial(complete, model="large")` is a version of `complete` that always
     uses the large model. Unlike a `lambda` in a loop, it stores the **values** right away, so it has no late-binding trap,

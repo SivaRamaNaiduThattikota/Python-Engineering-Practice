@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-p", num="3.P", title="Module 3 practice set and mini project",
@@ -9,6 +10,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(3, "a tool runtime for an agent"), "Module 3 at a glance: from defining functions to passing them around as values, building up to a tool runtime."),
     p("""Before opening a hint, name the idea the problem is about: how a call fills parameters (3.1, 3.2), where a name is
     looked up or assigned (3.3), what a closure captures and when it reads it (3.4), or passing functions around (3.5).
     Several problems mix two of these, as real bugs do."""),
@@ -376,6 +378,8 @@ def via_dict(name):
 )
 
 section("project", "Mini project: a tool runtime for an agent",
+    fig(chain(["model asks for a tool|name + JSON arguments", "look it up in|the registry dict", "bind and validate|the arguments", ("call it, return the|result or the error", "good")]),
+        "The tool runtime: every piece is a function value, found by name and called with checked arguments."),
     p("""An agent receives tool calls from an LLM as `{"name": ..., "arguments": {...}}`. Build the small runtime that
     registers tools, describes them, executes calls safely and tracks usage. Every rule below comes from this module, and
     the tests check each one."""),

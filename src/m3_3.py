@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-3", num="3.3", title="Scope: local, enclosing, global, built-in",
@@ -28,6 +29,16 @@ LEGB_FIG = """
 </svg>"""
 
 section("legb", "Where Python looks for a name: LEGB",
+    fig(flowchart({
+        "l": ("ask", 0, 0, "Local: assigned in|this function?"),
+        "e": ("ask", 0, 1, "Enclosing: in an|outer function?"),
+        "g": ("ask", 0, 2, "Global: at module|level?"),
+        "b": ("ask", 0, 3, "Built-in: len,|print, ...?"),
+        "ok": ("good", 1, 1, "use that value"),
+        "err": ("bad", 0, 4, "NameError"),
+    }, [("l", "ok", "yes"), ("l", "e", "no"), ("e", "ok", "yes"), ("e", "g", "no"), ("g", "ok", "yes"), ("g", "b", "no"),
+        ("b", "ok", "yes"), ("b", "err", "no")], cell=(240, 82), label="LEGB name lookup"),
+        "Python looks a name up in four places, in this order, and uses the first match."),
     p("""A **scope** is the part of a program where a name refers to one particular variable. When Python reads a name,
     it searches scopes in a fixed order and uses the **first** match:"""),
     p("""- **L, Local:** names assigned inside the function that is running, including its parameters.
@@ -59,6 +70,8 @@ section("legb", "Where Python looks for a name: LEGB",
 )
 
 section("assignment", "Assignment decides the scope, for the whole function",
+    fig(chain(["the compiler reads|the whole function", "finds x = ...|anywhere in it", "x is local for the|entire body", ("reading x before that line:|UnboundLocalError", "bad")]),
+        "Scope is decided before the function runs: one assignment anywhere makes the name local everywhere in that function."),
     p("""Reading a name searches LEGB. **Assigning** works differently, and this is the part that causes real bugs. When
     Python **compiles** a function, it scans the whole body. Any name that is assigned **anywhere** in the function (with
     `=`, `+=`, a `for` target, an `import`, a `def` or `with ... as`) becomes a **local name for the entire function**,
@@ -89,6 +102,12 @@ section("assignment", "Assignment decides the scope, for the whole function",
 )
 
 section("global", "`global` and `nonlocal`",
+    fig(table(["statement", "effect inside the function"], [
+        ["(nothing)", "assignment creates a local name"],
+        ["global x", "assignment rebinds the module-level x"],
+        ["nonlocal x", "assignment rebinds x in the enclosing function"],
+    ], label="what global and nonlocal change"),
+        "`global` and `nonlocal` change only where assignment goes; reading an outer name never needs them."),
     p("""`global name` at the top of a function says: in this function, `name` refers to the **module-level** variable,
     for reading and assigning. `nonlocal name` says the same about the nearest **enclosing function's** variable. Both are
     only needed to **rebind** the outer name. Changing a mutable object that an outer name already points at needs no

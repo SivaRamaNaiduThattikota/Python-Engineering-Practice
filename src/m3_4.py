@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m3-4", num="3.4", title="Closures and late binding",
@@ -31,6 +32,8 @@ CELL_FIG = """
 </svg>"""
 
 section("what", "What a closure is",
+    fig(chain(["make_counter() runs", "inner function|is created", "inner keeps a cell|for count", ("make_counter returns,|inner still sees count", "good")]),
+        "A closure is a function plus the variables it captured from the enclosing function, kept alive after that function returned."),
     p("""When a function is defined **inside** another function and uses one of the outer function's local variables,
     the inner function remembers that variable even after the outer function has returned. The inner function together
     with the outer variables it uses is called a **closure**, and those variables are its **free variables** (not its own
@@ -88,6 +91,11 @@ section("uses", "What closures are good for",
 )
 
 section("late", "Late binding: closures read the variable, not the value",
+    fig(table(["closure built in the loop", "f[0]()", "f[1]()", "f[2]()"], [
+        ["lambda: i", "2", "2", "2"],
+        ["lambda i=i: i", "0", "1", "2"],
+    ], hl={(0, 1), (0, 2)}, label="late binding: closures read the variable when called"),
+        "Closures read the variable when they are called, after the loop has finished; a default argument captures the value at creation instead."),
     p("""A closure stores the **variable** (the cell), not a copy of its value at the moment the inner function was
     created. It reads the current value **when it runs**. Usually that is what you want. It becomes a trap when closures are
     created in a loop: every closure shares the **same** loop variable, and by the time they run, the loop has finished and
