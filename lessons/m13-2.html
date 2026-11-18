@@ -1,0 +1,1511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>13.2 · Fixtures</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m13-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 13 · Testing with pytest</span></div>
+  <h1>13.2 Fixtures</h1>
+  <p>Real tests need things: a temporary folder, a configured client, a database with three rows, an environment variable that must be restored afterwards. Fixtures provide them. How pytest injects fixtures by name, <code>yield</code> for cleanup, scopes and their traps, parametrised and factory fixtures, <code>conftest.py</code>, and the built-in fixtures <code>tmp_path</code>, <code>monkeypatch</code>, <code>capsys</code> and <code>caplog</code>. As in 13.1, most problems are graded by running your tests against buggy versions.</p>
+  <div class="chips"><span class="chip">18 problems</span><span class="chip">4 easy · 9 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="fixtures">
+<h2><span class="n">1</span>Fixtures: dependencies by name</h2>
+<p>Tests often need the same preparation: a list of sample documents, a configured object, a file on disk. Copying that code into every test is noisy, and putting it in module-level variables shares <strong>mutable state</strong> between tests, which makes them depend on each other's order. A <strong>fixture</strong> is a function decorated with <code>@pytest.fixture</code> that builds the thing; a test asks for it by <strong>naming a parameter after it</strong>, and pytest calls the fixture, passes the result in, and does it again, freshly, for the next test. Fixtures can ask for other fixtures the same way, so setup is composed from small pieces.</p>
+<p>This is <strong>dependency injection</strong>: the test declares what it needs and the framework supplies it. It also makes tests read well: <code>def test_search_ranks_exact_match_first(store, sample_docs):</code> says what the test needs without saying how it is built.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">fixtures.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.fixture
+def docs():
+    print(&quot;&lt;building docs&gt;&quot;)
+    return [{&quot;id&quot;: &quot;faq-1&quot;, &quot;text&quot;: &quot;Refunds take 5 days&quot;}, {&quot;id&quot;: &quot;faq-2&quot;, &quot;text&quot;: &quot;Shipping is free&quot;}]
+
+@pytest.fixture
+def index(docs):
+    print(f&quot;&lt;building index from {len(docs)} docs&gt;&quot;)
+    return {d[&quot;id&quot;]: d[&quot;text&quot;].lower() for d in docs}
+
+def test_lookup(index):
+    assert index[&quot;faq-1&quot;] == &quot;refunds take 5 days&quot;
+
+def test_mutation_is_private(docs):
+    docs.append({&quot;id&quot;: &quot;faq-3&quot;, &quot;text&quot;: &quot;x&quot;})
+    assert len(docs) == 3
+
+def test_fresh_again(docs):
+    assert len(docs) == 2
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, args=[&quot;-s&quot;, &quot;--tb=no&quot;])
+print(r[&quot;outcomes&quot;])
+print(re.findall(r&quot;&lt;([^&lt;&gt;]+)&gt;&quot;, r[&quot;output&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;test_lookup&#x27;: &#x27;passed&#x27;, &#x27;test_mutation_is_private&#x27;: &#x27;passed&#x27;, &#x27;test_fresh_again&#x27;: &#x27;passed&#x27;}
+[&#x27;building docs&#x27;, &#x27;building index from 2 docs&#x27;, &#x27;building docs&#x27;, &#x27;building docs&#x27;]</pre></div></div>
+<p><code>-s</code> turns off pytest's output capturing so the prints are visible, and <code>--tb=no</code> hides tracebacks; the markers in angle brackets are only there to pick the prints out of pytest's report. <code>docs</code> was built three times, once per test that needed it (<code>index</code> asked for it in the first test, so pytest built <code>docs</code> before <code>index</code>), which is why the list appended to in the second test is gone in the third.</p>
+</section>
+<section class="sec" id="yield">
+<h2><span class="n">2</span>Cleanup with <code>yield</code></h2>
+<p>A fixture that acquires something must release it. Write it as a generator: code before <strong><code>yield</code></strong> is the setup, the yielded value goes to the test, and code after <code>yield</code> is the <strong>teardown</strong>, which runs after the test <strong>whether it passed or failed</strong>, like the <code>finally</code> of a context manager (10.2). When a test uses several fixtures, teardowns run in reverse order of setup. If setup raises, the test is reported as an <strong>error</strong> (not a failure), which tells you the problem is in the preparation; a failing teardown is also an error.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">teardown.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.fixture
+def connection():
+    print(&quot;&lt;open connection&gt;&quot;)
+    yield {&quot;open&quot;: True}
+    print(&quot;&lt;close connection&gt;&quot;)
+
+@pytest.fixture
+def transaction(connection):
+    print(&quot;&lt;begin&gt;&quot;)
+    yield []
+    print(&quot;&lt;rollback&gt;&quot;)
+
+def test_insert(transaction):
+    transaction.append(&quot;row&quot;)
+    assert transaction == [&quot;row&quot;, &quot;other&quot;]
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, args=[&quot;-s&quot;, &quot;--tb=no&quot;])
+print(r[&quot;outcomes&quot;])
+print(re.findall(r&quot;&lt;([^&lt;&gt;]+)&gt;&quot;, r[&quot;output&quot;]))</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;test_insert&#x27;: &#x27;failed&#x27;}
+[&#x27;open connection&#x27;, &#x27;begin&#x27;, &#x27;rollback&#x27;, &#x27;close connection&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="scope">
+<h2><span class="n">3</span>Scopes, autouse and conftest.py</h2>
+<p>By default a fixture has <strong>function scope</strong>: it is created for every test that uses it. <code>@pytest.fixture(scope="module")</code> creates it once per test file, <code>"class"</code> once per test class, and <code>"session"</code> once per test run, which is how you share something <strong>expensive</strong> such as a loaded model, a started container or a database schema. The trap: a shared object is shared, so if one test mutates it, the next sees the change, and the suite becomes order-dependent (problem 7). Share only read-only things at wide scope, or pair a wide-scoped resource with a function-scoped fixture that resets it (a session database plus a per-test transaction that is rolled back). A fixture can only use fixtures of the same or wider scope.</p>
+<p><code>autouse=True</code> applies a fixture to every test in its scope without naming it, useful for "always reset this global" or "never allow network calls", but invisible to readers, so use it sparingly. Fixtures defined in a file named <strong><code>conftest.py</code></strong> are available to every test file in that folder and below, with no import; a project usually has one at the top of <code>tests/</code> for shared fixtures and more in subfolders for specific ones.</p>
+<p>A fixture can be <strong>parametrised</strong>: <code>@pytest.fixture(params=["small", "large"])</code> runs every test that uses it once per parameter, with the value in <code>request.param</code>, which is how one test suite is run against several backends or models. And when tests need several similar objects with variations, a <strong>factory fixture</strong> returns a function (<code>make_doc(id="faq-1", text=...)</code>) rather than one object, keeping defaults in one place and letting each test state only what matters to it (problem 12).</p>
+</section>
+<section class="sec" id="builtin">
+<h2><span class="n">4</span>Built-in fixtures</h2>
+<p>pytest ships fixtures for the usual sources of non-isolation. <strong><code>tmp_path</code></strong> gives each test a fresh, empty <code>pathlib.Path</code> folder, so tests never write into the project or collide with each other (12.1). <strong><code>monkeypatch</code></strong> changes things for one test and undoes them afterwards: <code>monkeypatch.setenv("KEY", "value")</code> and <code>delenv("KEY", raising=False)</code> for environment variables (12.4), <code>monkeypatch.setattr(module, "name", replacement)</code> to swap a function or attribute (13.3 builds on this), <code>monkeypatch.chdir(path)</code> and <code>monkeypatch.setitem(dict, key, value)</code>. <strong><code>capsys</code></strong> captures what the code prints: <code>capsys.readouterr()</code> returns an object with <code>.out</code> and <code>.err</code>. <strong><code>caplog</code></strong> captures log records (12.3): <code>caplog.records</code>, <code>caplog.messages</code>, and <code>caplog.set_level(logging.INFO)</code> to make sure records below the default level are kept. <code>request</code> gives fixtures information about the test using them, and <code>recwarn</code> records warnings.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">builtin.py</span><button class="copy">Copy</button></div><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import logging, os
+
+def save_greeting(folder, name):
+    path = folder / &quot;greeting.txt&quot;
+    path.write_text(f&quot;Hello, {name}&quot;, encoding=&quot;utf-8&quot;)
+    print(&quot;saved&quot;, path.name)
+    logging.getLogger(&quot;app&quot;).warning(&quot;wrote %s&quot;, path.name)
+    return path
+
+def test_writes_into_tmp_path(tmp_path, capsys, caplog):
+    path = save_greeting(tmp_path, os.environ[&quot;USER_NAME&quot;]) if &quot;USER_NAME&quot; in os.environ else save_greeting(tmp_path, &quot;Ana&quot;)
+    assert path.read_text(encoding=&quot;utf-8&quot;) == &quot;Hello, Ana&quot;
+    assert capsys.readouterr().out == &quot;saved greeting.txt\\n&quot;
+    assert caplog.messages == [&quot;wrote greeting.txt&quot;]
+
+def test_env_is_restored(monkeypatch):
+    monkeypatch.setenv(&quot;USER_NAME&quot;, &quot;Bo&quot;)
+    assert os.environ[&quot;USER_NAME&quot;] == &quot;Bo&quot;
+
+def test_after(tmp_path):
+    assert &quot;USER_NAME&quot; not in os.environ and list(tmp_path.iterdir()) == []
+&#x27;&#x27;&#x27;
+print(run_pytest(SRC)[&quot;outcomes&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;test_writes_into_tmp_path&#x27;: &#x27;passed&#x27;, &#x27;test_env_is_restored&#x27;: &#x27;passed&#x27;, &#x27;test_after&#x27;: &#x27;passed&#x27;}</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-the-order-of-setup-and-teardown" data-pid="m13-2-the-order-of-setup-and-teardown" data-type="predict" data-level="easy" data-answer="[&#x27;a-setup&#x27;, &#x27;b-setup&#x27;, &#x27;test_one AB&#x27;, &#x27;b-teardown&#x27;, &#x27;a-teardown&#x27;, &#x27;a-setup&#x27;, &#x27;test_two A&#x27;, &#x27;a-teardown&#x27;]
+{&#x27;test_one&#x27;: &#x27;passed&#x27;, &#x27;test_two&#x27;: &#x27;failed&#x27;}">
+<header class="prob-head"><h3>1. The order of setup and teardown</h3></header>
+<div class="code"><pre><code class="py">import re
+from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.fixture
+def a():
+    print(&quot;&lt;a-setup&gt;&quot;)
+    yield &quot;A&quot;
+    print(&quot;&lt;a-teardown&gt;&quot;)
+
+@pytest.fixture
+def b(a):
+    print(&quot;&lt;b-setup&gt;&quot;)
+    yield a + &quot;B&quot;
+    print(&quot;&lt;b-teardown&gt;&quot;)
+
+def test_one(b):
+    print(f&quot;&lt;test_one {b}&gt;&quot;)
+
+def test_two(a):
+    print(f&quot;&lt;test_two {a}&gt;&quot;)
+    assert False
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, args=[&quot;-s&quot;, &quot;--tb=no&quot;])
+print(re.findall(r&quot;&lt;([^&lt;&gt;]+)&gt;&quot;, r[&quot;output&quot;]))
+print(r[&quot;outcomes&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A fixture's dependencies are set up first; teardowns run in reverse order, after the test, even when it fails.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;a-setup&#x27;, &#x27;b-setup&#x27;, &#x27;test_one AB&#x27;, &#x27;b-teardown&#x27;, &#x27;a-teardown&#x27;, &#x27;a-setup&#x27;, &#x27;test_two A&#x27;, &#x27;a-teardown&#x27;]
+{&#x27;test_one&#x27;: &#x27;passed&#x27;, &#x27;test_two&#x27;: &#x27;failed&#x27;}</pre></div><p>For <code>test_one</code>, <code>b</code> needs <code>a</code>, so <code>a</code> is set up first, then <code>b</code>; after the test, teardown runs in reverse: <code>b</code> then <code>a</code>. <code>test_two</code> gets a <strong>new</strong> <code>a</code> (function scope), and its teardown still runs although the test failed, which is the whole point of <code>yield</code> fixtures.</p></div></details>
+</article>
+<article class="prob" id="p-tests-with-a-fixture-for-a-shopping-cart" data-pid="m13-2-tests-with-a-fixture-for-a-shopping-cart" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Tests with a fixture for a shopping cart</h3></header>
+<div class="prob-q"><p>Write a fixture <code>cart</code> that returns a <code>Cart</code> with two items already added (<code>"pen"</code> at 1.5 x 2 and <code>"book"</code> at 12.0 x 1), and at least four tests that use it, covering <code>total</code>, adding more of an existing item, removing an item, and that removing an unknown item raises <code>KeyError</code>. Your tests must pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2"># --- code under test (do not edit) ---
+class Cart:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, name, price, qty=1):
+        if qty &lt; 1:
+            raise ValueError(&quot;qty must be at least 1&quot;)
+        old_price, old_qty = self.items.get(name, (price, 0))
+        self.items[name] = (price, old_qty + qty)
+
+    def remove(self, name):
+        del self.items[name]
+
+    def total(self):
+        return round(sum(price * qty for price, qty in self.items.values()), 2)
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+assert "@pytest.fixture" in __source__
+BASE = '''
+class Cart:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, name, price, qty=1):
+        if qty < 1:
+            raise ValueError("qty must be at least 1")
+        old_price, old_qty = self.items.get(name, (price, 0))
+        self.items[name] = (price, old_qty + qty)
+
+    def remove(self, name):
+        del self.items[name]
+
+    def total(self):
+        return round(sum(price * qty for price, qty in self.items.values()), 2)
+'''
+BUGS = {
+    "add_replaces_qty": BASE.replace("old_qty + qty", "qty"),
+    "total_ignores_qty": BASE.replace("price * qty for", "price for"),
+    "remove_silent": BASE.replace("del self.items[name]", "self.items.pop(name, None)"),
+    "remove_clears_all": BASE.replace("del self.items[name]", "self.items.clear()"),
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+assert &quot;@pytest.fixture&quot; in __source__
+BASE = &#x27;&#x27;&#x27;
+class Cart:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, name, price, qty=1):
+        if qty &lt; 1:
+            raise ValueError(&quot;qty must be at least 1&quot;)
+        old_price, old_qty = self.items.get(name, (price, 0))
+        self.items[name] = (price, old_qty + qty)
+
+    def remove(self, name):
+        del self.items[name]
+
+    def total(self):
+        return round(sum(price * qty for price, qty in self.items.values()), 2)
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;add_replaces_qty&quot;: BASE.replace(&quot;old_qty + qty&quot;, &quot;qty&quot;),
+    &quot;total_ignores_qty&quot;: BASE.replace(&quot;price * qty for&quot;, &quot;price for&quot;),
+    &quot;remove_silent&quot;: BASE.replace(&quot;del self.items[name]&quot;, &quot;self.items.pop(name, None)&quot;),
+    &quot;remove_clears_all&quot;: BASE.replace(&quot;del self.items[name]&quot;, &quot;self.items.clear()&quot;),
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@pytest.fixture</code> above <code>def cart():</code> that builds the cart, adds both items and returns it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After removing <code>"pen"</code>, check both what is gone and what is left.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+class Cart:
+    def __init__(self):
+        self.items = {}
+
+    def add(self, name, price, qty=1):
+        if qty &lt; 1:
+            raise ValueError(&quot;qty must be at least 1&quot;)
+        old_price, old_qty = self.items.get(name, (price, 0))
+        self.items[name] = (price, old_qty + qty)
+
+    def remove(self, name):
+        del self.items[name]
+
+    def total(self):
+        return round(sum(price * qty for price, qty in self.items.values()), 2)
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture
+def cart():
+    c = Cart()
+    c.add(&quot;pen&quot;, 1.5, qty=2)
+    c.add(&quot;book&quot;, 12.0)
+    return c
+
+
+def test_total(cart):
+    assert cart.total() == 15.0
+
+
+def test_adding_existing_item_increases_quantity(cart):
+    cart.add(&quot;pen&quot;, 1.5, qty=3)
+    assert cart.items[&quot;pen&quot;] == (1.5, 5)
+    assert cart.total() == 19.5
+
+
+def test_remove_item(cart):
+    cart.remove(&quot;pen&quot;)
+    assert &quot;pen&quot; not in cart.items and cart.total() == 12.0
+
+
+def test_remove_unknown_raises(cart):
+    with pytest.raises(KeyError):
+        cart.remove(&quot;lamp&quot;)
+
+
+def test_rejects_zero_quantity(cart):
+    with pytest.raises(ValueError):
+        cart.add(&quot;pen&quot;, 1.5, qty=0)</code></pre></div><p>The fixture states the common starting point once, and each test reads as "given the cart, when I do X, then Y". Because the fixture runs for every test, <code>test_remove_item</code> can mutate the cart freely without affecting <code>test_total</code>. Each mutant breaks one behaviour: replacing instead of adding quantities is caught by adding more pens, ignoring quantities by the total with two pens, a silent remove by the <code>KeyError</code> test, and clearing everything by checking what is <strong>left</strong> after a removal, a reminder that "the item is gone" is only half of the expected outcome.</p></div></details>
+</article>
+<article class="prob" id="p-tests-that-share-a-module-level-list" data-pid="m13-2-tests-that-share-a-module-level-list" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. Tests that share a module-level list</h3></header>
+<div class="prob-q"><p>These tests for a chat history share the global <code>HISTORY</code>, so <code>test_second_turn</code> only passes when <code>test_first_turn</code> has run before it, and fails when run alone (<code>pytest -k second</code>). Replace the global with a fixture so every test is independent and still passes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3"># --- code under test (do not edit) ---
+def add_turn(history, role, content):
+    if role not in (&quot;user&quot;, &quot;assistant&quot;):
+        raise ValueError(f&quot;bad role {role!r}&quot;)
+    history.append({&quot;role&quot;: role, &quot;content&quot;: content})
+    return len(history)
+
+
+# --- tests ---
+import pytest
+
+HISTORY = []
+
+
+def test_first_turn():
+    assert add_turn(HISTORY, &quot;user&quot;, &quot;Hi&quot;) == 1
+
+
+def test_second_turn():
+    assert add_turn(HISTORY, &quot;assistant&quot;, &quot;Hello!&quot;) == 2
+    assert HISTORY[0][&quot;role&quot;] == &quot;user&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest
+tests_part = __source__.split("# --- tests")[1]
+assert run_pytest(__source__)["failed"] == 0
+alone = run_pytest(__source__, args=["-k", "second"])
+assert alone["failed"] == 0 and alone["passed"] == 1, alone["output"][-600:]
+assert "HISTORY" not in tests_part and "@pytest.fixture" in tests_part</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert run_pytest(__source__)[&quot;failed&quot;] == 0
+alone = run_pytest(__source__, args=[&quot;-k&quot;, &quot;second&quot;])
+assert alone[&quot;failed&quot;] == 0 and alone[&quot;passed&quot;] == 1, alone[&quot;output&quot;][-600:]
+assert &quot;HISTORY&quot; not in tests_part and &quot;@pytest.fixture&quot; in tests_part</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A fixture <code>history</code> that returns a list already holding the user's first turn lets <code>test_second_turn</code> stand on its own.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def add_turn(history, role, content):
+    if role not in (&quot;user&quot;, &quot;assistant&quot;):
+        raise ValueError(f&quot;bad role {role!r}&quot;)
+    history.append({&quot;role&quot;: role, &quot;content&quot;: content})
+    return len(history)
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture
+def history():
+    return [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hi&quot;}]
+
+
+def test_first_turn():
+    assert add_turn([], &quot;user&quot;, &quot;Hi&quot;) == 1
+
+
+def test_second_turn(history):
+    assert add_turn(history, &quot;assistant&quot;, &quot;Hello!&quot;) == 2
+    assert history[0][&quot;role&quot;] == &quot;user&quot;</code></pre></div><p>A module-level list is created once when the file is imported and shared by every test, so the second test silently relied on the first having appended to it. Run alone, in another order, or in parallel (<code>pytest-xdist</code>), it fails, and a failure that depends on which tests ran is the most confusing kind. The fixture gives <code>test_second_turn</code> exactly the state it needs, freshly built, so it passes in any order and documents its precondition in its signature.</p></div></details>
+</article>
+<article class="prob" id="p-tmp-path-and-monkeypatch-clean-up" data-pid="m13-2-tmp-path-and-monkeypatch-clean-up" data-type="predict" data-level="easy" data-answer="{&#x27;test_a&#x27;: &#x27;passed&#x27;, &#x27;test_b&#x27;: &#x27;passed&#x27;, &#x27;test_c&#x27;: &#x27;failed&#x27;}">
+<header class="prob-head"><h3>4. tmp_path and monkeypatch clean up</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import os
+
+def test_a(tmp_path, monkeypatch):
+    (tmp_path / &quot;note.txt&quot;).write_text(&quot;a&quot;, encoding=&quot;utf-8&quot;)
+    monkeypatch.setenv(&quot;P4_MODE&quot;, &quot;test&quot;)
+    monkeypatch.setattr(os, &quot;sep&quot;, &quot;|&quot;)
+    assert os.environ[&quot;P4_MODE&quot;] == &quot;test&quot; and os.sep == &quot;|&quot;
+
+def test_b(tmp_path):
+    assert list(tmp_path.iterdir()) == []
+    assert &quot;P4_MODE&quot; not in os.environ
+    assert os.sep == &quot;/&quot;
+
+def test_c(tmp_path, monkeypatch):
+    monkeypatch.delenv(&quot;P4_MISSING&quot;, raising=False)
+    monkeypatch.delenv(&quot;P4_MISSING&quot;)
+&#x27;&#x27;&#x27;
+print(run_pytest(SRC)[&quot;outcomes&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each test gets a new empty <code>tmp_path</code>, and <code>monkeypatch</code> undoes its changes after the test. <code>delenv</code> raises if the variable is missing, unless <code>raising=False</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;test_a&#x27;: &#x27;passed&#x27;, &#x27;test_b&#x27;: &#x27;passed&#x27;, &#x27;test_c&#x27;: &#x27;failed&#x27;}</pre></div><p><code>tmp_path</code> is a different, empty folder for every test, so the file written in <code>test_a</code> is not in <code>test_b</code>'s folder. Every <code>monkeypatch</code> change, environment variables and attributes alike, is undone after the test, so <code>test_b</code> sees the original <code>os.sep</code>. In <code>test_c</code>, <code>raising=False</code> tolerates a missing variable, but the second <code>delenv</code> uses the default <code>raising=True</code> and raises <code>KeyError</code>, failing the test.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-test-a-jsonl-store-with-tmp-path" data-pid="m13-2-test-a-jsonl-store-with-tmp-path" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Test a JSONL store with tmp_path</h3></header>
+<div class="prob-q"><p><code>write_jsonl(path, records)</code> creates parent folders, overwrites the file, writes one compact JSON object per line keeping non-ASCII characters, and returns the count; <code>read_jsonl(path)</code> returns the list of objects, skipping blank lines. Write at least four tests using <code>tmp_path</code> that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5"># --- code under test (do not edit) ---
+import json
+
+
+def write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + &quot;\n&quot;)
+    return len(records)
+
+
+def read_jsonl(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+assert "tmp_path" in __source__.split("# --- tests")[1]
+BASE = '''
+import json
+
+
+def write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\\n")
+    return len(records)
+
+
+def read_jsonl(path):
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+'''
+BUGS = {
+    "appends": BASE.replace('open(path, "w"', 'open(path, "a"'),
+    "escapes_ascii": BASE.replace("json.dumps(r, ensure_ascii=False)", "json.dumps(r)"),
+    "no_mkdir": BASE.replace("    path.parent.mkdir(parents=True, exist_ok=True)\n", ""),
+    "blank_lines_crash": BASE.replace(" if line.strip()]", "]"),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+assert &quot;tmp_path&quot; in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = &#x27;&#x27;&#x27;
+import json
+
+
+def write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + &quot;\\n&quot;)
+    return len(records)
+
+
+def read_jsonl(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return [json.loads(line) for line in f if line.strip()]
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;appends&quot;: BASE.replace(&#x27;open(path, &quot;w&quot;&#x27;, &#x27;open(path, &quot;a&quot;&#x27;),
+    &quot;escapes_ascii&quot;: BASE.replace(&quot;json.dumps(r, ensure_ascii=False)&quot;, &quot;json.dumps(r)&quot;),
+    &quot;no_mkdir&quot;: BASE.replace(&quot;    path.parent.mkdir(parents=True, exist_ok=True)\n&quot;, &quot;&quot;),
+    &quot;blank_lines_crash&quot;: BASE.replace(&quot; if line.strip()]&quot;, &quot;]&quot;),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Round trip: write then read and compare. Overwrite: write twice and check only the second set remains.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the raw file text contains <code>é</code> (not <code>\u00e9</code>); write into <code>tmp_path / "a" / "b" / "x.jsonl"</code>; append a blank line by hand before reading.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import json
+
+
+def write_jsonl(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + &quot;\n&quot;)
+    return len(records)
+
+
+def read_jsonl(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+# --- tests ---
+import pytest
+
+RECORDS = [{&quot;id&quot;: 1, &quot;text&quot;: &quot;Où est ma commande ?&quot;}, {&quot;id&quot;: 2, &quot;text&quot;: &quot;plain&quot;}]
+
+
+@pytest.fixture
+def path(tmp_path):
+    return tmp_path / &quot;data&quot; / &quot;nested&quot; / &quot;turns.jsonl&quot;
+
+
+def test_round_trip_and_count(path):
+    assert write_jsonl(path, RECORDS) == 2
+    assert read_jsonl(path) == RECORDS
+
+
+def test_overwrites_existing_file(path):
+    write_jsonl(path, RECORDS)
+    write_jsonl(path, [{&quot;id&quot;: 3}])
+    assert read_jsonl(path) == [{&quot;id&quot;: 3}]
+
+
+def test_keeps_non_ascii_characters(path):
+    write_jsonl(path, RECORDS)
+    raw = path.read_text(encoding=&quot;utf-8&quot;)
+    assert &quot;Où&quot; in raw and raw.count(&quot;\n&quot;) == 2
+
+
+def test_skips_blank_lines(path):
+    write_jsonl(path, RECORDS)
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(&quot;\n   \n&quot;)
+    assert len(read_jsonl(path)) == 2</code></pre></div><p><code>tmp_path</code> makes file tests safe and independent: every test writes into its own empty folder, so overwriting, appending and missing-folder cases can be checked without touching the project or each other, and pytest keeps the last few runs' folders for inspection. A small fixture on top of it (<code>path</code>) gives every test the same nested location, which is what exercises the folder creation. The tests check observable behaviour (file content and what reading returns), so each mutant fails: appending keeps the old records, escaping removes <code>Où</code> from the raw text, a missing <code>mkdir</code> raises on the nested path, and the reader without the blank-line filter crashes on <code>json.loads("\n")</code>.</p></div></details>
+</article>
+<article class="prob" id="p-test-environment-based-settings-with-mon" data-pid="m13-2-test-environment-based-settings-with-mon" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Test environment-based settings with monkeypatch</h3></header>
+<div class="prob-q"><p><code>load_settings()</code> reads <code>APP_MODEL</code> (default <code>"small"</code>), <code>APP_TEMPERATURE</code> (float in <code>[0, 2]</code>, default <code>0.0</code>) and the required <code>OPENAI_API_KEY</code> (a <code>RuntimeError</code> if missing or empty) from <code>os.environ</code>. Write at least four tests using <code>monkeypatch.setenv</code> and <code>delenv</code> that pass here and catch four buggy versions. Your tests must not depend on the real environment of the machine running them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6"># --- code under test (do not edit) ---
+import os
+
+
+def load_settings():
+    key = os.environ.get(&quot;OPENAI_API_KEY&quot;, &quot;&quot;)
+    if not key:
+        raise RuntimeError(&quot;OPENAI_API_KEY is not set&quot;)
+    temperature = float(os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0.0&quot;))
+    if not 0 &lt;= temperature &lt;= 2:
+        raise ValueError(f&quot;APP_TEMPERATURE out of range: {temperature}&quot;)
+    return {&quot;model&quot;: os.environ.get(&quot;APP_MODEL&quot;, &quot;small&quot;), &quot;temperature&quot;: temperature, &quot;api_key&quot;: key}
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import os, pytest
+from lessontools import run_pytest, swap_impl
+os.environ["OPENAI_API_KEY"] = "sk-real-machine-key"
+os.environ["APP_MODEL"] = "machine-model"
+good = run_pytest(__source__)
+os.environ.pop("OPENAI_API_KEY")
+os.environ.pop("APP_MODEL")
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+assert "monkeypatch" in __source__.split("# --- tests")[1]
+BASE = '''
+import os
+
+
+def load_settings():
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    temperature = float(os.environ.get("APP_TEMPERATURE", "0.0"))
+    if not 0 <= temperature <= 2:
+        raise ValueError(f"APP_TEMPERATURE out of range: {temperature}")
+    return {"model": os.environ.get("APP_MODEL", "small"), "temperature": temperature, "api_key": key}
+'''
+BUGS = {
+    "empty_key_ok": BASE.replace('os.environ.get("OPENAI_API_KEY", "")\n    if not key:', 'os.environ.get("OPENAI_API_KEY")\n    if key is None:'),
+    "no_range_check": BASE.replace("if not 0 <= temperature <= 2:", "if temperature != temperature:"),
+    "wrong_default_model": BASE.replace('"APP_MODEL", "small"', '"APP_MODEL", "large"'),
+    "temperature_string": BASE.replace('"temperature": temperature', '"temperature": os.environ.get("APP_TEMPERATURE", "0.0")'),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, pytest
+from lessontools import run_pytest, swap_impl
+os.environ[&quot;OPENAI_API_KEY&quot;] = &quot;sk-real-machine-key&quot;
+os.environ[&quot;APP_MODEL&quot;] = &quot;machine-model&quot;
+good = run_pytest(__source__)
+os.environ.pop(&quot;OPENAI_API_KEY&quot;)
+os.environ.pop(&quot;APP_MODEL&quot;)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+assert &quot;monkeypatch&quot; in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = &#x27;&#x27;&#x27;
+import os
+
+
+def load_settings():
+    key = os.environ.get(&quot;OPENAI_API_KEY&quot;, &quot;&quot;)
+    if not key:
+        raise RuntimeError(&quot;OPENAI_API_KEY is not set&quot;)
+    temperature = float(os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0.0&quot;))
+    if not 0 &lt;= temperature &lt;= 2:
+        raise ValueError(f&quot;APP_TEMPERATURE out of range: {temperature}&quot;)
+    return {&quot;model&quot;: os.environ.get(&quot;APP_MODEL&quot;, &quot;small&quot;), &quot;temperature&quot;: temperature, &quot;api_key&quot;: key}
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;empty_key_ok&quot;: BASE.replace(&#x27;os.environ.get(&quot;OPENAI_API_KEY&quot;, &quot;&quot;)\n    if not key:&#x27;, &#x27;os.environ.get(&quot;OPENAI_API_KEY&quot;)\n    if key is None:&#x27;),
+    &quot;no_range_check&quot;: BASE.replace(&quot;if not 0 &lt;= temperature &lt;= 2:&quot;, &quot;if temperature != temperature:&quot;),
+    &quot;wrong_default_model&quot;: BASE.replace(&#x27;&quot;APP_MODEL&quot;, &quot;small&quot;&#x27;, &#x27;&quot;APP_MODEL&quot;, &quot;large&quot;&#x27;),
+    &quot;temperature_string&quot;: BASE.replace(&#x27;&quot;temperature&quot;: temperature&#x27;, &#x27;&quot;temperature&quot;: os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0.0&quot;)&#x27;),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Start each test from a clean slate: an autouse fixture that <code>delenv</code>s the three variables with <code>raising=False</code>, then set what the test needs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Check the empty key (<code>setenv("OPENAI_API_KEY", "")</code>), a temperature of 2.5, the defaults, and the type of the parsed temperature.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import os
+
+
+def load_settings():
+    key = os.environ.get(&quot;OPENAI_API_KEY&quot;, &quot;&quot;)
+    if not key:
+        raise RuntimeError(&quot;OPENAI_API_KEY is not set&quot;)
+    temperature = float(os.environ.get(&quot;APP_TEMPERATURE&quot;, &quot;0.0&quot;))
+    if not 0 &lt;= temperature &lt;= 2:
+        raise ValueError(f&quot;APP_TEMPERATURE out of range: {temperature}&quot;)
+    return {&quot;model&quot;: os.environ.get(&quot;APP_MODEL&quot;, &quot;small&quot;), &quot;temperature&quot;: temperature, &quot;api_key&quot;: key}
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    for name in (&quot;OPENAI_API_KEY&quot;, &quot;APP_MODEL&quot;, &quot;APP_TEMPERATURE&quot;):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(&quot;OPENAI_API_KEY&quot;, &quot;sk-test&quot;)
+
+
+def test_defaults():
+    assert load_settings() == {&quot;model&quot;: &quot;small&quot;, &quot;temperature&quot;: 0.0, &quot;api_key&quot;: &quot;sk-test&quot;}
+
+
+def test_reads_overrides(monkeypatch):
+    monkeypatch.setenv(&quot;APP_MODEL&quot;, &quot;large&quot;)
+    monkeypatch.setenv(&quot;APP_TEMPERATURE&quot;, &quot;0.7&quot;)
+    s = load_settings()
+    assert s[&quot;model&quot;] == &quot;large&quot; and s[&quot;temperature&quot;] == 0.7 and isinstance(s[&quot;temperature&quot;], float)
+
+
+@pytest.mark.parametrize(&quot;value&quot;, [None, &quot;&quot;])
+def test_missing_or_empty_key(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv(&quot;OPENAI_API_KEY&quot;)
+    else:
+        monkeypatch.setenv(&quot;OPENAI_API_KEY&quot;, value)
+    with pytest.raises(RuntimeError, match=&quot;OPENAI_API_KEY&quot;):
+        load_settings()
+
+
+@pytest.mark.parametrize(&quot;value&quot;, [&quot;-0.1&quot;, &quot;2.5&quot;])
+def test_temperature_out_of_range(monkeypatch, value):
+    monkeypatch.setenv(&quot;APP_TEMPERATURE&quot;, value)
+    with pytest.raises(ValueError, match=&quot;out of range&quot;):
+        load_settings()</code></pre></div><p>The grader ran your tests with a real-looking key and model already set in the environment, as on a developer's machine. A test that assumes "no key is set" without removing it would pass or fail depending on who runs it; the autouse fixture removes every variable the code reads and sets a dummy key, so each test starts from the same known state, and <code>monkeypatch</code> restores the machine's values afterwards. Tests then set only what they are about. The parametrised error tests cover missing <strong>and</strong> empty keys (the <code>is None</code> mutant only rejects missing) and both sides of the range.</p></div></details>
+</article>
+<article class="prob" id="p-a-session-fixture-that-tests-mutate" data-pid="m13-2-a-session-fixture-that-tests-mutate" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. A session fixture that tests mutate</h3></header>
+<div class="prob-q"><p>Loading the label map is slow, so it was made a <code>session</code>-scoped fixture. But <code>test_add_label</code> mutates it, and <code>test_label_count</code> now fails when it runs after it. Keep the expensive load happening <strong>once</strong>, but give each test its own copy, so the tests pass in any order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7"># --- code under test (do not edit) ---
+def load_label_map():
+    # imagine this reads a large file or calls a service
+    return {&quot;spam&quot;: 0, &quot;ham&quot;: 1, &quot;phish&quot;: 2}
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture(scope=&quot;session&quot;)
+def label_map():
+    return load_label_map()
+
+
+def test_add_label(label_map):
+    label_map[&quot;promo&quot;] = 3
+    assert len(label_map) == 4
+
+
+def test_label_count(label_map):
+    assert len(label_map) == 3
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest
+r = run_pytest(__source__)
+assert r["failed"] == 0 and r["passed"] == 2, r["output"][-600:]
+counted = run_pytest(__source__.replace("return load_label_map()", "import builtins\n    builtins.loads = getattr(builtins, 'loads', 0) + 1\n    return load_label_map()"))
+import builtins
+loads = getattr(builtins, "loads", 0)
+if hasattr(builtins, "loads"):
+    del builtins.loads
+assert counted["failed"] == 0 and loads == 1</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest
+r = run_pytest(__source__)
+assert r[&quot;failed&quot;] == 0 and r[&quot;passed&quot;] == 2, r[&quot;output&quot;][-600:]
+counted = run_pytest(__source__.replace(&quot;return load_label_map()&quot;, &quot;import builtins\n    builtins.loads = getattr(builtins, &#x27;loads&#x27;, 0) + 1\n    return load_label_map()&quot;))
+import builtins
+loads = getattr(builtins, &quot;loads&quot;, 0)
+if hasattr(builtins, &quot;loads&quot;):
+    del builtins.loads
+assert counted[&quot;failed&quot;] == 0 and loads == 1</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep the session fixture (rename it, e.g. <code>_label_map_source</code>), and add a function-scoped <code>label_map</code> fixture that returns <code>dict(...)</code> of it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def load_label_map():
+    # imagine this reads a large file or calls a service
+    return {&quot;spam&quot;: 0, &quot;ham&quot;: 1, &quot;phish&quot;: 2}
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture(scope=&quot;session&quot;)
+def label_map_source():
+    return load_label_map()
+
+
+@pytest.fixture
+def label_map(label_map_source):
+    return dict(label_map_source)
+
+
+def test_add_label(label_map):
+    label_map[&quot;promo&quot;] = 3
+    assert len(label_map) == 4
+
+
+def test_label_count(label_map):
+    assert len(label_map) == 3</code></pre></div><p>A wider scope shares <strong>one object</strong> among tests, so any mutation leaks into every later test. The standard pattern splits the fixture in two: the expensive work stays session-scoped and runs once (the grader counted the loads), and a cheap function-scoped fixture hands each test a copy, or in a database test, a transaction that is rolled back. For nested data, <code>copy.deepcopy</code> is needed instead of <code>dict(...)</code>. Session fixtures are ideal for read-only resources such as a loaded tokenizer or model weights, and dangerous for anything a test might change.</p></div></details>
+</article>
+<article class="prob" id="p-a-yield-fixture-is-a-generator" data-pid="m13-2-a-yield-fixture-is-a-generator" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. A yield fixture is a generator</h3></header>
+<div class="prob-q"><p>Fill in <code>events</code> after each marked line. This is what pytest does with a <code>yield</code> fixture.</p></div>
+<div class="code"><pre><code class="py">events = []
+
+def resource():
+    events.append(&quot;setup&quot;)
+    try:
+        yield &quot;conn&quot;
+    finally:
+        events.append(&quot;teardown&quot;)
+
+gen = resource()
+value = next(gen)
+events.append(f&quot;test uses {value}&quot;)
+try:
+    next(gen)
+except StopIteration:
+    events.append(&quot;done&quot;)
+
+gen2 = resource()
+next(gen2)
+gen2.close()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>events</code></th></tr><tr><td>setup</td><td><input class="cell" data-a="[&#x27;setup&#x27;]" data-s="[&#x27;setup&#x27;]" aria-label="events at setup" autocomplete="off"></td></tr><tr><td>test runs</td><td><input class="cell" data-a="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;]" data-s="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;]" aria-label="events at test runs" autocomplete="off"></td></tr><tr><td>after teardown</td><td><input class="cell" data-a="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;]" data-s="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;]" aria-label="events at after teardown" autocomplete="off"></td></tr><tr><td>closed early</td><td><input class="cell" data-a="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;, &#x27;setup&#x27;, &#x27;teardown&#x27;]" data-s="[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;, &#x27;setup&#x27;, &#x27;teardown&#x27;]" aria-label="events at closed early" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>next</code> runs the generator up to <code>yield</code>. A second <code>next</code> runs the rest and raises <code>StopIteration</code>. <code>close()</code> raises <code>GeneratorExit</code> at the <code>yield</code>, so <code>finally</code> runs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>events</code></th></tr><tr><td>setup</td><td><code>[&#x27;setup&#x27;]</code></td></tr><tr><td>test runs</td><td><code>[&#x27;setup&#x27;, &#x27;test uses conn&#x27;]</code></td></tr><tr><td>after teardown</td><td><code>[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;]</code></td></tr><tr><td>closed early</td><td><code>[&#x27;setup&#x27;, &#x27;test uses conn&#x27;, &#x27;teardown&#x27;, &#x27;done&#x27;, &#x27;setup&#x27;, &#x27;teardown&#x27;]</code></td></tr></table></div><p>pytest calls <code>next</code> once to run the setup and get the value, runs the test, and calls <code>next</code> again so the code after <code>yield</code> runs; the generator then finishes with <code>StopIteration</code>, which pytest expects. If something interrupts the run, closing the generator raises <code>GeneratorExit</code> at the <code>yield</code>, and the <code>finally</code> still executes, which is why cleanup in fixtures, like in <code>@contextmanager</code> functions (10.2), is safest in a <code>finally</code> block or after the <code>yield</code>.</p></div></details>
+</article>
+<article class="prob" id="p-assert-on-logs-with-caplog" data-pid="m13-2-assert-on-logs-with-caplog" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Assert on logs with caplog</h3></header>
+<div class="prob-q"><p><code>call_with_retry(fn, attempts=3)</code> calls <code>fn()</code>, and for each failure logs a <code>WARNING</code> <code>"attempt %d failed: %s"</code> on the logger <code>"retry"</code>; when all attempts fail it logs an <code>ERROR</code> <code>"giving up after %d attempts"</code> and re-raises the last error. Write at least three tests using <code>caplog</code> (check levels and messages) that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9"># --- code under test (do not edit) ---
+import logging
+
+log = logging.getLogger(&quot;retry&quot;)
+
+
+def call_with_retry(fn, attempts=3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            log.warning(&quot;attempt %d failed: %s&quot;, attempt, e)
+            last = e
+    log.error(&quot;giving up after %d attempts&quot;, attempts)
+    raise last
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 3, good["output"][-800:]
+assert "caplog" in __source__.split("# --- tests")[1]
+BASE = '''
+import logging
+
+log = logging.getLogger("retry")
+
+
+def call_with_retry(fn, attempts=3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            log.warning("attempt %d failed: %s", attempt, e)
+            last = e
+    log.error("giving up after %d attempts", attempts)
+    raise last
+'''
+BUGS = {
+    "info_level": BASE.replace("log.warning(", "log.info("),
+    "no_final_error": BASE.replace('    log.error("giving up after %d attempts", attempts)\n', ""),
+    "zero_based": BASE.replace('"attempt %d failed: %s", attempt, e', '"attempt %d failed: %s", attempt - 1, e'),
+    "swallows": BASE.replace("    raise last", "    return None"),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 3, good[&quot;output&quot;][-800:]
+assert &quot;caplog&quot; in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = &#x27;&#x27;&#x27;
+import logging
+
+log = logging.getLogger(&quot;retry&quot;)
+
+
+def call_with_retry(fn, attempts=3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            log.warning(&quot;attempt %d failed: %s&quot;, attempt, e)
+            last = e
+    log.error(&quot;giving up after %d attempts&quot;, attempts)
+    raise last
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;info_level&quot;: BASE.replace(&quot;log.warning(&quot;, &quot;log.info(&quot;),
+    &quot;no_final_error&quot;: BASE.replace(&#x27;    log.error(&quot;giving up after %d attempts&quot;, attempts)\n&#x27;, &quot;&quot;),
+    &quot;zero_based&quot;: BASE.replace(&#x27;&quot;attempt %d failed: %s&quot;, attempt, e&#x27;, &#x27;&quot;attempt %d failed: %s&quot;, attempt - 1, e&#x27;),
+    &quot;swallows&quot;: BASE.replace(&quot;    raise last&quot;, &quot;    return None&quot;),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A small fake: <code>iter([...])</code> of results where exceptions are raised, or a function that fails the first n times.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>[(r.levelname, r.getMessage()) for r in caplog.records]</code> compares levels and messages at once; <code>caplog.set_level(logging.INFO)</code> keeps lower records too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import logging
+
+log = logging.getLogger(&quot;retry&quot;)
+
+
+def call_with_retry(fn, attempts=3):
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as e:
+            log.warning(&quot;attempt %d failed: %s&quot;, attempt, e)
+            last = e
+    log.error(&quot;giving up after %d attempts&quot;, attempts)
+    raise last
+
+
+# --- tests ---
+import logging
+import pytest
+
+
+def flaky(failures):
+    calls = {&quot;n&quot;: 0}
+
+    def fn():
+        calls[&quot;n&quot;] += 1
+        if calls[&quot;n&quot;] &lt;= failures:
+            raise ConnectionError(f&quot;reset {calls[&#x27;n&#x27;]}&quot;)
+        return &quot;ok&quot;
+    return fn
+
+
+def test_success_after_failures_logs_warnings(caplog):
+    caplog.set_level(logging.INFO)
+    assert call_with_retry(flaky(2)) == &quot;ok&quot;
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        (&quot;WARNING&quot;, &quot;attempt 1 failed: reset 1&quot;), (&quot;WARNING&quot;, &quot;attempt 2 failed: reset 2&quot;)]
+
+
+def test_first_try_logs_nothing(caplog):
+    caplog.set_level(logging.INFO)
+    assert call_with_retry(flaky(0)) == &quot;ok&quot;
+    assert caplog.records == []
+
+
+def test_gives_up_with_error_and_reraises(caplog):
+    caplog.set_level(logging.INFO)
+    with pytest.raises(ConnectionError, match=&quot;reset 3&quot;):
+        call_with_retry(flaky(5), attempts=3)
+    assert [r.levelname for r in caplog.records] == [&quot;WARNING&quot;] * 3 + [&quot;ERROR&quot;]
+    assert caplog.records[-1].getMessage() == &quot;giving up after 3 attempts&quot;
+    assert caplog.records[-1].name == &quot;retry&quot;</code></pre></div><p>Logs are behaviour too: operators rely on the warning per retry and the final error, so tests should pin their level and wording. <code>caplog</code> captures records from every logger during the test; setting the level to <code>INFO</code> matters because otherwise a mutant that logs at <code>INFO</code> would simply not be captured and the comparison would fail for the wrong reason, or a mutant at a lower level would slip through a looser check. The fake <code>flaky</code> function fails a chosen number of times, making the retry path deterministic. Checking that the last error is <strong>re-raised</strong> (with its message) catches the swallowing mutant.</p></div></details>
+</article>
+<article class="prob" id="p-scopes-and-parametrized-fixtures" data-pid="m13-2-scopes-and-parametrized-fixtures" data-type="predict" data-level="medium" data-answer="[&#x27;load model&#x27;, &#x27;size small&#x27;, &#x27;size large&#x27;, &#x27;size small&#x27;, &#x27;size large&#x27;]
+{&#x27;test_one&#x27;: &#x27;passed&#x27;, &#x27;test_two[small]&#x27;: &#x27;passed&#x27;, &#x27;test_two[large]&#x27;: &#x27;passed&#x27;, &#x27;test_three[small]&#x27;: &#x27;passed&#x27;, &#x27;test_three[large]&#x27;: &#x27;failed&#x27;}">
+<header class="prob-head"><h3>10. Scopes and parametrized fixtures</h3></header>
+<div class="code"><pre><code class="py">import re
+from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.fixture(scope=&quot;module&quot;)
+def model():
+    print(&quot;&lt;load model&gt;&quot;)
+    return &quot;weights&quot;
+
+@pytest.fixture(params=[&quot;small&quot;, &quot;large&quot;])
+def size(request):
+    print(f&quot;&lt;size {request.param}&gt;&quot;)
+    return request.param
+
+def test_one(model):
+    pass
+
+def test_two(model, size):
+    pass
+
+def test_three(size):
+    assert size == &quot;small&quot;
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, args=[&quot;-s&quot;, &quot;--tb=no&quot;])
+print(re.findall(r&quot;&lt;([^&lt;&gt;]+)&gt;&quot;, r[&quot;output&quot;]))
+print(r[&quot;outcomes&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A module-scoped fixture is created once per file. A parametrised fixture multiplies every test that uses it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;load model&#x27;, &#x27;size small&#x27;, &#x27;size large&#x27;, &#x27;size small&#x27;, &#x27;size large&#x27;]
+{&#x27;test_one&#x27;: &#x27;passed&#x27;, &#x27;test_two[small]&#x27;: &#x27;passed&#x27;, &#x27;test_two[large]&#x27;: &#x27;passed&#x27;, &#x27;test_three[small]&#x27;: &#x27;passed&#x27;, &#x27;test_three[large]&#x27;: &#x27;failed&#x27;}</pre></div><p>The module-scoped model is loaded once and reused by <code>test_one</code> and both <code>test_two</code> runs. The parametrised <code>size</code> fixture turns each test that uses it into one test per parameter, with the parameter in the id, and since it has function scope it is set up again for each of them. <code>test_three[large]</code> fails its assert, so the same test body is reported once as passed and once as failed.</p></div></details>
+</article>
+<article class="prob" id="p-test-console-output-with-capsys" data-pid="m13-2-test-console-output-with-capsys" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>11. Test console output with capsys</h3></header>
+<div class="prob-q"><p><code>print_report(stats)</code> prints one aligned line per metric, sorted by name, as <code>f"{name:&lt;10}{value:&gt;8.3f}"</code>, then <code>"total runs: N"</code>, and prints warnings (for negative values) to <strong>standard error</strong> as <code>"warning: negative NAME"</code>. Write at least three tests using <code>capsys</code> that check standard output and standard error separately. They must pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11"># --- code under test (do not edit) ---
+import sys
+
+
+def print_report(stats, runs):
+    for name in sorted(stats):
+        value = stats[name]
+        if value &lt; 0:
+            print(f&quot;warning: negative {name}&quot;, file=sys.stderr)
+        print(f&quot;{name:&lt;10}{value:&gt;8.3f}&quot;)
+    print(f&quot;total runs: {runs}&quot;)
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 3, good["output"][-800:]
+assert "capsys" in __source__.split("# --- tests")[1]
+BASE = '''
+import sys
+
+
+def print_report(stats, runs):
+    for name in sorted(stats):
+        value = stats[name]
+        if value < 0:
+            print(f"warning: negative {name}", file=sys.stderr)
+        print(f"{name:<10}{value:>8.3f}")
+    print(f"total runs: {runs}")
+'''
+BUGS = {
+    "unsorted": BASE.replace("for name in sorted(stats):", "for name in stats:"),
+    "warning_to_stdout": BASE.replace(", file=sys.stderr", ""),
+    "two_decimals": BASE.replace(">8.3f", ">8.2f"),
+    "no_total": BASE.replace('    print(f"total runs: {runs}")\n', ""),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 3, good[&quot;output&quot;][-800:]
+assert &quot;capsys&quot; in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = &#x27;&#x27;&#x27;
+import sys
+
+
+def print_report(stats, runs):
+    for name in sorted(stats):
+        value = stats[name]
+        if value &lt; 0:
+            print(f&quot;warning: negative {name}&quot;, file=sys.stderr)
+        print(f&quot;{name:&lt;10}{value:&gt;8.3f}&quot;)
+    print(f&quot;total runs: {runs}&quot;)
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;unsorted&quot;: BASE.replace(&quot;for name in sorted(stats):&quot;, &quot;for name in stats:&quot;),
+    &quot;warning_to_stdout&quot;: BASE.replace(&quot;, file=sys.stderr&quot;, &quot;&quot;),
+    &quot;two_decimals&quot;: BASE.replace(&quot;&gt;8.3f&quot;, &quot;&gt;8.2f&quot;),
+    &quot;no_total&quot;: BASE.replace(&#x27;    print(f&quot;total runs: {runs}&quot;)\n&#x27;, &quot;&quot;),
+}
+assert all(b != BASE for b in BUGS.values())
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>out, err = capsys.readouterr()</code> after the call; compare <code>out.splitlines()</code> with the exact expected lines.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pass the stats in non-alphabetical order so sorting is visible.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import sys
+
+
+def print_report(stats, runs):
+    for name in sorted(stats):
+        value = stats[name]
+        if value &lt; 0:
+            print(f&quot;warning: negative {name}&quot;, file=sys.stderr)
+        print(f&quot;{name:&lt;10}{value:&gt;8.3f}&quot;)
+    print(f&quot;total runs: {runs}&quot;)
+
+
+# --- tests ---
+import pytest
+
+
+def test_lines_are_sorted_and_aligned(capsys):
+    print_report({&quot;recall&quot;: 0.5, &quot;f1&quot;: 0.6667}, runs=3)
+    out, err = capsys.readouterr()
+    assert out.splitlines() == [&quot;f1           0.667&quot;, &quot;recall       0.500&quot;, &quot;total runs: 3&quot;]
+    assert err == &quot;&quot;
+
+
+def test_negative_values_warn_on_stderr(capsys):
+    print_report({&quot;delta&quot;: -0.25}, runs=1)
+    out, err = capsys.readouterr()
+    assert err == &quot;warning: negative delta\n&quot;
+    assert &quot;warning&quot; not in out and out.splitlines()[0] == &quot;delta       -0.250&quot;
+
+
+def test_empty_stats_still_prints_total(capsys):
+    print_report({}, runs=0)
+    assert capsys.readouterr().out == &quot;total runs: 0\n&quot;</code></pre></div><p><code>capsys</code> replaces standard output and standard error during the test, and <code>readouterr()</code> returns (and resets) what was written to each, so tests can check the two streams separately, which matters because scripts and CLIs (15.3) must keep data on stdout and diagnostics on stderr so pipes work. Comparing the exact lines checks order, alignment and precision together; feeding the metrics out of alphabetical order is what exposes the unsorted mutant. For logging, use <code>caplog</code>; for prints, <code>capsys</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-a-factory-fixture-for-a-document-store" data-pid="m13-2-a-factory-fixture-for-a-document-store" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">RAG</span><h3>12. A factory fixture for a document store</h3></header>
+<div class="prob-q"><p>Write a <strong>factory fixture</strong> <code>make_doc</code> returning a function <code>make_doc(id="doc-1", text="Refunds take 5 days", source="faq.md")</code> that builds document dicts with those defaults, and a fixture <code>store</code> giving an empty <code>DocumentStore</code>. Then write at least five tests for the store that pass here and catch five buggy versions: add and get, duplicate ids, delete, search ranking, and <code>source</code> filtering.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12"># --- code under test (do not edit) ---
+class DocumentStore:
+    def __init__(self):
+        self._docs = {}
+
+    def add(self, doc):
+        if doc[&quot;id&quot;] in self._docs:
+            raise ValueError(f&quot;duplicate id {doc[&#x27;id&#x27;]}&quot;)
+        self._docs[doc[&quot;id&quot;]] = dict(doc)
+
+    def get(self, doc_id):
+        return dict(self._docs[doc_id])
+
+    def delete(self, doc_id):
+        self._docs.pop(doc_id)
+
+    def search(self, query, source=None, k=3):
+        words = set(query.lower().split())
+        scored = []
+        for doc in self._docs.values():
+            if source is not None and doc[&quot;source&quot;] != source:
+                continue
+            score = len(words &amp; set(doc[&quot;text&quot;].lower().split()))
+            if score:
+                scored.append((-score, doc[&quot;id&quot;]))
+        return [doc_id for _, doc_id in sorted(scored)[:k]]
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+tests_part = __source__.split("# --- tests")[1]
+assert "def make_doc" in tests_part and "def store" in tests_part
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "duplicates_overwrite": BASE.replace('            raise ValueError(f"duplicate id {doc[\'id\']}")\n', "            pass\n"),
+    "get_returns_internal": BASE.replace("return dict(self._docs[doc_id])", "return self._docs[doc_id]"),
+    "rank_ascending": BASE.replace("scored.append((-score, doc[\"id\"]))", "scored.append((score, doc[\"id\"]))"),
+    "ignores_source": BASE.replace('if source is not None and doc["source"] != source:', "if False:"),
+    "zero_scores_kept": BASE.replace("            if score:\n", "            if True:\n"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert &quot;def make_doc&quot; in tests_part and &quot;def store&quot; in tests_part
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;duplicates_overwrite&quot;: BASE.replace(&#x27;            raise ValueError(f&quot;duplicate id {doc[\&#x27;id\&#x27;]}&quot;)\n&#x27;, &quot;            pass\n&quot;),
+    &quot;get_returns_internal&quot;: BASE.replace(&quot;return dict(self._docs[doc_id])&quot;, &quot;return self._docs[doc_id]&quot;),
+    &quot;rank_ascending&quot;: BASE.replace(&quot;scored.append((-score, doc[\&quot;id\&quot;]))&quot;, &quot;scored.append((score, doc[\&quot;id\&quot;]))&quot;),
+    &quot;ignores_source&quot;: BASE.replace(&#x27;if source is not None and doc[&quot;source&quot;] != source:&#x27;, &quot;if False:&quot;),
+    &quot;zero_scores_kept&quot;: BASE.replace(&quot;            if score:\n&quot;, &quot;            if True:\n&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@pytest.fixture def make_doc(): def _make(id="doc-1", text=..., source="faq.md"): return {...}; return _make</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Ranking: three documents sharing 3, 1 and 2 query words; a document sharing none must not appear. Mutating the returned dict must not change the store.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+class DocumentStore:
+    def __init__(self):
+        self._docs = {}
+
+    def add(self, doc):
+        if doc[&quot;id&quot;] in self._docs:
+            raise ValueError(f&quot;duplicate id {doc[&#x27;id&#x27;]}&quot;)
+        self._docs[doc[&quot;id&quot;]] = dict(doc)
+
+    def get(self, doc_id):
+        return dict(self._docs[doc_id])
+
+    def delete(self, doc_id):
+        self._docs.pop(doc_id)
+
+    def search(self, query, source=None, k=3):
+        words = set(query.lower().split())
+        scored = []
+        for doc in self._docs.values():
+            if source is not None and doc[&quot;source&quot;] != source:
+                continue
+            score = len(words &amp; set(doc[&quot;text&quot;].lower().split()))
+            if score:
+                scored.append((-score, doc[&quot;id&quot;]))
+        return [doc_id for _, doc_id in sorted(scored)[:k]]
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.fixture
+def make_doc():
+    def _make(id=&quot;doc-1&quot;, text=&quot;Refunds take 5 days&quot;, source=&quot;faq.md&quot;):
+        return {&quot;id&quot;: id, &quot;text&quot;: text, &quot;source&quot;: source}
+    return _make
+
+
+@pytest.fixture
+def store():
+    return DocumentStore()
+
+
+def test_add_and_get_returns_a_copy(store, make_doc):
+    store.add(make_doc())
+    doc = store.get(&quot;doc-1&quot;)
+    assert doc == make_doc()
+    doc[&quot;text&quot;] = &quot;changed&quot;
+    assert store.get(&quot;doc-1&quot;)[&quot;text&quot;] == &quot;Refunds take 5 days&quot;
+
+
+def test_duplicate_id_rejected(store, make_doc):
+    store.add(make_doc())
+    with pytest.raises(ValueError, match=&quot;duplicate&quot;):
+        store.add(make_doc(text=&quot;other&quot;))
+    assert store.get(&quot;doc-1&quot;)[&quot;text&quot;] == &quot;Refunds take 5 days&quot;
+
+
+def test_delete(store, make_doc):
+    store.add(make_doc())
+    store.delete(&quot;doc-1&quot;)
+    with pytest.raises(KeyError):
+        store.get(&quot;doc-1&quot;)
+
+
+def test_search_ranks_by_shared_words(store, make_doc):
+    store.add(make_doc(id=&quot;one&quot;, text=&quot;refund policy&quot;))
+    store.add(make_doc(id=&quot;three&quot;, text=&quot;refund policy for late delivery&quot;))
+    store.add(make_doc(id=&quot;two&quot;, text=&quot;late refund&quot;))
+    store.add(make_doc(id=&quot;none&quot;, text=&quot;shipping is free&quot;))
+    assert store.search(&quot;late refund policy delivery&quot;) == [&quot;three&quot;, &quot;one&quot;, &quot;two&quot;] or store.search(&quot;late refund policy delivery&quot;) == [&quot;three&quot;, &quot;two&quot;, &quot;one&quot;]
+    assert store.search(&quot;late refund policy delivery&quot;, k=5)[0] == &quot;three&quot;
+    assert &quot;none&quot; not in store.search(&quot;late refund policy delivery&quot;, k=5)
+
+
+def test_search_filters_by_source(store, make_doc):
+    store.add(make_doc(id=&quot;faq&quot;, text=&quot;refund window&quot;, source=&quot;faq.md&quot;))
+    store.add(make_doc(id=&quot;terms&quot;, text=&quot;refund window&quot;, source=&quot;terms.md&quot;))
+    assert store.search(&quot;refund&quot;, source=&quot;terms.md&quot;) == [&quot;terms&quot;]
+    assert store.search(&quot;refund&quot;) == [&quot;faq&quot;, &quot;terms&quot;]</code></pre></div><p>The factory fixture keeps one definition of a valid document, and each test passes only what matters to it (<code>id</code>, <code>text</code>, <code>source</code>), so a reader sees the relevant data at a glance; when the document shape changes, one function changes. Each test targets a behaviour a real store must guarantee and a mutant breaks: duplicates rejected without overwriting, <code>get</code> returning a copy so callers cannot corrupt the store, highest overlap first, documents with no overlap excluded rather than returned with score 0, and source filtering. Ties between documents with the same score are ordered by id in this implementation; a test that depended on an unspecified tie order would be fragile, which is why the ranking assertion only pins what the specification promises.</p></div></details>
+</article>
+<article class="prob" id="p-a-tiny-fixture-resolver" data-pid="m13-2-a-tiny-fixture-resolver" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. A tiny fixture resolver</h3></header>
+<div class="prob-q"><p>Write <code>run_with_fixtures(test_fn, fixtures)</code>: <code>fixtures</code> maps names to functions that may themselves take other fixtures as parameters, and may be plain functions (returning a value) or generator functions (yielding a value, with teardown after the yield). Inspect <code>test_fn</code>'s parameters (<code>inspect.signature</code>), resolve each fixture recursively (each fixture created at most once per call), call the test, then run teardowns in reverse order of setup, even if the test raised (re-raise its exception after cleanup). Return the test's return value. Unknown fixture names raise <code>LookupError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import inspect
+
+def run_with_fixtures(test_fn, fixtures):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">events = []
+
+def config():
+    events.append("config")
+    return {"model": "small"}
+
+def client(config):
+    events.append("client open")
+    yield f"client({config['model']})"
+    events.append("client close")
+
+def cache(config):
+    events.append("cache open")
+    yield {}
+    events.append("cache close")
+
+FIX = {"config": config, "client": client, "cache": cache}
+
+def test_ok(client, cache, config):
+    events.append("test")
+    return client, cache, config["model"]
+
+assert run_with_fixtures(test_ok, FIX) == ("client(small)", {}, "small")
+assert events == ["config", "client open", "cache open", "test", "cache close", "client close"]
+events.clear()
+
+def test_fails(cache):
+    raise AssertionError("boom")
+
+try:
+    run_with_fixtures(test_fails, FIX)
+    assert False
+except AssertionError as e:
+    assert str(e) == "boom"
+assert events == ["config", "cache open", "cache close"]
+try:
+    run_with_fixtures(lambda db: None, FIX)
+    assert False
+except LookupError as e:
+    assert "db" in str(e)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">events = []
+
+def config():
+    events.append(&quot;config&quot;)
+    return {&quot;model&quot;: &quot;small&quot;}
+
+def client(config):
+    events.append(&quot;client open&quot;)
+    yield f&quot;client({config[&#x27;model&#x27;]})&quot;
+    events.append(&quot;client close&quot;)
+
+def cache(config):
+    events.append(&quot;cache open&quot;)
+    yield {}
+    events.append(&quot;cache close&quot;)
+
+FIX = {&quot;config&quot;: config, &quot;client&quot;: client, &quot;cache&quot;: cache}
+
+def test_ok(client, cache, config):
+    events.append(&quot;test&quot;)
+    return client, cache, config[&quot;model&quot;]
+
+assert run_with_fixtures(test_ok, FIX) == (&quot;client(small)&quot;, {}, &quot;small&quot;)
+assert events == [&quot;config&quot;, &quot;client open&quot;, &quot;cache open&quot;, &quot;test&quot;, &quot;cache close&quot;, &quot;client close&quot;]
+events.clear()
+
+def test_fails(cache):
+    raise AssertionError(&quot;boom&quot;)
+
+try:
+    run_with_fixtures(test_fails, FIX)
+    assert False
+except AssertionError as e:
+    assert str(e) == &quot;boom&quot;
+assert events == [&quot;config&quot;, &quot;cache open&quot;, &quot;cache close&quot;]
+try:
+    run_with_fixtures(lambda db: None, FIX)
+    assert False
+except LookupError as e:
+    assert &quot;db&quot; in str(e)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A recursive <code>resolve(name)</code> with a <code>cache</code> dict: look up the function, resolve its own parameters first, call it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If <code>inspect.isgeneratorfunction(fn)</code>, call it, take <code>next(gen)</code> as the value and push <code>gen</code> on a teardown stack; teardown with <code>next(gen, None)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import inspect
+
+
+def run_with_fixtures(test_fn, fixtures):
+    cache, teardown = {}, []
+
+    def resolve(name):
+        if name in cache:
+            return cache[name]
+        if name not in fixtures:
+            raise LookupError(f&quot;fixture {name!r} not found&quot;)
+        fn = fixtures[name]
+        kwargs = {p: resolve(p) for p in inspect.signature(fn).parameters}
+        if inspect.isgeneratorfunction(fn):
+            gen = fn(**kwargs)
+            value = next(gen)
+            teardown.append(gen)
+        else:
+            value = fn(**kwargs)
+        cache[name] = value
+        return value
+
+    try:
+        kwargs = {p: resolve(p) for p in inspect.signature(test_fn).parameters}
+        return test_fn(**kwargs)
+    finally:
+        for gen in reversed(teardown):
+            next(gen, None)</code></pre></div><p>This is pytest's fixture mechanism reduced to its core. Parameters are read with <code>inspect.signature</code>, and each name is resolved by building its own dependencies first, so <code>config</code> is created before <code>client</code> and <code>cache</code> even though the test lists it last, and only once, thanks to the per-call cache (pytest's function scope). Generator fixtures are advanced to their <code>yield</code> for the value and kept on a stack; the <code>finally</code> then finishes them in reverse order, so the cache closes before the client that was opened earlier, exactly the order of teardown in the warm-up. Because cleanup sits in <code>finally</code>, a failing test still releases its resources and its own exception propagates. pytest adds scopes (a cache per module or session), errors during setup, and plugins, but the idea is this one: dependency injection by parameter name.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-tests-that-touch-the-real-" data-pid="m13-2-read-the-code-tests-that-touch-the-real-" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>14. Read the code: tests that touch the real world</h3></header>
+<div class="prob-q"><p>This test module passes on its author's laptop and breaks elsewhere. It writes <code>cache.json</code> into the current folder, sets <code>os.environ</code> directly and never restores it, replaces <code>sys.stdout</code> by hand, and one test relies on a file the previous test created. Rewrite the tests using <code>tmp_path</code>, <code>monkeypatch</code> and <code>capsys</code> so each test is isolated and passes alone, keeping what they check.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14"># --- code under test (do not edit) ---
+import json, os
+
+
+def save_cache(path, data):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        json.dump(data, f)
+    print(f&quot;cached {len(data)} answers&quot;)
+
+
+def load_cache(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return json.load(f)
+
+
+def cache_path():
+    return os.path.join(os.environ.get(&quot;CACHE_DIR&quot;, &quot;.&quot;), &quot;cache.json&quot;)
+
+
+# --- tests ---
+import io, os, sys
+import pytest
+
+
+def test_save():
+    old = sys.stdout
+    sys.stdout = io.StringIO()
+    save_cache(&quot;cache.json&quot;, {&quot;q1&quot;: &quot;5 days&quot;})
+    out = sys.stdout.getvalue()
+    sys.stdout = old
+    assert out == &quot;cached 1 answers\n&quot;
+
+
+def test_load_existing():
+    assert load_cache(&quot;cache.json&quot;) == {&quot;q1&quot;: &quot;5 days&quot;}
+
+
+def test_cache_dir():
+    os.environ[&quot;CACHE_DIR&quot;] = &quot;/tmp/answers&quot;
+    assert cache_path() == &quot;/tmp/answers/cache.json&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">import os, pytest
+from lessontools import run_pytest
+tests_part = __source__.split("# --- tests")[1]
+os.environ.pop("CACHE_DIR", None)
+r = run_pytest(__source__)
+assert r["failed"] == 0 and r["passed"] >= 3, r["output"][-800:]
+assert "CACHE_DIR" not in os.environ, "a test left CACHE_DIR set"
+alone = run_pytest(__source__, args=["-k", "load"])
+assert alone["failed"] == 0 and alone["passed"] >= 1, alone["output"][-600:]
+assert "sys.stdout =" not in tests_part and "os.environ[" not in tests_part and '_cache("cache.json"' not in tests_part
+assert "tmp_path" in tests_part and "monkeypatch" in tests_part and "capsys" in tests_part</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, pytest
+from lessontools import run_pytest
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+os.environ.pop(&quot;CACHE_DIR&quot;, None)
+r = run_pytest(__source__)
+assert r[&quot;failed&quot;] == 0 and r[&quot;passed&quot;] &gt;= 3, r[&quot;output&quot;][-800:]
+assert &quot;CACHE_DIR&quot; not in os.environ, &quot;a test left CACHE_DIR set&quot;
+alone = run_pytest(__source__, args=[&quot;-k&quot;, &quot;load&quot;])
+assert alone[&quot;failed&quot;] == 0 and alone[&quot;passed&quot;] &gt;= 1, alone[&quot;output&quot;][-600:]
+assert &quot;sys.stdout =&quot; not in tests_part and &quot;os.environ[&quot; not in tests_part and &#x27;_cache(&quot;cache.json&quot;&#x27; not in tests_part
+assert &quot;tmp_path&quot; in tests_part and &quot;monkeypatch&quot; in tests_part and &quot;capsys&quot; in tests_part</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each test builds its own path with <code>tmp_path / "cache.json"</code>; the load test saves its own file first.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>monkeypatch.setenv("CACHE_DIR", str(tmp_path))</code> and compare with <code>str(tmp_path / "cache.json")</code>; <code>capsys.readouterr().out</code> replaces the manual stdout swap.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import json, os
+
+
+def save_cache(path, data):
+    with open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        json.dump(data, f)
+    print(f&quot;cached {len(data)} answers&quot;)
+
+
+def load_cache(path):
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return json.load(f)
+
+
+def cache_path():
+    return os.path.join(os.environ.get(&quot;CACHE_DIR&quot;, &quot;.&quot;), &quot;cache.json&quot;)
+
+
+# --- tests ---
+import os
+import pytest
+
+
+@pytest.fixture
+def path(tmp_path):
+    return tmp_path / &quot;cache.json&quot;
+
+
+def test_save_prints_count(path, capsys):
+    save_cache(path, {&quot;q1&quot;: &quot;5 days&quot;})
+    assert capsys.readouterr().out == &quot;cached 1 answers\n&quot;
+
+
+def test_load_existing(path):
+    save_cache(path, {&quot;q1&quot;: &quot;5 days&quot;})
+    assert load_cache(path) == {&quot;q1&quot;: &quot;5 days&quot;}
+
+
+def test_load_missing_returns_empty(path):
+    assert load_cache(path) == {}
+
+
+def test_cache_dir_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv(&quot;CACHE_DIR&quot;, str(tmp_path))
+    assert cache_path() == os.path.join(str(tmp_path), &quot;cache.json&quot;)</code></pre></div><p>Each original test leaked into the world. Writing <code>cache.json</code> in the current folder litters the repository, can collide with a real cache, and made <code>test_load_existing</code> depend on <code>test_save</code> having run first; <code>tmp_path</code> gives every test its own folder, so the load test creates what it needs. Setting <code>os.environ</code> directly changed the environment for every later test in the process (and the grader checked that nothing was left behind); <code>monkeypatch</code> restores it. Swapping <code>sys.stdout</code> by hand is fragile (an exception before the restore leaves output broken for the rest of the run) and <code>capsys</code> does it safely. The added missing-file test covers the branch the old suite never reached.</p></div></details>
+</article>
+<article class="prob" id="p-errors-in-setup-and-teardown" data-pid="m13-2-errors-in-setup-and-teardown" data-type="predict" data-level="hard" data-answer="error  test_needs_setup
+error  test_needs_teardown
+error  test_fails_and_teardown_fails
+error  test_unknown_fixture
+0 4 True">
+<header class="prob-head"><h3>15. Errors in setup and teardown</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.fixture
+def broken_setup():
+    raise RuntimeError(&quot;cannot connect&quot;)
+    yield
+
+@pytest.fixture
+def broken_teardown():
+    yield &quot;ok&quot;
+    raise RuntimeError(&quot;cannot disconnect&quot;)
+
+def test_needs_setup(broken_setup):
+    assert True
+
+def test_needs_teardown(broken_teardown):
+    assert broken_teardown == &quot;ok&quot;
+
+def test_fails_and_teardown_fails(broken_teardown):
+    assert False
+
+def test_unknown_fixture(no_such_fixture):
+    pass
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC)
+for name, outcome in r[&quot;outcomes&quot;].items():
+    print(f&quot;{outcome:6} {name}&quot;)
+print(r[&quot;passed&quot;], r[&quot;failed&quot;], &quot;errors&quot; in r[&quot;output&quot;] or &quot;error&quot; in r[&quot;output&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A failure during setup or teardown is reported as an error, not a failure. On this site, <code>outcomes</code> shows the last phase that went wrong.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>error  test_needs_setup
+error  test_needs_teardown
+error  test_fails_and_teardown_fails
+error  test_unknown_fixture
+0 4 True</pre></div><p>When setup raises, the test body never runs and pytest reports an <strong>error</strong>, which tells you to look at the fixture rather than the code under test; an unknown fixture name is also a setup error. A teardown failure is reported as an error too, even when the test itself passed, so one test can show up as "passed" and "error" in pytest's summary; <code>run_pytest</code> keeps the worst phase. The last line counts the error outcomes among the failures, which is why all four tests count as failing even though one body passed.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-what-are-pytest-fixtures-and-why-are-the" data-pid="m13-2-what-are-pytest-fixtures-and-why-are-the" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. What are pytest fixtures, and why are they better than setup and teardown methods?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A fixture is a function that provides a test dependency, requested by naming it as a parameter; pytest builds it, injects it, and (for <code>yield</code> fixtures) runs the cleanup after the test. Compared with <code>setUp</code>/<code>tearDown</code> methods in <code>unittest</code>, fixtures are <strong>explicit</strong> (each test lists what it uses, so unused setup is not run and readers see the dependencies), <strong>composable</strong> (fixtures use other fixtures, building complex setup from small parts), <strong>scoped</strong> (function, class, module or session, so expensive resources can be shared deliberately), <strong>parametrisable</strong> (run the same tests against several configurations), and <strong>shareable</strong> across files through <code>conftest.py</code> without inheritance. Teardown lives next to setup in one function, with guaranteed execution after the test. Built-in fixtures (<code>tmp_path</code>, <code>monkeypatch</code>, <code>capsys</code>, <code>caplog</code>) cover the common isolation needs.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-keep-tests-isolated-when-the-" data-pid="m13-2-how-do-you-keep-tests-isolated-when-the-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How do you keep tests isolated when the code reads files, environment variables and global state?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Give every test its own world and undo every change. Files: write only inside <code>tmp_path</code> (or <code>tmp_path_factory</code> for wider scopes), never in the repository or the current folder, and make code accept paths as parameters so tests can point it there. Environment: set and remove variables with <code>monkeypatch.setenv</code> and <code>delenv</code>, and start from a known state by deleting the variables the code reads, so the developer's real environment cannot change results. Global state (module-level caches, singletons, registries, logging configuration): reset it in a fixture, often <code>autouse</code>, or patch it with <code>monkeypatch.setattr</code>; better still, design code to receive dependencies instead of reaching for globals. Time and randomness: inject a clock and a seeded generator. Then verify isolation by running tests alone, in random order (<code>pytest-randomly</code>) and in parallel (<code>pytest-xdist</code>).</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-use-a-session-scoped-fixt" data-pid="m13-2-when-would-you-use-a-session-scoped-fixt" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When would you use a session-scoped fixture, and what can go wrong?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Use session scope for expensive resources that many tests need and that can be shared safely: starting a database or message-broker container (for example with Testcontainers), creating a schema, loading a tokenizer, an embedding model or a large reference dataset, or building a test application once. The risks come from sharing. Mutable shared objects make tests order-dependent, so expose them read-only, hand each test a copy, or pair the session resource with a function-scoped fixture that isolates each test, such as a transaction rolled back after every test or a fresh database per test created from a template. Session fixtures are created lazily on first use and torn down at the very end, so failures in their teardown are reported late, and with <code>pytest-xdist</code> each worker process gets its own "session", so cross-process resources (ports, files, database names) must be made unique per worker. Finally, slow session setup still costs time on every run; keep heavy fixtures behind marks so the fast unit suite does not pay for them.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A fixture is a function marked <code>@pytest.fixture</code>; a test receives it by naming a parameter, and fixtures can depend on other fixtures.</li><li>Code after <code>yield</code> is teardown and runs even when the test fails; setup and teardown failures are reported as errors.</li><li>Scopes (<code>function</code>, <code>class</code>, <code>module</code>, <code>session</code>) share objects; never let tests mutate a widely scoped fixture, copy or reset it instead.</li><li>Parametrised fixtures run tests per configuration; factory fixtures return functions with defaults; <code>conftest.py</code> shares fixtures.</li><li><code>tmp_path</code>, <code>monkeypatch</code>, <code>capsys</code> and <code>caplog</code> isolate files, environment and attributes, output, and logs.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

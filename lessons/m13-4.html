@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>13.4 · Testing ML and GenAI code</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m13-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 13 · Testing with pytest</span></div>
+  <h1>13.4 Testing ML and GenAI code</h1>
+  <p>ML and LLM systems add three difficulties to testing: numbers that are only approximately right, randomness, and models whose quality is a statistic rather than a yes or no. What to unit-test and what to evaluate instead, tolerances with NumPy, seeds and determinism, property and invariance tests, data validation, smoke training tests, prompt and parser tests, and evaluation gates for LLM changes.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="layers">
+<h2><span class="n">1</span>What to test, and what to evaluate</h2>
+<p>An ML or LLM system is ordinary code around a model. The ordinary code, which is most of it, gets ordinary <strong>unit tests</strong>: data loading and cleaning, feature functions, tokenisation and chunking, metric implementations, prompt builders, output parsers and validators, routing and retry logic. These are deterministic, or can be made so, and every bug in them corrupts results silently, so they deserve the most tests. The model itself is different: "the classifier is good" is not true or false for one input, it is an accuracy of 0.93 on a dataset. That is measured by <strong>evaluation</strong>, with datasets, metrics and thresholds, run less often and reported as numbers.</p>
+<p>Between the two sit tests that check <strong>behaviour without exact answers</strong>: property tests (outputs are probabilities, shapes match, a scaler's output has mean 0), <strong>smoke training tests</strong> (a tiny model on a tiny dataset reaches perfect accuracy and its loss decreases, which catches broken gradients in seconds), <strong>data validation</strong> (schemas, ranges, duplicates, leakage between splits), and <strong>invariance tests</strong> (changing the case of an e-mail should not change its spam label). A healthy project has many fast unit tests, some of these behavioural tests, and an evaluation suite gating model and prompt changes.</p>
+</section>
+<section class="sec" id="numbers">
+<h2><span class="n">2</span>Numbers: tolerances and dtypes</h2>
+<p>Floating-point results depend on the order of operations, the library version, the hardware and the dtype, so exact equality is almost never the right check for computed values. For NumPy arrays, use <strong><code>np.testing.assert_allclose(actual, expected, rtol=1e-7, atol=0)</code></strong>: it passes when <code>|actual - expected| &lt;= atol + rtol * |expected|</code> element-wise, checks shapes, and reports how many elements mismatch and by how much. Choose tolerances deliberately: <code>float32</code> computations (most deep learning) carry about 7 significant digits, so <code>rtol=1e-5</code> is realistic, and values near zero need an <code>atol</code>. <code>np.testing.assert_array_equal</code> is for exact integer or boolean arrays (and treats NaNs in the same places as equal, unlike <code>==</code>). Check <strong>dtypes and shapes</strong> explicitly too: a feature matrix that silently became <code>int64</code> or <code>(n,)</code> instead of <code>(n, 1)</code> is a common bug.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">tolerances.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+
+a = np.array([0.1 + 0.2, 1e-9, 100.0])
+b = np.array([0.3, 0.0, 100.0001])
+print(np.array_equal(a, b), np.allclose(a, b))
+try:
+    np.testing.assert_allclose(a, b)
+except AssertionError as e:
+    print([line.strip() for line in str(e).splitlines() if line.strip().startswith(&quot;Mismatched&quot;)])
+np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-8)
+print(np.float32(0.1) == 0.1, np.float32(1 / 3).dtype, np.array([1, 2]).dtype)
+np.testing.assert_array_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
+print(np.array_equal(np.array([np.nan]), np.array([np.nan])))</code></pre><div class="out"><span class="ol">Output</span><pre>False True
+[&#x27;Mismatched elements: 2 / 3 (66.7%)&#x27;]
+True float32 int32
+False</pre></div></div>
+</section>
+<section class="sec" id="seeds">
+<h2><span class="n">3</span>Randomness and determinism</h2>
+<p>Shuffles, splits, initial weights, sampling and data augmentation all use random numbers. A test that depends on them must control them, and so should production code, for reproducible experiments. The robust pattern is to <strong>pass a generator in</strong>: <code>rng = np.random.default_rng(seed)</code> or <code>random.Random(seed)</code>, given to every function that needs randomness, rather than calling the global <code>np.random.rand</code> or <code>random.random</code>, whose state any other code can change. Two generators with the same seed produce the same sequence; one generator used twice produces different numbers each time, so "same seed, same result" tests create a fresh generator for each run (problem 3).</p>
+<p>Some randomness cannot be seeded from Python: GPU kernels with non-deterministic reductions, multi-threaded data loaders, and LLM sampling, where even temperature 0 is not guaranteed to be identical across calls. For those, test <strong>properties and tolerances</strong>, run several samples and check aggregate behaviour, or move the model call out of the unit test entirely.</p>
+</section>
+<section class="sec" id="data">
+<h2><span class="n">4</span>Testing data</h2>
+<p>Most ML failures are data failures: a column that changed type upstream, labels outside the expected set, duplicated examples, missing values encoded as <code>-1</code>, or the same customer in both training and test sets (<strong>leakage</strong>, which inflates offline metrics and disappoints in production). These are tested like any contract: a validation function returns a list of problems for a batch, unit tests check the validator, and the pipeline runs it on every new batch and refuses to train on bad data (problem 6). Libraries such as Pandera, Great Expectations and Pydantic (11.4) formalise the schemas; the checks themselves are simple code.</p>
+</section>
+<section class="sec" id="llm">
+<h2><span class="n">5</span>Testing LLM applications</h2>
+<p>Split an LLM feature into deterministic parts and the model call. <strong>Prompt builders</strong> get unit tests on structure (the context and the question are present, the instructions come first, long context is truncated within budget), not on exact wording, which changes often; when an exact template matters, a <strong>snapshot</strong> (golden file) test stores the expected prompt and is updated deliberately. <strong>Output parsers and validators</strong> get tests with realistic, messy replies collected from real runs: code fences, extra prose, wrong case, missing fields, truncated JSON (13.1 problem 9, 11.4). <strong>Orchestration</strong> (retries, tool loops, fallbacks) is tested with fakes (13.3). None of this needs a real model.</p>
+<p>Quality is <strong>evaluated</strong>: a versioned evaluation set of inputs with expected answers or grading rules (exact match, contained facts, valid JSON, a rubric scored by a judge model), run against the real model when the prompt, the model or the retrieval changes, and compared with the previous <strong>baseline</strong>. A CI gate fails the change if a metric drops below a threshold or regresses by more than a tolerance (problem 10). Because outputs vary, evaluations use enough cases to be statistically meaningful, report confidence intervals or several runs, and track cost and latency alongside quality.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-numpy-comparisons" data-pid="m13-4-numpy-comparisons" data-type="predict" data-level="easy" data-answer="pass fail
+pass fail
+pass fail
+pass False
+True False">
+<header class="prob-head"><h3>1. NumPy comparisons</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+
+def check(fn):
+    try:
+        fn()
+        return &quot;pass&quot;
+    except AssertionError:
+        return &quot;fail&quot;
+
+x = np.array([1.0, 2.0, 3.0])
+print(check(lambda: np.testing.assert_allclose(x + 1e-9, x)), check(lambda: np.testing.assert_allclose(x + 1e-3, x)))
+print(check(lambda: np.testing.assert_allclose(x + 1e-3, x, rtol=1e-3)), check(lambda: np.testing.assert_allclose([0.0], [1e-9])))
+print(check(lambda: np.testing.assert_allclose([0.0], [1e-9], atol=1e-8)), check(lambda: np.testing.assert_allclose(x, x[:2])))
+print(check(lambda: np.testing.assert_array_equal([1, np.nan], [1, np.nan])), bool(np.all(np.array([np.nan]) == np.array([np.nan]))))
+r1, r2 = np.random.default_rng(7), np.random.default_rng(7)
+print(np.array_equal(r1.random(3), r2.random(3)), np.array_equal(r1.random(3), r1.random(3)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The default <code>rtol</code> is <code>1e-7</code> and the default <code>atol</code> is 0. Shapes must match. NaN is never equal to NaN with <code>==</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>pass fail
+pass fail
+pass fail
+pass False
+True False</pre></div><p>A difference of <code>1e-9</code> is far below <code>1e-7</code> relative tolerance, but <code>1e-3</code> is not, until <code>rtol=1e-3</code> allows it (the largest relative error is 0.001 at the element 1.0). With <code>atol</code> 0, nothing is "close" to exactly 0 except 0, so comparisons near zero need an absolute tolerance. Different shapes always fail. <code>assert_array_equal</code> treats NaNs in matching positions as equal, while <code>==</code> says NaN differs from itself. Two generators with the same seed give the same numbers, but one generator moves on, so consecutive draws differ.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-standard-scaler" data-pid="m13-4-test-a-standard-scaler" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Test a standard scaler</h3></header>
+<div class="prob-q"><p><code>StandardScaler</code> learns each column's mean and standard deviation in <code>fit(X)</code> and <code>transform(X)</code> returns <code>(X - mean) / std</code>, using 1 instead of 0 for constant columns, always as <code>float64</code>, without modifying the input. Write at least four tests with <code>np.testing.assert_allclose</code> that pass here and catch four buggy versions. Use small arrays whose expected output you can work out by hand.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2"># --- code under test (do not edit) ---
+import numpy as np
+
+
+class StandardScaler:
+    def fit(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        self.mean_ = X.mean(axis=0)
+        std = X.std(axis=0)
+        self.std_ = np.where(std == 0, 1.0, std)
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        return (X - self.mean_) / self.std_
+
+
+# --- tests ---
+import numpy as np
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "global_stats": BASE.replace("X.mean(axis=0)", "X.mean()").replace("X.std(axis=0)", "X.std()"),
+    "zero_std_nan": BASE.replace("np.where(std == 0, 1.0, std)", "std"),
+    "refits_on_transform": BASE.replace("        return (X - self.mean_) / self.std_", "        return (X - X.mean(axis=0)) / self.std_"),
+    "int_dtype_kept": BASE.replace("        X = np.asarray(X, dtype=np.float64)\n        return", "        X = np.asarray(X)\n        return").replace("return (X - self.mean_) / self.std_", "return ((X - self.mean_) / self.std_).astype(X.dtype)"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;global_stats&quot;: BASE.replace(&quot;X.mean(axis=0)&quot;, &quot;X.mean()&quot;).replace(&quot;X.std(axis=0)&quot;, &quot;X.std()&quot;),
+    &quot;zero_std_nan&quot;: BASE.replace(&quot;np.where(std == 0, 1.0, std)&quot;, &quot;std&quot;),
+    &quot;refits_on_transform&quot;: BASE.replace(&quot;        return (X - self.mean_) / self.std_&quot;, &quot;        return (X - X.mean(axis=0)) / self.std_&quot;),
+    &quot;int_dtype_kept&quot;: BASE.replace(&quot;        X = np.asarray(X, dtype=np.float64)\n        return&quot;, &quot;        X = np.asarray(X)\n        return&quot;).replace(&quot;return (X - self.mean_) / self.std_&quot;, &quot;return ((X - self.mean_) / self.std_).astype(X.dtype)&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>X = [[1, 10], [3, 30]]</code> has column means 2 and 20 and standard deviations 1 and 10, so the result is <code>[[-1, -1], [1, 1]]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Transform <strong>new</strong> data with the fitted statistics: <code>[[5, 20]]</code> must give <code>[[3, 0]]</code>. A constant column must become zeros, not NaN. Pass integers and check the dtype.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import numpy as np
+
+
+class StandardScaler:
+    def fit(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        self.mean_ = X.mean(axis=0)
+        std = X.std(axis=0)
+        self.std_ = np.where(std == 0, 1.0, std)
+        return self
+
+    def transform(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        return (X - self.mean_) / self.std_
+
+
+# --- tests ---
+import numpy as np
+import pytest
+
+TRAIN = np.array([[1, 10], [3, 30]])
+
+
+@pytest.fixture
+def scaler():
+    return StandardScaler().fit(TRAIN)
+
+
+def test_per_column_statistics(scaler):
+    np.testing.assert_allclose(scaler.mean_, [2.0, 20.0])
+    np.testing.assert_allclose(scaler.transform(TRAIN), [[-1.0, -1.0], [1.0, 1.0]])
+
+
+def test_new_data_uses_fitted_statistics(scaler):
+    np.testing.assert_allclose(scaler.transform([[5, 20]]), [[3.0, 0.0]])
+
+
+def test_constant_column_becomes_zeros():
+    X = np.array([[1.0, 7.0], [3.0, 7.0]])
+    out = StandardScaler().fit(X).transform(X)
+    assert not np.isnan(out).any()
+    np.testing.assert_allclose(out[:, 1], [0.0, 0.0])
+
+
+def test_output_is_float64_and_input_untouched(scaler):
+    X = TRAIN.copy()
+    out = scaler.transform(X)
+    assert out.dtype == np.float64
+    np.testing.assert_array_equal(X, TRAIN)</code></pre></div><p>Two rows per column make the expected output easy to derive by hand (mean halfway, population standard deviation half the gap), so the test states the exact answer with <code>assert_allclose</code> rather than re-computing it with the same formula, which would only prove the code agrees with itself. The second test captures the most important rule of preprocessing: <strong>transform</strong> uses the statistics learned in <strong>fit</strong>; a version that re-centres each new batch on its own mean leaks information and makes a single-row batch always zero. The constant-column and dtype tests cover the edge cases that silently produce NaNs or truncated integers in a real pipeline.</p></div></details>
+</article>
+<article class="prob" id="p-a-test-that-depends-on-unseeded-randomne" data-pid="m13-4-a-test-that-depends-on-unseeded-randomne" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A test that depends on unseeded randomness</h3></header>
+<div class="prob-q"><p><code>bootstrap_ci(values, n, rng)</code> estimates a confidence interval by resampling with the generator it is given. The test creates an <strong>unseeded</strong> generator and compares against numbers copied from one run, so it fails almost every time. Fix the test: make it deterministic with a seeded generator, check that two generators with the same seed give the same interval, and check properties that hold for any seed (lower bound not above upper, both within the data range).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def bootstrap_ci(values, n, rng, level=0.9):
+    values = np.asarray(values, dtype=float)
+    means = np.array([rng.choice(values, size=len(values), replace=True).mean() for _ in range(n)])
+    lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
+
+
+# --- tests ---
+import numpy as np
+
+
+def test_bootstrap():
+    rng = np.random.default_rng()
+    assert bootstrap_ci([1, 2, 3, 4, 5], 200, rng) == (2.2, 3.8)
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+runs = [run_pytest(__source__) for _ in range(3)]
+assert all(r["failed"] == 0 and r["passed"] >= 2 for r in runs), runs[0]["output"][-800:]
+tests_part = __source__.split("# --- tests")[1]
+assert "default_rng()" not in tests_part
+BUG = '''
+import numpy as np
+
+
+def bootstrap_ci(values, n, rng, level=0.9):
+    values = np.asarray(values, dtype=float)
+    means = np.array([np.random.choice(values, size=len(values), replace=True).mean() for _ in range(n)])
+    lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+runs = [run_pytest(__source__) for _ in range(3)]
+assert all(r[&quot;failed&quot;] == 0 and r[&quot;passed&quot;] &gt;= 2 for r in runs), runs[0][&quot;output&quot;][-800:]
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert &quot;default_rng()&quot; not in tests_part
+BUG = &#x27;&#x27;&#x27;
+import numpy as np
+
+
+def bootstrap_ci(values, n, rng, level=0.9):
+    values = np.asarray(values, dtype=float)
+    means = np.array([np.random.choice(values, size=len(values), replace=True).mean() for _ in range(n)])
+    lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>np.random.default_rng(0)</code> twice, called separately, must give identical intervals: that also catches code that ignores the generator.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Properties: <code>lo &lt;= hi</code> and <code>1 &lt;= lo</code> and <code>hi &lt;= 5</code> for several seeds, with <code>@pytest.mark.parametrize("seed", [0, 1, 2])</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def bootstrap_ci(values, n, rng, level=0.9):
+    values = np.asarray(values, dtype=float)
+    means = np.array([rng.choice(values, size=len(values), replace=True).mean() for _ in range(n)])
+    lo, hi = np.quantile(means, [(1 - level) / 2, 1 - (1 - level) / 2])
+    return float(lo), float(hi)
+
+
+# --- tests ---
+import numpy as np
+import pytest
+
+DATA = [1, 2, 3, 4, 5]
+
+
+def test_same_seed_same_interval():
+    a = bootstrap_ci(DATA, 200, np.random.default_rng(0))
+    b = bootstrap_ci(DATA, 200, np.random.default_rng(0))
+    assert a == b
+
+
+@pytest.mark.parametrize(&quot;seed&quot;, [0, 1, 2])
+def test_interval_is_ordered_and_within_data_range(seed):
+    lo, hi = bootstrap_ci(DATA, 200, np.random.default_rng(seed))
+    assert 1 &lt;= lo &lt;= hi &lt;= 5
+
+
+def test_interval_contains_sample_mean():
+    lo, hi = bootstrap_ci(DATA, 500, np.random.default_rng(3))
+    assert lo &lt;= 3.0 &lt;= hi</code></pre></div><p>An unseeded generator gives different numbers on every run, so a test with copied values is flaky by construction. A seeded generator makes runs repeatable, and comparing <strong>two fresh generators with the same seed</strong> is the right determinism check; it also exposes code that ignores the generator and uses the global NumPy random state (the graded bug), which no seed passed to the function can control. The other tests check properties that hold whatever the seed, which keeps them valid if the algorithm changes, unlike golden numbers. The grader ran the suite three times to make sure it is stable.</p></div></details>
+</article>
+<article class="prob" id="p-why-property-tests-catch-overflow" data-pid="m13-4-why-property-tests-catch-overflow" data-type="predict" data-level="easy" data-answer="[0.09  0.245 0.665] [0.09  0.245 0.665]
+[nan nan nan] [0.09  0.245 0.665]
+False True">
+<header class="prob-head"><h3>4. Why property tests catch overflow</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+
+def softmax_naive(z):
+    e = np.exp(z)
+    return e / e.sum()
+
+def softmax_stable(z):
+    e = np.exp(z - np.max(z))
+    return e / e.sum()
+
+small = np.array([1.0, 2.0, 3.0])
+large = np.array([1000.0, 1001.0, 1002.0])
+with np.errstate(over=&quot;ignore&quot;, invalid=&quot;ignore&quot;):
+    print(np.round(softmax_naive(small), 3), np.round(softmax_stable(small), 3))
+    print(softmax_naive(large), np.round(softmax_stable(large), 3))
+    print(np.isclose(softmax_naive(large).sum(), 1.0), np.isclose(softmax_stable(large).sum(), 1.0))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>exp(1000)</code> overflows a float64 to infinity, and infinity divided by infinity is NaN. Subtracting the maximum changes nothing mathematically.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0.09  0.245 0.665] [0.09  0.245 0.665]
+[nan nan nan] [0.09  0.245 0.665]
+False True</pre></div><p>On ordinary inputs both versions agree, so a test with only "nice" values would pass the naive one. With large logits, which real models produce, the exponentials overflow to infinity and the result is NaN. A <strong>property</strong> test ("outputs are finite, non-negative and sum to 1, for small and large inputs") fails for the naive version immediately. The stable version subtracts the maximum, which leaves the result unchanged but keeps every exponent at most 0.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-test-precision-recall-and-f1" data-pid="m13-4-test-precision-recall-and-f1" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Test precision, recall and F1</h3></header>
+<div class="prob-q"><p><code>prf(y_true, y_pred, positive)</code> returns <code>(precision, recall, f1)</code> for the given positive label, with 0.0 when a ratio's denominator is zero. Write at least five tests with hand-computed expectations (use <code>pytest.approx</code>), including the edge cases. They must pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5"># --- code under test (do not edit) ---
+def prf(y_true, y_pred, positive):
+    tp = sum(t == positive and p == positive for t, p in zip(y_true, y_pred))
+    fp = sum(t != positive and p == positive for t, p in zip(y_true, y_pred))
+    fn = sum(t == positive and p != positive for t, p in zip(y_true, y_pred))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return precision, recall, f1
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "swapped": BASE.replace("    return precision, recall, f1", "    return recall, precision, f1"),
+    "zero_division": BASE.replace("tp / (tp + fp) if tp + fp else 0.0", "tp / (tp + fp)"),
+    "arithmetic_mean": BASE.replace("2 * precision * recall / (precision + recall) if precision + recall else 0.0", "(precision + recall) / 2"),
+    "label_one": BASE.replace("p == positive for t, p in zip(y_true, y_pred))\n    fn", "p == 1 for t, p in zip(y_true, y_pred))\n    fn"),
+    "fn_counts_tn": BASE.replace("fn = sum(t == positive and p != positive", "fn = sum(t != positive and p != positive"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;swapped&quot;: BASE.replace(&quot;    return precision, recall, f1&quot;, &quot;    return recall, precision, f1&quot;),
+    &quot;zero_division&quot;: BASE.replace(&quot;tp / (tp + fp) if tp + fp else 0.0&quot;, &quot;tp / (tp + fp)&quot;),
+    &quot;arithmetic_mean&quot;: BASE.replace(&quot;2 * precision * recall / (precision + recall) if precision + recall else 0.0&quot;, &quot;(precision + recall) / 2&quot;),
+    &quot;label_one&quot;: BASE.replace(&quot;p == positive for t, p in zip(y_true, y_pred))\n    fn&quot;, &quot;p == 1 for t, p in zip(y_true, y_pred))\n    fn&quot;),
+    &quot;fn_counts_tn&quot;: BASE.replace(&quot;fn = sum(t == positive and p != positive&quot;, &quot;fn = sum(t != positive and p != positive&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pick a case where precision and recall differ, for example 2 true positives, 1 false positive and 3 false negatives: precision 2/3, recall 2/5.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use string labels (<code>"spam"</code>, <code>"ham"</code>) so a version that assumes the label 1 fails; include a case with no predicted positives and one with true negatives.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def prf(y_true, y_pred, positive):
+    tp = sum(t == positive and p == positive for t, p in zip(y_true, y_pred))
+    fp = sum(t != positive and p == positive for t, p in zip(y_true, y_pred))
+    fn = sum(t == positive and p != positive for t, p in zip(y_true, y_pred))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return precision, recall, f1
+
+
+# --- tests ---
+import pytest
+
+S, H = &quot;spam&quot;, &quot;ham&quot;
+
+
+def test_mixed_case_by_hand():
+    # tp=2, fp=1, fn=3, tn=1
+    y_true = [S, S, H, S, S, S, H]
+    y_pred = [S, S, S, H, H, H, H]
+    p, r, f = prf(y_true, y_pred, S)
+    assert (p, r) == pytest.approx((2 / 3, 2 / 5))
+    assert f == pytest.approx(2 * (2 / 3) * (2 / 5) / (2 / 3 + 2 / 5))
+
+
+def test_true_negatives_do_not_count():
+    p, r, f = prf([S, H, H, H], [S, H, H, H], S)
+    assert (p, r, f) == pytest.approx((1.0, 1.0, 1.0))
+
+
+def test_no_predicted_positives_gives_zero_precision():
+    assert prf([S, H], [H, H], S) == (0.0, 0.0, 0.0)
+
+
+def test_all_wrong():
+    assert prf([S, H], [H, S], S) == (0.0, 0.0, 0.0)
+
+
+def test_other_label_as_positive():
+    p, r, f = prf([S, H, H], [H, H, S], H)
+    assert (p, r) == pytest.approx((0.5, 0.5))</code></pre></div><p>Metric code is where silent bugs do the most damage: a swapped precision and recall or an arithmetic mean instead of the harmonic one still produces plausible numbers, and every model comparison built on them is wrong. Hand-computed cases where precision and recall <strong>differ</strong> catch swaps and the wrong mean; string labels catch code that assumes the positive class is <code>1</code>; true negatives in the data catch formulas that count them; and the empty-denominator cases pin the convention (0.0 rather than an exception or NaN, as scikit-learn's <code>zero_division=0</code> does). Comparing against an independent hand calculation, not the same formula, is what makes the tests meaningful.</p></div></details>
+</article>
+<article class="prob" id="p-validate-a-training-batch" data-pid="m13-4-validate-a-training-batch" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Validate a training batch</h3></header>
+<div class="prob-q"><p>Write <code>validate_batch(rows, labels, max_text=2000)</code> returning a sorted list of problem strings for a list of dict rows: <code>"row N: missing KEY"</code> for each of <code>id</code>, <code>text</code>, <code>label</code> absent; <code>"row N: text must be a non-empty string"</code>; <code>"row N: text longer than MAX"</code>; <code>"row N: unknown label 'X'"</code>; and <code>"duplicate id 'X'"</code> once per repeated id. Rows are numbered from 1. An empty list means the batch is valid.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def validate_batch(rows, labels, max_text=2000):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = [
+    {"id": "a", "text": "Win a prize", "label": "spam"},
+    {"id": "b", "text": "", "label": "ham"},
+    {"id": "c", "label": "ham"},
+    {"id": "a", "text": "Lunch?", "label": "Ham"},
+    {"text": "x" * 25, "label": "ham"},
+    {"id": "e", "text": 42, "label": "phish"},
+    {"id": "a", "text": "again", "label": "spam"},
+]
+problems = validate_batch(rows, {"spam", "ham", "phish"}, max_text=20)
+assert problems == sorted([
+    "row 2: text must be a non-empty string", "row 3: missing text", "row 4: unknown label 'Ham'",
+    "row 5: missing id", "row 5: text longer than 20", "row 6: text must be a non-empty string", "duplicate id 'a'",
+])
+assert validate_batch(rows[:1], {"spam"}) == [] and validate_batch([], {"spam"}) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = [
+    {&quot;id&quot;: &quot;a&quot;, &quot;text&quot;: &quot;Win a prize&quot;, &quot;label&quot;: &quot;spam&quot;},
+    {&quot;id&quot;: &quot;b&quot;, &quot;text&quot;: &quot;&quot;, &quot;label&quot;: &quot;ham&quot;},
+    {&quot;id&quot;: &quot;c&quot;, &quot;label&quot;: &quot;ham&quot;},
+    {&quot;id&quot;: &quot;a&quot;, &quot;text&quot;: &quot;Lunch?&quot;, &quot;label&quot;: &quot;Ham&quot;},
+    {&quot;text&quot;: &quot;x&quot; * 25, &quot;label&quot;: &quot;ham&quot;},
+    {&quot;id&quot;: &quot;e&quot;, &quot;text&quot;: 42, &quot;label&quot;: &quot;phish&quot;},
+    {&quot;id&quot;: &quot;a&quot;, &quot;text&quot;: &quot;again&quot;, &quot;label&quot;: &quot;spam&quot;},
+]
+problems = validate_batch(rows, {&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;}, max_text=20)
+assert problems == sorted([
+    &quot;row 2: text must be a non-empty string&quot;, &quot;row 3: missing text&quot;, &quot;row 4: unknown label &#x27;Ham&#x27;&quot;,
+    &quot;row 5: missing id&quot;, &quot;row 5: text longer than 20&quot;, &quot;row 6: text must be a non-empty string&quot;, &quot;duplicate id &#x27;a&#x27;&quot;,
+])
+assert validate_batch(rows[:1], {&quot;spam&quot;}) == [] and validate_batch([], {&quot;spam&quot;}) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Loop with <code>enumerate(rows, start=1)</code>; check missing keys first and skip value checks for keys that are missing.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count ids with a <code>Counter</code> (ignoring rows without an id) and add one message per id seen more than once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import Counter
+
+
+def validate_batch(rows, labels, max_text=2000):
+    problems = []
+    for n, row in enumerate(rows, start=1):
+        for key in (&quot;id&quot;, &quot;text&quot;, &quot;label&quot;):
+            if key not in row:
+                problems.append(f&quot;row {n}: missing {key}&quot;)
+        if &quot;text&quot; in row:
+            text = row[&quot;text&quot;]
+            if not isinstance(text, str) or not text.strip():
+                problems.append(f&quot;row {n}: text must be a non-empty string&quot;)
+            elif len(text) &gt; max_text:
+                problems.append(f&quot;row {n}: text longer than {max_text}&quot;)
+        if &quot;label&quot; in row and row[&quot;label&quot;] not in labels:
+            problems.append(f&quot;row {n}: unknown label {row[&#x27;label&#x27;]!r}&quot;)
+    counts = Counter(row[&quot;id&quot;] for row in rows if &quot;id&quot; in row)
+    problems.extend(f&quot;duplicate id {i!r}&quot; for i, c in counts.items() if c &gt; 1)
+    return sorted(problems)</code></pre></div><p>A validation function that <strong>collects</strong> every problem, with row numbers, is what a data pipeline needs: one run tells the data owner everything to fix, instead of one error per attempt. The checks mirror the common silent failures: missing fields, empty or non-string text (a number where text belongs often means a shifted CSV column), oversize inputs that would be truncated by a tokenizer, labels with the wrong case (<code>"Ham"</code> becomes a fourth class) and duplicates, which inflate metrics when copies land in both training and test sets. The function is pure, so it is trivially unit-tested, and the pipeline can refuse to train when the list is not empty.</p></div></details>
+</article>
+<article class="prob" id="p-a-prompt-test-that-breaks-every-day" data-pid="m13-4-a-prompt-test-that-breaks-every-day" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A prompt test that breaks every day</h3></header>
+<div class="prob-q"><p><code>build_prompt(question, chunks, today=None)</code> puts today's date in the system part. The test compares the whole prompt to a string containing the date on which it was written, so it fails on every other day, and it is so exact that harmless wording changes would break it too. Fix it: pass a fixed <code>today</code>, and assert the <strong>structure</strong> that matters (date line, every chunk with its source, the question last), so it still catches the graded buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7"># --- code under test (do not edit) ---
+from datetime import date
+
+
+def build_prompt(question, chunks, today=None):
+    today = today or date.today()
+    lines = [f&quot;You answer support questions. Today is {today.isoformat()}.&quot;, &quot;Context:&quot;]
+    lines += [f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks]
+    lines += [&quot;&quot;, f&quot;Question: {question}&quot;]
+    return &quot;\n&quot;.join(lines)
+
+
+# --- tests ---
+CHUNKS = [{&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds take 5 days.&quot;}, {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;No refunds after 30 days.&quot;}]
+
+
+def test_prompt():
+    assert build_prompt(&quot;Refund?&quot;, CHUNKS) == (
+        &quot;You answer support questions. Today is 2025-01-15.\nContext:\n&quot;
+        &quot;[faq.md] Refunds take 5 days.\n[terms.md] No refunds after 30 days.\n\nQuestion: Refund?&quot;
+    )
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 1, good["output"][-800:]
+assert "date(" in __source__.split("# --- tests")[1]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "drops_last_chunk": BASE.replace("for c in chunks]", "for c in chunks[:-1]]"),
+    "no_sources": BASE.replace('f"[{c[\'source\']}] {c[\'text\']}"', 'c["text"]'),
+    "question_first": BASE.replace('    lines += ["", f"Question: {question}"]\n', "").replace('lines = [f"You', 'lines = [f"Question: {question}", f"You'),
+    "ignores_today": BASE.replace("today = today or date.today()", "today = date.today()"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []
+harmless = BASE.replace("You answer support questions.", "You are a helpful support assistant.")
+assert run_pytest(swap_impl(__source__, harmless))["failed"] == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 1, good[&quot;output&quot;][-800:]
+assert &quot;date(&quot; in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;drops_last_chunk&quot;: BASE.replace(&quot;for c in chunks]&quot;, &quot;for c in chunks[:-1]]&quot;),
+    &quot;no_sources&quot;: BASE.replace(&#x27;f&quot;[{c[\&#x27;source\&#x27;]}] {c[\&#x27;text\&#x27;]}&quot;&#x27;, &#x27;c[&quot;text&quot;]&#x27;),
+    &quot;question_first&quot;: BASE.replace(&#x27;    lines += [&quot;&quot;, f&quot;Question: {question}&quot;]\n&#x27;, &quot;&quot;).replace(&#x27;lines = [f&quot;You&#x27;, &#x27;lines = [f&quot;Question: {question}&quot;, f&quot;You&#x27;),
+    &quot;ignores_today&quot;: BASE.replace(&quot;today = today or date.today()&quot;, &quot;today = date.today()&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []
+harmless = BASE.replace(&quot;You answer support questions.&quot;, &quot;You are a helpful support assistant.&quot;)
+assert run_pytest(swap_impl(__source__, harmless))[&quot;failed&quot;] == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>build_prompt("Refund?", CHUNKS, today=date(2025, 1, 15))</code>; then check <code>"Today is 2025-01-15" in prompt</code>, each <code>[source] text</code> line, and <code>prompt.endswith("Question: Refund?")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The grader also changes the first sentence's wording; your test must still pass then.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+from datetime import date
+
+
+def build_prompt(question, chunks, today=None):
+    today = today or date.today()
+    lines = [f&quot;You answer support questions. Today is {today.isoformat()}.&quot;, &quot;Context:&quot;]
+    lines += [f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks]
+    lines += [&quot;&quot;, f&quot;Question: {question}&quot;]
+    return &quot;\n&quot;.join(lines)
+
+
+# --- tests ---
+from datetime import date
+
+CHUNKS = [{&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds take 5 days.&quot;}, {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;No refunds after 30 days.&quot;}]
+
+
+def test_prompt_structure():
+    prompt = build_prompt(&quot;Refund?&quot;, CHUNKS, today=date(2025, 1, 15))
+    lines = prompt.splitlines()
+    assert &quot;Today is 2025-01-15&quot; in lines[0]
+    assert &quot;[faq.md] Refunds take 5 days.&quot; in lines and &quot;[terms.md] No refunds after 30 days.&quot; in lines
+    assert lines[-1] == &quot;Question: Refund?&quot;
+    assert lines.index(&quot;[faq.md] Refunds take 5 days.&quot;) &lt; lines.index(&quot;[terms.md] No refunds after 30 days.&quot;)</code></pre></div><p>The original test was wrong for two reasons. It depended on the <strong>real date</strong>, so it could only pass on one day; the function already accepts <code>today</code>, so the test injects a fixed date, the same idea as the fake clock in 13.3. And it compared the entire string, so rewording the instructions, which prompt engineers do constantly, would break it although nothing important changed; the grader checks exactly that. Structural assertions pin what the rest of the system depends on: the date is present, every chunk appears with its source in order, and the question comes last. When the exact text matters (a regulated disclaimer, say), use a deliberate snapshot file instead.</p></div></details>
+</article>
+<article class="prob" id="p-seeded-generators" data-pid="m13-4-seeded-generators" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Seeded generators</h3></header>
+<div class="prob-q"><p>Fill in <code>same</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import random
+
+a, b = random.Random(42), random.Random(42)
+same = a.random() == b.random()
+a.random()
+same = a.random() == b.random()
+b.random()
+same = a.random() == b.random()
+random.seed(42)
+same = random.random() == random.Random(42).random()
+c = random.Random(7)
+state = c.getstate()
+first = c.sample(range(100), 3)
+c.setstate(state)
+same = c.sample(range(100), 3) == first</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>same</code></th></tr><tr><td>same seed</td><td><input class="cell" data-a="True" data-s="True" aria-label="same at same seed" autocomplete="off"></td></tr><tr><td>a is one step ahead</td><td><input class="cell" data-a="False" data-s="False" aria-label="same at a is one step ahead" autocomplete="off"></td></tr><tr><td>caught up</td><td><input class="cell" data-a="True" data-s="True" aria-label="same at caught up" autocomplete="off"></td></tr><tr><td>global versus instance</td><td><input class="cell" data-a="True" data-s="True" aria-label="same at global versus instance" autocomplete="off"></td></tr><tr><td>restored state</td><td><input class="cell" data-a="True" data-s="True" aria-label="same at restored state" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A generator's output depends only on its seed and how many numbers it has produced. The global functions use a hidden instance seeded with <code>random.seed</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>same</code></th></tr><tr><td>same seed</td><td><code>True</code></td></tr><tr><td>a is one step ahead</td><td><code>False</code></td></tr><tr><td>caught up</td><td><code>True</code></td></tr><tr><td>global versus instance</td><td><code>True</code></td></tr><tr><td>restored state</td><td><code>True</code></td></tr></table></div><p>Two generators with the same seed produce the same sequence, so they agree draw for draw while they stay in step; one extra call on <code>a</code> puts it one value ahead, and an extra call on <code>b</code> brings them back in step. The module-level functions use a hidden global <code>Random</code> instance, so seeding it with 42 gives the same first value as a fresh <code>Random(42)</code>, but any library call that uses <code>random</code> in between changes it, which is why passing explicit generators is safer. <code>getstate</code> and <code>setstate</code> snapshot and restore a generator, useful for replaying exactly the same samples.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-tolerant-label-parser-with-real-r" data-pid="m13-4-test-a-tolerant-label-parser-with-real-r" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Test a tolerant label parser with real replies</h3></header>
+<div class="prob-q"><p><code>parse_label(reply, labels)</code> extracts a classification label from a model reply: it ignores case and surrounding whitespace and punctuation, accepts <code>"Label: spam"</code> and replies wrapped in quotes or code fences, and returns the label only if <strong>exactly one</strong> known label appears as a word; otherwise <code>None</code>. Write a parametrized test over at least eight realistic replies (including ambiguous and refusal ones) that passes here and catches four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9"># --- code under test (do not edit) ---
+import re
+
+
+def parse_label(reply, labels):
+    words = re.findall(r&quot;[a-z]+&quot;, reply.lower())
+    found = {w for w in words if w in labels}
+    return found.pop() if len(found) == 1 else None
+
+
+# --- tests ---
+import pytest
+
+LABELS = {&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;}
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0, good["output"][-800:]
+assert len([n for n in good["outcomes"] if "[" in n]) >= 8
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "case_sensitive": BASE.replace("reply.lower()", "reply"),
+    "first_match": BASE.replace("    found = {w for w in words if w in labels}\n    return found.pop() if len(found) == 1 else None", "    hits = [w for w in words if w in labels]\n    return hits[0] if hits else None"),
+    "substring_match": BASE.replace("    words = re.findall(r\"[a-z]+\", reply.lower())\n    found = {w for w in words if w in labels}", "    found = {l for l in labels if l in reply.lower()}"),
+    "exact_only": BASE.replace("    words = re.findall(r\"[a-z]+\", reply.lower())\n    found = {w for w in words if w in labels}", "    found = {reply.strip().lower()} & set(labels)"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0, good[&quot;output&quot;][-800:]
+assert len([n for n in good[&quot;outcomes&quot;] if &quot;[&quot; in n]) &gt;= 8
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;case_sensitive&quot;: BASE.replace(&quot;reply.lower()&quot;, &quot;reply&quot;),
+    &quot;first_match&quot;: BASE.replace(&quot;    found = {w for w in words if w in labels}\n    return found.pop() if len(found) == 1 else None&quot;, &quot;    hits = [w for w in words if w in labels]\n    return hits[0] if hits else None&quot;),
+    &quot;substring_match&quot;: BASE.replace(&quot;    words = re.findall(r\&quot;[a-z]+\&quot;, reply.lower())\n    found = {w for w in words if w in labels}&quot;, &quot;    found = {l for l in labels if l in reply.lower()}&quot;),
+    &quot;exact_only&quot;: BASE.replace(&quot;    words = re.findall(r\&quot;[a-z]+\&quot;, reply.lower())\n    found = {w for w in words if w in labels}&quot;, &quot;    found = {reply.strip().lower()} &amp; set(labels)&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use replies like <code>"Spam"</code>, <code>"Label: PHISH."</code>, a fenced reply, <code>"hammer time"</code> (contains <code>ham</code> inside a word), <code>"spam or ham?"</code> and <code>"I cannot help with that."</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A table <code>@pytest.mark.parametrize("reply,expected", [...])</code> with <code>None</code> as the expected value for ambiguous and unusable replies.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import re
+
+
+def parse_label(reply, labels):
+    words = re.findall(r&quot;[a-z]+&quot;, reply.lower())
+    found = {w for w in words if w in labels}
+    return found.pop() if len(found) == 1 else None
+
+
+# --- tests ---
+import pytest
+
+LABELS = {&quot;spam&quot;, &quot;ham&quot;, &quot;phish&quot;}
+FENCE = &quot;`&quot; * 3
+
+
+@pytest.mark.parametrize(&quot;reply,expected&quot;, [
+    (&quot;spam&quot;, &quot;spam&quot;),
+    (&quot;  Spam  &quot;, &quot;spam&quot;),
+    (&quot;Label: PHISH.&quot;, &quot;phish&quot;),
+    (&#x27;&quot;ham&quot;&#x27;, &quot;ham&quot;),
+    (f&quot;{FENCE}\nham\n{FENCE}&quot;, &quot;ham&quot;),
+    (&quot;This is spam, definitely spam.&quot;, &quot;spam&quot;),
+    (&quot;spam or ham? Hard to say.&quot;, None),
+    (&quot;hammer time&quot;, None),
+    (&quot;I cannot help with that.&quot;, None),
+    (&quot;&quot;, None),
+])
+def test_parse_label(reply, expected):
+    assert parse_label(reply, LABELS) == expected</code></pre></div><p>Parsers of model output should be tested with the replies models actually produce, collected from logs: different case, a <code>Label:</code> prefix, quotes, code fences, repeated labels, hedging between two labels and refusals. A parametrised table makes each reply a separate, readable test, and adding a newly seen failure mode is one line. The table pins the important decisions: repeated mentions of one label are fine, <strong>two different</strong> labels are ambiguous and must not be resolved by taking the first, and <code>ham</code> inside <code>hammer</code> is not the label <code>ham</code> (the substring mutant fails). Returning <code>None</code> lets the caller retry or route to a human instead of acting on a guess.</p></div></details>
+</article>
+<article class="prob" id="p-an-evaluation-gate-for-ci" data-pid="m13-4-an-evaluation-gate-for-ci" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. An evaluation gate for CI</h3></header>
+<div class="prob-q"><p>Write <code>evaluate(predict, cases)</code> returning <code>{"n": ..., "accuracy": ..., "by_tag": {tag: accuracy}, "failures": [case ids]}</code> (accuracies rounded to 3, tags sorted), where each case has <code>id</code>, <code>input</code>, <code>expected</code> and <code>tags</code>, and a prediction that raises counts as wrong. Then write <code>gate(report, baseline, min_accuracy=0.8, max_drop=0.02)</code> that raises <code>AssertionError</code> listing every problem: overall accuracy below the minimum, overall accuracy more than <code>max_drop</code> below the baseline's, and any tag more than <code>max_drop</code> below its baseline value. Return <code>True</code> when the gate passes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">def evaluate(predict, cases):
+    pass
+
+def gate(report, baseline, min_accuracy=0.8, max_drop=0.02):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">cases = [
+    {"id": "c1", "input": "WIN A PRIZE", "expected": "spam", "tags": ["spam"]},
+    {"id": "c2", "input": "lunch at 1?", "expected": "ham", "tags": ["ham"]},
+    {"id": "c3", "input": "verify your bank login", "expected": "phish", "tags": ["phish", "security"]},
+    {"id": "c4", "input": "free gift card", "expected": "spam", "tags": ["spam"]},
+    {"id": "c5", "input": "reset your password here", "expected": "phish", "tags": ["phish", "security"]},
+]
+def model(text):
+    if "password" in text:
+        raise TimeoutError("model timed out")
+    if "bank" in text:
+        return "phish"
+    return "spam" if any(w in text.lower() for w in ("win", "free")) else "ham"
+report = evaluate(model, cases)
+assert report == {"n": 5, "accuracy": 0.8, "by_tag": {"ham": 1.0, "phish": 0.5, "security": 0.5, "spam": 1.0}, "failures": ["c5"]}
+assert list(report["by_tag"]) == ["ham", "phish", "security", "spam"]
+assert gate(report, {"accuracy": 0.79, "by_tag": {"phish": 0.5}}) is True
+try:
+    gate(report, {"accuracy": 0.9, "by_tag": {"phish": 1.0, "spam": 1.0}}, min_accuracy=0.85)
+    assert False
+except AssertionError as e:
+    msg = str(e)
+    assert "accuracy 0.8 below minimum 0.85" in msg and "dropped from 0.9" in msg and "phish" in msg and "spam" not in msg
+assert evaluate(model, [])["accuracy"] == 0.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">cases = [
+    {&quot;id&quot;: &quot;c1&quot;, &quot;input&quot;: &quot;WIN A PRIZE&quot;, &quot;expected&quot;: &quot;spam&quot;, &quot;tags&quot;: [&quot;spam&quot;]},
+    {&quot;id&quot;: &quot;c2&quot;, &quot;input&quot;: &quot;lunch at 1?&quot;, &quot;expected&quot;: &quot;ham&quot;, &quot;tags&quot;: [&quot;ham&quot;]},
+    {&quot;id&quot;: &quot;c3&quot;, &quot;input&quot;: &quot;verify your bank login&quot;, &quot;expected&quot;: &quot;phish&quot;, &quot;tags&quot;: [&quot;phish&quot;, &quot;security&quot;]},
+    {&quot;id&quot;: &quot;c4&quot;, &quot;input&quot;: &quot;free gift card&quot;, &quot;expected&quot;: &quot;spam&quot;, &quot;tags&quot;: [&quot;spam&quot;]},
+    {&quot;id&quot;: &quot;c5&quot;, &quot;input&quot;: &quot;reset your password here&quot;, &quot;expected&quot;: &quot;phish&quot;, &quot;tags&quot;: [&quot;phish&quot;, &quot;security&quot;]},
+]
+def model(text):
+    if &quot;password&quot; in text:
+        raise TimeoutError(&quot;model timed out&quot;)
+    if &quot;bank&quot; in text:
+        return &quot;phish&quot;
+    return &quot;spam&quot; if any(w in text.lower() for w in (&quot;win&quot;, &quot;free&quot;)) else &quot;ham&quot;
+report = evaluate(model, cases)
+assert report == {&quot;n&quot;: 5, &quot;accuracy&quot;: 0.8, &quot;by_tag&quot;: {&quot;ham&quot;: 1.0, &quot;phish&quot;: 0.5, &quot;security&quot;: 0.5, &quot;spam&quot;: 1.0}, &quot;failures&quot;: [&quot;c5&quot;]}
+assert list(report[&quot;by_tag&quot;]) == [&quot;ham&quot;, &quot;phish&quot;, &quot;security&quot;, &quot;spam&quot;]
+assert gate(report, {&quot;accuracy&quot;: 0.79, &quot;by_tag&quot;: {&quot;phish&quot;: 0.5}}) is True
+try:
+    gate(report, {&quot;accuracy&quot;: 0.9, &quot;by_tag&quot;: {&quot;phish&quot;: 1.0, &quot;spam&quot;: 1.0}}, min_accuracy=0.85)
+    assert False
+except AssertionError as e:
+    msg = str(e)
+    assert &quot;accuracy 0.8 below minimum 0.85&quot; in msg and &quot;dropped from 0.9&quot; in msg and &quot;phish&quot; in msg and &quot;spam&quot; not in msg
+assert evaluate(model, [])[&quot;accuracy&quot;] == 0.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect per-tag lists of <code>True</code>/<code>False</code>, then compute the accuracy of each; an empty case list gives accuracy 0.0.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a list of problem strings in <code>gate</code> and raise once with <code>"; ".join(problems)</code>; compare tags only when they exist in the baseline.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def evaluate(predict, cases):
+    results, by_tag, failures = [], {}, []
+    for case in cases:
+        try:
+            ok = predict(case[&quot;input&quot;]) == case[&quot;expected&quot;]
+        except Exception:
+            ok = False
+        results.append(ok)
+        if not ok:
+            failures.append(case[&quot;id&quot;])
+        for tag in case.get(&quot;tags&quot;, []):
+            by_tag.setdefault(tag, []).append(ok)
+    accuracy = round(sum(results) / len(results), 3) if results else 0.0
+    return {&quot;n&quot;: len(results), &quot;accuracy&quot;: accuracy,
+            &quot;by_tag&quot;: {tag: round(sum(v) / len(v), 3) for tag, v in sorted(by_tag.items())},
+            &quot;failures&quot;: failures}
+
+
+def gate(report, baseline, min_accuracy=0.8, max_drop=0.02):
+    problems = []
+    acc = report[&quot;accuracy&quot;]
+    if acc &lt; min_accuracy:
+        problems.append(f&quot;accuracy {acc} below minimum {min_accuracy}&quot;)
+    if acc &lt; baseline.get(&quot;accuracy&quot;, 0.0) - max_drop:
+        problems.append(f&quot;accuracy dropped from {baseline[&#x27;accuracy&#x27;]} to {acc}&quot;)
+    for tag, old in baseline.get(&quot;by_tag&quot;, {}).items():
+        new = report[&quot;by_tag&quot;].get(tag)
+        if new is not None and new &lt; old - max_drop:
+            problems.append(f&quot;tag {tag!r} dropped from {old} to {new}&quot;)
+    if problems:
+        raise AssertionError(&quot;; &quot;.join(problems))
+    return True</code></pre></div><p>An evaluation gate turns "the model seems fine" into a check CI can enforce when someone edits a prompt or switches models. Two thresholds work together: an absolute minimum protects users, and a maximum <strong>drop from the baseline</strong> catches regressions even when the absolute number is still acceptable. Per-tag accuracy matters because an average can hide a collapse in one important slice: here the overall accuracy is fine but phishing, the costliest class, fell from 1.0 to 0.5. Exceptions count as wrong answers, since a timeout in production is a failure too, and all problems are reported at once. In practice the tolerance should reflect the evaluation set's noise (with 50 cases, one case is 2 points), and the baseline is stored with the prompt and model version.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-smoke-tests-for-a-training-loop" data-pid="m13-4-smoke-tests-for-a-training-loop" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Smoke tests for a training loop</h3></header>
+<div class="prob-q"><p><code>train_logreg(X, y, lr=0.5, epochs=200, seed=0)</code> trains logistic regression with gradient descent and returns <code>(w, b, losses)</code>; <code>predict_proba(X, w, b)</code> returns probabilities. Write at least five smoke tests on tiny data that run in milliseconds: the loss decreases, a separable dataset is classified perfectly, probabilities are in <code>[0, 1]</code> with the right shape, the same seed gives identical weights, and a bias is learned when the data needs one. They must pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+
+def predict_proba(X, w, b):
+    return sigmoid(np.asarray(X, dtype=float) @ w + b)
+
+
+def train_logreg(X, y, lr=0.5, epochs=200, seed=0):
+    X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=float)
+    rng = np.random.default_rng(seed)
+    w, b = rng.normal(0, 0.01, X.shape[1]), 0.0
+    losses = []
+    for _ in range(epochs):
+        p = predict_proba(X, w, b)
+        losses.append(float(-np.mean(y * np.log(p + 1e-12) + (1 - y) * np.log(1 - p + 1e-12))))
+        grad = p - y
+        w -= lr * X.T @ grad / len(y)
+        b -= lr * grad.mean()
+    return w, b, losses
+
+
+# --- tests ---
+import numpy as np
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "gradient_ascent": BASE.replace("w -= lr * X.T @ grad / len(y)", "w += lr * X.T @ grad / len(y)").replace("b -= lr * grad.mean()", "b += lr * grad.mean()"),
+    "no_bias_update": BASE.replace("        b -= lr * grad.mean()\n", ""),
+    "seed_ignored": BASE.replace("rng = np.random.default_rng(seed)", "rng = np.random.default_rng()"),
+    "logits_not_probs": BASE.replace("    return sigmoid(np.asarray(X, dtype=float) @ w + b)", "    return np.asarray(X, dtype=float) @ w + b").replace("p = predict_proba(X, w, b)", "p = sigmoid(predict_proba(X, w, b))"),
+    "wrong_axis": BASE.replace("w -= lr * X.T @ grad / len(y)", "w -= lr * (X.T @ grad / len(y)).mean()"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;gradient_ascent&quot;: BASE.replace(&quot;w -= lr * X.T @ grad / len(y)&quot;, &quot;w += lr * X.T @ grad / len(y)&quot;).replace(&quot;b -= lr * grad.mean()&quot;, &quot;b += lr * grad.mean()&quot;),
+    &quot;no_bias_update&quot;: BASE.replace(&quot;        b -= lr * grad.mean()\n&quot;, &quot;&quot;),
+    &quot;seed_ignored&quot;: BASE.replace(&quot;rng = np.random.default_rng(seed)&quot;, &quot;rng = np.random.default_rng()&quot;),
+    &quot;logits_not_probs&quot;: BASE.replace(&quot;    return sigmoid(np.asarray(X, dtype=float) @ w + b)&quot;, &quot;    return np.asarray(X, dtype=float) @ w + b&quot;).replace(&quot;p = predict_proba(X, w, b)&quot;, &quot;p = sigmoid(predict_proba(X, w, b))&quot;),
+    &quot;wrong_axis&quot;: BASE.replace(&quot;w -= lr * X.T @ grad / len(y)&quot;, &quot;w -= lr * (X.T @ grad / len(y)).mean()&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Data: <code>X = [[0, 0], [0, 1], [1, 0], [1, 1]]</code> with <code>y = [0, 0, 0, 1]</code> (logical AND) is separable but needs a negative bias.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a second dataset where the two features matter differently (for example <code>y</code> depends only on the first feature) to catch a version that applies one average gradient to every weight.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Probabilities: <code>predict_proba</code> on any points must lie in <code>[0, 1]</code>; seeds: train twice with <code>seed=3</code> and compare with <code>assert_array_equal</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+
+def predict_proba(X, w, b):
+    return sigmoid(np.asarray(X, dtype=float) @ w + b)
+
+
+def train_logreg(X, y, lr=0.5, epochs=200, seed=0):
+    X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=float)
+    rng = np.random.default_rng(seed)
+    w, b = rng.normal(0, 0.01, X.shape[1]), 0.0
+    losses = []
+    for _ in range(epochs):
+        p = predict_proba(X, w, b)
+        losses.append(float(-np.mean(y * np.log(p + 1e-12) + (1 - y) * np.log(1 - p + 1e-12))))
+        grad = p - y
+        w -= lr * X.T @ grad / len(y)
+        b -= lr * grad.mean()
+    return w, b, losses
+
+
+# --- tests ---
+import numpy as np
+import pytest
+
+X_AND = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+Y_AND = np.array([0, 0, 0, 1])
+
+
+@pytest.fixture
+def trained():
+    return train_logreg(X_AND, Y_AND, lr=1.0, epochs=2000, seed=0)
+
+
+def test_loss_decreases(trained):
+    _, _, losses = trained
+    assert losses[-1] &lt; losses[0] / 5
+    assert all(b &lt;= a + 1e-12 for a, b in zip(losses, losses[1:]))
+
+
+def test_separable_data_classified_perfectly(trained):
+    w, b, _ = trained
+    preds = (predict_proba(X_AND, w, b) &gt; 0.5).astype(int)
+    np.testing.assert_array_equal(preds, Y_AND)
+
+
+def test_bias_is_learned_when_needed(trained):
+    _, b, _ = trained
+    assert b &lt; -1.0
+
+
+def test_probabilities_in_unit_interval(trained):
+    w, b, _ = trained
+    p = predict_proba(np.array([[5, 5], [-5, -5], [0.5, 0.5]]), w, b)
+    assert p.shape == (3,) and np.all((p &gt;= 0) &amp; (p &lt;= 1))
+
+
+def test_same_seed_same_weights():
+    w1, b1, _ = train_logreg(X_AND, Y_AND, epochs=20, seed=3)
+    w2, b2, _ = train_logreg(X_AND, Y_AND, epochs=20, seed=3)
+    np.testing.assert_array_equal(w1, w2)
+    assert b1 == b2
+
+
+def test_weights_learn_which_feature_matters():
+    X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+    y = np.array([0, 0, 1, 1])
+    w, b, _ = train_logreg(X, y, lr=1.0, epochs=1000)
+    assert w[0] &gt; 2 and abs(w[1]) &lt; 0.5</code></pre></div><p>Smoke tests cannot prove a model is good, but they catch the bugs that make training meaningless, in milliseconds instead of a GPU-hour. A decreasing loss catches a flipped gradient sign; perfect accuracy on a tiny separable problem (AND) catches broken updates; AND needs a negative bias, so a model without bias updates cannot fit it; a probability check on extreme inputs catches outputs that are logits; two runs with one seed catch ignored seeds; and a dataset where only the first feature matters catches a gradient averaged across features. Each test encodes a fact about logistic regression, not a magic number, which keeps them valid when hyperparameters change. The same ideas, overfitting a single batch first, are standard practice before long deep-learning runs.</p></div></details>
+</article>
+<article class="prob" id="p-metamorphic-tests-for-a-classifier" data-pid="m13-4-metamorphic-tests-for-a-classifier" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Metamorphic tests for a classifier</h3></header>
+<div class="prob-q"><p>Write <code>check_invariance(classify, texts, transforms)</code> for metamorphic testing. <code>transforms</code> maps a name to a function that rewrites a text in a way that should <strong>not</strong> change its label (upper-casing, extra whitespace, a polite prefix). For each text, compute the original label and each transformed label; return a list of violations <code>(text, transform_name, original_label, new_label)</code> in input order, then transform order. A transform or classifier that raises counts as a violation with the label <code>"error: ExceptionName"</code>. Also write <code>invariance_rate(violations, texts, transforms)</code> returning the share of (text, transform) pairs without a violation, rounded to 3.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def check_invariance(classify, texts, transforms):
+    pass
+
+def invariance_rate(violations, texts, transforms):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def classify(text):
+    t = text.lower()
+    if "prize" in t or "free" in t:
+        return "spam"
+    if t.startswith("hi") and "please" in t:
+        return "spam"
+    return "ham"
+
+def shout(t):
+    return t.upper()
+
+def spaces(t):
+    return "  " + "   ".join(t.split()) + "  "
+
+def polite(t):
+    return "Hi team, please read: " + t
+
+def broken(t):
+    raise UnicodeError("bad transform")
+
+texts = ["Win a free prize now", "Lunch at noon?", "Quarterly report attached"]
+transforms = {"upper": shout, "spaces": spaces, "polite": polite}
+v = check_invariance(classify, texts, transforms)
+assert v == [("Lunch at noon?", "polite", "ham", "spam"), ("Quarterly report attached", "polite", "ham", "spam")]
+assert invariance_rate(v, texts, transforms) == round(7 / 9, 3)
+v2 = check_invariance(classify, texts[:1], {"broken": broken})
+assert v2 == [("Win a free prize now", "broken", "spam", "error: UnicodeError")]
+assert check_invariance(classify, [], transforms) == [] and invariance_rate([], [], transforms) == 1.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def classify(text):
+    t = text.lower()
+    if &quot;prize&quot; in t or &quot;free&quot; in t:
+        return &quot;spam&quot;
+    if t.startswith(&quot;hi&quot;) and &quot;please&quot; in t:
+        return &quot;spam&quot;
+    return &quot;ham&quot;
+
+def shout(t):
+    return t.upper()
+
+def spaces(t):
+    return &quot;  &quot; + &quot;   &quot;.join(t.split()) + &quot;  &quot;
+
+def polite(t):
+    return &quot;Hi team, please read: &quot; + t
+
+def broken(t):
+    raise UnicodeError(&quot;bad transform&quot;)
+
+texts = [&quot;Win a free prize now&quot;, &quot;Lunch at noon?&quot;, &quot;Quarterly report attached&quot;]
+transforms = {&quot;upper&quot;: shout, &quot;spaces&quot;: spaces, &quot;polite&quot;: polite}
+v = check_invariance(classify, texts, transforms)
+assert v == [(&quot;Lunch at noon?&quot;, &quot;polite&quot;, &quot;ham&quot;, &quot;spam&quot;), (&quot;Quarterly report attached&quot;, &quot;polite&quot;, &quot;ham&quot;, &quot;spam&quot;)]
+assert invariance_rate(v, texts, transforms) == round(7 / 9, 3)
+v2 = check_invariance(classify, texts[:1], {&quot;broken&quot;: broken})
+assert v2 == [(&quot;Win a free prize now&quot;, &quot;broken&quot;, &quot;spam&quot;, &quot;error: UnicodeError&quot;)]
+assert check_invariance(classify, [], transforms) == [] and invariance_rate([], [], transforms) == 1.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap the transformed classification in a helper that returns either the label or <code>f"error: {type(e).__name__}"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The number of pairs is <code>len(texts) * len(transforms)</code>; with no pairs, the rate is 1.0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def _label(classify, text, transform=None):
+    try:
+        return classify(transform(text) if transform else text)
+    except Exception as e:
+        return f&quot;error: {type(e).__name__}&quot;
+
+
+def check_invariance(classify, texts, transforms):
+    violations = []
+    for text in texts:
+        original = _label(classify, text)
+        for name, transform in transforms.items():
+            new = _label(classify, text, transform)
+            if new != original:
+                violations.append((text, name, original, new))
+    return violations
+
+
+def invariance_rate(violations, texts, transforms):
+    pairs = len(texts) * len(transforms)
+    if pairs == 0:
+        return 1.0
+    return round(1 - len(violations) / pairs, 3)</code></pre></div><p>For a model there is often no "expected output" to compare with, but there are <strong>relations</strong> between outputs that must hold: shouting or extra spaces should not turn ham into spam, and a polite greeting certainly should not. Metamorphic testing checks those relations on many inputs without labelling anything, and here it found a real weakness: the toy classifier treats "Hi ... please" as spam, so a harmless prefix flips two answers. Reporting violations with the text and transform makes them actionable, and the invariance rate is a metric you can track over model versions, alongside accuracy, in the evaluation gate. Checklists of such behavioural tests (invariance, directional changes, minimum functionality) are a standard way to probe NLP and LLM systems.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-weak-tests-for-a-feature-e" data-pid="m13-4-read-the-code-weak-tests-for-a-feature-e" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Read the code: weak tests for a feature extractor</h3></header>
+<div class="prob-q"><p><code>featurize(texts)</code> turns texts into a float matrix with columns <code>[length, digit_count, upper_ratio]</code>. Its tests generate random strings without a seed, check only the shape, and compare a ratio with <code>==</code>. All four graded buggy versions pass them. Rewrite the tests with fixed, hand-checked examples, <code>assert_allclose</code>, explicit dtype and shape checks, and the empty-text edge case.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def featurize(texts):
+    rows = []
+    for t in texts:
+        letters = [c for c in t if c.isalpha()]
+        upper = sum(c.isupper() for c in letters) / len(letters) if letters else 0.0
+        rows.append([len(t), sum(c.isdigit() for c in t), upper])
+    return np.array(rows, dtype=np.float64).reshape(len(texts), 3)
+
+
+# --- tests ---
+import random, string
+import numpy as np
+
+
+def test_shape():
+    texts = [&quot;&quot;.join(random.choices(string.ascii_letters, k=10)) for _ in range(5)]
+    assert featurize(texts).shape == (5, 3)
+
+
+def test_ratio():
+    assert featurize([&quot;AB&quot;])[0][2] == 1.0
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+tests_part = __source__.split("# --- tests")[1]
+assert "random.choices" not in tests_part and "assert_allclose" in tests_part
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "ratio_over_all_chars": BASE.replace("/ len(letters) if letters else 0.0", "/ len(t) if t else 0.0"),
+    "digits_as_letters": BASE.replace("letters = [c for c in t if c.isalpha()]", "letters = [c for c in t if c.isalnum()]"),
+    "int_dtype": BASE.replace("dtype=np.float64", "dtype=np.int64"),
+    "empty_crash": BASE.replace("/ len(letters) if letters else 0.0", "/ len(letters)"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy, pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert &quot;random.choices&quot; not in tests_part and &quot;assert_allclose&quot; in tests_part
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;ratio_over_all_chars&quot;: BASE.replace(&quot;/ len(letters) if letters else 0.0&quot;, &quot;/ len(t) if t else 0.0&quot;),
+    &quot;digits_as_letters&quot;: BASE.replace(&quot;letters = [c for c in t if c.isalpha()]&quot;, &quot;letters = [c for c in t if c.isalnum()]&quot;),
+    &quot;int_dtype&quot;: BASE.replace(&quot;dtype=np.float64&quot;, &quot;dtype=np.int64&quot;),
+    &quot;empty_crash&quot;: BASE.replace(&quot;/ len(letters) if letters else 0.0&quot;, &quot;/ len(letters)&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Hand-check a mixed example: <code>"Win 100 GBP"</code> has length 11, 3 digits, and 4 of its 6 letters upper case.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Also test <code>""</code> (all zeros, no error), a text with no letters (<code>"2025"</code>), and <code>out.dtype == np.float64</code> with <code>out.shape == (n, 3)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import numpy as np
+
+
+def featurize(texts):
+    rows = []
+    for t in texts:
+        letters = [c for c in t if c.isalpha()]
+        upper = sum(c.isupper() for c in letters) / len(letters) if letters else 0.0
+        rows.append([len(t), sum(c.isdigit() for c in t), upper])
+    return np.array(rows, dtype=np.float64).reshape(len(texts), 3)
+
+
+# --- tests ---
+import numpy as np
+
+
+def test_mixed_text_by_hand():
+    out = featurize([&quot;Win 100 GBP&quot;])
+    np.testing.assert_allclose(out, [[11.0, 3.0, 4 / 6]])
+
+
+def test_dtype_and_shape():
+    out = featurize([&quot;a&quot;, &quot;BB&quot;, &quot;c3&quot;])
+    assert out.dtype == np.float64 and out.shape == (3, 3)
+
+
+def test_ratio_ignores_digits_and_spaces():
+    np.testing.assert_allclose(featurize([&quot;AB 12 cd&quot;])[0], [8.0, 2.0, 0.5])
+
+
+def test_empty_and_letterless_texts():
+    np.testing.assert_allclose(featurize([&quot;&quot;, &quot;2025&quot;]), [[0.0, 0.0, 0.0], [4.0, 4.0, 0.0]])
+
+
+def test_no_texts():
+    assert featurize([]).shape == (0, 3)</code></pre></div><p>Random inputs without a seed make failures unreproducible, and "the shape is right" is true of almost any broken implementation. Feature code needs a few <strong>hand-checked</strong> examples chosen to exercise each rule: a text mixing upper and lower case letters, digits and spaces shows whether the ratio is over letters only and whether digits are counted separately; an empty and a digits-only text cover the division by zero; and an explicit dtype check catches integer truncation, which would silently turn every ratio into 0. <code>assert_allclose</code> compares whole rows with a tolerance, so <code>4 / 6</code> needs no hand-rounded literal. If random inputs are useful, seed them and check properties (for example, <code>0 &lt;= upper_ratio &lt;= 1</code>).</p></div></details>
+</article>
+<article class="prob" id="p-numpy-generators-and-reproducibility" data-pid="m13-4-numpy-generators-and-reproducibility" data-type="predict" data-level="hard" data-answer="True
+True False
+False
+True
+True True">
+<header class="prob-head"><h3>14. NumPy generators and reproducibility</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+
+np.random.seed(0)
+legacy = np.random.rand(2)
+np.random.seed(0)
+print(np.array_equal(legacy, np.random.rand(2)))
+g = np.random.default_rng(0)
+print(np.array_equal(g.random(2), np.random.default_rng(0).random(2)), np.array_equal(legacy, np.random.default_rng(0).random(2)))
+parent = np.random.SeedSequence(42)
+a, b = [np.random.default_rng(s) for s in parent.spawn(2)]
+print(np.array_equal(a.random(3), b.random(3)))
+a2, b2 = [np.random.default_rng(s) for s in np.random.SeedSequence(42).spawn(2)]
+print(np.array_equal(np.random.default_rng(np.random.SeedSequence(42).spawn(2)[0]).random(3), a2.random(3)))
+perm1 = np.random.default_rng(5).permutation(6)
+perm2 = np.random.default_rng(5).permutation(6)
+print(np.array_equal(perm1, perm2), sorted(perm1.tolist()) == list(range(6)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The legacy global <code>np.random.seed</code> and the new <code>default_rng</code> use different algorithms. <code>SeedSequence.spawn</code> creates independent child seeds, deterministically.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True
+True False
+False
+True
+True True</pre></div><p>Re-seeding the legacy global generator reproduces its numbers, and two <code>default_rng(0)</code> generators agree with each other, but the legacy and new APIs use different algorithms, so the same seed gives different numbers across them (a surprise when migrating code). <code>SeedSequence.spawn</code> derives independent streams for parallel workers, so the two children produce different numbers, yet spawning again from the same parent seed reproduces the same children, which is how you make parallel experiments both independent and repeatable. A seeded permutation is reproducible and is always a permutation of the input.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-how-do-you-test-a-machine-learning-pipel" data-pid="m13-4-how-do-you-test-a-machine-learning-pipel" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How do you test a machine learning pipeline?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>In layers. <strong>Unit tests</strong> for deterministic code: data loading and cleaning, feature functions, preprocessing (fit on train, transform with stored statistics), metrics, and serialisation, with hand-computed examples and tolerances. <strong>Data validation</strong> on every batch: schema, types, ranges, missing values, label sets, duplicates and leakage between splits, failing the pipeline before training on bad data. <strong>Smoke tests</strong> of training: a tiny model overfits a tiny batch, the loss decreases, outputs have the right shapes and ranges, and seeds make runs reproducible. <strong>Integration tests</strong> run the pipeline end to end on a small fixture dataset and check artefacts (model file, metrics report) are produced. <strong>Model evaluation</strong> on a held-out, versioned dataset with metrics and slices, compared with the current production model before promotion, plus behavioural checks (invariance, fairness slices). In production, <strong>monitoring</strong> of input drift and prediction distributions closes the loop. Keep randomness injected and seeded so failures are reproducible.</p></div></details>
+</article>
+<article class="prob" id="p-a-teammate-changed-a-prompt-how-do-you-d" data-pid="m13-4-a-teammate-changed-a-prompt-how-do-you-d" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. A teammate changed a prompt. How do you decide whether it is safe to ship?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Run it through the same gates as code. Unit tests first: prompt building and output parsing must still pass, and structural tests should not depend on exact wording. Then the <strong>evaluation set</strong>: a versioned collection of representative inputs, including past failures and edge cases, scored with appropriate metrics (exact or semantic match, required facts present, valid structured output, a rubric graded by a judge model whose agreement with humans has been checked). Compare with the <strong>baseline</strong> of the current prompt on the same model version, overall and per slice, with enough cases and repeated runs to tell a real change from noise; block on regressions beyond a tolerance. Check cost and latency (longer prompts cost more) and safety cases (prompt injection, refusals). If it passes, roll out gradually or behind a flag, and watch production metrics (user feedback, escalations, parse failures) with the ability to roll back, since evaluation sets never cover everything.</p></div></details>
+</article>
+<article class="prob" id="p-model-outputs-are-non-deterministic-how-" data-pid="m13-4-model-outputs-are-non-deterministic-how-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. Model outputs are non-deterministic. How do you keep your tests from being flaky?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>First, keep the model out of unit tests: inject a fake or mock client so everything around the model (prompt building, parsing, retries, tool dispatch) is tested deterministically. Where randomness is yours, control it: pass seeded generators, set framework seeds, and use deterministic algorithms when available. Compare numbers with tolerances that reflect the dtype and computation (<code>assert_allclose</code> with sensible <code>rtol</code>/<code>atol</code>), and test properties and relations rather than exact values: shapes, ranges, probabilities summing to 1, monotonic loss on a tiny problem, invariance under harmless input changes. For real model calls, which belong in evaluation or a few marked integration tests, use temperature 0 where possible, assert on robust properties (valid JSON matching a schema, contains the required fact), aggregate over several cases or samples with thresholds instead of single pass/fail outputs, and record and replay responses for regression tests. Track flaky tests explicitly and fix their cause rather than adding retries.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Unit-test the deterministic code around models (features, preprocessing, metrics, prompts, parsers); evaluate model quality separately with datasets and thresholds.</li><li>Compare floats with <code>np.testing.assert_allclose</code> and deliberate <code>rtol</code>/<code>atol</code>; check dtypes and shapes explicitly.</li><li>Inject seeded generators (<code>default_rng(seed)</code>, <code>random.Random(seed)</code>); test determinism with two fresh generators, and properties for everything else.</li><li>Validate data with functions that collect every problem; smoke-test training on tiny data (loss decreases, perfect fit, bias learned, seeds respected).</li><li>Test LLM parsers with real replies, prompts by structure, behaviour with metamorphic checks, and gate changes on evaluation against a baseline.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -20,6 +20,7 @@ onmessage = async e => {
   try {
     // numpy, pandas and friends are fetched the first time a snippet imports them
     await py.loadPackagesFromImports(code + '\n' + (tests || ''), { messageCallback: () => {} });
+    if ((code + (tests || '')).includes('lessontools')) await py.loadPackage('pytest', { messageCallback: () => {} });
     py.setStdout({ batched: s => postMessage({ id, type: 'out', text: s }) });
     py.setStderr({ batched: s => postMessage({ id, type: 'err', text: s }) });
     const res = py.globals.get('_run')(code, tests || '');

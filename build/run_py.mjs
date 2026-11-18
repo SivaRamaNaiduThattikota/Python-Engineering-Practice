@@ -15,7 +15,9 @@ for (const j of jobs) {
   const lines = [];
   py.setStdout({ batched: s => lines.push(s) });
   py.setStderr({ batched: s => lines.push(s) });
-  await py.loadPackagesFromImports((j.code || j.setup || '') + '\n' + (j.tests || ''), { messageCallback: () => {} });
+  const src = (j.code || j.setup || '') + '\n' + (j.tests || '');
+  await py.loadPackagesFromImports(src, { messageCallback: () => {} });
+  if (src.includes('lessontools')) await py.loadPackage('pytest', { messageCallback: () => {} });
   if (j.kind === 'time') {
     const r = py.globals.get('_time')(j.setup, py.toPy(j.stmts), j.number || 0);
     results[j.id] = { times: r.toJs() };

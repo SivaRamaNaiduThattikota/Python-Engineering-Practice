@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>13.P · Module 13 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m13-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 13 · Testing with pytest</span></div>
+  <h1>13.P Module 13 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 13: pytest basics, fixtures, mocking, and testing ML and LLM code. Then a mini project that needs all of it: a complete test suite for a RAG answer service with a cache, a retriever, a model client and a clock, graded against ten realistic bugs.</p>
+  <div class="chips"><span class="chip">12 problems</span><span class="chip">3 easy · 6 medium · 3 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>Before writing a test, ask what would make it <strong>fail</strong>. Pick inputs that separate correct behaviour from plausible mistakes (13.1); give each test its own world through fixtures, <code>tmp_path</code> and <code>monkeypatch</code> (13.2); replace slow or random dependencies with fakes and mocks that match the real interface, and patch where names are looked up (13.3); and for numbers, randomness and models, test tolerances, seeds, properties and behaviour, leaving quality to evaluation (13.4).</p>
+<p>The problems mix the lessons on purpose, and the mini project combines all four: it is the test suite you would be expected to write for a small production service.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-fixtures-parametrize-and-mocks-together" data-pid="m13-p-fixtures-parametrize-and-mocks-together" data-type="predict" data-level="easy" data-answer="{&#x27;test_label[win a prize-spam]&#x27;: &#x27;passed&#x27;, &#x27;test_label[lunch?-ham]&#x27;: &#x27;passed&#x27;, &#x27;test_fresh_mock&#x27;: &#x27;passed&#x27;, &#x27;test_wrong_assert&#x27;: &#x27;failed&#x27;}">
+<header class="prob-head"><h3>1. Fixtures, parametrize and mocks together</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+from unittest.mock import Mock
+
+@pytest.fixture
+def llm():
+    m = Mock()
+    m.complete.side_effect = lambda p: &quot;SPAM&quot; if &quot;prize&quot; in p else &quot;ham&quot;
+    return m
+
+@pytest.mark.parametrize(&quot;text,label&quot;, [(&quot;win a prize&quot;, &quot;spam&quot;), (&quot;lunch?&quot;, &quot;ham&quot;)])
+def test_label(llm, text, label):
+    assert llm.complete(text).lower() == label
+    assert llm.complete.call_count == 1
+
+def test_fresh_mock(llm):
+    assert llm.complete.call_count == 0
+    llm.complete(&quot;x&quot;)
+    llm.complete.assert_called_once_with(&quot;x&quot;)
+
+def test_wrong_assert(llm):
+    llm.complete(&quot;a&quot;)
+    llm.complete(&quot;b&quot;)
+    llm.complete.assert_called_once_with(&quot;b&quot;)
+&#x27;&#x27;&#x27;
+print(run_pytest(SRC)[&quot;outcomes&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A function-scoped fixture builds a new mock for every test, including every parametrised case.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;test_label[win a prize-spam]&#x27;: &#x27;passed&#x27;, &#x27;test_label[lunch?-ham]&#x27;: &#x27;passed&#x27;, &#x27;test_fresh_mock&#x27;: &#x27;passed&#x27;, &#x27;test_wrong_assert&#x27;: &#x27;failed&#x27;}</pre></div><p>Each parametrised case gets its own fixture instance, so the call count is 1 in both. <code>test_fresh_mock</code> sees a mock with no history for the same reason. In <code>test_wrong_assert</code>, the mock was called twice, so <code>assert_called_once_with</code> fails even though the last call matches: it checks both the count and the arguments.</p></div></details>
+</article>
+<article class="prob" id="p-test-an-e-mail-normaliser" data-pid="m13-p-test-an-e-mail-normaliser" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Test an e-mail normaliser</h3></header>
+<div class="prob-q"><p><code>normalize_email(raw)</code> strips whitespace, lower-cases the whole address, removes a <code>+tag</code> from the local part, removes dots from the local part only for <code>gmail.com</code> addresses, and raises <code>ValueError</code> for anything without exactly one <code>@</code> or with an empty local part or domain. Write at least five tests that pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2"># --- code under test (do not edit) ---
+def normalize_email(raw):
+    email = raw.strip().lower()
+    if email.count(&quot;@&quot;) != 1:
+        raise ValueError(f&quot;invalid e-mail {raw!r}&quot;)
+    local, domain = email.split(&quot;@&quot;)
+    if not local or not domain:
+        raise ValueError(f&quot;invalid e-mail {raw!r}&quot;)
+    local = local.split(&quot;+&quot;, 1)[0]
+    if domain == &quot;gmail.com&quot;:
+        local = local.replace(&quot;.&quot;, &quot;&quot;)
+    return f&quot;{local}@{domain}&quot;
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "no_strip": BASE.replace("raw.strip().lower()", "raw.lower()"),
+    "dots_everywhere": BASE.replace('    if domain == "gmail.com":\n        local = local.replace(".", "")', '    local = local.replace(".", "")'),
+    "tag_kept": BASE.replace('    local = local.split("+", 1)[0]\n', ""),
+    "two_ats_ok": BASE.replace('if email.count("@") != 1:', 'if "@" not in email:').replace('local, domain = email.split("@")', 'local, domain = email.split("@", 1)'),
+    "domain_case_kept": BASE.replace("email = raw.strip().lower()", "email = raw.strip()").replace('local = local.split("+", 1)[0]', 'local = local.lower().split("+", 1)[0]'),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;no_strip&quot;: BASE.replace(&quot;raw.strip().lower()&quot;, &quot;raw.lower()&quot;),
+    &quot;dots_everywhere&quot;: BASE.replace(&#x27;    if domain == &quot;gmail.com&quot;:\n        local = local.replace(&quot;.&quot;, &quot;&quot;)&#x27;, &#x27;    local = local.replace(&quot;.&quot;, &quot;&quot;)&#x27;),
+    &quot;tag_kept&quot;: BASE.replace(&#x27;    local = local.split(&quot;+&quot;, 1)[0]\n&#x27;, &quot;&quot;),
+    &quot;two_ats_ok&quot;: BASE.replace(&#x27;if email.count(&quot;@&quot;) != 1:&#x27;, &#x27;if &quot;@&quot; not in email:&#x27;).replace(&#x27;local, domain = email.split(&quot;@&quot;)&#x27;, &#x27;local, domain = email.split(&quot;@&quot;, 1)&#x27;),
+    &quot;domain_case_kept&quot;: BASE.replace(&quot;email = raw.strip().lower()&quot;, &quot;email = raw.strip()&quot;).replace(&#x27;local = local.split(&quot;+&quot;, 1)[0]&#x27;, &#x27;local = local.lower().split(&quot;+&quot;, 1)[0]&#x27;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A parametrised table of <code>(raw, expected)</code> pairs, plus a parametrised table of invalid inputs for <code>pytest.raises</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Include a non-Gmail address with dots in the local part, an upper-case domain, surrounding spaces and two <code>@</code> signs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def normalize_email(raw):
+    email = raw.strip().lower()
+    if email.count(&quot;@&quot;) != 1:
+        raise ValueError(f&quot;invalid e-mail {raw!r}&quot;)
+    local, domain = email.split(&quot;@&quot;)
+    if not local or not domain:
+        raise ValueError(f&quot;invalid e-mail {raw!r}&quot;)
+    local = local.split(&quot;+&quot;, 1)[0]
+    if domain == &quot;gmail.com&quot;:
+        local = local.replace(&quot;.&quot;, &quot;&quot;)
+    return f&quot;{local}@{domain}&quot;
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.mark.parametrize(&quot;raw,expected&quot;, [
+    (&quot;  Ana.Lee@Shop.IO &quot;, &quot;ana.lee@shop.io&quot;),
+    (&quot;ana.lee+news@gmail.com&quot;, &quot;analee@gmail.com&quot;),
+    (&quot;bo+promo@shop.io&quot;, &quot;bo@shop.io&quot;),
+    (&quot;CY@EXAMPLE.COM&quot;, &quot;cy@example.com&quot;),
+])
+def test_normalises(raw, expected):
+    assert normalize_email(raw) == expected
+
+
+@pytest.mark.parametrize(&quot;raw&quot;, [&quot;no-at-sign&quot;, &quot;a@b@c.io&quot;, &quot;@shop.io&quot;, &quot;ana@&quot;, &quot;&quot;])
+def test_rejects_invalid(raw):
+    with pytest.raises(ValueError, match=&quot;invalid e-mail&quot;):
+        normalize_email(raw)</code></pre></div><p>Two tables cover the whole specification: valid inputs paired with their exact normal form, and invalid inputs that must raise. Each row is chosen to separate the correct rule from a plausible wrong one: the non-Gmail address with dots shows that dots are removed only for Gmail, the upper-case domain shows the whole address is lower-cased, the spaces show stripping, and two <code>@</code> signs show the exact-count check. E-mail normalisation decides whether two accounts are the same customer, so its bugs merge or split identities in every downstream dataset.</p></div></details>
+</article>
+<article class="prob" id="p-a-timing-test-that-sleeps" data-pid="m13-p-a-timing-test-that-sleeps" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A timing test that sleeps</h3></header>
+<div class="prob-q"><p><code>Stopwatch</code> measures the latency of model calls. Its test really sleeps for 0.2 seconds and checks the measured time with a loose range, so it is slow and can fail on a busy machine. <code>Stopwatch</code> already accepts a <code>clock</code>; rewrite the test with a fake clock so it is instant and checks exact values, including that <code>stop()</code> without <code>start()</code> raises <code>RuntimeError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3"># --- code under test (do not edit) ---
+import time
+
+
+class Stopwatch:
+    def __init__(self, clock=time.perf_counter):
+        self.clock = clock
+        self._start = None
+
+    def start(self):
+        self._start = self.clock()
+
+    def stop(self):
+        if self._start is None:
+            raise RuntimeError(&quot;stop() before start()&quot;)
+        elapsed_ms = round((self.clock() - self._start) * 1000)
+        self._start = None
+        return elapsed_ms
+
+
+# --- tests ---
+import time
+
+
+def test_measures_elapsed():
+    sw = Stopwatch()
+    sw.start()
+    time.sleep(0.2)
+    assert 150 &lt;= sw.stop() &lt;= 400
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split("# --- tests")[1]
+assert "sleep" not in tests_part
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 2, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "seconds": BASE.replace("round((self.clock() - self._start) * 1000)", "round(self.clock() - self._start)"),
+    "no_reset": BASE.replace("        self._start = None\n        return elapsed_ms", "        return elapsed_ms"),
+    "no_guard": BASE.replace('        if self._start is None:\n            raise RuntimeError("stop() before start()")\n', ""),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert &quot;sleep&quot; not in tests_part
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 2, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;seconds&quot;: BASE.replace(&quot;round((self.clock() - self._start) * 1000)&quot;, &quot;round(self.clock() - self._start)&quot;),
+    &quot;no_reset&quot;: BASE.replace(&quot;        self._start = None\n        return elapsed_ms&quot;, &quot;        return elapsed_ms&quot;),
+    &quot;no_guard&quot;: BASE.replace(&#x27;        if self._start is None:\n            raise RuntimeError(&quot;stop() before start()&quot;)\n&#x27;, &quot;&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>times = iter([10.0, 10.25])</code> and <code>Stopwatch(clock=lambda: next(times))</code>, or a <code>Mock(side_effect=[...])</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After one measurement, a second <code>stop()</code> without a new <code>start()</code> must raise.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import time
+
+
+class Stopwatch:
+    def __init__(self, clock=time.perf_counter):
+        self.clock = clock
+        self._start = None
+
+    def start(self):
+        self._start = self.clock()
+
+    def stop(self):
+        if self._start is None:
+            raise RuntimeError(&quot;stop() before start()&quot;)
+        elapsed_ms = round((self.clock() - self._start) * 1000)
+        self._start = None
+        return elapsed_ms
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+
+
+def test_measures_elapsed_in_ms():
+    sw = Stopwatch(clock=Mock(side_effect=[10.0, 10.25]))
+    sw.start()
+    assert sw.stop() == 250
+
+
+def test_stop_without_start_raises():
+    with pytest.raises(RuntimeError):
+        Stopwatch(clock=Mock(return_value=0.0)).stop()
+
+
+def test_stop_resets():
+    sw = Stopwatch(clock=Mock(side_effect=[1.0, 1.5]))
+    sw.start()
+    sw.stop()
+    with pytest.raises(RuntimeError):
+        sw.stop()</code></pre></div><p>Sleeping makes a test slow (a suite of such tests takes minutes) and still flaky, because a loaded CI machine can oversleep beyond the range, and the range is so loose that a version measuring in seconds instead of milliseconds would only fail by luck. Feeding the clock exact values makes the expected result exact: 0.25 seconds is 250 milliseconds, and the seconds mutant returns 0. The same injection lets the tests cover the state rules (no stop before start, reset after stop) instantly.</p></div></details>
+</article>
+<article class="prob" id="p-patch-dict-and-os-environ" data-pid="m13-p-patch-dict-and-os-environ" data-type="predict" data-level="medium" data-answer="(&#x27;x&#x27;, &#x27;2&#x27;) None 1
+1 False
+True False
+yes False">
+<header class="prob-head"><h3>4. patch.dict and os.environ</h3></header>
+<div class="code"><pre><code class="py">import os
+from unittest.mock import patch
+
+os.environ[&quot;P4_KEEP&quot;] = &quot;1&quot;
+os.environ.pop(&quot;P4_NEW&quot;, None)
+with patch.dict(os.environ, {&quot;P4_NEW&quot;: &quot;x&quot;, &quot;P4_KEEP&quot;: &quot;2&quot;}):
+    inside = (os.environ[&quot;P4_NEW&quot;], os.environ[&quot;P4_KEEP&quot;])
+print(inside, os.environ.get(&quot;P4_NEW&quot;), os.environ[&quot;P4_KEEP&quot;])
+with patch.dict(os.environ, {&quot;ONLY&quot;: &quot;this&quot;}, clear=True):
+    print(len(os.environ), &quot;P4_KEEP&quot; in os.environ)
+print(&quot;P4_KEEP&quot; in os.environ, &quot;ONLY&quot; in os.environ)
+
+@patch.dict(os.environ, {&quot;P4_DECORATED&quot;: &quot;yes&quot;})
+def read():
+    return os.environ[&quot;P4_DECORATED&quot;]
+print(read(), &quot;P4_DECORATED&quot; in os.environ)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>patch.dict</code> adds or overrides entries and restores the original dict afterwards; <code>clear=True</code> empties it first.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(&#x27;x&#x27;, &#x27;2&#x27;) None 1
+1 False
+True False
+yes False</pre></div><p>Inside the block the new variable exists and the existing one is overridden; afterwards both are restored exactly. With <code>clear=True</code>, the environment holds only the patched entries during the block, a quick way to test "nothing configured" behaviour, and everything comes back after it. As a decorator, the patch applies only while the function runs. <code>monkeypatch.setenv</code> does the same inside pytest tests.</p></div></details>
+</article>
+<article class="prob" id="p-test-context-truncation-with-a-fake-toke" data-pid="m13-p-test-context-truncation-with-a-fake-toke" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Test context truncation with a fake tokenizer</h3></header>
+<div class="prob-q"><p><code>fit_context(chunks, budget, count_tokens)</code> keeps chunks in order while their total token count fits the budget, stops at the first chunk that does not fit (it does not skip ahead), and returns <code>(kept, used_tokens)</code>. Write at least four tests using a simple <strong>fake tokenizer</strong> (for example one token per word) that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5"># --- code under test (do not edit) ---
+def fit_context(chunks, budget, count_tokens):
+    kept, used = [], 0
+    for chunk in chunks:
+        n = count_tokens(chunk)
+        if used + n &gt; budget:
+            break
+        kept.append(chunk)
+        used += n
+    return kept, used
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "skips_ahead": BASE.replace("            break\n", "            continue\n"),
+    "strict_budget": BASE.replace("if used + n > budget:", "if used + n >= budget:"),
+    "counts_chars": BASE.replace("n = count_tokens(chunk)", "n = len(chunk)"),
+    "used_wrong": BASE.replace("    return kept, used", "    return kept, budget"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;skips_ahead&quot;: BASE.replace(&quot;            break\n&quot;, &quot;            continue\n&quot;),
+    &quot;strict_budget&quot;: BASE.replace(&quot;if used + n &gt; budget:&quot;, &quot;if used + n &gt;= budget:&quot;),
+    &quot;counts_chars&quot;: BASE.replace(&quot;n = count_tokens(chunk)&quot;, &quot;n = len(chunk)&quot;),
+    &quot;used_wrong&quot;: BASE.replace(&quot;    return kept, used&quot;, &quot;    return kept, budget&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>def words(text): return len(text.split())</code> as the tokenizer.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Cases: everything fits, an exact fit at the budget, a big chunk followed by a small one (must stop, not skip), and the <code>used</code> count.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def fit_context(chunks, budget, count_tokens):
+    kept, used = [], 0
+    for chunk in chunks:
+        n = count_tokens(chunk)
+        if used + n &gt; budget:
+            break
+        kept.append(chunk)
+        used += n
+    return kept, used
+
+
+# --- tests ---
+import pytest
+
+
+def words(text):
+    return len(text.split())
+
+
+def test_everything_fits():
+    assert fit_context([&quot;a b&quot;, &quot;c&quot;], 10, words) == ([&quot;a b&quot;, &quot;c&quot;], 3)
+
+
+def test_exact_fit_is_allowed():
+    assert fit_context([&quot;a b c&quot;, &quot;d e&quot;], 5, words) == ([&quot;a b c&quot;, &quot;d e&quot;], 5)
+
+
+def test_stops_at_first_chunk_that_does_not_fit():
+    chunks = [&quot;one two&quot;, &quot;three four five six&quot;, &quot;seven&quot;]
+    assert fit_context(chunks, 4, words) == ([&quot;one two&quot;], 2)
+
+
+def test_uses_the_given_tokenizer():
+    assert fit_context([&quot;aaaaaaaaaa&quot;], 1, words) == ([&quot;aaaaaaaaaa&quot;], 1)
+
+
+def test_empty_budget():
+    assert fit_context([&quot;a&quot;], 0, words) == ([], 0)</code></pre></div><p>The tokenizer is a dependency, so the tests inject a fake that is trivial to reason about (one token per word) instead of a real tokenizer whose counts would have to be looked up. Each case pins one decision: an exact fit is allowed (<code>&gt;</code> not <code>&gt;=</code>), the loop stops instead of skipping to a later small chunk (chunks are ranked by relevance, so skipping would put a less relevant chunk ahead of a more relevant, larger one), the count comes from the tokenizer and not from characters (a ten-letter word is one "token" here), and the returned total is the real one. Context packing bugs silently waste tokens or drop the best evidence.</p></div></details>
+</article>
+<article class="prob" id="p-a-raises-test-whose-pattern-is-a-regex" data-pid="m13-p-a-raises-test-whose-pattern-is-a-regex" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A raises test whose pattern is a regex</h3></header>
+<div class="prob-q"><p><code>check_budget(cost, limit)</code> raises <code>ValueError("cost ($12.50) exceeds limit ($10.00)")</code>-style messages. The test's <code>match=</code> string is the literal message, but <code>match</code> is a <strong>regular expression</strong>, where <code>(</code>, <code>$</code> and <code>.</code> mean something else, so the test fails on correct code. Fix the test so it matches the literal text, and keep it strict enough to catch the graded buggy version (which reports the limit in the place of the cost).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6"># --- code under test (do not edit) ---
+def check_budget(cost, limit):
+    if cost &gt; limit:
+        raise ValueError(f&quot;cost (${cost:.2f}) exceeds limit (${limit:.2f})&quot;)
+    return limit - cost
+
+
+# --- tests ---
+import pytest
+
+
+def test_over_budget():
+    with pytest.raises(ValueError, match=&quot;cost ($12.50) exceeds limit ($10.00)&quot;):
+        check_budget(12.5, 10)
+
+
+def test_within_budget():
+    assert check_budget(4, 10) == 6
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 2, good["output"][-800:]
+BUG = '''
+def check_budget(cost, limit):
+    if cost > limit:
+        raise ValueError(f"cost (${limit:.2f}) exceeds limit (${limit:.2f})")
+    return limit - cost
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 2, good[&quot;output&quot;][-800:]
+BUG = &#x27;&#x27;&#x27;
+def check_budget(cost, limit):
+    if cost &gt; limit:
+        raise ValueError(f&quot;cost (${limit:.2f}) exceeds limit (${limit:.2f})&quot;)
+    return limit - cost
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>match=re.escape("cost ($12.50) exceeds limit ($10.00)")</code>, or check <code>str(excinfo.value) == ...</code> after the block.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def check_budget(cost, limit):
+    if cost &gt; limit:
+        raise ValueError(f&quot;cost (${cost:.2f}) exceeds limit (${limit:.2f})&quot;)
+    return limit - cost
+
+
+# --- tests ---
+import re
+import pytest
+
+
+def test_over_budget():
+    with pytest.raises(ValueError, match=re.escape(&quot;cost ($12.50) exceeds limit ($10.00)&quot;)):
+        check_budget(12.5, 10)
+
+
+def test_within_budget():
+    assert check_budget(4, 10) == 6</code></pre></div><p><code>match</code> runs <code>re.search(pattern, str(exception))</code>. In the literal message, <code>(</code> and <code>)</code> form a group, <code>$</code> means "end of string" and <code>.</code> matches any character, so the pattern could never match a message that continues after <code>$</code>, and the test failed on correct code. <code>re.escape</code> turns the text into a pattern that matches it literally. An alternative that avoids regular expressions entirely is <code>with pytest.raises(ValueError) as excinfo:</code> followed by <code>assert str(excinfo.value) == "..."</code>, which is also stricter, since <code>search</code> would accept the text anywhere in a longer message.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-confusion-matrix" data-pid="m13-p-test-a-confusion-matrix" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Test a confusion matrix</h3></header>
+<div class="prob-q"><p><code>confusion_matrix(y_true, y_pred, labels)</code> returns a list of lists where <code>matrix[i][j]</code> counts examples whose true label is <code>labels[i]</code> and predicted label is <code>labels[j]</code>; predictions with labels outside <code>labels</code> raise <code>ValueError</code>. Write at least four tests that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7"># --- code under test (do not edit) ---
+def confusion_matrix(y_true, y_pred, labels):
+    index = {label: i for i, label in enumerate(labels)}
+    matrix = [[0] * len(labels) for _ in labels]
+    for t, p in zip(y_true, y_pred, strict=True):
+        if t not in index or p not in index:
+            raise ValueError(f&quot;unknown label in ({t!r}, {p!r})&quot;)
+        matrix[index[t]][index[p]] += 1
+    return matrix
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "transposed": BASE.replace("matrix[index[t]][index[p]] += 1", "matrix[index[p]][index[t]] += 1"),
+    "shared_rows": BASE.replace("[[0] * len(labels) for _ in labels]", "[[0] * len(labels)] * len(labels)"),
+    "unknown_ignored": BASE.replace('            raise ValueError(f"unknown label in ({t!r}, {p!r})")', "            continue"),
+    "length_mismatch_ok": BASE.replace("zip(y_true, y_pred, strict=True)", "zip(y_true, y_pred)"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;transposed&quot;: BASE.replace(&quot;matrix[index[t]][index[p]] += 1&quot;, &quot;matrix[index[p]][index[t]] += 1&quot;),
+    &quot;shared_rows&quot;: BASE.replace(&quot;[[0] * len(labels) for _ in labels]&quot;, &quot;[[0] * len(labels)] * len(labels)&quot;),
+    &quot;unknown_ignored&quot;: BASE.replace(&#x27;            raise ValueError(f&quot;unknown label in ({t!r}, {p!r})&quot;)&#x27;, &quot;            continue&quot;),
+    &quot;length_mismatch_ok&quot;: BASE.replace(&quot;zip(y_true, y_pred, strict=True)&quot;, &quot;zip(y_true, y_pred)&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use an asymmetric case, where <code>spam</code> predicted as <code>ham</code> and <code>ham</code> predicted as <code>spam</code> happen a different number of times, so a transposed matrix differs.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>zip(..., strict=True)</code> raises <code>ValueError</code> for different lengths: test that too.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def confusion_matrix(y_true, y_pred, labels):
+    index = {label: i for i, label in enumerate(labels)}
+    matrix = [[0] * len(labels) for _ in labels]
+    for t, p in zip(y_true, y_pred, strict=True):
+        if t not in index or p not in index:
+            raise ValueError(f&quot;unknown label in ({t!r}, {p!r})&quot;)
+        matrix[index[t]][index[p]] += 1
+    return matrix
+
+
+# --- tests ---
+import pytest
+
+LABELS = [&quot;spam&quot;, &quot;ham&quot;]
+
+
+def test_asymmetric_errors():
+    y_true = [&quot;spam&quot;, &quot;spam&quot;, &quot;spam&quot;, &quot;ham&quot;, &quot;ham&quot;]
+    y_pred = [&quot;spam&quot;, &quot;ham&quot;, &quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;]
+    assert confusion_matrix(y_true, y_pred, LABELS) == [[1, 2], [1, 1]]
+
+
+def test_perfect_predictions_are_diagonal():
+    assert confusion_matrix([&quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;], [&quot;ham&quot;, &quot;spam&quot;, &quot;ham&quot;], LABELS) == [[1, 0], [0, 2]]
+
+
+def test_rows_follow_label_order():
+    assert confusion_matrix([&quot;spam&quot;], [&quot;ham&quot;], [&quot;ham&quot;, &quot;spam&quot;]) == [[0, 0], [1, 0]]
+
+
+def test_unknown_label_raises():
+    with pytest.raises(ValueError, match=&quot;unknown label&quot;):
+        confusion_matrix([&quot;spam&quot;], [&quot;phish&quot;], LABELS)
+
+
+def test_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        confusion_matrix([&quot;spam&quot;, &quot;ham&quot;], [&quot;spam&quot;], LABELS)</code></pre></div><p>An <strong>asymmetric</strong> example is essential: if spam-as-ham and ham-as-spam occurred equally often, a transposed matrix would look identical. The diagonal test exposes the classic list-multiplication bug, where every row is the same list object, so one increment shows up in all rows (2.4). Swapping the label order checks that rows and columns follow <code>labels</code>. The error tests pin the strictness: silently ignoring unknown labels or mismatched lengths would produce a matrix that looks plausible and hides a data problem.</p></div></details>
+</article>
+<article class="prob" id="p-a-snapshot-helper" data-pid="m13-p-a-snapshot-helper" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. A snapshot helper</h3></header>
+<div class="prob-q"><p>Write <code>snapshot(name, value, folder, update=False)</code> for golden-file tests. It stores <code>value</code> as pretty JSON (<code>indent=2</code>, sorted keys) in <code>folder / f"{name}.json"</code>. If the file does not exist, or <code>update</code> is true, it writes the file and returns <code>"written"</code>. Otherwise it compares: equal values return <code>"matched"</code>; different values raise <code>AssertionError</code> whose message starts with <code>f"snapshot {name!r} changed"</code> and, for dicts, lists the added, removed and changed top-level keys (<code>"added: ..."</code>, <code>"removed: ..."</code>, <code>"changed: ..."</code>, each comma-separated and sorted, omitted when empty).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">import json
+from pathlib import Path
+
+def snapshot(name, value, folder, update=False):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import json, tempfile
+from pathlib import Path
+folder = Path(tempfile.mkdtemp())
+prompt = {"system": "You answer support questions.", "max_tokens": 200, "stop": ["\n\n"]}
+assert snapshot("qa_prompt", prompt, folder) == "written"
+assert json.loads((folder / "qa_prompt.json").read_text(encoding="utf-8")) == prompt
+assert snapshot("qa_prompt", dict(prompt), folder) == "matched"
+changed = {"system": "You are a support assistant.", "max_tokens": 200, "temperature": 0.2}
+try:
+    snapshot("qa_prompt", changed, folder)
+    assert False
+except AssertionError as e:
+    msg = str(e)
+    assert msg.startswith("snapshot 'qa_prompt' changed") and "added: temperature" in msg and "removed: stop" in msg and "changed: system" in msg
+    assert "max_tokens" not in msg
+assert snapshot("qa_prompt", changed, folder, update=True) == "written" and snapshot("qa_prompt", changed, folder) == "matched"
+assert snapshot("chunks", ["a", "b"], folder) == "written"
+try:
+    snapshot("chunks", ["a"], folder)
+    assert False
+except AssertionError as e:
+    assert str(e).startswith("snapshot 'chunks' changed")
+assert (folder / "qa_prompt.json").read_text(encoding="utf-8").startswith('{\n  "max_tokens"')</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import json, tempfile
+from pathlib import Path
+folder = Path(tempfile.mkdtemp())
+prompt = {&quot;system&quot;: &quot;You answer support questions.&quot;, &quot;max_tokens&quot;: 200, &quot;stop&quot;: [&quot;\n\n&quot;]}
+assert snapshot(&quot;qa_prompt&quot;, prompt, folder) == &quot;written&quot;
+assert json.loads((folder / &quot;qa_prompt.json&quot;).read_text(encoding=&quot;utf-8&quot;)) == prompt
+assert snapshot(&quot;qa_prompt&quot;, dict(prompt), folder) == &quot;matched&quot;
+changed = {&quot;system&quot;: &quot;You are a support assistant.&quot;, &quot;max_tokens&quot;: 200, &quot;temperature&quot;: 0.2}
+try:
+    snapshot(&quot;qa_prompt&quot;, changed, folder)
+    assert False
+except AssertionError as e:
+    msg = str(e)
+    assert msg.startswith(&quot;snapshot &#x27;qa_prompt&#x27; changed&quot;) and &quot;added: temperature&quot; in msg and &quot;removed: stop&quot; in msg and &quot;changed: system&quot; in msg
+    assert &quot;max_tokens&quot; not in msg
+assert snapshot(&quot;qa_prompt&quot;, changed, folder, update=True) == &quot;written&quot; and snapshot(&quot;qa_prompt&quot;, changed, folder) == &quot;matched&quot;
+assert snapshot(&quot;chunks&quot;, [&quot;a&quot;, &quot;b&quot;], folder) == &quot;written&quot;
+try:
+    snapshot(&quot;chunks&quot;, [&quot;a&quot;], folder)
+    assert False
+except AssertionError as e:
+    assert str(e).startswith(&quot;snapshot &#x27;chunks&#x27; changed&quot;)
+assert (folder / &quot;qa_prompt.json&quot;).read_text(encoding=&quot;utf-8&quot;).startswith(&#x27;{\n  &quot;max_tokens&quot;&#x27;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare after a JSON round trip (<code>json.loads(json.dumps(value))</code>), so tuples and lists compare the same way as when stored.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For dicts, use set operations on the keys: <code>new.keys() - old.keys()</code> and so on.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import json
+from pathlib import Path
+
+
+def snapshot(name, value, folder, update=False):
+    path = Path(folder) / f&quot;{name}.json&quot;
+    text = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
+    if update or not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + &quot;\n&quot;, encoding=&quot;utf-8&quot;)
+        return &quot;written&quot;
+    old = json.loads(path.read_text(encoding=&quot;utf-8&quot;))
+    new = json.loads(text)
+    if old == new:
+        return &quot;matched&quot;
+    parts = [f&quot;snapshot {name!r} changed&quot;]
+    if isinstance(old, dict) and isinstance(new, dict):
+        added = sorted(new.keys() - old.keys())
+        removed = sorted(old.keys() - new.keys())
+        changed = sorted(k for k in old.keys() &amp; new.keys() if old[k] != new[k])
+        for label, keys in ((&quot;added&quot;, added), (&quot;removed&quot;, removed), (&quot;changed&quot;, changed)):
+            if keys:
+                parts.append(f&quot;{label}: {&#x27;, &#x27;.join(keys)}&quot;)
+    raise AssertionError(&quot;; &quot;.join(parts))</code></pre></div><p>Snapshot tests suit outputs that are large and structured and should change only deliberately: rendered prompts, request payloads sent to a model API, tool schemas, exported reports. The first run records the golden file, later runs compare, and an explicit <code>update</code> flag (usually a command-line option such as <code>--snapshot-update</code> in tools like syrupy) re-records after a reviewed change; the file lives in git, so the change shows up in code review. Sorted keys and indentation keep the files diff-friendly, comparing after a JSON round trip avoids false alarms from tuples versus lists, and a message that names added, removed and changed keys says what moved without a manual diff. Their weakness is that people update snapshots without reading them, so keep them small.</p></div></details>
+</article>
+<article class="prob" id="p-mock-open-and-magicmock-protocols" data-pid="m13-p-mock-open-and-magicmock-protocols" data-type="predict" data-level="hard" data-answer="header 3
+2
+resource
+1 0">
+<header class="prob-head"><h3>9. mock_open and MagicMock protocols</h3></header>
+<div class="code"><pre><code class="py">from unittest.mock import MagicMock, mock_open, patch
+
+def first_line(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return f.readline().strip()
+
+def count_lines(path):
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        return sum(1 for _ in f)
+
+m = mock_open(read_data=&quot;header\nrow1\nrow2\n&quot;)
+with patch(&quot;builtins.open&quot;, m):
+    print(first_line(&quot;data.csv&quot;), count_lines(&quot;data.csv&quot;))
+m.assert_called_with(&quot;data.csv&quot;, encoding=&quot;utf-8&quot;)
+print(m.call_count)
+
+cm = MagicMock()
+cm.__enter__.return_value = &quot;resource&quot;
+with cm as r:
+    print(r)
+print(cm.__exit__.call_count, len(MagicMock()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>mock_open</code> returns a mock that behaves like <code>open</code>: each call yields a fresh handle reading <code>read_data</code>, supporting <code>readline</code>, iteration and <code>with</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>header 3
+2
+resource
+1 0</pre></div><p><code>mock_open</code> simulates a text file, so code that reads lines or iterates works unchanged, and each call to the patched <code>open</code> starts reading from the beginning again, which is why both functions see the same content. The mock records the calls like any other, two here. A <code>MagicMock</code> supports the context-manager protocol: <code>__enter__</code>'s return value is what <code>as</code> receives, and <code>__exit__</code> is called once when the block ends. Patch <code>builtins.open</code> only for code that cannot take a path to a real file; for most file code, <code>tmp_path</code> (13.2) gives more realistic tests.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-structure-the-test-suite-o" data-pid="m13-p-how-would-you-structure-the-test-suite-o" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>10. How would you structure the test suite of an LLM-backed service?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>As a pyramid that keeps the model out of most tests. At the base, <strong>unit tests</strong> for pure logic: prompt builders (structure, truncation within the token budget), output parsers and validators fed with real messy replies, chunking, scoring, caching keys, configuration parsing. Next, <strong>component tests</strong> with fakes and mocks that match the real interfaces (autospec): the retrieval-plus-model flow, retries with injected sleep, timeouts, tool loops, the no-context path that must not call the model, cache behaviour with <code>tmp_path</code> and a fake clock, logging with <code>caplog</code>. Then a few <strong>integration tests</strong> marked to run separately with real credentials and budgets, or replaying recorded responses, to catch API drift. Alongside, an <strong>evaluation suite</strong> with a versioned dataset and quality thresholds gates prompt and model changes. Shared fixtures live in <code>conftest.py</code>, everything is deterministic (seeded, injected clocks), and the fast layers run on every commit.</p></div></details>
+</article>
+<article class="prob" id="p-what-would-you-check-when-reviewing-some" data-pid="m13-p-what-would-you-check-when-reviewing-some" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>11. What would you check when reviewing someone else's tests?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>That they can fail for the right reasons: each test asserts a specific outcome (not just "no exception" or a truthy value), with inputs that would distinguish correct code from plausible bugs, including edge cases and error paths; a quick mental mutation ("if this line were wrong, would a test fail?") helps. That they are isolated: no shared mutable globals, real files only in <code>tmp_path</code>, environment changes through <code>monkeypatch</code>, no dependence on order, time, network or unseeded randomness. That doubles are used well: mocks at boundaries only, with <code>spec</code>, no patching of the code under test, assertions on all relevant calls rather than <code>assert_called_with</code> on the last one, patches applied where names are looked up. That they are readable: names describe behaviour, arrange-act-assert structure, fixtures and parametrisation instead of copy-paste. And that they are fast and precise: tolerances for floats, <code>match=</code> (escaped) for error messages, no sleeps.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a test suite for a RAG answer service</h2>
+<p><code>AnswerService</code> answers support questions: it normalises the question, returns a cached answer if one exists on disk, otherwise retrieves chunks, calls the model with a prompt built from them, measures latency with an injected clock, caches the result, and logs what happened. Your task is the test suite: it must pass on this implementation and catch each of ten realistic bugs, using what this module taught: fixtures, <code>tmp_path</code>, mocks with <code>spec</code>, fakes, a fake clock, <code>caplog</code>, <code>pytest.raises</code> and parametrisation.</p>
+<article class="prob" id="p-answer-service-tests" data-pid="m13-p-answer-service-tests" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>12. Test the answer service</h3></header>
+<div class="prob-q"><p>Write at least eight tests below the <code># --- tests ---</code> line. The behaviour to pin down:</p>
+<ul><li>A blank question raises <code>ValueError</code> without touching the retriever or the model.</li><li>The cache key ignores case and surrounding whitespace, so <code>"  Refund window? "</code> and <code>"refund window?"</code> share one cached answer, stored as a JSON file in <code>cache_dir</code>.</li><li>A cache hit returns the stored result, logs <code>INFO</code> <code>"cache hit ..."</code>, and does not call the retriever or the model.</li><li>The retriever is asked for <code>max_chunks</code> chunks. With no chunks, the result is <code>{"answer": "I don't know.", "sources": [], "latency_ms": 0}</code>, a <code>WARNING</code> is logged, the model is not called, and nothing is cached.</li><li>The prompt contains every chunk as <code>[source] text</code> and the question; the model's reply is stripped; <code>sources</code> are unique in retrieval order; <code>latency_ms</code> is measured around the model call with the clock, in whole milliseconds.</li><li>A model <code>TimeoutError</code> is logged at <code>ERROR</code> and re-raised, and nothing is cached.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 12"># --- code under test (do not edit) ---
+import hashlib, json, logging, time
+
+log = logging.getLogger(&quot;answers&quot;)
+
+
+class AnswerService:
+    def __init__(self, retriever, llm, cache_dir, clock=time.monotonic, max_chunks=3):
+        self.retriever, self.llm, self.cache_dir = retriever, llm, cache_dir
+        self.clock, self.max_chunks = clock, max_chunks
+
+    def _key(self, question):
+        return hashlib.sha256(question.strip().lower().encode(&quot;utf-8&quot;)).hexdigest()[:16]
+
+    def answer(self, question):
+        if not question.strip():
+            raise ValueError(&quot;empty question&quot;)
+        key = self._key(question)
+        path = self.cache_dir / f&quot;{key}.json&quot;
+        if path.exists():
+            log.info(&quot;cache hit %s&quot;, key)
+            return json.loads(path.read_text(encoding=&quot;utf-8&quot;))
+        chunks = self.retriever.retrieve(question.strip(), k=self.max_chunks)
+        if not chunks:
+            log.warning(&quot;no context for %r&quot;, question.strip())
+            return {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: [], &quot;latency_ms&quot;: 0}
+        context = &quot;\n&quot;.join(f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks)
+        prompt = f&quot;Answer from the context only.\n{context}\n\nQuestion: {question.strip()}&quot;
+        start = self.clock()
+        try:
+            reply = self.llm.complete(prompt)
+        except TimeoutError:
+            log.error(&quot;model timed out for %s&quot;, key)
+            raise
+        result = {
+            &quot;answer&quot;: reply.strip(),
+            &quot;sources&quot;: list(dict.fromkeys(c[&quot;source&quot;] for c in chunks)),
+            &quot;latency_ms&quot;: round((self.clock() - start) * 1000),
+        }
+        path.write_text(json.dumps(result), encoding=&quot;utf-8&quot;)
+        return result
+
+
+class Retriever:
+    def retrieve(self, question, k):
+        raise NotImplementedError(&quot;real vector store&quot;)
+
+
+class LLM:
+    def complete(self, prompt):
+        raise NotImplementedError(&quot;real model API&quot;)
+
+
+# --- tests ---
+import logging
+import pytest
+from unittest.mock import Mock
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 8, good["output"][-1200:]
+tests_part = __source__.split("# --- tests")[1]
+assert "tmp_path" in tests_part and "caplog" in tests_part and "spec=" in tests_part
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "key_case_sensitive": BASE.replace("question.strip().lower().encode", "question.strip().encode"),
+    "key_not_stripped": BASE.replace("question.strip().lower().encode", "question.lower().encode"),
+    "cache_not_written": BASE.replace('        path.write_text(json.dumps(result), encoding="utf-8")\n', ""),
+    "cache_never_read": BASE.replace("if path.exists():", "if False:"),
+    "no_context_calls_model": BASE.replace('            return {"answer": "I don\'t know.", "sources": [], "latency_ms": 0}', '            self.llm.complete("")\n            return {"answer": "I don\'t know.", "sources": [], "latency_ms": 0}'),
+    "max_chunks_ignored": BASE.replace("k=self.max_chunks", "k=3"),
+    "latency_seconds": BASE.replace("round((self.clock() - start) * 1000)", "round(self.clock() - start)"),
+    "duplicate_sources": BASE.replace('list(dict.fromkeys(c["source"] for c in chunks))', '[c["source"] for c in chunks]'),
+    "timeout_swallowed": BASE.replace("            raise\n", "            return None\n"),
+    "no_warning": BASE.replace('            log.warning("no context for %r", question.strip())\n', ""),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 8, good[&quot;output&quot;][-1200:]
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+assert &quot;tmp_path&quot; in tests_part and &quot;caplog&quot; in tests_part and &quot;spec=&quot; in tests_part
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;key_case_sensitive&quot;: BASE.replace(&quot;question.strip().lower().encode&quot;, &quot;question.strip().encode&quot;),
+    &quot;key_not_stripped&quot;: BASE.replace(&quot;question.strip().lower().encode&quot;, &quot;question.lower().encode&quot;),
+    &quot;cache_not_written&quot;: BASE.replace(&#x27;        path.write_text(json.dumps(result), encoding=&quot;utf-8&quot;)\n&#x27;, &quot;&quot;),
+    &quot;cache_never_read&quot;: BASE.replace(&quot;if path.exists():&quot;, &quot;if False:&quot;),
+    &quot;no_context_calls_model&quot;: BASE.replace(&#x27;            return {&quot;answer&quot;: &quot;I don\&#x27;t know.&quot;, &quot;sources&quot;: [], &quot;latency_ms&quot;: 0}&#x27;, &#x27;            self.llm.complete(&quot;&quot;)\n            return {&quot;answer&quot;: &quot;I don\&#x27;t know.&quot;, &quot;sources&quot;: [], &quot;latency_ms&quot;: 0}&#x27;),
+    &quot;max_chunks_ignored&quot;: BASE.replace(&quot;k=self.max_chunks&quot;, &quot;k=3&quot;),
+    &quot;latency_seconds&quot;: BASE.replace(&quot;round((self.clock() - start) * 1000)&quot;, &quot;round(self.clock() - start)&quot;),
+    &quot;duplicate_sources&quot;: BASE.replace(&#x27;list(dict.fromkeys(c[&quot;source&quot;] for c in chunks))&#x27;, &#x27;[c[&quot;source&quot;] for c in chunks]&#x27;),
+    &quot;timeout_swallowed&quot;: BASE.replace(&quot;            raise\n&quot;, &quot;            return None\n&quot;),
+    &quot;no_warning&quot;: BASE.replace(&#x27;            log.warning(&quot;no context for %r&quot;, question.strip())\n&#x27;, &quot;&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Fixtures: <code>retriever</code> and <code>llm</code> as <code>Mock(spec=Retriever)</code> and <code>Mock(spec=LLM)</code> with default return values, a fake clock (<code>Mock(side_effect=[10.0, 10.25])</code>), and <code>service</code> built from them with <code>cache_dir=tmp_path</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the cache, call <code>answer</code> twice (with different spacing and case) and check <code>llm.complete.call_count == 1</code> and the number of files in <code>tmp_path</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use chunks whose sources repeat (<code>faq.md</code>, <code>terms.md</code>, <code>faq.md</code>) and <code>max_chunks=2</code> in one test; check log records with <code>caplog.set_level(logging.INFO)</code> and <code>(r.levelname, r.getMessage())</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import hashlib, json, logging, time
+
+log = logging.getLogger(&quot;answers&quot;)
+
+
+class AnswerService:
+    def __init__(self, retriever, llm, cache_dir, clock=time.monotonic, max_chunks=3):
+        self.retriever, self.llm, self.cache_dir = retriever, llm, cache_dir
+        self.clock, self.max_chunks = clock, max_chunks
+
+    def _key(self, question):
+        return hashlib.sha256(question.strip().lower().encode(&quot;utf-8&quot;)).hexdigest()[:16]
+
+    def answer(self, question):
+        if not question.strip():
+            raise ValueError(&quot;empty question&quot;)
+        key = self._key(question)
+        path = self.cache_dir / f&quot;{key}.json&quot;
+        if path.exists():
+            log.info(&quot;cache hit %s&quot;, key)
+            return json.loads(path.read_text(encoding=&quot;utf-8&quot;))
+        chunks = self.retriever.retrieve(question.strip(), k=self.max_chunks)
+        if not chunks:
+            log.warning(&quot;no context for %r&quot;, question.strip())
+            return {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: [], &quot;latency_ms&quot;: 0}
+        context = &quot;\n&quot;.join(f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks)
+        prompt = f&quot;Answer from the context only.\n{context}\n\nQuestion: {question.strip()}&quot;
+        start = self.clock()
+        try:
+            reply = self.llm.complete(prompt)
+        except TimeoutError:
+            log.error(&quot;model timed out for %s&quot;, key)
+            raise
+        result = {
+            &quot;answer&quot;: reply.strip(),
+            &quot;sources&quot;: list(dict.fromkeys(c[&quot;source&quot;] for c in chunks)),
+            &quot;latency_ms&quot;: round((self.clock() - start) * 1000),
+        }
+        path.write_text(json.dumps(result), encoding=&quot;utf-8&quot;)
+        return result
+
+
+class Retriever:
+    def retrieve(self, question, k):
+        raise NotImplementedError(&quot;real vector store&quot;)
+
+
+class LLM:
+    def complete(self, prompt):
+        raise NotImplementedError(&quot;real model API&quot;)
+
+
+# --- tests ---
+import logging
+import pytest
+from unittest.mock import Mock
+
+CHUNKS = [
+    {&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds take 5 days.&quot;},
+    {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;No refunds after 30 days.&quot;},
+    {&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds go to the original card.&quot;},
+]
+
+
+@pytest.fixture
+def retriever():
+    r = Mock(spec=Retriever)
+    r.retrieve.return_value = CHUNKS
+    return r
+
+
+@pytest.fixture
+def llm():
+    m = Mock(spec=LLM)
+    m.complete.return_value = &quot;  Refunds take 5 days.\n&quot;
+    return m
+
+
+@pytest.fixture
+def clock():
+    return Mock(side_effect=[10.0, 10.25, 20.0, 20.5])
+
+
+@pytest.fixture
+def service(retriever, llm, clock, tmp_path):
+    return AnswerService(retriever, llm, cache_dir=tmp_path, clock=clock)
+
+
+def test_answer_result(service):
+    assert service.answer(&quot;How long do refunds take?&quot;) == {
+        &quot;answer&quot;: &quot;Refunds take 5 days.&quot;, &quot;sources&quot;: [&quot;faq.md&quot;, &quot;terms.md&quot;], &quot;latency_ms&quot;: 250}
+
+
+def test_prompt_has_chunks_and_question(service, llm):
+    service.answer(&quot;  How long do refunds take? &quot;)
+    prompt = llm.complete.call_args.args[0]
+    for c in CHUNKS:
+        assert f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; in prompt
+    assert prompt.endswith(&quot;Question: How long do refunds take?&quot;)
+
+
+def test_cache_ignores_case_and_spaces(service, llm, retriever, tmp_path):
+    first = service.answer(&quot;Refund window?&quot;)
+    second = service.answer(&quot;  REFUND window?  &quot;)
+    assert first == second
+    assert llm.complete.call_count == 1 and retriever.retrieve.call_count == 1
+    assert len(list(tmp_path.glob(&quot;*.json&quot;))) == 1
+
+
+def test_cache_hit_is_logged_and_skips_dependencies(service, llm, retriever, caplog):
+    service.answer(&quot;Refund window?&quot;)
+    llm.reset_mock()
+    retriever.reset_mock()
+    caplog.set_level(logging.INFO)
+    service.answer(&quot;refund window?&quot;)
+    llm.complete.assert_not_called()
+    retriever.retrieve.assert_not_called()
+    assert [r.levelname for r in caplog.records] == [&quot;INFO&quot;] and caplog.records[0].getMessage().startswith(&quot;cache hit &quot;)
+
+
+def test_retriever_asked_for_max_chunks(retriever, llm, clock, tmp_path):
+    svc = AnswerService(retriever, llm, cache_dir=tmp_path, clock=clock, max_chunks=2)
+    svc.answer(&quot;Refunds?&quot;)
+    retriever.retrieve.assert_called_once_with(&quot;Refunds?&quot;, k=2)
+
+
+def test_no_context(service, retriever, llm, tmp_path, caplog):
+    retriever.retrieve.return_value = []
+    caplog.set_level(logging.INFO)
+    assert service.answer(&quot;Unknown topic&quot;) == {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: [], &quot;latency_ms&quot;: 0}
+    llm.complete.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [(&quot;WARNING&quot;, &quot;no context for &#x27;Unknown topic&#x27;&quot;)]
+
+
+def test_timeout_logged_reraised_and_not_cached(service, llm, tmp_path, caplog):
+    llm.complete.side_effect = TimeoutError(&quot;slow model&quot;)
+    with pytest.raises(TimeoutError):
+        service.answer(&quot;Refunds?&quot;)
+    assert [r.levelname for r in caplog.records] == [&quot;ERROR&quot;]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(&quot;question&quot;, [&quot;&quot;, &quot;   &quot;, &quot;\n\t&quot;])
+def test_blank_question(service, retriever, llm, question):
+    with pytest.raises(ValueError):
+        service.answer(question)
+    retriever.retrieve.assert_not_called()
+    llm.complete.assert_not_called()</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>pytest basics (13.1):</strong> exact expected results, <code>pytest.raises</code> for errors, and a parametrised table of blank questions.</li><li><strong>Fixtures (13.2):</strong> small fixtures (<code>retriever</code>, <code>llm</code>, <code>clock</code>) compose into <code>service</code>, with <code>tmp_path</code> as the cache folder, so every test gets a fresh service and an empty cache, and <code>caplog</code> checks the log levels and messages.</li><li><strong>Mocking (13.3):</strong> the retriever and model are <code>Mock(spec=...)</code> doubles of the real interfaces, configured per test (<code>return_value</code>, <code>side_effect</code>), and their call records prove the important side effects: no model call without context or on a cache hit, <code>k</code> passed through, one call for two spellings of a question. <code>reset_mock</code> separates the setup call from the call under test.</li><li><strong>Deterministic tests (13.4):</strong> the clock is scripted, so latency is exactly 250 ms; nothing sleeps, nothing calls the network.</li></ul>
+<p>The ten mutants are the bugs such services really ship with: cache keys that miss case or spacing (paying twice for the same question), caches written but never read or never written, model calls on empty context, ignored settings, seconds reported as milliseconds, duplicated citations, swallowed timeouts and missing warnings. A suite that catches all of them is one you can refactor the service under with confidence.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Start every test from "what would make this fail?" and choose inputs that separate correct behaviour from plausible bugs.</li><li>Compose fixtures for setup; isolate files with <code>tmp_path</code>, environment with <code>monkeypatch</code> or <code>patch.dict</code>, and logs with <code>caplog</code>.</li><li>Use <code>spec</code>'d mocks at boundaries, fakes for behaviour, injected clocks and tokenizers for determinism, and never sleep in tests.</li><li>Remember that <code>match=</code> is a regular expression (<code>re.escape</code> literal text) and that snapshots must be updated deliberately.</li><li>A test suite is good when it catches realistic mutants of the code: that is the standard the grader of this module applied.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

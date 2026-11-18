@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>13.3 · Mocking</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m13-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 13 · Testing with pytest</span></div>
+  <h1>13.3 Mocking</h1>
+  <p>Code that calls a model API, a database, the clock or the network cannot be unit-tested by calling the real thing: it is slow, costs money, needs keys and gives different answers each time. Test doubles replace those dependencies. <code>unittest.mock</code> from the ground up (<code>Mock</code>, <code>return_value</code>, <code>side_effect</code>, call assertions, <code>spec</code> and autospec), <code>patch</code> and where to patch, fakes and injected dependencies, and the ways mocking goes wrong.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 9 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="doubles">
+<h2><span class="n">1</span>Why test doubles, and which kind</h2>
+<p>A unit test should be fast, deterministic and free. Calls to an LLM API, a vector database, an HTTP service, the system clock or a random generator are none of those, so tests replace them with <strong>test doubles</strong>. The vocabulary helps when discussing designs. A <strong>stub</strong> returns canned answers ("the model always replies <code>spam</code>"). A <strong>fake</strong> is a simple working implementation (a dict-backed store, a scripted chat model). A <strong>mock</strong> records calls so the test can assert <strong>how</strong> the dependency was used ("called once with <code>max_tokens=200</code>"). A <strong>spy</strong> wraps the real object and records calls while still doing the real work.</p>
+<p>Choose by what the test is about. To check <strong>what your code returns</strong> given certain dependency behaviour, stubs and fakes are enough and keep tests robust. To check <strong>what your code does to the outside world</strong> (sends one e-mail, retries three times, passes the right parameters to the API), assert on the calls of a mock. Asserting on every internal call of everything couples tests to implementation details, so a refactor breaks them although behaviour did not change (problem 13).</p>
+</section>
+<section class="sec" id="mock">
+<h2><span class="n">2</span><code>Mock</code>: return values, side effects and call records</h2>
+<p><code>unittest.mock.Mock()</code> creates an object that accepts any attribute access and any call: <code>m.complete("hi")</code> returns another <code>Mock</code>, and every call is recorded. Configure behaviour with <strong><code>return_value</code></strong> (what calling returns) and <strong><code>side_effect</code></strong>: an exception class or instance to raise, an iterable to return (or raise) one item per call, or a function whose result is returned. Inspect with <code>called</code>, <code>call_count</code>, <code>call_args</code> (the last call, as a <code>call(...)</code> object), <code>call_args_list</code> (all calls) and <code>mock_calls</code> (including calls on child attributes), or assert with <strong><code>assert_called_once_with(...)</code></strong>, <code>assert_called_with(...)</code> (the <strong>last</strong> call only), <code>assert_any_call(...)</code>, <code>assert_has_calls([...])</code> and <code>assert_not_called()</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">mock_basics.py</span><button class="copy">Copy</button></div><pre><code class="py">from unittest.mock import Mock, call
+
+llm = Mock()
+llm.complete.return_value = &quot;spam&quot;
+print(llm.complete(&quot;Classify: WIN A PRIZE&quot;, max_tokens=5), llm.complete.call_count)
+llm.complete(&quot;second&quot;, max_tokens=5)
+print(llm.complete.call_args, llm.complete.call_args_list == [call(&quot;Classify: WIN A PRIZE&quot;, max_tokens=5), call(&quot;second&quot;, max_tokens=5)])
+llm.complete.assert_called_with(&quot;second&quot;, max_tokens=5)
+try:
+    llm.complete.assert_called_once_with(&quot;second&quot;, max_tokens=5)
+except AssertionError as e:
+    print(&quot;AssertionError:&quot;, str(e).splitlines()[0])
+
+flaky = Mock(side_effect=[TimeoutError(&quot;slow&quot;), &quot;ok&quot;])
+for _ in range(2):
+    try:
+        print(flaky())
+    except TimeoutError as e:
+        print(&quot;raised&quot;, e)
+print(type(llm.anything.you.like).__name__)</code></pre><div class="out"><span class="ol">Output</span><pre>spam 1
+call(&#x27;second&#x27;, max_tokens=5) True
+AssertionError: Expected &#x27;complete&#x27; to be called once. Called 2 times.
+raised slow
+ok
+Mock</pre></div></div>
+<p>The last line shows the danger: a bare <code>Mock</code> accepts <strong>any</strong> attribute, so if the real client's method is <code>complete</code> and your code calls <code>compelte</code>, the test still passes. <strong><code>Mock(spec=RealClass)</code></strong> (or <code>create_autospec(RealClass)</code>) restricts the mock to the real API: unknown attributes raise <code>AttributeError</code>, and with autospec, calls with the wrong arguments raise <code>TypeError</code> just as the real methods would (problems 3 and 14). <code>MagicMock</code> additionally supports magic methods such as <code>len()</code>, iteration and <code>with</code>.</p>
+</section>
+<section class="sec" id="patch">
+<h2><span class="n">3</span><code>patch</code> and where to patch</h2>
+<p>When code creates or imports its dependency itself instead of receiving it, the test must replace it in place. <strong><code>unittest.mock.patch("module.name", new=...)</code></strong> replaces the attribute <code>name</code> of <code>module</code> for the duration of a <code>with</code> block or a decorated test, and restores it afterwards; <code>patch.object(obj, "attr")</code> does the same for an object you already hold, and <code>patch.dict(os.environ, {...})</code> for dictionary entries. pytest's <code>monkeypatch.setattr</code> (13.2) is the fixture-based equivalent.</p>
+<p>The rule that trips everyone: <strong>patch where the name is looked up, not where it is defined.</strong> If <code>app.py</code> does <code>from weather import fetch</code>, then <code>app</code> has its own name <code>fetch</code> bound to the function at import time; patching <code>weather.fetch</code> changes the <code>weather</code> module's attribute, but <code>app.fetch</code> still points to the original. Patch <code>app.fetch</code> instead, or have <code>app</code> do <code>import weather</code> and call <code>weather.fetch(...)</code>, which looks the name up at call time (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">where_to_patch.py</span><button class="copy">Copy</button></div><pre><code class="py">from lessontools import run_pytest
+
+WEATHER = &#x27;&#x27;&#x27;
+def fetch(city):
+    raise RuntimeError(&quot;network access in a test!&quot;)
+&#x27;&#x27;&#x27;
+APP = &#x27;&#x27;&#x27;
+from weather import fetch
+
+def headline(city):
+    return f&quot;{city}: {fetch(city)[&#x27;temp&#x27;]} C&quot;
+&#x27;&#x27;&#x27;
+SRC = &#x27;&#x27;&#x27;
+from unittest.mock import patch
+import app
+
+def test_patch_definition():
+    with patch(&quot;weather.fetch&quot;, return_value={&quot;temp&quot;: 21}):
+        assert app.headline(&quot;Oslo&quot;) == &quot;Oslo: 21 C&quot;
+
+def test_patch_lookup():
+    with patch(&quot;app.fetch&quot;, return_value={&quot;temp&quot;: 21}) as fake:
+        assert app.headline(&quot;Oslo&quot;) == &quot;Oslo: 21 C&quot;
+    fake.assert_called_once_with(&quot;Oslo&quot;)
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, {&quot;weather&quot;: WEATHER, &quot;app&quot;: APP})
+print(r[&quot;outcomes&quot;])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;test_patch_definition&#x27;: &#x27;failed&#x27;, &#x27;test_patch_lookup&#x27;: &#x27;passed&#x27;}</pre></div></div>
+</section>
+<section class="sec" id="fakes">
+<h2><span class="n">4</span>Prefer injected fakes</h2>
+<p>Patching is a workaround for code that hides its dependencies. The cleaner design passes them in: <code>def summarise(text, client):</code> or a class that receives its client in <code>__init__</code>, with a sensible default in production. Then a test passes a <strong>fake</strong>, no patching needed, and the code documents what it depends on. The same applies to time (<code>clock=time.monotonic</code> as a parameter, or an injected <code>now()</code> function), randomness (<code>rng=random.Random(seed)</code>), sleeping (<code>sleep=time.sleep</code>, so retry tests do not actually wait) and file locations (12.1). Fakes are reusable across tests and can model behaviour a stub cannot, such as "the store returns what was added", and they keep tests about outcomes rather than calls.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">fake_clock.py</span><button class="copy">Copy</button></div><pre><code class="py">class FakeClock:
+    def __init__(self, start=0.0):
+        self.now = start
+    def __call__(self):
+        return self.now
+    def advance(self, seconds):
+        self.now += seconds
+
+class TTLCache:
+    def __init__(self, ttl, clock):
+        self.ttl, self.clock, self._data = ttl, clock, {}
+    def set(self, key, value):
+        self._data[key] = (value, self.clock() + self.ttl)
+    def get(self, key):
+        value, expires = self._data.get(key, (None, 0))
+        return value if self.clock() &lt; expires else None
+
+clock = FakeClock()
+cache = TTLCache(ttl=60, clock=clock)
+cache.set(&quot;answer:refunds&quot;, &quot;5 days&quot;)
+clock.advance(59.9)
+print(cache.get(&quot;answer:refunds&quot;))
+clock.advance(0.1)
+print(cache.get(&quot;answer:refunds&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>5 days
+None</pre></div></div>
+<p>Testing the expiry with the real clock would mean sleeping for a minute, or a flaky test with a tiny TTL; the fake clock makes it instant and exact, down to the boundary.</p>
+</section>
+<section class="sec" id="pitfalls">
+<h2><span class="n">5</span>How mocking goes wrong</h2>
+<p><strong>Mocks that drift from reality:</strong> a mock configured to return a dict when the real client returns an object, or accepting a parameter the real API renamed, passes while production fails; use <code>spec</code>/autospec, and keep a few integration tests against the real thing (13.4). <strong>Over-mocking:</strong> patching the function under test's own helpers, or asserting every internal call, tests the implementation instead of the behaviour, so the test passes for wrong code and fails for correct refactors. <strong>Mocking what you don't own:</strong> sprinkling patches of a third-party SDK through many tests ties them to its internals; wrap the SDK in a small adapter class of your own (<code>LLMClient.complete(prompt) -&gt; str</code>), mock or fake the adapter in unit tests, and test the adapter itself against the real SDK separately. <strong>Asserting the wrong call:</strong> <code>assert_called_with</code> checks only the last call, so it misses problems in earlier ones (problem 7).</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-mocks-record-everything" data-pid="m13-3-mocks-record-everything" data-type="predict" data-level="easy" data-answer="[0.1, 0.2] True False
+2 call(&#x27;shipping&#x27;, k=5)
+(&#x27;shipping&#x27;,) {&#x27;k&#x27;: 5}
+call.embed([&#x27;refunds&#x27;]) 3
+True True">
+<header class="prob-head"><h3>1. Mocks record everything</h3></header>
+<div class="code"><pre><code class="py">from unittest.mock import Mock, call
+
+client = Mock()
+client.embed.return_value = [0.1, 0.2]
+print(client.embed([&quot;refunds&quot;]), client.embed.called, client.search.called)
+client.search(&quot;refunds&quot;, k=3)
+client.search(&quot;shipping&quot;, k=5)
+print(client.search.call_count, client.search.call_args)
+print(client.search.call_args.args, client.search.call_args.kwargs)
+print(client.mock_calls[0], len(client.mock_calls))
+print(client.search.call_args_list[0] == call(&quot;refunds&quot;, k=3), client.search(&quot;x&quot;) is client.search(&quot;y&quot;))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>Mock</code> creates child mocks on first attribute access; calling one returns the same <code>return_value</code> mock each time.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0.1, 0.2] True False
+2 call(&#x27;shipping&#x27;, k=5)
+(&#x27;shipping&#x27;,) {&#x27;k&#x27;: 5}
+call.embed([&#x27;refunds&#x27;]) 3
+True True</pre></div><p><code>embed</code> returns its configured value; <code>search</code> exists as soon as it is accessed, but has not been called yet. After two calls, <code>call_args</code> is the last call, which unpacks into positional <code>args</code> and keyword <code>kwargs</code>. <code>mock_calls</code> on the parent records calls made on all its children in order, here three. Calling an unconfigured child mock always returns the <strong>same</strong> child, its <code>return_value</code>, so the two results are identical.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-summariser-with-a-mock-client" data-pid="m13-3-test-a-summariser-with-a-mock-client" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. Test a summariser with a mock client</h3></header>
+<div class="prob-q"><p><code>summarise(client, text, max_words=50)</code> builds a prompt that contains the text and the word limit, calls <code>client.complete(prompt, max_tokens=max_words * 2)</code> once, and returns the reply stripped; it raises <code>ValueError</code> without calling the client when the text is blank. Write at least four tests with a mock client (use <code>Mock(spec=LLMClient)</code>) that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2"># --- code under test (do not edit) ---
+class LLMClient:
+    def complete(self, prompt, max_tokens):
+        raise NotImplementedError(&quot;real API call&quot;)
+
+
+def summarise(client, text, max_words=50):
+    if not text.strip():
+        raise ValueError(&quot;nothing to summarise&quot;)
+    prompt = f&quot;Summarise in at most {max_words} words:\n\n{text}&quot;
+    return client.complete(prompt, max_tokens=max_words * 2).strip()
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+assert "spec=LLMClient" in __source__
+BASE = '''
+class LLMClient:
+    def complete(self, prompt, max_tokens):
+        raise NotImplementedError("real API call")
+
+
+def summarise(client, text, max_words=50):
+    if not text.strip():
+        raise ValueError("nothing to summarise")
+    prompt = f"Summarise in at most {max_words} words:\\n\\n{text}"
+    return client.complete(prompt, max_tokens=max_words * 2).strip()
+'''
+BUGS = {
+    "fixed_tokens": BASE.replace("max_tokens=max_words * 2", "max_tokens=100"),
+    "no_strip": BASE.replace(").strip()", ")"),
+    "text_missing": BASE.replace("{max_words} words:\\n\\n{text}", "{max_words} words.").replace("words.\"", "words.\""),
+    "calls_on_blank": BASE.replace('        raise ValueError("nothing to summarise")', '        client.complete("", max_tokens=1)\n        raise ValueError("nothing to summarise")'),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+assert &quot;spec=LLMClient&quot; in __source__
+BASE = &#x27;&#x27;&#x27;
+class LLMClient:
+    def complete(self, prompt, max_tokens):
+        raise NotImplementedError(&quot;real API call&quot;)
+
+
+def summarise(client, text, max_words=50):
+    if not text.strip():
+        raise ValueError(&quot;nothing to summarise&quot;)
+    prompt = f&quot;Summarise in at most {max_words} words:\\n\\n{text}&quot;
+    return client.complete(prompt, max_tokens=max_words * 2).strip()
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;fixed_tokens&quot;: BASE.replace(&quot;max_tokens=max_words * 2&quot;, &quot;max_tokens=100&quot;),
+    &quot;no_strip&quot;: BASE.replace(&quot;).strip()&quot;, &quot;)&quot;),
+    &quot;text_missing&quot;: BASE.replace(&quot;{max_words} words:\\n\\n{text}&quot;, &quot;{max_words} words.&quot;).replace(&quot;words.\&quot;&quot;, &quot;words.\&quot;&quot;),
+    &quot;calls_on_blank&quot;: BASE.replace(&#x27;        raise ValueError(&quot;nothing to summarise&quot;)&#x27;, &#x27;        client.complete(&quot;&quot;, max_tokens=1)\n        raise ValueError(&quot;nothing to summarise&quot;)&#x27;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>client = Mock(spec=LLMClient)</code>, <code>client.complete.return_value = "  A summary. "</code>, then check the result and <code>client.complete.call_args</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>prompt, = client.complete.call_args.args</code> and <code>client.complete.call_args.kwargs["max_tokens"]</code>; for blank text, <code>client.complete.assert_not_called()</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+class LLMClient:
+    def complete(self, prompt, max_tokens):
+        raise NotImplementedError(&quot;real API call&quot;)
+
+
+def summarise(client, text, max_words=50):
+    if not text.strip():
+        raise ValueError(&quot;nothing to summarise&quot;)
+    prompt = f&quot;Summarise in at most {max_words} words:\n\n{text}&quot;
+    return client.complete(prompt, max_tokens=max_words * 2).strip()
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+
+
+@pytest.fixture
+def client():
+    c = Mock(spec=LLMClient)
+    c.complete.return_value = &quot;  Refunds take five days.\n&quot;
+    return c
+
+
+def test_returns_stripped_reply(client):
+    assert summarise(client, &quot;Long refund policy text&quot;) == &quot;Refunds take five days.&quot;
+
+
+def test_calls_client_once_with_token_budget(client):
+    summarise(client, &quot;Long refund policy text&quot;, max_words=30)
+    client.complete.assert_called_once()
+    assert client.complete.call_args.kwargs == {&quot;max_tokens&quot;: 60}
+
+
+def test_prompt_contains_text_and_limit(client):
+    summarise(client, &quot;Refunds take five business days.&quot;, max_words=20)
+    prompt = client.complete.call_args.args[0]
+    assert &quot;Refunds take five business days.&quot; in prompt and &quot;20 words&quot; in prompt
+
+
+def test_blank_text_raises_without_calling(client):
+    with pytest.raises(ValueError):
+        summarise(client, &quot;   &quot;)
+    client.complete.assert_not_called()</code></pre></div><p>The mock stands in for the API, returns a canned reply with whitespace (so stripping is visible), and records the call, which lets the tests check the two things that matter about the interaction: <strong>what was sent</strong> (the prompt contains the text and the limit, the token budget is derived from <code>max_words</code>) and <strong>how often</strong> (once, and not at all for blank input, which would waste money). <code>spec=LLMClient</code> makes the mock refuse methods the real client does not have. Note what the tests do not check: the exact prompt wording, which can change freely without breaking them.</p></div></details>
+</article>
+<article class="prob" id="p-a-mock-that-hides-an-api-mismatch" data-pid="m13-3-a-mock-that-hides-an-api-mismatch" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A mock that hides an API mismatch</h3></header>
+<div class="prob-q"><p>The real <code>SearchClient</code> has a method <code>query(text, top_k)</code>. The tests use a bare <code>Mock()</code>, so they would still pass if the code called a method that does not exist, which is exactly what the graded buggy version does (<code>client.search(...)</code>). Make the tests catch it by giving the mock the real interface, and keep checking the arguments.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3"># --- code under test (do not edit) ---
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError(&quot;real vector database&quot;)
+
+
+def top_sources(client, question, k=3):
+    hits = client.query(question, top_k=k)
+    return [h[&quot;source&quot;] for h in hits]
+
+
+# --- tests ---
+from unittest.mock import Mock
+
+
+def test_top_sources():
+    client = Mock()
+    client.query.return_value = [{&quot;source&quot;: &quot;faq.md&quot;}, {&quot;source&quot;: &quot;terms.md&quot;}]
+    assert top_sources(client, &quot;refunds?&quot;, k=2) == [&quot;faq.md&quot;, &quot;terms.md&quot;]
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 1, good["output"][-800:]
+BUG = '''
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError("real vector database")
+
+
+def top_sources(client, question, k=3):
+    hits = client.search(question, top_k=k)
+    return [h["source"] for h in hits]
+'''
+BUG2 = '''
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError("real vector database")
+
+
+def top_sources(client, question, k=3):
+    hits = client.query(question, k=k)
+    return [h["source"] for h in hits]
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0
+assert run_pytest(swap_impl(__source__, BUG2))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 1, good[&quot;output&quot;][-800:]
+BUG = &#x27;&#x27;&#x27;
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError(&quot;real vector database&quot;)
+
+
+def top_sources(client, question, k=3):
+    hits = client.search(question, top_k=k)
+    return [h[&quot;source&quot;] for h in hits]
+&#x27;&#x27;&#x27;
+BUG2 = &#x27;&#x27;&#x27;
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError(&quot;real vector database&quot;)
+
+
+def top_sources(client, question, k=3):
+    hits = client.query(question, k=k)
+    return [h[&quot;source&quot;] for h in hits]
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0
+assert run_pytest(swap_impl(__source__, BUG2))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>create_autospec(SearchClient, instance=True)</code> checks both the method names and their signatures.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The second buggy version passes <code>k=</code> instead of <code>top_k=</code>: autospec rejects an unknown keyword, or assert the call explicitly.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+class SearchClient:
+    def query(self, text, top_k):
+        raise NotImplementedError(&quot;real vector database&quot;)
+
+
+def top_sources(client, question, k=3):
+    hits = client.query(question, top_k=k)
+    return [h[&quot;source&quot;] for h in hits]
+
+
+# --- tests ---
+from unittest.mock import create_autospec
+
+
+def test_top_sources():
+    client = create_autospec(SearchClient, instance=True)
+    client.query.return_value = [{&quot;source&quot;: &quot;faq.md&quot;}, {&quot;source&quot;: &quot;terms.md&quot;}]
+    assert top_sources(client, &quot;refunds?&quot;, k=2) == [&quot;faq.md&quot;, &quot;terms.md&quot;]
+    client.query.assert_called_once_with(&quot;refunds?&quot;, top_k=2)</code></pre></div><p>A bare <code>Mock</code> invents whatever the code asks for, so <code>client.search(...)</code> returned a new mock, and the test only failed by luck or not at all. With an autospec, the double has exactly the real class's methods <strong>and signatures</strong>: calling <code>search</code> raises <code>AttributeError</code>, and calling <code>query</code> with <code>k=</code> raises <code>TypeError</code> because the real method has no such parameter, the same errors production would hit. This is the cheapest protection against the main risk of mocking: tests passing against an API that does not exist.</p></div></details>
+</article>
+<article class="prob" id="p-the-forms-of-side-effect" data-pid="m13-3-the-forms-of-side-effect" data-type="predict" data-level="easy" data-answer="ConnectionError:  | ConnectionError: reset by peer
+[&quot;&#x27;first&#x27;&quot;, &#x27;TimeoutError: slow&#x27;, &quot;&#x27;third&#x27;&quot;, &#x27;StopIteration: &#x27;]
+&#x27;SPAM&#x27; 4">
+<header class="prob-head"><h3>4. The forms of side_effect</h3></header>
+<div class="code"><pre><code class="py">from unittest.mock import Mock
+
+def show(m, *args):
+    try:
+        return repr(m(*args))
+    except Exception as e:
+        return f&quot;{type(e).__name__}: {e}&quot;
+
+a = Mock(side_effect=ConnectionError)
+b = Mock(side_effect=ConnectionError(&quot;reset by peer&quot;))
+c = Mock(side_effect=[&quot;first&quot;, TimeoutError(&quot;slow&quot;), &quot;third&quot;])
+d = Mock(side_effect=lambda text: text.upper(), return_value=&quot;ignored&quot;)
+print(show(a), &quot;|&quot;, show(b))
+print([show(c) for _ in range(4)])
+print(show(d, &quot;spam&quot;), c.call_count)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception class or instance is raised. An iterable yields one item per call, raising items that are exceptions. A function's result wins over <code>return_value</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>ConnectionError:  | ConnectionError: reset by peer
+[&quot;&#x27;first&#x27;&quot;, &#x27;TimeoutError: slow&#x27;, &quot;&#x27;third&#x27;&quot;, &#x27;StopIteration: &#x27;]
+&#x27;SPAM&#x27; 4</pre></div><p>A class is instantiated and raised with no message; an instance is raised as it is. An iterable gives successive results, raising those that are exceptions, and when exhausted the mock raises <code>StopIteration</code>, a common surprise when a test calls the mock more often than expected. A function in <code>side_effect</code> is called with the same arguments and its result is returned, so <code>return_value</code> is ignored. The failed and exhausted calls still count towards <code>call_count</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-test-retries-with-a-mock-sleep" data-pid="m13-3-test-retries-with-a-mock-sleep" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Test retries with a mock sleep</h3></header>
+<div class="prob-q"><p><code>call_with_backoff(fn, sleep, attempts=3, base=1.0)</code> calls <code>fn()</code>; on <code>TimeoutError</code> or <code>ConnectionError</code> it calls <code>sleep(base * 2 ** i)</code> (1, 2, 4, ...) and tries again, up to <code>attempts</code> calls in total, re-raising the last error without sleeping after the final attempt; any other exception propagates at once. Write at least four tests using <code>Mock</code> objects for <code>fn</code> and <code>sleep</code> that pass here and catch five buggy versions. No test may really sleep.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5"># --- code under test (do not edit) ---
+def call_with_backoff(fn, sleep, attempts=3, base=1.0):
+    for i in range(attempts):
+        try:
+            return fn()
+        except (TimeoutError, ConnectionError):
+            if i == attempts - 1:
+                raise
+            sleep(base * 2 ** i)
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock, call
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BASE = '''
+def call_with_backoff(fn, sleep, attempts=3, base=1.0):
+    for i in range(attempts):
+        try:
+            return fn()
+        except (TimeoutError, ConnectionError):
+            if i == attempts - 1:
+                raise
+            sleep(base * 2 ** i)
+'''
+BUGS = {
+    "linear": BASE.replace("base * 2 ** i", "base * (i + 1)"),
+    "sleeps_after_last": BASE.replace("            if i == attempts - 1:\n                raise\n            sleep(base * 2 ** i)", "            sleep(base * 2 ** i)\n            if i == attempts - 1:\n                raise"),
+    "retries_everything": BASE.replace("except (TimeoutError, ConnectionError):", "except Exception:"),
+    "one_extra_attempt": BASE.replace("range(attempts)", "range(attempts + 1)").replace("i == attempts - 1", "i == attempts"),
+    "swallows_last": BASE.replace("                raise\n", "                return None\n"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BASE = &#x27;&#x27;&#x27;
+def call_with_backoff(fn, sleep, attempts=3, base=1.0):
+    for i in range(attempts):
+        try:
+            return fn()
+        except (TimeoutError, ConnectionError):
+            if i == attempts - 1:
+                raise
+            sleep(base * 2 ** i)
+&#x27;&#x27;&#x27;
+BUGS = {
+    &quot;linear&quot;: BASE.replace(&quot;base * 2 ** i&quot;, &quot;base * (i + 1)&quot;),
+    &quot;sleeps_after_last&quot;: BASE.replace(&quot;            if i == attempts - 1:\n                raise\n            sleep(base * 2 ** i)&quot;, &quot;            sleep(base * 2 ** i)\n            if i == attempts - 1:\n                raise&quot;),
+    &quot;retries_everything&quot;: BASE.replace(&quot;except (TimeoutError, ConnectionError):&quot;, &quot;except Exception:&quot;),
+    &quot;one_extra_attempt&quot;: BASE.replace(&quot;range(attempts)&quot;, &quot;range(attempts + 1)&quot;).replace(&quot;i == attempts - 1&quot;, &quot;i == attempts&quot;),
+    &quot;swallows_last&quot;: BASE.replace(&quot;                raise\n&quot;, &quot;                return None\n&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fn = Mock(side_effect=[TimeoutError(), ConnectionError(), "ok"])</code> and <code>sleep = Mock()</code>; then compare <code>sleep.call_args_list</code> with <code>[call(1.0), call(2.0)]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>All failures: <code>pytest.raises</code>, then check <code>fn.call_count</code> and that only two sleeps happened. A <code>ValueError</code> must not be retried.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def call_with_backoff(fn, sleep, attempts=3, base=1.0):
+    for i in range(attempts):
+        try:
+            return fn()
+        except (TimeoutError, ConnectionError):
+            if i == attempts - 1:
+                raise
+            sleep(base * 2 ** i)
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock, call
+
+
+def test_succeeds_after_transient_errors_with_exponential_waits():
+    fn = Mock(side_effect=[TimeoutError(), ConnectionError(), &quot;ok&quot;])
+    sleep = Mock()
+    assert call_with_backoff(fn, sleep, attempts=3, base=0.5) == &quot;ok&quot;
+    assert sleep.call_args_list == [call(0.5), call(1.0)]
+
+
+def test_gives_up_after_attempts_without_final_sleep():
+    fn = Mock(side_effect=TimeoutError(&quot;slow&quot;))
+    sleep = Mock()
+    with pytest.raises(TimeoutError, match=&quot;slow&quot;):
+        call_with_backoff(fn, sleep, attempts=4)
+    assert fn.call_count == 4
+    assert sleep.call_args_list == [call(1.0), call(2.0), call(4.0)]
+
+
+def test_other_errors_are_not_retried():
+    fn = Mock(side_effect=ValueError(&quot;bad request&quot;))
+    sleep = Mock()
+    with pytest.raises(ValueError):
+        call_with_backoff(fn, sleep)
+    assert fn.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_first_success_does_not_sleep():
+    fn = Mock(return_value=42)
+    sleep = Mock()
+    assert call_with_backoff(fn, sleep) == 42
+    sleep.assert_not_called()</code></pre></div><p>Because <code>sleep</code> is a parameter, the test passes a <code>Mock</code> and the "waiting" is just a recorded call, so a test of a 7-second backoff runs in microseconds and the waits themselves become checkable values. <code>side_effect</code> with a list scripts the dependency's behaviour call by call (two transient failures, then success). The assertions pin the observable contract: the exact wait sequence (exponential, not linear, which needs at least three waits, since 1 then 2 starts both sequences), no pointless sleep after the last attempt, the exact number of calls, the error re-raised, and non-transient errors not retried, which matters for LLM APIs where a 400 "bad request" will never succeed on retry while a 429 or timeout might.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-ttl-cache-with-a-fake-clock" data-pid="m13-3-test-a-ttl-cache-with-a-fake-clock" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Test a TTL cache with a fake clock</h3></header>
+<div class="prob-q"><p><code>TTLCache(ttl, clock)</code> stores values with an expiry time <code>clock() + ttl</code>; <code>get</code> returns the value while <code>clock()</code> is strictly before the expiry and <code>None</code> afterwards, deleting expired entries; <code>set</code> on an existing key refreshes its expiry; <code>len</code> counts live entries only. Write a <code>FakeClock</code> (or use a list and a lambda) and at least four tests that pass here and catch four buggy versions, without any real waiting.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6"># --- code under test (do not edit) ---
+class TTLCache:
+    def __init__(self, ttl, clock):
+        self.ttl, self.clock, self._data = ttl, clock, {}
+
+    def set(self, key, value):
+        self._data[key] = (value, self.clock() + self.ttl)
+
+    def get(self, key):
+        if key not in self._data:
+            return None
+        value, expires = self._data[key]
+        if self.clock() &gt;= expires:
+            del self._data[key]
+            return None
+        return value
+
+    def __len__(self):
+        now = self.clock()
+        return sum(1 for _, expires in self._data.values() if now &lt; expires)
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+assert "sleep" not in __source__.split("# --- tests")[1]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "inclusive_expiry": BASE.replace("if self.clock() >= expires:", "if self.clock() > expires:"),
+    "no_refresh": BASE.replace("        self._data[key] = (value, self.clock() + self.ttl)", "        self._data.setdefault(key, (value, self.clock() + self.ttl))"),
+    "len_counts_expired": BASE.replace("if now < expires)", ")"),
+    "ttl_ignored": BASE.replace("self.clock() + self.ttl)", "self.clock() + 60)"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+assert &quot;sleep&quot; not in __source__.split(&quot;# --- tests&quot;)[1]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;inclusive_expiry&quot;: BASE.replace(&quot;if self.clock() &gt;= expires:&quot;, &quot;if self.clock() &gt; expires:&quot;),
+    &quot;no_refresh&quot;: BASE.replace(&quot;        self._data[key] = (value, self.clock() + self.ttl)&quot;, &quot;        self._data.setdefault(key, (value, self.clock() + self.ttl))&quot;),
+    &quot;len_counts_expired&quot;: BASE.replace(&quot;if now &lt; expires)&quot;, &quot;)&quot;),
+    &quot;ttl_ignored&quot;: BASE.replace(&quot;self.clock() + self.ttl)&quot;, &quot;self.clock() + 60)&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A fake clock: <code>now = [0.0]</code> and <code>clock = lambda: now[0]</code>; advance with <code>now[0] += 10</code>. Or a small class with <code>__call__</code> and <code>advance</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Test exactly at the boundary (<code>ttl</code> seconds later), refreshing with a second <code>set</code>, <code>len</code> after expiry, and a ttl other than 60.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+class TTLCache:
+    def __init__(self, ttl, clock):
+        self.ttl, self.clock, self._data = ttl, clock, {}
+
+    def set(self, key, value):
+        self._data[key] = (value, self.clock() + self.ttl)
+
+    def get(self, key):
+        if key not in self._data:
+            return None
+        value, expires = self._data[key]
+        if self.clock() &gt;= expires:
+            del self._data[key]
+            return None
+        return value
+
+    def __len__(self):
+        now = self.clock()
+        return sum(1 for _, expires in self._data.values() if now &lt; expires)
+
+
+# --- tests ---
+import pytest
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+@pytest.fixture
+def cache(clock):
+    return TTLCache(ttl=30, clock=clock)
+
+
+def test_value_available_until_just_before_expiry(cache, clock):
+    cache.set(&quot;q&quot;, &quot;5 days&quot;)
+    clock.advance(29.999)
+    assert cache.get(&quot;q&quot;) == &quot;5 days&quot;
+
+
+def test_expires_exactly_at_ttl(cache, clock):
+    cache.set(&quot;q&quot;, &quot;5 days&quot;)
+    clock.advance(30)
+    assert cache.get(&quot;q&quot;) is None
+
+
+def test_set_refreshes_expiry(cache, clock):
+    cache.set(&quot;q&quot;, &quot;old&quot;)
+    clock.advance(20)
+    cache.set(&quot;q&quot;, &quot;new&quot;)
+    clock.advance(20)
+    assert cache.get(&quot;q&quot;) == &quot;new&quot;
+
+
+def test_len_counts_only_live_entries(cache, clock):
+    cache.set(&quot;a&quot;, 1)
+    clock.advance(15)
+    cache.set(&quot;b&quot;, 2)
+    clock.advance(20)
+    assert len(cache) == 1
+
+
+def test_missing_key(cache):
+    assert cache.get(&quot;nope&quot;) is None</code></pre></div><p>Injecting the clock turns time into test data: the fake starts at an arbitrary instant, and <code>advance</code> moves it by exact amounts, so the boundary (29.999 versus 30 seconds) can be tested precisely, which no test using real time could do reliably. The fixtures compose: <code>cache</code> asks for the same <code>clock</code> instance the test receives, so the test controls the cache's notion of now. The cases mirror the specification: strictly-before semantics at the boundary, refresh on overwrite, live-only counting, and a TTL other than the mutant's hard-coded 60. Caches of LLM answers and embeddings rely on exactly this logic.</p></div></details>
+</article>
+<article class="prob" id="p-checking-only-the-last-call" data-pid="m13-3-checking-only-the-last-call" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Checking only the last call</h3></header>
+<div class="prob-q"><p><code>fetch_all(client, ids)</code> must call <code>client.get(id, timeout=5)</code> for <strong>every</strong> id. The test uses <code>assert_called_with</code>, which only checks the <strong>last</strong> call, so the graded buggy version (which forgets the timeout on all but the last request) passes. Fix the test to check every call, in order.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7"># --- code under test (do not edit) ---
+def fetch_all(client, ids):
+    return [client.get(i, timeout=5) for i in ids]
+
+
+# --- tests ---
+from unittest.mock import Mock
+
+
+def test_fetch_all_uses_timeout():
+    client = Mock()
+    client.get.side_effect = lambda i, timeout=None: {&quot;id&quot;: i}
+    assert fetch_all(client, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]) == [{&quot;id&quot;: &quot;a&quot;}, {&quot;id&quot;: &quot;b&quot;}, {&quot;id&quot;: &quot;c&quot;}]
+    client.get.assert_called_with(&quot;c&quot;, timeout=5)
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 1, good["output"][-800:]
+BUG = '''
+def fetch_all(client, ids):
+    out = [client.get(i) for i in ids[:-1]]
+    if ids:
+        out.append(client.get(ids[-1], timeout=5))
+    return out
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 1, good[&quot;output&quot;][-800:]
+BUG = &#x27;&#x27;&#x27;
+def fetch_all(client, ids):
+    out = [client.get(i) for i in ids[:-1]]
+    if ids:
+        out.append(client.get(ids[-1], timeout=5))
+    return out
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare <code>client.get.call_args_list</code> with <code>[call("a", timeout=5), call("b", timeout=5), call("c", timeout=5)]</code>, or use <code>assert_has_calls</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def fetch_all(client, ids):
+    return [client.get(i, timeout=5) for i in ids]
+
+
+# --- tests ---
+from unittest.mock import Mock, call
+
+
+def test_fetch_all_uses_timeout():
+    client = Mock()
+    client.get.side_effect = lambda i, timeout=None: {&quot;id&quot;: i}
+    assert fetch_all(client, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]) == [{&quot;id&quot;: &quot;a&quot;}, {&quot;id&quot;: &quot;b&quot;}, {&quot;id&quot;: &quot;c&quot;}]
+    assert client.get.call_args_list == [call(&quot;a&quot;, timeout=5), call(&quot;b&quot;, timeout=5), call(&quot;c&quot;, timeout=5)]</code></pre></div><p><code>assert_called_with</code> compares only <code>call_args</code>, the most recent call, so any mistake in earlier calls is invisible; its name invites exactly this misuse. Comparing <code>call_args_list</code> with the full expected list checks every call, their order and their count. <code>assert_has_calls(calls)</code> checks that the calls appear as a consecutive sequence (in any surrounding context), and <code>assert_any_call</code> that at least one matches; choose the one that states what you mean. Missing timeouts are a real production issue: one request without a timeout can hang a worker indefinitely.</p></div></details>
+</article>
+<article class="prob" id="p-reading-a-mock-s-records" data-pid="m13-3-reading-a-mock-s-records" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Reading a mock's records</h3></header>
+<div class="prob-q"><p>Fill in <code>count</code> and <code>last</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from unittest.mock import Mock
+
+tool = Mock(return_value=&quot;42&quot;)
+tool(&quot;2 * 21&quot;)
+count, last = tool.call_count, tool.call_args.args
+tool(&quot;6 * 7&quot;, precision=0)
+count, last = tool.call_count, tool.call_args.kwargs
+tool.reset_mock()
+count, last = tool.call_count, tool.call_args
+tool.side_effect = KeyError(&quot;unknown&quot;)
+try:
+    tool(&quot;bad&quot;)
+except KeyError:
+    pass
+count, last = tool.call_count, tool.return_value</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>count</code></th><th><code>last</code></th></tr><tr><td>one call</td><td><input class="cell" data-a="1" data-s="1" aria-label="count at one call" autocomplete="off"></td><td><input class="cell" data-a="(&#x27;2 * 21&#x27;,)" data-s="(&#x27;2 * 21&#x27;,)" aria-label="last at one call" autocomplete="off"></td></tr><tr><td>with a keyword</td><td><input class="cell" data-a="2" data-s="2" aria-label="count at with a keyword" autocomplete="off"></td><td><input class="cell" data-a="{&#x27;precision&#x27;: 0}" data-s="{&#x27;precision&#x27;: 0}" aria-label="last at with a keyword" autocomplete="off"></td></tr><tr><td>after reset</td><td><input class="cell" data-a="0" data-s="0" aria-label="count at after reset" autocomplete="off"></td><td><input class="cell" data-a="None" data-s="None" aria-label="last at after reset" autocomplete="off"></td></tr><tr><td>after a raising call</td><td><input class="cell" data-a="1" data-s="1" aria-label="count at after a raising call" autocomplete="off"></td><td><input class="cell" data-a="&#x27;42&#x27;" data-s="42" aria-label="last at after a raising call" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>reset_mock</code> clears the call records but keeps the configured <code>return_value</code>. A call that raises is still recorded.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>count</code></th><th><code>last</code></th></tr><tr><td>one call</td><td><code>1</code></td><td><code>(&#x27;2 * 21&#x27;,)</code></td></tr><tr><td>with a keyword</td><td><code>2</code></td><td><code>{&#x27;precision&#x27;: 0}</code></td></tr><tr><td>after reset</td><td><code>0</code></td><td><code>None</code></td></tr><tr><td>after a raising call</td><td><code>1</code></td><td><code>&#x27;42&#x27;</code></td></tr></table></div><p>Every call is recorded with its positional and keyword arguments. <code>reset_mock()</code> clears the history, so <code>call_args</code> becomes <code>None</code>, but keeps configuration such as <code>return_value</code> (pass <code>return_value=True</code> to clear it too), which is useful when one mock is reused across phases of a test. A call that raises through <code>side_effect</code> still counts, which is how tests verify that a failing dependency was tried exactly once.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-rag-answer-function-with-fakes" data-pid="m13-3-test-a-rag-answer-function-with-fakes" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>9. Test a RAG answer function with fakes</h3></header>
+<div class="prob-q"><p><code>answer(question, retriever, llm, k=3)</code> retrieves <code>k</code> chunks; if there are none it returns <code>"I don't know."</code> <strong>without calling the model</strong>; otherwise it builds a prompt listing each chunk as <code>[source] text</code>, calls <code>llm(prompt)</code>, and returns <code>{"answer": reply, "sources": [...]}</code> with the unique sources in retrieval order. Write a small fake retriever class and use a <code>Mock</code> for <code>llm</code>; at least four tests must pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9"># --- code under test (do not edit) ---
+def answer(question, retriever, llm, k=3):
+    chunks = retriever.retrieve(question, k=k)
+    if not chunks:
+        return {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: []}
+    context = &quot;\n&quot;.join(f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks)
+    reply = llm(f&quot;Answer using only the context.\n{context}\n\nQuestion: {question}&quot;)
+    sources = list(dict.fromkeys(c[&quot;source&quot;] for c in chunks))
+    return {&quot;answer&quot;: reply, &quot;sources&quot;: sources}
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "calls_llm_without_context": BASE.replace('    if not chunks:\n        return {"answer": "I don\'t know.", "sources": []}\n', ""),
+    "ignores_k": BASE.replace("retriever.retrieve(question, k=k)", "retriever.retrieve(question, k=3)"),
+    "sorted_sources": BASE.replace("list(dict.fromkeys(c[\"source\"] for c in chunks))", "sorted(set(c[\"source\"] for c in chunks))"),
+    "duplicate_sources": BASE.replace("list(dict.fromkeys(c[\"source\"] for c in chunks))", "[c[\"source\"] for c in chunks]"),
+    "question_missing": BASE.replace("\\n\\nQuestion: {question}", ""),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;calls_llm_without_context&quot;: BASE.replace(&#x27;    if not chunks:\n        return {&quot;answer&quot;: &quot;I don\&#x27;t know.&quot;, &quot;sources&quot;: []}\n&#x27;, &quot;&quot;),
+    &quot;ignores_k&quot;: BASE.replace(&quot;retriever.retrieve(question, k=k)&quot;, &quot;retriever.retrieve(question, k=3)&quot;),
+    &quot;sorted_sources&quot;: BASE.replace(&quot;list(dict.fromkeys(c[\&quot;source\&quot;] for c in chunks))&quot;, &quot;sorted(set(c[\&quot;source\&quot;] for c in chunks))&quot;),
+    &quot;duplicate_sources&quot;: BASE.replace(&quot;list(dict.fromkeys(c[\&quot;source\&quot;] for c in chunks))&quot;, &quot;[c[\&quot;source\&quot;] for c in chunks]&quot;),
+    &quot;question_missing&quot;: BASE.replace(&quot;\\n\\nQuestion: {question}&quot;, &quot;&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A fake retriever: <code>class FakeRetriever: def __init__(self, chunks): ...; def retrieve(self, question, k): self.calls.append((question, k)); return self.chunks[:k]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use sources in non-alphabetical order with a repeat (<code>terms.md</code>, <code>faq.md</code>, <code>terms.md</code>) to expose ordering and duplicate bugs.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def answer(question, retriever, llm, k=3):
+    chunks = retriever.retrieve(question, k=k)
+    if not chunks:
+        return {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: []}
+    context = &quot;\n&quot;.join(f&quot;[{c[&#x27;source&#x27;]}] {c[&#x27;text&#x27;]}&quot; for c in chunks)
+    reply = llm(f&quot;Answer using only the context.\n{context}\n\nQuestion: {question}&quot;)
+    sources = list(dict.fromkeys(c[&quot;source&quot;] for c in chunks))
+    return {&quot;answer&quot;: reply, &quot;sources&quot;: sources}
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+
+
+class FakeRetriever:
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.calls = []
+
+    def retrieve(self, question, k):
+        self.calls.append((question, k))
+        return self.chunks[:k]
+
+
+CHUNKS = [
+    {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;No refunds after 30 days.&quot;},
+    {&quot;source&quot;: &quot;faq.md&quot;, &quot;text&quot;: &quot;Refunds take 5 days.&quot;},
+    {&quot;source&quot;: &quot;terms.md&quot;, &quot;text&quot;: &quot;Refunds go to the original card.&quot;},
+]
+
+
+def test_no_chunks_means_no_model_call():
+    llm = Mock()
+    assert answer(&quot;Refunds?&quot;, FakeRetriever([]), llm) == {&quot;answer&quot;: &quot;I don&#x27;t know.&quot;, &quot;sources&quot;: []}
+    llm.assert_not_called()
+
+
+def test_prompt_contains_context_and_question():
+    llm = Mock(return_value=&quot;5 days.&quot;)
+    answer(&quot;How long do refunds take?&quot;, FakeRetriever(CHUNKS), llm)
+    prompt = llm.call_args.args[0]
+    assert &quot;[faq.md] Refunds take 5 days.&quot; in prompt and &quot;How long do refunds take?&quot; in prompt
+
+
+def test_sources_unique_in_retrieval_order():
+    llm = Mock(return_value=&quot;5 days.&quot;)
+    result = answer(&quot;Refunds?&quot;, FakeRetriever(CHUNKS), llm)
+    assert result == {&quot;answer&quot;: &quot;5 days.&quot;, &quot;sources&quot;: [&quot;terms.md&quot;, &quot;faq.md&quot;]}
+
+
+def test_passes_k_to_retriever():
+    retriever = FakeRetriever(CHUNKS)
+    answer(&quot;Refunds?&quot;, retriever, Mock(return_value=&quot;x&quot;), k=2)
+    assert retriever.calls == [(&quot;Refunds?&quot;, 2)]</code></pre></div><p>Two kinds of double serve two purposes. The <strong>fake</strong> retriever behaves like a tiny real one (returns at most <code>k</code> chunks and remembers what it was asked), so tests can set up any retrieval result, including none. The <strong>mock</strong> model records the prompt, so tests can check what reaches the model, without depending on its exact wording, and can assert that no call is made when there is no context, the guard that prevents hallucinated answers and wasted tokens. Sources in deliberately unsorted order with a repeat expose both the sorting and the duplicate mutants; the citation order should follow relevance.</p></div></details>
+</article>
+<article class="prob" id="p-patching-the-right-name" data-pid="m13-3-patching-the-right-name" data-type="predict" data-level="medium" data-answer="{&#x27;test_patch_random_module_a&#x27;: &#x27;passed&#x27;, &#x27;test_patch_random_module_b&#x27;: &#x27;failed&#x27;, &#x27;test_patch_sampler_name&#x27;: &#x27;passed&#x27;}">
+<header class="prob-head"><h3>10. Patching the right name</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SAMPLER = &#x27;&#x27;&#x27;
+from random import random
+import random as rnd
+
+def keep_from_import(rate):
+    return random() &lt; rate
+
+def keep_module_lookup(rate):
+    return rnd.random() &lt; rate
+&#x27;&#x27;&#x27;
+SRC = &#x27;&#x27;&#x27;
+import random
+import sampler
+
+def test_patch_random_module_a(monkeypatch):
+    monkeypatch.setattr(random, &quot;random&quot;, lambda: -1.0)
+    assert sampler.keep_module_lookup(0.0) is True
+
+def test_patch_random_module_b(monkeypatch):
+    monkeypatch.setattr(random, &quot;random&quot;, lambda: -1.0)
+    assert sampler.keep_from_import(0.0) is True
+
+def test_patch_sampler_name(monkeypatch):
+    monkeypatch.setattr(sampler, &quot;random&quot;, lambda: -1.0)
+    assert sampler.keep_from_import(0.0) is True
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC, {&quot;sampler&quot;: SAMPLER})
+print(r[&quot;outcomes&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from random import random</code> copies the function into <code>sampler</code>'s own namespace when the module is imported; <code>rnd.random()</code> looks the attribute up on every call.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The fake returns -1.0, which the real <code>random()</code> (always in <code>[0, 1)</code>) never does, so each test passes only if the patch took effect.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;test_patch_random_module_a&#x27;: &#x27;passed&#x27;, &#x27;test_patch_random_module_b&#x27;: &#x27;failed&#x27;, &#x27;test_patch_sampler_name&#x27;: &#x27;passed&#x27;}</pre></div><p><code>keep_module_lookup</code> calls <code>rnd.random()</code>, which reads the attribute from the <code>random</code> module at call time, so patching the module works. <code>keep_from_import</code> uses its own global name <code>random</code>, bound to the original function when <code>sampler</code> was imported, so patching the <code>random</code> module has no effect: the real <code>random()</code> is never below 0, and the assert fails. Patching <code>sampler.random</code>, the name where it is looked up, works.</p></div></details>
+</article>
+<article class="prob" id="p-a-scripted-fake-llm" data-pid="m13-3-a-scripted-fake-llm" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. A scripted fake LLM</h3></header>
+<div class="prob-q"><p>Write <code>FakeLLM(script)</code>, a fake model client for tests. <code>script</code> is a list of <code>(substring, reply)</code> pairs. <code>complete(prompt)</code> records the prompt in <code>self.prompts</code>, returns the reply of the <strong>first</strong> pair whose substring occurs in the prompt (a reply that is an exception instance is raised instead), and raises <code>AssertionError(f"unexpected prompt: {prompt[:40]!r}")</code> when nothing matches. Add <code>assert_all_used()</code>, raising <code>AssertionError</code> naming the substrings that never matched.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">class FakeLLM:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">llm = FakeLLM([("Classify", "spam"), ("Summarise", "A short summary."), ("Translate", TimeoutError("model timed out"))])
+assert llm.complete("Classify: WIN A PRIZE") == "spam" and llm.complete("Classify: lunch?") == "spam"
+assert llm.complete("Please Summarise this") == "A short summary."
+try:
+    llm.complete("Translate to French")
+    assert False
+except TimeoutError as e:
+    assert str(e) == "model timed out"
+try:
+    llm.complete("Write a poem about refunds, a very long one")
+    assert False
+except AssertionError as e:
+    assert str(e) == "unexpected prompt: 'Write a poem about refunds, a very long '"
+assert len(llm.prompts) == 5
+unused = FakeLLM([("Classify", "spam"), ("Summarise", "x"), ("Rank", "1")])
+unused.complete("Classify this")
+try:
+    unused.assert_all_used()
+    assert False
+except AssertionError as e:
+    assert "Summarise" in str(e) and "Rank" in str(e) and "Classify" not in str(e)
+llm.assert_all_used()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">llm = FakeLLM([(&quot;Classify&quot;, &quot;spam&quot;), (&quot;Summarise&quot;, &quot;A short summary.&quot;), (&quot;Translate&quot;, TimeoutError(&quot;model timed out&quot;))])
+assert llm.complete(&quot;Classify: WIN A PRIZE&quot;) == &quot;spam&quot; and llm.complete(&quot;Classify: lunch?&quot;) == &quot;spam&quot;
+assert llm.complete(&quot;Please Summarise this&quot;) == &quot;A short summary.&quot;
+try:
+    llm.complete(&quot;Translate to French&quot;)
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;model timed out&quot;
+try:
+    llm.complete(&quot;Write a poem about refunds, a very long one&quot;)
+    assert False
+except AssertionError as e:
+    assert str(e) == &quot;unexpected prompt: &#x27;Write a poem about refunds, a very long &#x27;&quot;
+assert len(llm.prompts) == 5
+unused = FakeLLM([(&quot;Classify&quot;, &quot;spam&quot;), (&quot;Summarise&quot;, &quot;x&quot;), (&quot;Rank&quot;, &quot;1&quot;)])
+unused.complete(&quot;Classify this&quot;)
+try:
+    unused.assert_all_used()
+    assert False
+except AssertionError as e:
+    assert &quot;Summarise&quot; in str(e) and &quot;Rank&quot; in str(e) and &quot;Classify&quot; not in str(e)
+llm.assert_all_used()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a set of substrings that matched; <code>assert_all_used</code> compares it with all substrings, in script order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class FakeLLM:
+    def __init__(self, script):
+        self.script = list(script)
+        self.prompts = []
+        self._used = set()
+
+    def complete(self, prompt):
+        self.prompts.append(prompt)
+        for substring, reply in self.script:
+            if substring in prompt:
+                self._used.add(substring)
+                if isinstance(reply, BaseException):
+                    raise reply
+                return reply
+        raise AssertionError(f&quot;unexpected prompt: {prompt[:40]!r}&quot;)
+
+    def assert_all_used(self):
+        unused = [s for s, _ in self.script if s not in self._used]
+        if unused:
+            raise AssertionError(f&quot;script entries never used: {unused}&quot;)</code></pre></div><p>A scripted fake is the workhorse for testing LLM-driven code: tests state which prompts to expect and what the "model" answers, including failures, and the fake checks the other direction too: an unexpected prompt fails loudly instead of returning a meaningless mock, and <code>assert_all_used</code> catches code paths that silently stopped calling the model. Matching on substrings rather than exact prompts keeps tests robust to wording changes while still pinning the important part. Libraries offer the same idea (LangChain's fake chat models, <code>respx</code> or <code>responses</code> for HTTP-level fakes, VCR-style cassettes that replay recorded responses); 13.4 uses this fake for an agent.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-test-a-tool-calling-agent-loop" data-pid="m13-3-test-a-tool-calling-agent-loop" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. Test a tool-calling agent loop</h3></header>
+<div class="prob-q"><p><code>run_agent(llm, tools, question, max_steps=4)</code> sends <code>messages</code> to <code>llm.next(messages)</code>, which returns either <code>{"tool": name, "args": {...}}</code> or <code>{"answer": text}</code>. For a tool call it runs <code>tools[name](**args)</code> and appends the result as a <code>{"role": "tool", "name": ..., "content": str(result)}</code> message; an unknown tool appends a <code>"tool"</code> message with content <code>"error: unknown tool NAME"</code>; an answer is returned. After <code>max_steps</code> model calls without an answer it raises <code>RuntimeError</code>. Write at least five tests with <code>Mock(side_effect=[...])</code> for the model and mocks for tools. They must pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12"># --- code under test (do not edit) ---
+def run_agent(llm, tools, question, max_steps=4):
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]
+    for _ in range(max_steps):
+        step = llm.next(list(messages))
+        if &quot;answer&quot; in step:
+            return step[&quot;answer&quot;]
+        name = step[&quot;tool&quot;]
+        if name in tools:
+            content = str(tools[name](**step.get(&quot;args&quot;, {})))
+        else:
+            content = f&quot;error: unknown tool {name}&quot;
+        messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;name&quot;: name, &quot;content&quot;: content})
+    raise RuntimeError(f&quot;no answer after {max_steps} steps&quot;)
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "drops_args": BASE.replace("tools[name](**step.get(\"args\", {}))", "tools[name]()"),
+    "unknown_tool_crashes": BASE.replace("        if name in tools:\n            content = str(tools[name](**step.get(\"args\", {})))\n        else:\n            content = f\"error: unknown tool {name}\"\n",
+                                         "        content = str(tools[name](**step.get(\"args\", {})))\n"),
+    "results_not_sent": BASE.replace("        messages.append({\"role\": \"tool\", \"name\": name, \"content\": content})\n", ""),
+    "off_by_one_steps": BASE.replace("for _ in range(max_steps):", "for _ in range(max_steps + 1):"),
+    "returns_none": BASE.replace('    raise RuntimeError(f"no answer after {max_steps} steps")', "    return None"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;drops_args&quot;: BASE.replace(&quot;tools[name](**step.get(\&quot;args\&quot;, {}))&quot;, &quot;tools[name]()&quot;),
+    &quot;unknown_tool_crashes&quot;: BASE.replace(&quot;        if name in tools:\n            content = str(tools[name](**step.get(\&quot;args\&quot;, {})))\n        else:\n            content = f\&quot;error: unknown tool {name}\&quot;\n&quot;,
+                                         &quot;        content = str(tools[name](**step.get(\&quot;args\&quot;, {})))\n&quot;),
+    &quot;results_not_sent&quot;: BASE.replace(&quot;        messages.append({\&quot;role\&quot;: \&quot;tool\&quot;, \&quot;name\&quot;: name, \&quot;content\&quot;: content})\n&quot;, &quot;&quot;),
+    &quot;off_by_one_steps&quot;: BASE.replace(&quot;for _ in range(max_steps):&quot;, &quot;for _ in range(max_steps + 1):&quot;),
+    &quot;returns_none&quot;: BASE.replace(&#x27;    raise RuntimeError(f&quot;no answer after {max_steps} steps&quot;)&#x27;, &quot;    return None&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>llm = Mock(); llm.next.side_effect = [{"tool": "calc", "args": {"expr": "2*21"}}, {"answer": "42"}]</code>, and <code>calc = Mock(return_value=42)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The messages passed on the second model call are in <code>llm.next.call_args_list[1].args[0]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the step limit, make the model always ask for a tool (<code>side_effect</code> from a generator or a long list) and check <code>llm.next.call_count</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def run_agent(llm, tools, question, max_steps=4):
+    messages = [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: question}]
+    for _ in range(max_steps):
+        step = llm.next(list(messages))
+        if &quot;answer&quot; in step:
+            return step[&quot;answer&quot;]
+        name = step[&quot;tool&quot;]
+        if name in tools:
+            content = str(tools[name](**step.get(&quot;args&quot;, {})))
+        else:
+            content = f&quot;error: unknown tool {name}&quot;
+        messages.append({&quot;role&quot;: &quot;tool&quot;, &quot;name&quot;: name, &quot;content&quot;: content})
+    raise RuntimeError(f&quot;no answer after {max_steps} steps&quot;)
+
+
+# --- tests ---
+import pytest
+from unittest.mock import Mock
+
+
+def model(*steps):
+    llm = Mock()
+    llm.next.side_effect = list(steps)
+    return llm
+
+
+def test_direct_answer():
+    llm = model({&quot;answer&quot;: &quot;Hello&quot;})
+    assert run_agent(llm, {}, &quot;Hi&quot;) == &quot;Hello&quot;
+    assert llm.next.call_args.args[0] == [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Hi&quot;}]
+
+
+def test_tool_called_with_args_and_result_sent_back():
+    calc = Mock(return_value=42)
+    llm = model({&quot;tool&quot;: &quot;calc&quot;, &quot;args&quot;: {&quot;expr&quot;: &quot;2*21&quot;}}, {&quot;answer&quot;: &quot;It is 42.&quot;})
+    assert run_agent(llm, {&quot;calc&quot;: calc}, &quot;What is 2*21?&quot;) == &quot;It is 42.&quot;
+    calc.assert_called_once_with(expr=&quot;2*21&quot;)
+    second = llm.next.call_args_list[1].args[0]
+    assert second[-1] == {&quot;role&quot;: &quot;tool&quot;, &quot;name&quot;: &quot;calc&quot;, &quot;content&quot;: &quot;42&quot;}
+
+
+def test_unknown_tool_is_reported_to_the_model():
+    llm = model({&quot;tool&quot;: &quot;browse&quot;}, {&quot;answer&quot;: &quot;Sorry.&quot;})
+    assert run_agent(llm, {}, &quot;Look it up&quot;) == &quot;Sorry.&quot;
+    assert llm.next.call_args_list[1].args[0][-1][&quot;content&quot;] == &quot;error: unknown tool browse&quot;
+
+
+def test_stops_after_max_steps():
+    search = Mock(return_value=&quot;nothing&quot;)
+    llm = model(*[{&quot;tool&quot;: &quot;search&quot;, &quot;args&quot;: {&quot;q&quot;: &quot;x&quot;}}] * 10)
+    with pytest.raises(RuntimeError, match=&quot;3 steps&quot;):
+        run_agent(llm, {&quot;search&quot;: search}, &quot;Loop forever&quot;, max_steps=3)
+    assert llm.next.call_count == 3 and search.call_count == 3
+
+
+def test_messages_accumulate_in_order():
+    lookup = Mock(side_effect=[&quot;A&quot;, &quot;B&quot;])
+    llm = model({&quot;tool&quot;: &quot;lookup&quot;}, {&quot;tool&quot;: &quot;lookup&quot;}, {&quot;answer&quot;: &quot;done&quot;})
+    run_agent(llm, {&quot;lookup&quot;: lookup}, &quot;q&quot;)
+    third = llm.next.call_args_list[2].args[0]
+    assert [m[&quot;content&quot;] for m in third] == [&quot;q&quot;, &quot;A&quot;, &quot;B&quot;]</code></pre></div><p>The model is scripted step by step with <code>side_effect</code>, so each test drives the loop down one path: answer at once, one tool round trip, an unknown tool, a model that never stops, and several rounds. Because the code passes a <strong>copy</strong> of the messages on each call, <code>call_args_list</code> records exactly what the model saw at each step, which is what lets the tests check that tool results are fed back in order; if the code passed the same list object, every recorded call would show the final state, a classic trap when asserting on mutable arguments. The step-limit test protects against runaway agents that burn tokens, and checking the counts (exactly 3 model calls and 3 tool calls) catches the off-by-one.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-an-over-mocked-test-suite" data-pid="m13-3-read-the-code-an-over-mocked-test-suite" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>13. Read the code: an over-mocked test suite</h3></header>
+<div class="prob-q"><p>These tests for <code>rank_candidates</code> patch the function's own helper <code>_score</code>, so they pass whatever the real scoring does, and they assert on private calls. The graded buggy versions break the scoring (wrong weights, reversed order, a missing tie-break) and all pass. Rewrite the tests to check <strong>behaviour</strong> through the public function only: no patching of <code>_score</code>, no assertions on private helpers. They must pass here and catch the bugs.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13"># --- code under test (do not edit) ---
+def _score(candidate):
+    # 70% relevance, 30% freshness, both in [0, 1]
+    return 0.7 * candidate[&quot;relevance&quot;] + 0.3 * candidate[&quot;freshness&quot;]
+
+
+def rank_candidates(candidates, k=3):
+    ranked = sorted(candidates, key=lambda c: (-_score(c), c[&quot;id&quot;]))
+    return [c[&quot;id&quot;] for c in ranked[:k]]
+
+
+# --- tests ---
+import sys
+from unittest.mock import patch
+
+
+def test_rank_uses_score():
+    module = sys.modules[__name__]
+    with patch.object(module, &quot;_score&quot;, side_effect=lambda c: c[&quot;relevance&quot;]) as fake:
+        result = rank_candidates([{&quot;id&quot;: &quot;a&quot;, &quot;relevance&quot;: 0.2, &quot;freshness&quot;: 0}, {&quot;id&quot;: &quot;b&quot;, &quot;relevance&quot;: 0.9, &quot;freshness&quot;: 0}])
+    assert result == [&quot;b&quot;, &quot;a&quot;]
+    assert fake.call_count == 2
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split("# --- tests")[1]
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 3, good["output"][-800:]
+assert "patch" not in tests_part and "_score" not in tests_part
+BASE = __source__.split("# --- code under test (do not edit) ---")[1].split("# --- tests")[0]
+BUGS = {
+    "weights_swapped": BASE.replace("0.7 * candidate[\"relevance\"] + 0.3 * candidate[\"freshness\"]", "0.3 * candidate[\"relevance\"] + 0.7 * candidate[\"freshness\"]"),
+    "ascending": BASE.replace("key=lambda c: (-_score(c), c[\"id\"])", "key=lambda c: (_score(c), c[\"id\"])"),
+    "no_tie_break": BASE.replace("key=lambda c: (-_score(c), c[\"id\"])", "key=lambda c: -_score(c)"),
+    "ignores_k": BASE.replace("ranked[:k]", "ranked[:3]"),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 3, good[&quot;output&quot;][-800:]
+assert &quot;patch&quot; not in tests_part and &quot;_score&quot; not in tests_part
+BASE = __source__.split(&quot;# --- code under test (do not edit) ---&quot;)[1].split(&quot;# --- tests&quot;)[0]
+BUGS = {
+    &quot;weights_swapped&quot;: BASE.replace(&quot;0.7 * candidate[\&quot;relevance\&quot;] + 0.3 * candidate[\&quot;freshness\&quot;]&quot;, &quot;0.3 * candidate[\&quot;relevance\&quot;] + 0.7 * candidate[\&quot;freshness\&quot;]&quot;),
+    &quot;ascending&quot;: BASE.replace(&quot;key=lambda c: (-_score(c), c[\&quot;id\&quot;])&quot;, &quot;key=lambda c: (_score(c), c[\&quot;id\&quot;])&quot;),
+    &quot;no_tie_break&quot;: BASE.replace(&quot;key=lambda c: (-_score(c), c[\&quot;id\&quot;])&quot;, &quot;key=lambda c: -_score(c)&quot;),
+    &quot;ignores_k&quot;: BASE.replace(&quot;ranked[:k]&quot;, &quot;ranked[:3]&quot;),
+}
+assert all(b != BASE for b in BUGS.values()), [k for k, b in BUGS.items() if b == BASE]
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Choose candidates whose order depends on the weights: one high in relevance only, one high in freshness only.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For the tie-break, two candidates with identical scores given in reverse id order; for <code>k</code>, ask for 1 and for 4.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def _score(candidate):
+    # 70% relevance, 30% freshness, both in [0, 1]
+    return 0.7 * candidate[&quot;relevance&quot;] + 0.3 * candidate[&quot;freshness&quot;]
+
+
+def rank_candidates(candidates, k=3):
+    ranked = sorted(candidates, key=lambda c: (-_score(c), c[&quot;id&quot;]))
+    return [c[&quot;id&quot;] for c in ranked[:k]]
+
+
+# --- tests ---
+import pytest
+
+
+def cand(id, relevance, freshness):
+    return {&quot;id&quot;: id, &quot;relevance&quot;: relevance, &quot;freshness&quot;: freshness}
+
+
+def test_relevance_weighs_more_than_freshness():
+    relevant = cand(&quot;relevant&quot;, 0.9, 0.0)
+    fresh = cand(&quot;fresh&quot;, 0.0, 1.0)
+    assert rank_candidates([fresh, relevant]) == [&quot;relevant&quot;, &quot;fresh&quot;]
+
+
+def test_best_first():
+    items = [cand(&quot;low&quot;, 0.1, 0.1), cand(&quot;high&quot;, 1.0, 1.0), cand(&quot;mid&quot;, 0.5, 0.5)]
+    assert rank_candidates(items) == [&quot;high&quot;, &quot;mid&quot;, &quot;low&quot;]
+
+
+def test_ties_broken_by_id():
+    items = [cand(&quot;b&quot;, 0.5, 0.5), cand(&quot;a&quot;, 0.5, 0.5)]
+    assert rank_candidates(items) == [&quot;a&quot;, &quot;b&quot;]
+
+
+@pytest.mark.parametrize(&quot;k,expected&quot;, [(1, [&quot;high&quot;]), (4, [&quot;high&quot;, &quot;mid&quot;, &quot;low&quot;])])
+def test_k_limits_results(k, expected):
+    items = [cand(&quot;low&quot;, 0.1, 0.1), cand(&quot;high&quot;, 1.0, 1.0), cand(&quot;mid&quot;, 0.5, 0.5)]
+    assert rank_candidates(items, k=k) == expected</code></pre></div><p>Patching the unit's own helper replaced the logic under test with the test's own idea of it, so the test verified only that <code>sorted</code> calls a key function, and asserting <code>call_count == 2</code> pinned an implementation detail that a harmless refactor (caching scores) would break. Mock <strong>boundaries</strong> (the network, the model, the clock), not your own pure code. The rewritten tests use inputs chosen so that the specification decides the order: a relevance-only candidate beats a freshness-only one only if relevance weighs more, identical scores reveal the tie-break, and <code>k</code> values below and above the list size pin the limit. Each is a statement about what users of the function can rely on.</p></div></details>
+</article>
+<article class="prob" id="p-spec-autospec-and-magicmock" data-pid="m13-3-spec-autospec-and-magicmock" data-type="predict" data-level="hard" data-answer="AttributeError ok TypeError
+ok TypeError
+True TypeError 0 []
+AttributeError ok">
+<header class="prob-head"><h3>14. spec, autospec and MagicMock</h3></header>
+<div class="code"><pre><code class="py">from unittest.mock import MagicMock, Mock, create_autospec
+
+class Embedder:
+    dim = 384
+    def embed(self, texts, batch_size=32):
+        ...
+
+def attempt(fn):
+    try:
+        fn()
+        return &quot;ok&quot;
+    except Exception as e:
+        return type(e).__name__
+
+plain = Mock(spec=Embedder)
+auto = create_autospec(Embedder, instance=True)
+print(attempt(lambda: plain.embd), attempt(lambda: plain.embed(1, 2, 3, 4)), attempt(lambda: auto.embed(1, 2, 3, 4)))
+print(attempt(lambda: auto.embed([&quot;a&quot;], batch_size=8)), attempt(lambda: auto.embed(texts=[&quot;a&quot;], size=8)))
+print(isinstance(plain, Embedder), attempt(lambda: len(Mock())), len(MagicMock()), list(MagicMock()))
+strict = Mock(spec_set=Embedder)
+print(attempt(lambda: setattr(strict, &quot;dimension&quot;, 10)), attempt(lambda: setattr(plain, &quot;dimension&quot;, 10)))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>spec</code> restricts attribute names; autospec also checks call signatures. <code>MagicMock</code> configures magic methods; <code>Mock</code> does not.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>spec_set</code> also forbids setting attributes the spec does not have.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>AttributeError ok TypeError
+ok TypeError
+True TypeError 0 []
+AttributeError ok</pre></div><p><code>Mock(spec=...)</code> rejects misspelt attributes but its methods accept any arguments, while autospec copies the real signatures, so four positional arguments or an unknown keyword raise <code>TypeError</code> exactly as the real method would. A spec'd mock also passes <code>isinstance</code> checks. A plain <code>Mock</code> does not support <code>len()</code> (magic methods must be configured), whereas <code>MagicMock</code> supplies defaults: length 0 and empty iteration. <code>spec_set</code> additionally refuses to <strong>set</strong> unknown attributes, while a <code>spec</code> mock lets you add them, which can hide typos in test setup.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-a-mock-a-" data-pid="m13-3-what-is-the-difference-between-a-mock-a-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. What is the difference between a mock, a stub and a fake, and when do you use each?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>All three replace a real dependency in tests. A <strong>stub</strong> returns canned data and does nothing else, useful when the test only needs the dependency to answer (a model that always replies <code>spam</code>). A <strong>fake</strong> is a lightweight working implementation (an in-memory repository, a scripted LLM, a fake clock); it supports realistic sequences of operations, can be shared across many tests, and keeps tests focused on outcomes. A <strong>mock</strong> records interactions so the test can verify <strong>how</strong> the dependency was used (called once, with these arguments, never on this path); use it when the interaction is the behaviour, such as sending a notification, retrying with backoff or not calling a paid API. Spies wrap the real thing and record calls. Prefer stubs and fakes for state and results, mocks for important side effects, and verify mocks against the real interface with <code>spec</code>/autospec so they cannot drift.</p></div></details>
+</article>
+<article class="prob" id="p-why-do-people-say-don-t-mock-what-you-do" data-pid="m13-3-why-do-people-say-don-t-mock-what-you-do" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Why do people say 'don't mock what you don't own'?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Mocking a third-party library (an LLM SDK, <code>requests</code>, a cloud client) directly in many tests encodes your <strong>assumptions</strong> about its behaviour into every test: method names, argument shapes, return types and error classes. When the library changes, or when your assumptions were wrong, the tests keep passing while production fails, and the patches are scattered everywhere. Instead, wrap the library in a thin adapter you own with a small interface that suits your application (<code>LLMClient.complete(prompt, max_tokens) -&gt; str</code>, raising your own <code>LLMError</code>), mock or fake <strong>that</strong> in unit tests, and test the adapter itself against the real library with a few integration tests (or recorded responses). The adapter also gives you one place for retries, timeouts, logging and switching providers.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-unit-test-code-that-calls-an-" data-pid="m13-3-how-do-you-unit-test-code-that-calls-an-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How do you unit-test code that calls an LLM API?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Separate the parts. Put the API behind a small client interface and inject it, so unit tests pass a fake or a mock: scripted replies for the happy path, malformed JSON and refusals for parsing and repair logic, <code>TimeoutError</code> and rate-limit errors for retry logic, and assertions on the prompts sent (that they contain the context and question, that no call happens when there is no context) and on call counts and parameters. Keep the deterministic logic (prompt building, output parsing and validation, routing, tool dispatch) in pure functions tested directly. Use <code>spec</code>/autospec so fakes match the real client. Then add a thin layer of <strong>integration</strong> tests against the real API, few, marked (<code>@pytest.mark.integration</code>) and run in CI with a key and a budget, possibly replaying recorded responses (VCR cassettes) for stability. Finally, evaluate model quality separately with an evaluation set (13.4), because unit tests check your code's behaviour, not whether the model's answers are good.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Test doubles replace slow, costly or random dependencies: stubs answer, fakes work, mocks record calls, spies wrap the real thing.</li><li><code>Mock</code> configures behaviour with <code>return_value</code> and <code>side_effect</code> (exception, iterable, function) and records calls; <code>assert_called_with</code> checks only the last call.</li><li>Use <code>spec</code> or <code>create_autospec</code> so doubles match the real API; <code>MagicMock</code> adds magic methods.</li><li>Patch where a name is looked up (<code>app.fetch</code>, not <code>weather.fetch</code>), or better, inject dependencies such as clients, clocks and <code>sleep</code>.</li><li>Mock boundaries, not your own logic; assert behaviour, and wrap third-party APIs in adapters you own.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

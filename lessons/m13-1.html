@@ -1,0 +1,1635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>13.1 · pytest basics</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m13-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 13 · Testing with pytest</span></div>
+  <h1>13.1 pytest basics</h1>
+  <p>Tests are how you know code works today and still works after the next change, and in interviews and code reviews they are how others judge your engineering. pytest from the ground up: test discovery, plain <code>assert</code> with rewriting, floats with <code>approx</code>, exceptions with <code>raises</code>, parametrised cases, marks, and what makes a test worth having. Most problems here ask you to write the tests, and they are graded by running real pytest against a correct implementation and several buggy ones.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>What a test is and how pytest finds it</h2>
+<p>A <strong>test</strong> is code that runs other code with a known input and checks the output. Written once, it runs in a second every time anything changes, so regressions are caught before users or downstream jobs find them, and refactoring becomes safe. A good test reads as a specification: its name states a behaviour (<code>test_slugify_collapses_repeated_separators</code>), and its body follows <strong>arrange, act, assert</strong>: set up the input, call the code, check the result.</p>
+<p><strong>pytest</strong> finds tests by convention: files named <code>test_*.py</code> or <code>*_test.py</code>, functions named <code>test_*</code> in them, and methods named <code>test_*</code> in classes named <code>Test*</code> that have no <code>__init__</code>. You check results with the plain <strong><code>assert</code></strong> statement; pytest rewrites asserts in test files when it imports them, so a failure shows the values involved (<code>assert 4 == 5</code> with <code>where 4 = add(2, 2)</code>) instead of a bare <code>AssertionError</code>. A test <strong>passes</strong> if it returns without an exception and <strong>fails</strong> if anything raises, so a test with no assert passes whenever the code merely does not crash, which is rarely enough.</p>
+<p>On your machine you run <code>pytest</code> in the project folder (or <code>python -m pytest</code>); useful options are <code>-q</code> (quiet), <code>-v</code> (one line per test), <code>-x</code> (stop at the first failure), <code>-k "slug and not unicode"</code> (select by name), <code>--lf</code> (rerun last failures) and a node id such as <code>tests/test_text.py::test_slugify</code> to run one test. <strong>On this site</strong>, the helper <code>run_pytest(source)</code> from <code>lessontools</code> writes <code>source</code> to a fresh folder as <code>test_main.py</code>, runs real pytest on it in the browser, and returns a dict with each test's outcome, the counts and pytest's output. <code>swap_impl(source, code)</code> replaces the section between the comments <code># --- code under test</code> and <code># --- tests</code> with other code, which is how your tests are run against buggy versions.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">first_test.py</span><button class="copy">Copy</button></div><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+def add(a, b):
+    return a + b
+
+def test_add_numbers():
+    result = add(2, 3)
+    assert result == 5
+
+def test_add_lists():
+    assert add([1], [2, 3]) == [1, 2]
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC)
+print(r[&quot;outcomes&quot;], r[&quot;passed&quot;], r[&quot;failed&quot;])
+print([line for line in r[&quot;output&quot;].splitlines() if line.startswith(&quot;E &quot;)])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;test_add_numbers&#x27;: &#x27;passed&#x27;, &#x27;test_add_lists&#x27;: &#x27;failed&#x27;} 1 1
+[&#x27;E       assert [1, 2, 3] == [1, 2]&#x27;, &#x27;E         &#x27;, &#x27;E         Left contains one more item: 3&#x27;, &#x27;E         Use -v to get more diff&#x27;]</pre></div></div>
+<p>The failure report shows the actual value (<code>[1, 2, 3]</code>), the expected one, and where they differ, without any message written by hand. That is the reason to prefer a plain <code>assert</code> over <code>assertEqual</code>-style helpers in pytest code.</p>
+</section>
+<section class="sec" id="asserts">
+<h2><span class="n">2</span>Writing assertions: values, floats and exceptions</h2>
+<p>Assert the most specific thing you can. <code>assert result == {"label": "spam", "score": 0.9}</code> checks everything at once and pytest prints a diff of the dicts; <code>assert result</code> or <code>assert "spam" in str(result)</code> pass for many wrong results. Compare whole values where possible, check types when they matter (<code>isinstance</code>), and use <code>is</code> only for <code>None</code>, <code>True</code> and <code>False</code>.</p>
+<p>Floats need tolerance, because arithmetic in binary rounds: <code>0.1 + 0.2 == 0.3</code> is <code>False</code>. <strong><code>pytest.approx(expected)</code></strong> compares within a relative tolerance of one millionth by default (<code>rel=1e-6</code>), plus an absolute tolerance of <code>1e-12</code> for values near zero; set <code>rel=</code> or <code>abs=</code> explicitly when you know the precision you need. It works for single numbers, and element-wise for lists, tuples and dict values, and NumPy arrays, so <code>assert metrics == pytest.approx({"precision": 0.667, "recall": 0.5}, abs=1e-3)</code> checks a whole metrics dict.</p>
+<p>Errors are behaviour too. <strong><code>with pytest.raises(ValueError, match="overlap"):</code></strong> passes only if the block raises <code>ValueError</code> (or a subclass) whose message matches the regular expression; if nothing is raised, the test fails with <code>DID NOT RAISE</code>. Use <code>as excinfo</code> to inspect the exception afterwards (<code>excinfo.value</code>, <code>excinfo.type</code>). Keep only the raising call inside the block: anything after it never runs. <code>pytest.warns(DeprecationWarning)</code> does the same for warnings.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">asserts.py</span><button class="copy">Copy</button></div><pre><code class="py">import pytest
+
+print(0.1 + 0.2 == 0.3, 0.1 + 0.2 == pytest.approx(0.3))
+print({&quot;p&quot;: 0.6667, &quot;r&quot;: 0.5} == pytest.approx({&quot;p&quot;: 2 / 3, &quot;r&quot;: 0.5}, abs=1e-3), 1e-9 == pytest.approx(0))
+with pytest.raises(ValueError, match=&quot;invalid literal&quot;) as excinfo:
+    int(&quot;twelve&quot;)
+print(excinfo.type.__name__, excinfo.value)</code></pre><div class="out"><span class="ol">Output</span><pre>False True
+True False
+ValueError invalid literal for int() with base 10: &#x27;twelve&#x27;</pre></div></div>
+</section>
+<section class="sec" id="param">
+<h2><span class="n">3</span>Parametrize: one test, many cases</h2>
+<p>Edge cases are where bugs live, and writing a separate function for each is tedious. <strong><code>@pytest.mark.parametrize("text,expected", [...])</code></strong> runs one test function once per tuple, each as a separate test with its own outcome and an id built from the values (<code>test_slugify[Hello World-hello-world]</code>), so one failing case does not hide the others. Give readable ids with <code>ids=[...]</code> or <code>pytest.param(value, id="unicode")</code>, and attach marks to single cases with <code>pytest.param(..., marks=pytest.mark.xfail)</code>. Stacking two <code>parametrize</code> decorators runs every combination, which suits checks such as every model with every temperature.</p>
+<p>Choose cases deliberately: the normal case, the <strong>empty</strong> input, a single element, <strong>boundaries</strong> (exactly at a limit, one below, one above), invalid input that must raise, unusual characters (Unicode, whitespace, very long strings), and anything a past bug taught you. That list is more valuable than many random normal cases.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">parametrize.py</span><button class="copy">Copy</button></div><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+def word_count(text):
+    return len(text.split())
+
+@pytest.mark.parametrize(&quot;text,expected&quot;, [
+    (&quot;refund window&quot;, 2),
+    (&quot;&quot;, 0),
+    (&quot;  spaced   out  &quot;, 2),
+    pytest.param(&quot;tab\\tand\\nnewline&quot;, 3, id=&quot;whitespace&quot;),
+    pytest.param(&quot;don&#x27;t stop&quot;, 3, id=&quot;apostrophe&quot;, marks=pytest.mark.xfail(reason=&quot;counts words, not tokens&quot;)),
+])
+def test_word_count(text, expected):
+    assert word_count(text) == expected
+&#x27;&#x27;&#x27;
+for name, outcome in run_pytest(SRC)[&quot;outcomes&quot;].items():
+    print(f&quot;{outcome:8} {name}&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>passed   test_word_count[refund window-2]
+passed   test_word_count[-0]
+passed   test_word_count[  spaced   out  -2]
+passed   test_word_count[whitespace]
+xfailed  test_word_count[apostrophe]</pre></div></div>
+</section>
+<section class="sec" id="marks">
+<h2><span class="n">4</span>Marks: skipping and expected failures</h2>
+<p><strong>Marks</strong> attach metadata to tests. <code>@pytest.mark.skip(reason=...)</code> never runs a test; <code>@pytest.mark.skipif(condition, reason=...)</code> skips it when the condition is true, for example on another operating system, without a GPU, or without an API key in the environment. <code>@pytest.mark.xfail(reason=...)</code> documents a known bug: the test runs, a failure is reported as <code>xfailed</code> (expected), and if it unexpectedly passes it is <code>xpassed</code>; with <strong><code>strict=True</code></strong>, an unexpected pass is a failure, which forces you to remove the mark once the bug is fixed. Custom marks (<code>@pytest.mark.slow</code>, <code>@pytest.mark.integration</code>) are registered in the configuration and selected with <code>-m "not slow"</code>, so a fast suite runs on every change and the slow one in CI.</p>
+</section>
+<section class="sec" id="good">
+<h2><span class="n">5</span>What makes a test worth having</h2>
+<p>A test is worth having if it <strong>fails when the code is wrong</strong> and <strong>passes when the code is right</strong>, every time. That gives the checklist. It tests <strong>behaviour</strong> through the public interface, not implementation details, so a refactor does not break it. It is <strong>deterministic</strong>: no dependence on the clock, randomness without a seed, the network, test order or leftover files (13.2 and 13.3 show how to control those). It is <strong>fast</strong>, so people run it constantly. It checks <strong>one behaviour</strong>, so its name says what broke. And it would have <strong>caught a real bug</strong>: the grading of this lesson's problems, mutation testing, measures exactly that by running your tests against deliberately broken versions of the code.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-what-pytest-collects-and-how-it-judges" data-pid="m13-1-what-pytest-collects-and-how-it-judges" data-type="predict" data-level="easy" data-answer="test_add passed
+test_add_strings failed
+test_no_assert passed
+test_error failed
+test_raises passed
+TestAdd::test_negative passed
+4 2 1">
+<header class="prob-head"><h3>1. What pytest collects and how it judges</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+def add(a, b):
+    return a + b
+
+def test_add():
+    assert add(2, 3) == 5
+
+def test_add_strings():
+    assert add(&quot;a&quot;, &quot;b&quot;) == &quot;ab &quot;
+
+def test_no_assert():
+    add(1, 1)
+
+def check_add():
+    assert False
+
+def test_error():
+    assert add(1, None) == 1
+
+def test_raises():
+    with pytest.raises(TypeError):
+        add(1, None)
+
+class TestAdd:
+    def test_negative(self):
+        assert add(-1, -1) == -2
+
+class TestWithInit:
+    def __init__(self):
+        self.x = 1
+    def test_never(self):
+        assert False
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC)
+for name, outcome in r[&quot;outcomes&quot;].items():
+    print(name, outcome)
+print(r[&quot;passed&quot;], r[&quot;failed&quot;], r[&quot;exit&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Only <code>test_*</code> functions and <code>test_*</code> methods of <code>Test*</code> classes without <code>__init__</code> are collected. Any exception in a test makes it fail.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>test_add passed
+test_add_strings failed
+test_no_assert passed
+test_error failed
+test_raises passed
+TestAdd::test_negative passed
+4 2 1</pre></div><p><code>check_add</code> is not collected because of its name, and <code>TestWithInit</code> is skipped by collection (pytest warns) because a test class cannot have an <code>__init__</code>. <code>test_no_assert</code> passes since nothing raised: a test without an assertion only checks that the code does not crash. The <code>TypeError</code> in <code>test_error</code> makes it fail just like a failed assert, while <code>test_raises</code> expects exactly that error and passes. The exit code 1 means "some tests failed"; 0 would mean all passed.</p></div></details>
+</article>
+<article class="prob" id="p-test-a-slugify-function" data-pid="m13-1-test-a-slugify-function" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. Test a slugify function</h3></header>
+<div class="prob-q"><p><code>slugify(text)</code> turns titles into URL-safe ids: it lower-cases, keeps ASCII letters and digits, turns every run of other characters into <strong>one</strong> hyphen, and never starts or ends with a hyphen (<code>"  Refund Policy (EU)! "</code> becomes <code>"refund-policy-eu"</code>, <code>"Café menu"</code> becomes <code>"caf-menu"</code>, <code>""</code> stays <code>""</code>). Write at least four tests below the <code># --- tests ---</code> line. They must all pass on this implementation and catch each of five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2"># --- code under test (do not edit) ---
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+
+
+# --- tests ---
+import pytest
+
+
+def test_lowercases():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+BUGS = {
+    "keeps_case": '''
+def slugify(text):
+    out, dash = [], False
+    for ch in text:
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+''',
+    "keeps_unicode": '''
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+''',
+    "no_collapse": '''
+def slugify(text):
+    out = []
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+        elif out:
+            out.append("-")
+    return "".join(out).strip("-")
+''',
+    "trailing_hyphen": '''
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append("-")
+            dash = True
+    return "".join(out)
+''',
+    "keeps_punctuation": '''
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch not in " ":
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+''',
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+BUGS = {
+    &quot;keeps_case&quot;: &#x27;&#x27;&#x27;
+def slugify(text):
+    out, dash = [], False
+    for ch in text:
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+&#x27;&#x27;&#x27;,
+    &quot;keeps_unicode&quot;: &#x27;&#x27;&#x27;
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+&#x27;&#x27;&#x27;,
+    &quot;no_collapse&quot;: &#x27;&#x27;&#x27;
+def slugify(text):
+    out = []
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+        elif out:
+            out.append(&quot;-&quot;)
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+&#x27;&#x27;&#x27;,
+    &quot;trailing_hyphen&quot;: &#x27;&#x27;&#x27;
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out)
+&#x27;&#x27;&#x27;,
+    &quot;keeps_punctuation&quot;: &#x27;&#x27;&#x27;
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch not in &quot; &quot;:
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+&#x27;&#x27;&#x27;,
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One test per rule in the description: case, non-ASCII characters, runs of separators, edges, punctuation, and the empty string.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If the grader lists a bug as escaped, read that buggy version and write the input that makes it differ from the correct one.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def slugify(text):
+    out, dash = [], False
+    for ch in text.lower():
+        if ch.isascii() and ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append(&quot;-&quot;)
+            dash = True
+    return &quot;&quot;.join(out).strip(&quot;-&quot;)
+
+
+# --- tests ---
+import pytest
+
+
+def test_lowercases():
+    assert slugify(&quot;Refund Policy&quot;) == &quot;refund-policy&quot;
+
+
+def test_drops_non_ascii_letters():
+    assert slugify(&quot;Café menu&quot;) == &quot;caf-menu&quot;
+
+
+def test_collapses_runs_of_separators():
+    assert slugify(&quot;refund -- policy!!&quot;) == &quot;refund-policy&quot;
+
+
+def test_no_leading_or_trailing_hyphens():
+    assert slugify(&quot;  (EU) refunds! &quot;) == &quot;eu-refunds&quot;
+
+
+def test_drops_punctuation():
+    assert slugify(&quot;what&#x27;s new?&quot;) == &quot;what-s-new&quot;
+
+
+def test_empty_and_symbols_only():
+    assert slugify(&quot;&quot;) == &quot;&quot;
+    assert slugify(&quot;!!!&quot;) == &quot;&quot;</code></pre></div><p>Each test pins one rule of the specification, with an input chosen so that a version breaking that rule gives a different answer: mixed case, an accented letter, a run of several separators, separators at both ends, punctuation inside a word, and inputs with nothing to keep. That is how to write tests from a spec: list the rules, then the input that would expose a violation of each. The grader's five mutants are exactly such violations, and a suite that lets one survive has a hole that a real bug could slip through. Comparing the full returned string is what makes each test strict.</p></div></details>
+</article>
+<article class="prob" id="p-a-float-test-that-fails-on-correct-code" data-pid="m13-1-a-float-test-that-fails-on-correct-code" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A float test that fails on correct code</h3></header>
+<div class="prob-q"><p><code>mean_reciprocal_rank</code> is correct, but its test fails because it compares floats with <code>==</code>, and the test suite does not notice a bug that divides by the wrong count. Fix the tests: use <code>pytest.approx</code>, and add a case that catches the bug (the graded buggy version divides by the number of queries that had a hit, instead of all queries).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3"># --- code under test (do not edit) ---
+def mean_reciprocal_rank(ranks):
+    # ranks: 1-based position of the first relevant result per query, or None if there was none
+    return sum(1 / r for r in ranks if r is not None) / len(ranks)
+
+
+# --- tests ---
+import pytest
+
+
+def test_mrr():
+    assert mean_reciprocal_rank([1, 2, 3]) == 0.611111
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 2, good["output"][-800:]
+BUG = '''
+def mean_reciprocal_rank(ranks):
+    hits = [r for r in ranks if r is not None]
+    return sum(1 / r for r in hits) / len(hits)
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 2, good[&quot;output&quot;][-800:]
+BUG = &#x27;&#x27;&#x27;
+def mean_reciprocal_rank(ranks):
+    hits = [r for r in ranks if r is not None]
+    return sum(1 / r for r in hits) / len(hits)
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>assert value == pytest.approx(11 / 18)</code>, or <code>pytest.approx(0.6111, abs=1e-4)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Which input makes the two versions differ? A query with no hit.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def mean_reciprocal_rank(ranks):
+    # ranks: 1-based position of the first relevant result per query, or None if there was none
+    return sum(1 / r for r in ranks if r is not None) / len(ranks)
+
+
+# --- tests ---
+import pytest
+
+
+def test_mrr_of_ranks():
+    assert mean_reciprocal_rank([1, 2, 3]) == pytest.approx(11 / 18)
+
+
+def test_queries_without_a_hit_count_as_zero():
+    assert mean_reciprocal_rank([1, None]) == pytest.approx(0.5)</code></pre></div><p><code>(1 + 1/2 + 1/3) / 3</code> is <code>0.6111...</code> with many more digits, so an exact comparison against a rounded literal fails although the code is right; <code>approx</code> compares within a relative tolerance, and writing the exact fraction <code>11 / 18</code> makes the intent clear. The second test adds the case the first could not see: a query with no relevant result must count as a reciprocal rank of 0, which is what makes MRR penalise a retriever that finds nothing. With only "every query has a hit" in the suite, both versions agree and the bug ships. A green test suite is only as strong as its cases.</p></div></details>
+</article>
+<article class="prob" id="p-pytest-approx-in-detail" data-pid="m13-1-pytest-approx-in-detail" data-type="predict" data-level="easy" data-answer="True True
+False True
+False True
+True True">
+<header class="prob-head"><h3>4. pytest.approx in detail</h3></header>
+<div class="code"><pre><code class="py">import pytest
+
+print(0.1 + 0.2 == pytest.approx(0.3), [0.1 + 0.2, 1] == pytest.approx([0.3, 1]))
+print(1.0001 == pytest.approx(1), 1.0001 == pytest.approx(1, rel=1e-3))
+print(1e-7 == pytest.approx(0), 1e-7 == pytest.approx(0, abs=1e-6))
+print({&quot;f1&quot;: 0.8333} == pytest.approx({&quot;f1&quot;: 5 / 6}, abs=1e-3), (1, 2) == pytest.approx([1, 2]))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The default relative tolerance is <code>1e-6</code>, and the default absolute tolerance is <code>1e-12</code>, which is what applies when comparing with 0.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>True True
+False True
+False True
+True True</pre></div><p>The float rounding error is far inside the default tolerance, and lists are compared element by element. <code>1.0001</code> is 100 parts per million away from 1, outside the default one part per million but inside <code>rel=1e-3</code>. Near zero, a relative tolerance is useless (a fraction of zero is zero), so only the tiny default absolute tolerance applies and <code>1e-7</code> is not "approximately 0" until you say what "small" means with <code>abs=</code>. Dict values are compared by key. A tuple even equals an approx of a list, because <code>approx</code> compares any two sequences element by element; it does not check the container type, so add an <code>isinstance</code> assert when the type matters.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-test-a-chunker-including-its-errors" data-pid="m13-1-test-a-chunker-including-its-errors" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>5. Test a chunker, including its errors</h3></header>
+<div class="prob-q"><p><code>chunk_words(text, size, overlap=0)</code> splits text into chunks of <code>size</code> words, each starting <code>size - overlap</code> words after the previous one, keeping a shorter last chunk only when it contains words not already covered; it raises <code>ValueError</code> mentioning <code>size</code> if <code>size &lt; 1</code> and mentioning <code>overlap</code> if <code>overlap</code> is negative or not smaller than <code>size</code>. Write at least five tests (use <code>pytest.raises</code> with <code>match=</code>) that pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5"># --- code under test (do not edit) ---
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap must be in [0, size)&quot;)
+    words = text.split()
+    step = size - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(&quot; &quot;.join(words[start:start + size]))
+        if start + size &gt;= len(words):
+            break
+    return chunks
+
+
+# --- tests ---
+import pytest
+
+
+def test_chunks_without_overlap():
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BUGS = {
+    "ignores_overlap": '''
+def chunk_words(text, size, overlap=0):
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    if not 0 <= overlap < size:
+        raise ValueError("overlap must be in [0, size)")
+    words = text.split()
+    return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
+''',
+    "drops_last_chunk": '''
+def chunk_words(text, size, overlap=0):
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    if not 0 <= overlap < size:
+        raise ValueError("overlap must be in [0, size)")
+    words = text.split()
+    step = size - overlap
+    return [" ".join(words[i:i + size]) for i in range(0, len(words) - size + 1, step)]
+''',
+    "no_overlap_check": '''
+def chunk_words(text, size, overlap=0):
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    words = text.split()
+    step = size - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(" ".join(words[start:start + size]))
+        if start + size >= len(words):
+            break
+    return chunks
+''',
+    "redundant_tail": '''
+def chunk_words(text, size, overlap=0):
+    if size < 1:
+        raise ValueError("size must be at least 1")
+    if not 0 <= overlap < size:
+        raise ValueError("overlap must be in [0, size)")
+    words = text.split()
+    step = size - overlap
+    return [" ".join(words[i:i + size]) for i in range(0, len(words), step)]
+''',
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BUGS = {
+    &quot;ignores_overlap&quot;: &#x27;&#x27;&#x27;
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap must be in [0, size)&quot;)
+    words = text.split()
+    return [&quot; &quot;.join(words[i:i + size]) for i in range(0, len(words), size)]
+&#x27;&#x27;&#x27;,
+    &quot;drops_last_chunk&quot;: &#x27;&#x27;&#x27;
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap must be in [0, size)&quot;)
+    words = text.split()
+    step = size - overlap
+    return [&quot; &quot;.join(words[i:i + size]) for i in range(0, len(words) - size + 1, step)]
+&#x27;&#x27;&#x27;,
+    &quot;no_overlap_check&quot;: &#x27;&#x27;&#x27;
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    words = text.split()
+    step = size - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(&quot; &quot;.join(words[start:start + size]))
+        if start + size &gt;= len(words):
+            break
+    return chunks
+&#x27;&#x27;&#x27;,
+    &quot;redundant_tail&quot;: &#x27;&#x27;&#x27;
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap must be in [0, size)&quot;)
+    words = text.split()
+    step = size - overlap
+    return [&quot; &quot;.join(words[i:i + size]) for i in range(0, len(words), step)]
+&#x27;&#x27;&#x27;,
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A ten-word text with <code>size=4, overlap=1</code> exercises the step, the overlap and the last chunk at once; write the expected chunks out by hand.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>overlap == size</code> must raise with a message about overlap; the buggy version raises too, but from <code>range</code> with a different message, so <code>match="overlap"</code> tells them apart.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the last full chunk already reaches the end, no extra shorter chunk may follow: try 5 words with <code>size=3, overlap=1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def chunk_words(text, size, overlap=0):
+    if size &lt; 1:
+        raise ValueError(&quot;size must be at least 1&quot;)
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;overlap must be in [0, size)&quot;)
+    words = text.split()
+    step = size - overlap
+    chunks = []
+    for start in range(0, len(words), step):
+        chunks.append(&quot; &quot;.join(words[start:start + size]))
+        if start + size &gt;= len(words):
+            break
+    return chunks
+
+
+# --- tests ---
+import pytest
+
+TEN = &quot;w0 w1 w2 w3 w4 w5 w6 w7 w8 w9&quot;
+
+
+def test_chunks_without_overlap():
+    assert chunk_words(TEN, 4) == [&quot;w0 w1 w2 w3&quot;, &quot;w4 w5 w6 w7&quot;, &quot;w8 w9&quot;]
+
+
+def test_chunks_with_overlap():
+    assert chunk_words(TEN, 4, overlap=1) == [&quot;w0 w1 w2 w3&quot;, &quot;w3 w4 w5 w6&quot;, &quot;w6 w7 w8 w9&quot;]
+
+
+def test_no_redundant_tail_chunk():
+    assert chunk_words(&quot;a b c d e&quot;, 3, overlap=1) == [&quot;a b c&quot;, &quot;c d e&quot;]
+
+
+def test_empty_text():
+    assert chunk_words(&quot;&quot;, 3) == []
+
+
+@pytest.mark.parametrize(&quot;overlap&quot;, [-1, 3, 4])
+def test_rejects_bad_overlap(overlap):
+    with pytest.raises(ValueError, match=&quot;overlap&quot;):
+        chunk_words(TEN, 3, overlap=overlap)
+
+
+def test_rejects_bad_size():
+    with pytest.raises(ValueError, match=&quot;size&quot;):
+        chunk_words(TEN, 0)</code></pre></div><p>Writing the expected chunks out by hand for one well-chosen input (ten numbered words) checks the step, the overlap and the final chunk together, and numbered words make mistakes easy to see. The redundant-tail case is the subtle one: with overlap, a naive loop emits a last chunk made only of words already included, which wastes an embedding and double-counts text in retrieval. <code>match=</code> matters for errors: the version without the overlap check still raises <code>ValueError</code> for <code>overlap == size</code>, but from <code>range()</code> ("arg 3 must not be zero"), and for <code>overlap &gt; size</code> it silently loops backwards; checking the message proves the error comes from <strong>your</strong> validation. Parametrising the bad values keeps each case visible in the report.</p></div></details>
+</article>
+<article class="prob" id="p-parametrized-tests-for-a-duration-parser" data-pid="m13-1-parametrized-tests-for-a-duration-parser" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. Parametrized tests for a duration parser</h3></header>
+<div class="prob-q"><p><code>parse_duration(text)</code> turns <code>"1h30m"</code>, <code>"45s"</code>, <code>"2h"</code>, <code>"1h0m5s"</code> into seconds; units must appear in the order h, m, s, at most once each; whitespace around the text is ignored; anything else (<code>""</code>, <code>"10"</code>, <code>"5x"</code>, <code>"1m1h"</code>, <code>"h"</code>) raises <code>ValueError</code>. Write a <strong>parametrized</strong> test with at least six valid cases and another with at least five invalid ones. Your tests must pass here and catch four buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6"># --- code under test (do not edit) ---
+def parse_duration(text):
+    text = text.strip()
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 60, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and &quot;hms&quot;.index(ch) &lt;= &quot;hms&quot;.index(seen[-1]):
+                raise ValueError(f&quot;bad unit order in {text!r}&quot;)
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(f&quot;bad duration {text!r}&quot;)
+    if number or not seen:
+        raise ValueError(f&quot;bad duration {text!r}&quot;)
+    return total
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0, good["output"][-800:]
+params = [n for n in good["outcomes"] if "[" in n]
+assert len(params) >= 11 and len({n.split("[")[0] for n in params}) >= 2
+BUGS = {
+    "no_strip": '''
+def parse_duration(text):
+    units = {"h": 3600, "m": 60, "s": 1}
+    total, number, seen = 0, "", []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and "hms".index(ch) <= "hms".index(seen[-1]):
+                raise ValueError("order")
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = ""
+        else:
+            raise ValueError("bad")
+    if number or not seen:
+        raise ValueError("bad")
+    return total
+''',
+    "any_order": '''
+def parse_duration(text):
+    text = text.strip()
+    units = {"h": 3600, "m": 60, "s": 1}
+    total, number, seen = 0, "", []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = ""
+        else:
+            raise ValueError("bad")
+    if number or not seen:
+        raise ValueError("bad")
+    return total
+''',
+    "bare_number_ok": '''
+def parse_duration(text):
+    text = text.strip()
+    if text.isdigit():
+        return int(text)
+    units = {"h": 3600, "m": 60, "s": 1}
+    total, number, seen = 0, "", []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and "hms".index(ch) <= "hms".index(seen[-1]):
+                raise ValueError("order")
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = ""
+        else:
+            raise ValueError("bad")
+    if number or not seen:
+        raise ValueError("bad")
+    return total
+''',
+    "minutes_wrong": '''
+def parse_duration(text):
+    text = text.strip()
+    units = {"h": 3600, "m": 100, "s": 1}
+    total, number, seen = 0, "", []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and "hms".index(ch) <= "hms".index(seen[-1]):
+                raise ValueError("order")
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = ""
+        else:
+            raise ValueError("bad")
+    if number or not seen:
+        raise ValueError("bad")
+    return total
+''',
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0, good[&quot;output&quot;][-800:]
+params = [n for n in good[&quot;outcomes&quot;] if &quot;[&quot; in n]
+assert len(params) &gt;= 11 and len({n.split(&quot;[&quot;)[0] for n in params}) &gt;= 2
+BUGS = {
+    &quot;no_strip&quot;: &#x27;&#x27;&#x27;
+def parse_duration(text):
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 60, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and &quot;hms&quot;.index(ch) &lt;= &quot;hms&quot;.index(seen[-1]):
+                raise ValueError(&quot;order&quot;)
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(&quot;bad&quot;)
+    if number or not seen:
+        raise ValueError(&quot;bad&quot;)
+    return total
+&#x27;&#x27;&#x27;,
+    &quot;any_order&quot;: &#x27;&#x27;&#x27;
+def parse_duration(text):
+    text = text.strip()
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 60, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(&quot;bad&quot;)
+    if number or not seen:
+        raise ValueError(&quot;bad&quot;)
+    return total
+&#x27;&#x27;&#x27;,
+    &quot;bare_number_ok&quot;: &#x27;&#x27;&#x27;
+def parse_duration(text):
+    text = text.strip()
+    if text.isdigit():
+        return int(text)
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 60, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and &quot;hms&quot;.index(ch) &lt;= &quot;hms&quot;.index(seen[-1]):
+                raise ValueError(&quot;order&quot;)
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(&quot;bad&quot;)
+    if number or not seen:
+        raise ValueError(&quot;bad&quot;)
+    return total
+&#x27;&#x27;&#x27;,
+    &quot;minutes_wrong&quot;: &#x27;&#x27;&#x27;
+def parse_duration(text):
+    text = text.strip()
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 100, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and &quot;hms&quot;.index(ch) &lt;= &quot;hms&quot;.index(seen[-1]):
+                raise ValueError(&quot;order&quot;)
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(&quot;bad&quot;)
+    if number or not seen:
+        raise ValueError(&quot;bad&quot;)
+    return total
+&#x27;&#x27;&#x27;,
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@pytest.mark.parametrize("text,seconds", [("45s", 45), ...])</code> above <code>def test_valid(text, seconds):</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Include a case with surrounding spaces, one with minutes, and invalid inputs such as a bare number and units out of order.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def parse_duration(text):
+    text = text.strip()
+    units = {&quot;h&quot;: 3600, &quot;m&quot;: 60, &quot;s&quot;: 1}
+    total, number, seen = 0, &quot;&quot;, []
+    for ch in text:
+        if ch.isdigit():
+            number += ch
+        elif ch in units and number:
+            if seen and &quot;hms&quot;.index(ch) &lt;= &quot;hms&quot;.index(seen[-1]):
+                raise ValueError(f&quot;bad unit order in {text!r}&quot;)
+            total += int(number) * units[ch]
+            seen.append(ch)
+            number = &quot;&quot;
+        else:
+            raise ValueError(f&quot;bad duration {text!r}&quot;)
+    if number or not seen:
+        raise ValueError(f&quot;bad duration {text!r}&quot;)
+    return total
+
+
+# --- tests ---
+import pytest
+
+
+@pytest.mark.parametrize(&quot;text,seconds&quot;, [
+    (&quot;45s&quot;, 45),
+    (&quot;2h&quot;, 7200),
+    (&quot;1h30m&quot;, 5400),
+    (&quot;1h0m5s&quot;, 3605),
+    (&quot;90m&quot;, 5400),
+    (&quot;  10m &quot;, 600),
+    (&quot;0s&quot;, 0),
+])
+def test_valid_durations(text, seconds):
+    assert parse_duration(text) == seconds
+
+
+@pytest.mark.parametrize(&quot;text&quot;, [&quot;&quot;, &quot;10&quot;, &quot;5x&quot;, &quot;1m1h&quot;, &quot;h&quot;, &quot;1h1h&quot;, &quot;1.5h&quot;])
+def test_invalid_durations(text):
+    with pytest.raises(ValueError):
+        parse_duration(text)</code></pre></div><p>Parametrisation turns a table of examples into separate tests, each reported with its own id, so the report says exactly which input broke. The valid table covers each unit alone, combinations, a zero component, a value above 60 for minutes and surrounding spaces; the invalid table covers empty input, a number without a unit, an unknown unit, units out of order, a unit without a number, a repeated unit and a decimal. Each mutant fails at least one row: <code>"  10m "</code> catches the missing strip, <code>"1m1h"</code> the missing order check, <code>"10"</code> the bare-number shortcut, and any minute case the wrong multiplier.</p></div></details>
+</article>
+<article class="prob" id="p-tests-that-cannot-fail" data-pid="m13-1-tests-that-cannot-fail" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Tests that cannot fail</h3></header>
+<div class="prob-q"><p>These tests for <code>classify(text)</code> all pass, yet the graded buggy version, which labels everything <code>"ham"</code>, passes them too. Each test has a flaw: an assert that is always true, a check after the line that raises, and a membership test that accepts any label. Fix the tests so they pass here and fail on the bug.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7"># --- code under test (do not edit) ---
+def classify(text):
+    if not text.strip():
+        raise ValueError(&quot;empty message&quot;)
+    spammy = (&quot;win&quot;, &quot;prize&quot;, &quot;free&quot;, &quot;click&quot;)
+    return &quot;spam&quot; if any(w in text.lower() for w in spammy) else &quot;ham&quot;
+
+
+# --- tests ---
+import pytest
+
+
+def test_spam():
+    assert (classify(&quot;WIN a free prize&quot;), &quot;spam&quot;)
+
+
+def test_empty_rejected():
+    with pytest.raises(ValueError):
+        classify(&quot;   &quot;)
+        assert classify(&quot;hello&quot;) == &quot;ham&quot;
+
+
+def test_labels():
+    assert classify(&quot;Click here&quot;) in [&quot;spam&quot;, &quot;ham&quot;]
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 3, good["output"][-800:]
+BUG = '''
+def classify(text):
+    if not text.strip():
+        raise ValueError("empty message")
+    return "ham"
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0
+assert "assert (" not in __source__.split("# --- tests")[1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 3, good[&quot;output&quot;][-800:]
+BUG = &#x27;&#x27;&#x27;
+def classify(text):
+    if not text.strip():
+        raise ValueError(&quot;empty message&quot;)
+    return &quot;ham&quot;
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0
+assert &quot;assert (&quot; not in __source__.split(&quot;# --- tests&quot;)[1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>assert (x, y)</code> asserts a non-empty tuple, which is always true (Python even warns). Use <code>==</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Move the second check out of the <code>with pytest.raises</code> block. Assert the exact label.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def classify(text):
+    if not text.strip():
+        raise ValueError(&quot;empty message&quot;)
+    spammy = (&quot;win&quot;, &quot;prize&quot;, &quot;free&quot;, &quot;click&quot;)
+    return &quot;spam&quot; if any(w in text.lower() for w in spammy) else &quot;ham&quot;
+
+
+# --- tests ---
+import pytest
+
+
+def test_spam():
+    assert classify(&quot;WIN a free prize&quot;) == &quot;spam&quot;
+
+
+def test_empty_rejected():
+    with pytest.raises(ValueError, match=&quot;empty&quot;):
+        classify(&quot;   &quot;)
+
+
+def test_ham():
+    assert classify(&quot;hello, lunch at noon?&quot;) == &quot;ham&quot;
+
+
+def test_click_is_spam():
+    assert classify(&quot;Click here&quot;) == &quot;spam&quot;</code></pre></div><p>All three are classic ways to write a test that cannot fail. <code>assert (value, "spam")</code> asserts a two-element tuple, which is always truthy; Python emits <code>SyntaxWarning: assertion is always true</code> for exactly this. Inside <code>pytest.raises</code>, the block stops at the first raising line, so the <code>ham</code> check never ran. And "the label is one of the labels" is true of any classifier. A useful habit: after writing a test, break the code on purpose and watch the test fail; a test you have never seen fail is not yet trustworthy.</p></div></details>
+</article>
+<article class="prob" id="p-inspecting-pytest-raises" data-pid="m13-1-inspecting-pytest-raises" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Inspecting pytest.raises</h3></header>
+<div class="prob-q"><p>Fill in <code>kind</code> and <code>text</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import pytest
+
+with pytest.raises(ValueError) as info:
+    int(&quot;x&quot;)
+kind, text = info.type.__name__, str(info.value)
+with pytest.raises(LookupError) as info:
+    {&quot;model&quot;: &quot;small&quot;}[&quot;temperature&quot;]
+kind, text = info.type.__name__, str(info.value)
+with pytest.raises((TypeError, ValueError)) as info:
+    len(5)
+kind, text = info.type.__name__, info.match(&quot;has no len&quot;)
+
+def check():
+    try:
+        with pytest.raises(ValueError):
+            int(&quot;3&quot;)
+    except BaseException as e:
+        return type(e).__name__, str(e)
+
+kind, text = check()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>kind</code></th><th><code>text</code></th></tr><tr><td>ValueError</td><td><input class="cell" data-a="&#x27;ValueError&#x27;" data-s="ValueError" aria-label="kind at ValueError" autocomplete="off"></td><td><input class="cell" data-a="&quot;invalid literal for int() with base 10: &#x27;x&#x27;&quot;" data-s="invalid literal for int() with base 10: &#x27;x&#x27;" aria-label="text at ValueError" autocomplete="off"></td></tr><tr><td>a subclass</td><td><input class="cell" data-a="&#x27;KeyError&#x27;" data-s="KeyError" aria-label="kind at a subclass" autocomplete="off"></td><td><input class="cell" data-a="&quot;&#x27;temperature&#x27;&quot;" data-s="&#x27;temperature&#x27;" aria-label="text at a subclass" autocomplete="off"></td></tr><tr><td>a tuple of types</td><td><input class="cell" data-a="&#x27;TypeError&#x27;" data-s="TypeError" aria-label="kind at a tuple of types" autocomplete="off"></td><td><input class="cell" data-a="True" data-s="True" aria-label="text at a tuple of types" autocomplete="off"></td></tr><tr><td>nothing raised</td><td><input class="cell" data-a="&#x27;Failed&#x27;" data-s="Failed" aria-label="kind at nothing raised" autocomplete="off"></td><td><input class="cell" data-a="&quot;DID NOT RAISE &lt;class &#x27;ValueError&#x27;&gt;&quot;" data-s="DID NOT RAISE &lt;class &#x27;ValueError&#x27;&gt;" aria-label="text at nothing raised" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>info.type</code> is the class actually raised. A <code>KeyError</code>'s string is the repr of the key. <code>match</code> returns <code>True</code> when the pattern is found.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>When the block does not raise, <code>pytest.raises</code> raises pytest's own <code>Failed</code> exception.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>kind</code></th><th><code>text</code></th></tr><tr><td>ValueError</td><td><code>&#x27;ValueError&#x27;</code></td><td><code>&quot;invalid literal for int() with base 10: &#x27;x&#x27;&quot;</code></td></tr><tr><td>a subclass</td><td><code>&#x27;KeyError&#x27;</code></td><td><code>&quot;&#x27;temperature&#x27;&quot;</code></td></tr><tr><td>a tuple of types</td><td><code>&#x27;TypeError&#x27;</code></td><td><code>True</code></td></tr><tr><td>nothing raised</td><td><code>&#x27;Failed&#x27;</code></td><td><code>&quot;DID NOT RAISE &lt;class &#x27;ValueError&#x27;&gt;&quot;</code></td></tr></table></div><p><code>pytest.raises</code> accepts the expected class or any superclass, so <code>LookupError</code> catches the <code>KeyError</code>, and <code>info.type</code> reports the real class. A <code>KeyError</code> prints as the quoted key, which is why <code>match=</code> patterns for key errors look odd. A tuple accepts any of the types, and <code>info.match</code> searches the message with a regular expression and returns <code>True</code> (or raises <code>AssertionError</code>). When nothing is raised, the context manager raises <code>Failed: DID NOT RAISE</code>, an exception that derives from <code>BaseException</code>, so a plain <code>except Exception</code> in test helpers does not swallow it.</p></div></details>
+</article>
+<article class="prob" id="p-test-an-llm-json-extractor" data-pid="m13-1-test-an-llm-json-extractor" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Test an LLM JSON extractor</h3></header>
+<div class="prob-q"><p><code>extract_json(reply)</code> pulls a JSON object out of a model reply: it accepts a bare object, an object inside a fenced block such as three backticks followed by <code>json</code>, and an object surrounded by chatter, using the first <code>{</code> and the last <code>}</code>; it raises <code>ValueError</code> when there is no object or the JSON is invalid. Write at least five tests that pass here and catch three buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9"># --- code under test (do not edit) ---
+import json
+
+
+def extract_json(reply):
+    start, end = reply.find(&quot;{&quot;), reply.rfind(&quot;}&quot;)
+    if start == -1 or end &lt; start:
+        raise ValueError(&quot;no JSON object in reply&quot;)
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f&quot;invalid JSON: {e.msg}&quot;) from e
+    return value
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BUGS = {
+    "first_brace_only": '''
+import json
+def extract_json(reply):
+    start, end = reply.find("{"), reply.find("}")
+    if start == -1 or end < start:
+        raise ValueError("no JSON object in reply")
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON: {e.msg}") from e
+    return value
+''',
+    "leaks_decode_error": '''
+import json
+def extract_json(reply):
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        raise ValueError("no JSON object in reply")
+    value = json.loads(reply[start:end + 1].replace("'", '"'))
+    return value
+''',
+    "none_when_missing": '''
+import json
+def extract_json(reply):
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        return None
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON: {e.msg}") from e
+    return value
+''',
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BUGS = {
+    &quot;first_brace_only&quot;: &#x27;&#x27;&#x27;
+import json
+def extract_json(reply):
+    start, end = reply.find(&quot;{&quot;), reply.find(&quot;}&quot;)
+    if start == -1 or end &lt; start:
+        raise ValueError(&quot;no JSON object in reply&quot;)
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f&quot;invalid JSON: {e.msg}&quot;) from e
+    return value
+&#x27;&#x27;&#x27;,
+    &quot;leaks_decode_error&quot;: &#x27;&#x27;&#x27;
+import json
+def extract_json(reply):
+    start, end = reply.find(&quot;{&quot;), reply.rfind(&quot;}&quot;)
+    if start == -1 or end &lt; start:
+        raise ValueError(&quot;no JSON object in reply&quot;)
+    value = json.loads(reply[start:end + 1].replace(&quot;&#x27;&quot;, &#x27;&quot;&#x27;))
+    return value
+&#x27;&#x27;&#x27;,
+    &quot;none_when_missing&quot;: &#x27;&#x27;&#x27;
+import json
+def extract_json(reply):
+    start, end = reply.find(&quot;{&quot;), reply.rfind(&quot;}&quot;)
+    if start == -1 or end &lt; start:
+        return None
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f&quot;invalid JSON: {e.msg}&quot;) from e
+    return value
+&#x27;&#x27;&#x27;,
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A nested object (<code>{"a": {"b": 1}}</code>) defeats a version that stops at the first <code>}</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Single quotes (<code>{'label': 'spam'}</code>) are invalid JSON and must give a <code>ValueError</code>, not be repaired silently.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import json
+
+
+def extract_json(reply):
+    start, end = reply.find(&quot;{&quot;), reply.rfind(&quot;}&quot;)
+    if start == -1 or end &lt; start:
+        raise ValueError(&quot;no JSON object in reply&quot;)
+    try:
+        value = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError as e:
+        raise ValueError(f&quot;invalid JSON: {e.msg}&quot;) from e
+    return value
+
+
+# --- tests ---
+import pytest
+
+FENCE = &quot;`&quot; * 3
+
+
+def test_bare_object():
+    assert extract_json(&#x27;{&quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.9}&#x27;) == {&quot;label&quot;: &quot;spam&quot;, &quot;score&quot;: 0.9}
+
+
+def test_fenced_block():
+    reply = f&#x27;Here you go:\n{FENCE}json\n{{&quot;label&quot;: &quot;ham&quot;}}\n{FENCE}&#x27;
+    assert extract_json(reply) == {&quot;label&quot;: &quot;ham&quot;}
+
+
+def test_nested_object_with_chatter():
+    reply = &#x27;Sure! {&quot;label&quot;: &quot;spam&quot;, &quot;meta&quot;: {&quot;reasons&quot;: [&quot;prize&quot;]}} Hope this helps.&#x27;
+    assert extract_json(reply) == {&quot;label&quot;: &quot;spam&quot;, &quot;meta&quot;: {&quot;reasons&quot;: [&quot;prize&quot;]}}
+
+
+def test_no_object_raises():
+    with pytest.raises(ValueError, match=&quot;no JSON object&quot;):
+        extract_json(&quot;I cannot classify this message.&quot;)
+
+
+def test_single_quotes_are_invalid():
+    with pytest.raises(ValueError, match=&quot;invalid JSON&quot;):
+        extract_json(&quot;{&#x27;label&#x27;: &#x27;spam&#x27;}&quot;)
+
+
+def test_array_reply_has_no_object():
+    with pytest.raises(ValueError, match=&quot;no JSON object&quot;):
+        extract_json(&quot;[1, 2, 3]&quot;)</code></pre></div><p>Each test targets one documented behaviour with realistic model output: a fenced block, chatter around a <strong>nested</strong> object (which defeats "stop at the first closing brace"), no object at all, Python-style quotes, and text whose first-brace-to-last-brace span is not one object. The quote test also shows why tests should check the <strong>type</strong> of error: the buggy version that "repairs" quotes returns a value instead of raising, which a looser test (<code>assert result</code>) would accept. The missing-object tests assert an exception, so a version returning <code>None</code> fails. Note what is <strong>not</strong> tested: when the text from the first <code>{</code> to the last <code>}</code> parses, it is always an object, so a check for "not an object" after parsing could never trigger; a branch no test can reach is usually dead code to delete.</p></div></details>
+</article>
+<article class="prob" id="p-marks-and-their-outcomes" data-pid="m13-1-marks-and-their-outcomes" data-type="predict" data-level="medium" data-answer="skipped  test_skipped
+passed   test_new_syntax
+xfailed  test_known_bug
+xpassed  test_fixed_meanwhile
+failed   test_strict
+passed   test_odd[1]
+xfailed  test_odd[2]
+passed   test_odd[three]
+1">
+<header class="prob-head"><h3>10. Marks and their outcomes</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import sys
+import pytest
+
+@pytest.mark.skip(reason=&quot;slow&quot;)
+def test_skipped():
+    assert False
+
+@pytest.mark.skipif(sys.version_info &lt; (3, 10), reason=&quot;needs match statements&quot;)
+def test_new_syntax():
+    assert True
+
+@pytest.mark.xfail(reason=&quot;known tokenizer bug&quot;)
+def test_known_bug():
+    assert 1 + 1 == 3
+
+@pytest.mark.xfail(reason=&quot;maybe fixed&quot;)
+def test_fixed_meanwhile():
+    assert True
+
+@pytest.mark.xfail(strict=True, reason=&quot;must still fail&quot;)
+def test_strict():
+    assert True
+
+@pytest.mark.parametrize(&quot;n&quot;, [1, pytest.param(2, marks=pytest.mark.xfail), pytest.param(3, id=&quot;three&quot;)])
+def test_odd(n):
+    assert n % 2 == 1
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC)
+for name, outcome in r[&quot;outcomes&quot;].items():
+    print(f&quot;{outcome:8} {name}&quot;)
+print(r[&quot;exit&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An xfail test that passes is <code>xpassed</code>, unless the mark is strict, in which case it fails.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>skipped  test_skipped
+passed   test_new_syntax
+xfailed  test_known_bug
+xpassed  test_fixed_meanwhile
+failed   test_strict
+passed   test_odd[1]
+xfailed  test_odd[2]
+passed   test_odd[three]
+1</pre></div><p><code>skip</code> never runs the test, and <code>skipif</code> runs it because the condition is false on Python 3.14. A failing <code>xfail</code> test is reported as expected (<code>xfailed</code>); a passing one is <code>xpassed</code>, a hint that the bug was fixed. With <code>strict=True</code> that unexpected pass is a failure, which is what sets the exit code to 1. Marks can be attached to single parameter sets with <code>pytest.param</code>, and <code>id=</code> replaces the generated id.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-property-tests-for-a-dataset-split" data-pid="m13-1-property-tests-for-a-dataset-split" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Property tests for a dataset split</h3></header>
+<div class="prob-q"><p><code>split(items, test_size, seed)</code> returns <code>(train, test)</code>: a shuffled copy of <code>items</code> (shuffled with <code>random.Random(seed)</code>), with <code>round(len(items) * test_size)</code> items in <code>test</code> and the rest in <code>train</code>; it never modifies <code>items</code>, and raises <code>ValueError</code> unless <code>0 &lt; test_size &lt; 1</code>. Write tests for <strong>properties</strong> that must hold for any input (sizes, no overlap, nothing lost, determinism, input untouched, different seeds giving different splits) rather than one hard-coded split. They must pass here and catch five buggy versions.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11"># --- code under test (do not edit) ---
+import random
+
+
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+
+
+# --- tests ---
+import pytest
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 5, good["output"][-800:]
+BUGS = {
+    "mutates_input": '''
+import random
+def split(items, test_size, seed):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    random.Random(seed).shuffle(items)
+    n_test = round(len(items) * test_size)
+    return items[n_test:], items[:n_test]
+''',
+    "ignores_seed": '''
+import random
+def split(items, test_size, seed):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    shuffled = list(items)
+    random.shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+''',
+    "overlap": '''
+import random
+def split(items, test_size, seed):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test - 1:], shuffled[:n_test]
+''',
+    "truncates_size": '''
+import random
+def split(items, test_size, seed):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = int(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+''',
+    "no_shuffle": '''
+import random
+def split(items, test_size, seed):
+    if not 0 < test_size < 1:
+        raise ValueError("test_size must be between 0 and 1")
+    shuffled = list(items)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+''',
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))["failed"] == 0)
+assert escaped == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 5, good[&quot;output&quot;][-800:]
+BUGS = {
+    &quot;mutates_input&quot;: &#x27;&#x27;&#x27;
+import random
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    random.Random(seed).shuffle(items)
+    n_test = round(len(items) * test_size)
+    return items[n_test:], items[:n_test]
+&#x27;&#x27;&#x27;,
+    &quot;ignores_seed&quot;: &#x27;&#x27;&#x27;
+import random
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    random.shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+&#x27;&#x27;&#x27;,
+    &quot;overlap&quot;: &#x27;&#x27;&#x27;
+import random
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test - 1:], shuffled[:n_test]
+&#x27;&#x27;&#x27;,
+    &quot;truncates_size&quot;: &#x27;&#x27;&#x27;
+import random
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = int(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+&#x27;&#x27;&#x27;,
+    &quot;no_shuffle&quot;: &#x27;&#x27;&#x27;
+import random
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+&#x27;&#x27;&#x27;,
+}
+escaped = sorted(name for name, impl in BUGS.items() if run_pytest(swap_impl(__source__, impl))[&quot;failed&quot;] == 0)
+assert escaped == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a list of distinct items such as <code>list(range(100))</code> and check <code>len(test)</code>, <code>set(train) &amp; set(test)</code>, and <code>sorted(train + test)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Determinism: the same seed twice gives the same split; seeds 1 and 2 give different test sets. Not shuffled: is the test set just the first items?</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Rounding: with 7 items and <code>test_size=0.3</code>, <code>round</code> gives 2 and <code>int</code> gives 2 as well; find a size where they differ, such as 9 items at 0.3.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+import random
+
+
+def split(items, test_size, seed):
+    if not 0 &lt; test_size &lt; 1:
+        raise ValueError(&quot;test_size must be between 0 and 1&quot;)
+    shuffled = list(items)
+    random.Random(seed).shuffle(shuffled)
+    n_test = round(len(shuffled) * test_size)
+    return shuffled[n_test:], shuffled[:n_test]
+
+
+# --- tests ---
+import pytest
+
+ITEMS = list(range(100))
+
+
+@pytest.mark.parametrize(&quot;n,test_size,expected&quot;, [(100, 0.2, 20), (9, 0.3, 3), (10, 0.25, 2), (3, 0.5, 2)])
+def test_test_set_size_is_rounded(n, test_size, expected):
+    train, test = split(list(range(n)), test_size, seed=0)
+    assert len(test) == expected and len(train) == n - expected
+
+
+def test_no_overlap_and_nothing_lost():
+    train, test = split(ITEMS, 0.2, seed=1)
+    assert set(train).isdisjoint(test)
+    assert sorted(train + test) == ITEMS
+
+
+def test_same_seed_same_split():
+    assert split(ITEMS, 0.2, seed=42) == split(ITEMS, 0.2, seed=42)
+
+
+def test_different_seeds_differ_and_are_shuffled():
+    _, a = split(ITEMS, 0.2, seed=1)
+    _, b = split(ITEMS, 0.2, seed=2)
+    assert a != b
+    assert a != ITEMS[:20]
+
+
+def test_input_is_not_modified():
+    items = list(range(10))
+    split(items, 0.3, seed=3)
+    assert items == list(range(10))
+
+
+@pytest.mark.parametrize(&quot;test_size&quot;, [0, 1, -0.1, 1.5])
+def test_rejects_bad_test_size(test_size):
+    with pytest.raises(ValueError):
+        split(ITEMS, test_size, seed=0)</code></pre></div><p>A split cannot be checked against one hard-coded expected output without reimplementing the shuffle, so the tests check <strong>properties</strong> that any correct split has: the sizes, disjointness, the union being exactly the input, determinism for one seed, variation across seeds, an actual shuffle, and an untouched input. Each mutant breaks one property: shuffling in place changes the caller's list (a real bug in data pipelines, where the same list feeds several experiments), the global <code>random</code> ignores the seed, the off-by-one slice puts one item in both sets (data leakage), <code>int</code> truncates 2.7 to 2, and the unshuffled version puts the first items in the test set. Tools such as Hypothesis generate the inputs for property tests automatically; the properties themselves are the part you design.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-fragile-test-module" data-pid="m13-1-read-the-code-a-fragile-test-module" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Read the code: a fragile test module</h3></header>
+<div class="prob-q"><p>This test module for <code>normalise_scores</code> has several problems: one test depends on another having run first through a shared list, one test is never collected, one compares floats exactly, one catches any <code>Exception</code>, and the suite misses the bug in the graded buggy version (which forgets to handle all-equal scores and raises <code>ZeroDivisionError</code>). Rewrite the tests so each is independent, collected, precise, and the bug is caught.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12"># --- code under test (do not edit) ---
+def normalise_scores(scores):
+    # min-max scaling to [0, 1]; all-equal scores map to 0.0; empty input gives []
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    if hi == lo:
+        return [0.0 for _ in scores]
+    return [(s - lo) / (hi - lo) for s in scores]
+
+
+# --- tests ---
+import pytest
+
+RESULTS = []
+
+
+def test_basic():
+    RESULTS.extend(normalise_scores([1, 2, 3]))
+    assert RESULTS[0] == 0.0
+
+
+def test_middle_value():
+    assert RESULTS[1] == 0.5
+
+
+def check_top_value():
+    assert normalise_scores([1, 2, 3])[2] == 1.0
+
+
+def test_fractions():
+    assert normalise_scores([0.1, 0.2, 0.4]) == [0.0, 0.3333333333333333, 1.0]
+
+
+def test_bad_input():
+    with pytest.raises(Exception):
+        normalise_scores([1, &quot;a&quot;])
+</textarea>
+<script type="text/plain" class="prob-tests">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split("# --- tests")[1]
+good = run_pytest(__source__)
+assert good["failed"] == 0 and good["passed"] >= 4, good["output"][-800:]
+alone = run_pytest(__source__, args=["-k", "middle or top"])
+assert alone["failed"] == 0 and "RESULTS" not in tests_part and "check_" not in tests_part
+assert "pytest.raises(Exception)" not in tests_part
+BUG = '''
+def normalise_scores(scores):
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    return [(s - lo) / (hi - lo) for s in scores]
+'''
+assert run_pytest(swap_impl(__source__, BUG))["failed"] > 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import pytest
+from lessontools import run_pytest, swap_impl
+tests_part = __source__.split(&quot;# --- tests&quot;)[1]
+good = run_pytest(__source__)
+assert good[&quot;failed&quot;] == 0 and good[&quot;passed&quot;] &gt;= 4, good[&quot;output&quot;][-800:]
+alone = run_pytest(__source__, args=[&quot;-k&quot;, &quot;middle or top&quot;])
+assert alone[&quot;failed&quot;] == 0 and &quot;RESULTS&quot; not in tests_part and &quot;check_&quot; not in tests_part
+assert &quot;pytest.raises(Exception)&quot; not in tests_part
+BUG = &#x27;&#x27;&#x27;
+def normalise_scores(scores):
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    return [(s - lo) / (hi - lo) for s in scores]
+&#x27;&#x27;&#x27;
+assert run_pytest(swap_impl(__source__, BUG))[&quot;failed&quot;] &gt; 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Give each test its own input and expected output; rename <code>check_top_value</code> to start with <code>test_</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>pytest.approx</code> for the fractions, <code>pytest.raises(TypeError)</code> for mixed types, and add the all-equal and empty cases.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py"># --- code under test (do not edit) ---
+def normalise_scores(scores):
+    # min-max scaling to [0, 1]; all-equal scores map to 0.0; empty input gives []
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    if hi == lo:
+        return [0.0 for _ in scores]
+    return [(s - lo) / (hi - lo) for s in scores]
+
+
+# --- tests ---
+import pytest
+
+
+def test_scales_to_unit_interval():
+    assert normalise_scores([1, 2, 3]) == [0.0, 0.5, 1.0]
+
+
+def test_middle_value():
+    assert normalise_scores([1, 2, 3])[1] == 0.5
+
+
+def test_top_value():
+    assert normalise_scores([1, 2, 3])[2] == 1.0
+
+
+def test_fractions():
+    assert normalise_scores([0.1, 0.2, 0.4]) == pytest.approx([0.0, 1 / 3, 1.0])
+
+
+def test_all_equal_scores_map_to_zero():
+    assert normalise_scores([0.7, 0.7]) == [0.0, 0.0]
+
+
+def test_empty_input():
+    assert normalise_scores([]) == []
+
+
+def test_mixed_types_raise_type_error():
+    with pytest.raises(TypeError):
+        normalise_scores([1, &quot;a&quot;])</code></pre></div><p>Each problem is a common way test suites rot. A test that reads state written by another passes only when run in that order, so <code>pytest -k middle</code> or a parallel run breaks it; every test must arrange its own data. A function not named <code>test_*</code> is silently skipped, giving a false sense of coverage. The exact float comparison happens to pass today but breaks on another platform or after a harmless refactor, while <code>approx</code> states the intended precision. <code>pytest.raises(Exception)</code> passes for <strong>any</strong> error, including a bug that raises <code>NameError</code>; name the expected type. Finally, the missing edge case (all scores equal, which happens whenever a retriever returns identical scores) is exactly where the buggy version divides by zero.</p></div></details>
+</article>
+<article class="prob" id="p-a-tiny-test-runner" data-pid="m13-1-a-tiny-test-runner" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. A tiny test runner</h3></header>
+<div class="prob-q"><p>To see what pytest does underneath, write <code>run_tests(namespace)</code>. It finds callables whose names start with <code>test</code> in <code>namespace</code> (a dict, in insertion order), runs each, and records <code>"passed"</code>, <code>"failed"</code> (an <code>AssertionError</code>) or <code>f"error: {ExceptionName}"</code> (any other exception). A function with a <code>params</code> attribute (a list of argument tuples, set by the decorator <code>parametrize(*cases)</code> that you also write) runs once per tuple, recorded as <code>f"{name}[{i}]"</code>. Return the dict of results.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">def parametrize(*cases):
+    pass
+
+def run_tests(namespace):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">def add(a, b):
+    return a + b
+
+def test_add():
+    assert add(2, 2) == 4
+
+def test_wrong():
+    assert add(2, 2) == 5
+
+def test_crash():
+    return {}["missing"]
+
+@parametrize((1, 2, 3), (0, 0, 0), (2, 2, 5))
+def test_cases(a, b, expected):
+    assert add(a, b) == expected
+
+def helper_not_a_test():
+    raise RuntimeError
+
+test_value = 42
+
+ns = {"add": add, "test_add": test_add, "test_wrong": test_wrong, "test_crash": test_crash, "test_cases": test_cases,
+      "helper_not_a_test": helper_not_a_test, "test_value": test_value}
+results = run_tests(ns)
+assert results == {"test_add": "passed", "test_wrong": "failed", "test_crash": "error: KeyError",
+                   "test_cases[0]": "passed", "test_cases[1]": "passed", "test_cases[2]": "failed"}
+assert test_cases.params == [(1, 2, 3), (0, 0, 0), (2, 2, 5)] and test_cases(1, 1, 2) is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">def add(a, b):
+    return a + b
+
+def test_add():
+    assert add(2, 2) == 4
+
+def test_wrong():
+    assert add(2, 2) == 5
+
+def test_crash():
+    return {}[&quot;missing&quot;]
+
+@parametrize((1, 2, 3), (0, 0, 0), (2, 2, 5))
+def test_cases(a, b, expected):
+    assert add(a, b) == expected
+
+def helper_not_a_test():
+    raise RuntimeError
+
+test_value = 42
+
+ns = {&quot;add&quot;: add, &quot;test_add&quot;: test_add, &quot;test_wrong&quot;: test_wrong, &quot;test_crash&quot;: test_crash, &quot;test_cases&quot;: test_cases,
+      &quot;helper_not_a_test&quot;: helper_not_a_test, &quot;test_value&quot;: test_value}
+results = run_tests(ns)
+assert results == {&quot;test_add&quot;: &quot;passed&quot;, &quot;test_wrong&quot;: &quot;failed&quot;, &quot;test_crash&quot;: &quot;error: KeyError&quot;,
+                   &quot;test_cases[0]&quot;: &quot;passed&quot;, &quot;test_cases[1]&quot;: &quot;passed&quot;, &quot;test_cases[2]&quot;: &quot;failed&quot;}
+assert test_cases.params == [(1, 2, 3), (0, 0, 0), (2, 2, 5)] and test_cases(1, 1, 2) is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>parametrize</code> returns a decorator that sets <code>fn.params = list(cases)</code> and returns <code>fn</code> unchanged.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the runner, <code>getattr(fn, "params", None)</code> decides between one call and one call per tuple; a small inner function records one outcome.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def parametrize(*cases):
+    def decorator(fn):
+        fn.params = list(cases)
+        return fn
+    return decorator
+
+
+def _outcome(fn, args):
+    try:
+        fn(*args)
+    except AssertionError:
+        return &quot;failed&quot;
+    except Exception as e:
+        return f&quot;error: {type(e).__name__}&quot;
+    return &quot;passed&quot;
+
+
+def run_tests(namespace):
+    results = {}
+    for name, fn in namespace.items():
+        if not name.startswith(&quot;test&quot;) or not callable(fn):
+            continue
+        params = getattr(fn, &quot;params&quot;, None)
+        if params is None:
+            results[name] = _outcome(fn, ())
+        else:
+            for i, args in enumerate(params):
+                results[f&quot;{name}[{i}]&quot;] = _outcome(fn, args)
+    return results</code></pre></div><p>This is pytest's core loop in miniature: discovery by naming convention (<code>test_value</code> is skipped because it is not callable), one isolated call per test with exceptions turned into outcomes, and parametrisation implemented as metadata attached by a decorator (8.3) that the runner reads, which is literally how <code>pytest.mark.parametrize</code> works: marks are stored on the function and expanded at collection time. Distinguishing a failed assertion from another exception mirrors pytest's report, where a <code>KeyError</code> points to a broken test or code rather than a wrong value. What pytest adds is fixtures (13.2), assertion rewriting, plugins and rich reporting.</p></div></details>
+</article>
+<article class="prob" id="p-stacked-parametrize-and-ids" data-pid="m13-1-stacked-parametrize-and-ids" data-type="predict" data-level="hard" data-answer="passed  test_settings[0.0-small]
+passed  test_settings[0.0-large]
+passed  test_settings[0.7-small]
+failed  test_settings[0.7-large]
+passed  test_length[one-char]
+passed  test_length[empty]
+5 1">
+<header class="prob-head"><h3>14. Stacked parametrize and ids</h3></header>
+<div class="code"><pre><code class="py">from lessontools import run_pytest
+
+SRC = &#x27;&#x27;&#x27;
+import pytest
+
+@pytest.mark.parametrize(&quot;model&quot;, [&quot;small&quot;, &quot;large&quot;])
+@pytest.mark.parametrize(&quot;temperature&quot;, [0.0, 0.7])
+def test_settings(model, temperature):
+    assert not (model == &quot;large&quot; and temperature &gt; 0.5)
+
+@pytest.mark.parametrize(&quot;text,expected&quot;, [(&quot;a&quot;, 1), (&quot;&quot;, 0)], ids=[&quot;one-char&quot;, &quot;empty&quot;])
+def test_length(text, expected):
+    assert len(text) == expected
+&#x27;&#x27;&#x27;
+r = run_pytest(SRC)
+for name, outcome in r[&quot;outcomes&quot;].items():
+    print(f&quot;{outcome:7} {name}&quot;)
+print(r[&quot;passed&quot;], r[&quot;failed&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Two stacked <code>parametrize</code> decorators give every combination. The decorator closest to the function contributes the first part of each id.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>passed  test_settings[0.0-small]
+passed  test_settings[0.0-large]
+passed  test_settings[0.7-small]
+failed  test_settings[0.7-large]
+passed  test_length[one-char]
+passed  test_length[empty]
+5 1</pre></div><p>Stacking produces the Cartesian product, 2 models times 2 temperatures, as four separate tests; the id joins the values with <code>-</code>, starting with the innermost decorator's value (<code>0.0-small</code>), and in the run order the outer parameter, the model, changes fastest. Only the large model at temperature 0.7 fails. Explicit <code>ids</code> replace the generated ones, which matters when values are long strings or objects whose generated ids are unreadable.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-makes-a-good-unit-test" data-pid="m13-1-what-makes-a-good-unit-test" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. What makes a good unit test?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A good unit test fails when the behaviour it covers is broken and passes otherwise, reliably. Concretely: it tests one behaviour through the public interface, with a name that states that behaviour, so a failure explains itself; it follows arrange, act, assert and asserts the specific expected value, not just "something truthy"; it is deterministic (no real clock, network, unseeded randomness, shared state or test order) and fast, so it can run on every change; it is independent of other tests and cleans up after itself; it covers edge cases and error paths, not only the happy path; and it is resilient to refactoring because it checks outcomes, not implementation details such as which private helper was called. A useful check of a test's value is whether it would catch a plausible bug: break the code deliberately and see it fail. Coverage percentages measure what code ran, not what was verified.</p></div></details>
+</article>
+<article class="prob" id="p-why-does-pytest-use-plain-assert-stateme" data-pid="m13-1-why-does-pytest-use-plain-assert-stateme" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. Why does pytest use plain assert statements, and how does it show useful failure messages?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Plain <code>assert</code> keeps tests short and readable: <code>assert result == expected</code> instead of a family of methods such as <code>assertEqual</code>, <code>assertIn</code>, <code>assertAlmostEqual</code>. Normally a failed <code>assert</code> only raises a bare <code>AssertionError</code>, so pytest <strong>rewrites</strong> the assert statements in test modules when it imports them, through an import hook that transforms the module's syntax tree: each assert is expanded into code that saves intermediate values, and on failure builds a message showing them, such as <code>assert 4 == 5</code> where <code>4 = add(2, 2)</code>, and diffs for long strings, lists and dicts. That is why it only works in test files and modules registered for rewriting (helpers can be registered with <code>pytest.register_assert_rewrite</code>), and why running Python with <code>-O</code>, which strips asserts, must never be used for tests.</p></div></details>
+</article>
+<article class="prob" id="p-what-is-a-flaky-test-what-causes-it-and-" data-pid="m13-1-what-is-a-flaky-test-what-causes-it-and-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is a flaky test, what causes it, and what do you do about it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A flaky test passes and fails on the same code. Common causes: dependence on test <strong>order</strong> or shared state (module globals, files, databases, environment variables left behind); <strong>time</strong> (the current date, time zones, timeouts, <code>sleep</code>-based waits); unseeded <strong>randomness</strong>; <strong>concurrency</strong> races; real <strong>network</strong> calls and external services; floating-point comparisons that depend on platform; and leaking resources. Flaky tests are harmful because people learn to ignore red builds and rerun until green, so real failures get missed. Fix them rather than retrying: isolate state with fixtures and temporary directories (13.2), freeze or inject the clock, seed randomness, replace network calls with fakes or mocks (13.3), wait on conditions instead of sleeping, and use <code>approx</code> for floats. To find them, run the suite in random order (<code>pytest-randomly</code>) and repeatedly, and quarantine (mark and track) a flaky test only as a short-term measure with an owner and a deadline. For LLM-dependent tests, keep model calls out of unit tests entirely (13.4).</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>pytest collects <code>test_*</code> functions in <code>test_*.py</code> files (and <code>test_*</code> methods of <code>Test*</code> classes); any exception fails a test, so assert something specific.</li><li>Plain <code>assert</code> is rewritten to show values; compare whole results, use <code>pytest.approx</code> for floats, and set <code>abs=</code> near zero.</li><li><code>pytest.raises(Type, match=...)</code> checks errors; keep only the raising call inside the block.</li><li><code>@pytest.mark.parametrize</code> turns a table of cases into separate tests; choose empty, boundary, invalid and unusual inputs deliberately.</li><li>Marks skip or expect failures (<code>strict=True</code> keeps xfail honest); judge tests by whether they catch real bugs, as mutation testing does.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
