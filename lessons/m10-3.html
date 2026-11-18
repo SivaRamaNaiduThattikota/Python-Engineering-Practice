@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10.3 · Resource patterns</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m10-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 10 · Iterators and context managers</span></div>
+  <h1>10.3 Resource patterns</h1>
+  <p>The toolbox for managing resources beyond a single <code>with</code>: <code>contextlib.ExitStack</code> for a dynamic number of resources and for undo actions, <code>suppress</code>, <code>nullcontext</code>, <code>closing</code> and <code>redirect_stdout</code>, classes that own a resource and close it reliably, temporary global state, cooperative deadlines, and pools. Why <code>__del__</code> is not cleanup. Applied to files, seeds, clients, workspaces and compensating actions.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="exitstack">
+<h2><span class="n">1</span><code>ExitStack</code>: a dynamic number of resources</h2>
+<p>A <code>with</code> statement names its context managers in the code, so it cannot open "one file per input path" when the number of paths is only known at run time. <strong><code>contextlib.ExitStack</code></strong> solves that: it is a context manager that you fill while the block runs. <code>stack.enter_context(cm)</code> enters <code>cm</code> and remembers to exit it; <code>stack.callback(func, *args)</code> registers any cleanup function. When the <code>with ExitStack()</code> block ends, normally or by an exception, everything registered is exited or called in <strong>reverse</strong> order, exactly as nested <code>with</code> statements would. If opening the fifth file fails, the four already open are closed.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">exitstack.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+from contextlib import ExitStack
+
+d = tempfile.mkdtemp()
+paths = []
+for name, text in [(&quot;a.txt&quot;, &quot;alpha&quot;), (&quot;b.txt&quot;, &quot;beta&quot;), (&quot;c.txt&quot;, &quot;gamma&quot;)]:
+    paths.append(os.path.join(d, name))
+    with open(paths[-1], &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(text)
+
+events = []
+with ExitStack() as stack:
+    files = [stack.enter_context(open(p, encoding=&quot;utf-8&quot;)) for p in paths]
+    stack.callback(events.append, &quot;callback ran last-in, first-out&quot;)
+    print([f.read() for f in files])
+print(all(f.closed for f in files), events)
+
+try:
+    with ExitStack() as stack:
+        opened = [stack.enter_context(open(p, encoding=&quot;utf-8&quot;)) for p in paths + [os.path.join(d, &quot;missing.txt&quot;)]]
+except FileNotFoundError:
+    print(&quot;missing file: the three opened ones were closed:&quot;, all(f.closed for f in files))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;alpha&#x27;, &#x27;beta&#x27;, &#x27;gamma&#x27;]
+True [&#x27;callback ran last-in, first-out&#x27;]
+missing file: the three opened ones were closed: True</pre></div></div>
+<p>Two more methods make <code>ExitStack</code> useful beyond files. <strong><code>pop_all()</code></strong> moves everything registered so far into a <strong>new</strong> stack and leaves the current one empty, so the <code>with</code> block ends without closing anything: the pattern for a function that acquires several resources safely (if any acquisition fails, the earlier ones are released) and then hands them, still open, to its caller (problem 6). And <strong>callbacks</strong> turn any cleanup into part of the stack: deleting a temporary file, restoring a setting, sending an "aborted" event, or undoing a step that already happened (problem 15).</p>
+</section>
+<section class="sec" id="helpers">
+<h2><span class="n">2</span>Small helpers from <code>contextlib</code></h2>
+<p>The <code>contextlib</code> module has a few one-line managers that remove a lot of boilerplate. <strong><code>suppress(*exceptions)</code></strong> ignores the listed exception types inside the block (7.3, 10.2). <strong><code>nullcontext(value)</code></strong> is a manager that does nothing and yields <code>value</code>, for code where a manager is optional: <code>with (lock if lock else nullcontext()):</code>. <strong><code>closing(obj)</code></strong> turns any object with a <code>close()</code> method into a manager that calls <code>close()</code> at the end, for older libraries that never implemented <code>__enter__</code>. <strong><code>redirect_stdout(target)</code></strong> (and <code>redirect_stderr</code>) sends <code>print</code> output to a file-like object for the duration of the block, which is how you capture the output of code that prints instead of returning. <strong><code>chdir(path)</code></strong> (Python 3.11+) changes the working directory temporarily.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">contextlib_helpers.py</span><button class="copy">Copy</button></div><pre><code class="py">import io
+from contextlib import suppress, nullcontext, closing, redirect_stdout
+
+class LegacyConnection:
+    def __init__(self):
+        self.open = True
+    def close(self):
+        self.open = False
+
+with closing(LegacyConnection()) as conn:
+    print(&quot;open inside:&quot;, conn.open)
+print(&quot;open after:&quot;, conn.open)
+
+def process(items, lock=None):
+    with lock if lock is not None else nullcontext():
+        return sum(items)
+print(process([1, 2, 3]))
+
+buf = io.StringIO()
+with redirect_stdout(buf):
+    print(&quot;this goes into the buffer&quot;)
+    help_text = &quot;captured&quot;
+print(repr(buf.getvalue()), help_text)
+
+cache = {&quot;a&quot;: 1}
+with suppress(KeyError):
+    del cache[&quot;missing&quot;]
+print(cache)</code></pre><div class="out"><span class="ol">Output</span><pre>open inside: True
+open after: False
+6
+&#x27;this goes into the buffer\n&#x27; captured
+{&#x27;a&#x27;: 1}</pre></div></div>
+</section>
+<section class="sec" id="owners">
+<h2><span class="n">3</span>Classes that own a resource</h2>
+<p>An object that holds a connection, a session, a file or a subprocess <strong>owns</strong> that resource and should offer three things. A <code>close()</code> method that releases it and is <strong>idempotent</strong> (calling it twice is harmless, since cleanup code often runs from several places). Context manager support, <code>__enter__</code> returning <code>self</code> and <code>__exit__</code> calling <code>close()</code>, so <code>with Client() as c:</code> works. And a clear error when the object is used after closing, instead of a confusing failure deep inside the library (problem 7). This is the interface of files, <code>sqlite3</code> connections, <code>httpx.Client</code>, and the OpenAI and Anthropic SDK clients.</p>
+<p>What not to rely on is <strong><code>__del__</code></strong>, the finaliser Python may call when an object is garbage-collected. It runs at an unpredictable time (or, at interpreter shutdown, possibly not at all), it runs when other objects it needs may already be gone, exceptions inside it are ignored with only a warning, and reference cycles can delay it indefinitely (2.1). Use <code>with</code> or explicit <code>close()</code> for cleanup; if you need a last-resort safety net, <code>weakref.finalize(obj, cleanup_func)</code> is more predictable than <code>__del__</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">resource_owner.py</span><button class="copy">Copy</button></div><pre><code class="py">class Session:
+    def __init__(self, name):
+        self.name = name
+        self._closed = False
+        self.requests = 0
+
+    @property
+    def closed(self):
+        return self._closed
+
+    def send(self, payload):
+        if self._closed:
+            raise RuntimeError(f&quot;session {self.name} is closed&quot;)
+        self.requests += 1
+        return f&quot;sent {payload}&quot;
+
+    def close(self):
+        if not self._closed:          # idempotent
+            self._closed = True
+            print(f&quot;  {self.name}: released after {self.requests} requests&quot;)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+with Session(&quot;api&quot;) as s:
+    s.send(&quot;a&quot;); s.send(&quot;b&quot;)
+s.close()                             # harmless second close
+try:
+    s.send(&quot;c&quot;)
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>  api: released after 2 requests
+RuntimeError: session api is closed</pre></div></div>
+</section>
+<section class="sec" id="state">
+<h2><span class="n">4</span>Temporary global state</h2>
+<p>Some state is global to the process: the random number generator's state, environment variables, the current working directory, logging levels, NumPy's print options, a framework's "gradients enabled" switch (10.2). Code that changes it for a moment must <strong>save and restore</strong> the exact previous value, not reset it to some default, or it silently changes behaviour for everything that runs afterwards. A context manager is the right shape: save in <code>__enter__</code> (or before <code>yield</code>), restore in <code>__exit__</code> (or <code>finally</code>). For randomness, that means <code>random.getstate()</code> and <code>random.setstate()</code>, not <code>random.seed(0)</code> on exit (problem 9).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">global_state.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, random
+from contextlib import contextmanager
+
+@contextmanager
+def seeded(seed):
+    state = random.getstate()
+    random.seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(state)
+
+@contextmanager
+def env(**values):
+    old = {k: os.environ.get(k) for k in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+random.seed(123)
+before = random.random()
+random.seed(123)
+with seeded(7):
+    sample = [random.randint(1, 6) for _ in range(5)]
+after = random.random()
+print(sample, after == before)
+
+with env(LLM_MODEL=&quot;large&quot;):
+    print(&quot;inside:&quot;, os.environ[&quot;LLM_MODEL&quot;])
+print(&quot;after:&quot;, os.environ.get(&quot;LLM_MODEL&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>[3, 2, 4, 6, 1] True
+inside: large
+after: None</pre></div></div>
+<p><code>after == before</code> shows that the code outside the block got exactly the random numbers it would have got without the block: the seeded section was invisible to it. That property is what keeps experiments reproducible when a library seeds randomness internally. Better still, avoid global state where you can: pass a <code>random.Random(seed)</code> instance (7.4) or a NumPy <code>Generator</code> to the code that needs randomness.</p>
+</section>
+<section class="sec" id="deadline">
+<h2><span class="n">5</span>Timers, deadlines and budgets as scopes</h2>
+<p>A context manager is a natural way to give a block of work a <strong>budget</strong>: a time limit, a token budget, a maximum number of model calls. In synchronous Python a manager cannot interrupt the block (8.3), so these scopes are <strong>cooperative</strong>: the block checks the budget at safe points (<code>deadline.check()</code> before each retry or each document), and the manager records whether the budget was exceeded when the block ends. With asyncio, <code>asyncio.timeout(seconds)</code> (14.5) can cancel the waiting task, which is the main reason timeouts work better in async code.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">deadline.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+from contextlib import contextmanager
+
+class Deadline:
+    def __init__(self, seconds, clock):
+        self.seconds, self.clock = seconds, clock
+        self.start = clock()
+
+    def remaining(self):
+        return self.seconds - (self.clock() - self.start)
+
+    def check(self, step=&quot;&quot;):
+        if self.remaining() &lt;= 0:
+            raise TimeoutError(f&quot;deadline of {self.seconds}s exceeded at {step or &#x27;check&#x27;}&quot;)
+
+@contextmanager
+def deadline(seconds, clock=time.monotonic):
+    d = Deadline(seconds, clock)
+    yield d
+
+ticks = iter([0.0, 1.0, 2.5, 3.5, 6.0])
+done = []
+try:
+    with deadline(5, clock=lambda: next(ticks)) as d:
+        for doc in [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;]:
+            d.check(f&quot;doc {doc}&quot;)
+            done.append(doc)
+except TimeoutError as e:
+    print(done, &quot;|&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;] | deadline of 5s exceeded at doc d</pre></div></div>
+<p>Each <code>check</code> reads the clock once, so the scripted times make the outcome exact: three documents fit, and the fourth check finds the five seconds used up. Passing <code>d.remaining()</code> as the timeout of each network call is the other half of a deadline (7.4): no single call can then run past the budget either (problem 11).</p>
+</section>
+<section class="sec" id="pools">
+<h2><span class="n">6</span>Pools: borrowing and returning resources</h2>
+<p>Some resources are expensive to create and limited in number: database connections, browser instances, GPU workers, licensed API sessions. A <strong>pool</strong> creates a few, lends one out per task, and takes it back afterwards, so tasks do not pay the creation cost and the total stays bounded. Lending is a context manager: <code>with pool.acquire() as conn:</code> returns the connection to the pool when the block ends, even if it raised. A subtle rule: if the block failed <strong>because the resource is broken</strong> (the connection dropped), the pool must discard that resource rather than lend it to the next task (problem 13). Connection pools in <code>psycopg</code>, SQLAlchemy and <code>httpx</code> follow this design.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-exit-order-on-a-stack" data-pid="m10-3-exit-order-on-a-stack" data-type="predict" data-level="easy" data-answer="[&#x27;open db&#x27;, &#x27;open cache&#x27;, &#x27;open queue&#x27;, &#x27;work&#x27;, &#x27;flush metrics&#x27;, &#x27;close queue&#x27;, &#x27;close cache&#x27;, &#x27;close db&#x27;]">
+<header class="prob-head"><h3>1. Exit order on a stack</h3></header>
+<div class="code"><pre><code class="py">from contextlib import ExitStack, contextmanager
+
+log = []
+
+@contextmanager
+def res(name):
+    log.append(f&quot;open {name}&quot;)
+    try:
+        yield name
+    finally:
+        log.append(f&quot;close {name}&quot;)
+
+with ExitStack() as stack:
+    for name in [&quot;db&quot;, &quot;cache&quot;, &quot;queue&quot;]:
+        stack.enter_context(res(name))
+    stack.callback(log.append, &quot;flush metrics&quot;)
+    log.append(&quot;work&quot;)
+print(log)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Everything registered on the stack is unwound in reverse order of registration, callbacks included.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;open db&#x27;, &#x27;open cache&#x27;, &#x27;open queue&#x27;, &#x27;work&#x27;, &#x27;flush metrics&#x27;, &#x27;close queue&#x27;, &#x27;close cache&#x27;, &#x27;close db&#x27;]</pre></div><p>The three resources are opened in loop order, then the callback is registered last. At the end of the block the stack unwinds last-in, first-out: the callback runs first, then <code>queue</code>, <code>cache</code> and <code>db</code> are closed in reverse order of opening, exactly like three nested <code>with</code> statements with a <code>finally</code> inside the innermost.</p></div></details>
+</article>
+<article class="prob" id="p-reproducible-randomness-in-a-block" data-pid="m10-3-reproducible-randomness-in-a-block" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>2. Reproducible randomness in a block</h3></header>
+<div class="prob-q"><p>Write a <code>contextlib.contextmanager</code> function <code>seeded(seed)</code> that seeds Python's global <code>random</code> module for the duration of the block and, afterwards, restores the generator to <strong>exactly</strong> the state it had before, so code outside the block is unaffected. Yield nothing.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import random
+from contextlib import contextmanager
+
+@contextmanager
+def seeded(seed):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import random
+with seeded(42):
+    first = [random.random() for _ in range(3)]
+with seeded(42):
+    second = [random.random() for _ in range(3)]
+assert first == second
+
+random.seed(99)
+expected = [random.random() for _ in range(2)]
+random.seed(99)
+a = random.random()
+with seeded(1):
+    random.random()
+b = random.random()
+assert [a, b] == expected
+try:
+    with seeded(5):
+        raise ValueError("x")
+except ValueError:
+    pass
+random.seed(3); x = random.random(); random.seed(3)
+with seeded(8):
+    pass
+assert random.random() == x</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import random
+with seeded(42):
+    first = [random.random() for _ in range(3)]
+with seeded(42):
+    second = [random.random() for _ in range(3)]
+assert first == second
+
+random.seed(99)
+expected = [random.random() for _ in range(2)]
+random.seed(99)
+a = random.random()
+with seeded(1):
+    random.random()
+b = random.random()
+assert [a, b] == expected
+try:
+    with seeded(5):
+        raise ValueError(&quot;x&quot;)
+except ValueError:
+    pass
+random.seed(3); x = random.random(); random.seed(3)
+with seeded(8):
+    pass
+assert random.random() == x</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>state = random.getstate()</code> before seeding; <code>random.setstate(state)</code> in a <code>finally</code> after the <code>yield</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from contextlib import contextmanager
+
+@contextmanager
+def seeded(seed):
+    state = random.getstate()
+    random.seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(state)</code></pre></div><p>Inside the block the sequence is fixed by the seed, so two seeded blocks give identical numbers, the property you want for a deterministic data shuffle or sample. Outside, <code>getstate</code>/<code>setstate</code> put the generator back exactly where it was, so the surrounding code receives the same numbers as if the block had never run (the second test). Resetting to a fixed seed on exit instead would make every later random number in the program depend on this block. <code>finally</code> restores the state even when the block raises.</p></div></details>
+</article>
+<article class="prob" id="p-an-object-with-close-but-no-with-support" data-pid="m10-3-an-object-with-close-but-no-with-support" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. An object with close() but no with support</h3></header>
+<div class="prob-q"><p><code>Exporter</code> has <code>close()</code> but no context manager methods, so <code>with Exporter(...) as e:</code> fails with <code>TypeError ... does not support the context manager protocol</code>. Add context manager support so it closes on exit (also after errors) and returns itself from <code>__enter__</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Exporter:
+    def __init__(self, sink):
+        self.sink = sink
+        self.closed = False
+
+    def write(self, row):
+        if self.closed:
+            raise RuntimeError(&quot;exporter is closed&quot;)
+        self.sink.append(row)
+
+    def close(self):
+        self.closed = True
+</textarea>
+<script type="text/plain" class="prob-tests">sink = []
+with Exporter(sink) as e:
+    e.write({"id": 1})
+assert e.closed and sink == [{"id": 1}]
+try:
+    with Exporter(sink) as e2:
+        e2.write({"id": 2})
+        raise ValueError("bad row")
+except ValueError:
+    pass
+assert e2.closed and sink == [{"id": 1}, {"id": 2}]
+try:
+    e2.write({"id": 3})
+    assert False
+except RuntimeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">sink = []
+with Exporter(sink) as e:
+    e.write({&quot;id&quot;: 1})
+assert e.closed and sink == [{&quot;id&quot;: 1}]
+try:
+    with Exporter(sink) as e2:
+        e2.write({&quot;id&quot;: 2})
+        raise ValueError(&quot;bad row&quot;)
+except ValueError:
+    pass
+assert e2.closed and sink == [{&quot;id&quot;: 1}, {&quot;id&quot;: 2}]
+try:
+    e2.write({&quot;id&quot;: 3})
+    assert False
+except RuntimeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__enter__</code> returns <code>self</code>; <code>__exit__(self, exc_type, exc, tb)</code> calls <code>self.close()</code> and returns <code>False</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Exporter:
+    def __init__(self, sink):
+        self.sink = sink
+        self.closed = False
+
+    def write(self, row):
+        if self.closed:
+            raise RuntimeError(&quot;exporter is closed&quot;)
+        self.sink.append(row)
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False</code></pre></div><p><code>with</code> requires <code>__enter__</code> and <code>__exit__</code>; an object that only has <code>close()</code> does not qualify, which is why <code>contextlib.closing(obj)</code> exists for third-party objects you cannot change. For your own classes, adding the two methods is better: every user gets <code>with Exporter(...) as e:</code> and the cleanup is guaranteed even when a row fails. Returning <code>False</code> from <code>__exit__</code> lets the <code>ValueError</code> reach the caller after the exporter has closed. The closed check in <code>write</code> turns use-after-close into a clear error.</p></div></details>
+</article>
+<article class="prob" id="p-nullcontext-suppress-and-redirect-stdout" data-pid="m10-3-nullcontext-suppress-and-redirect-stdout" data-type="predict" data-level="easy" data-answer="got value
+before
+after
+[&#x27;hidden line&#x27;, &#x27;another&#x27;] 20">
+<header class="prob-head"><h3>4. nullcontext, suppress and redirect_stdout</h3></header>
+<div class="code"><pre><code class="py">import io
+from contextlib import nullcontext, suppress, redirect_stdout
+
+with nullcontext(&quot;value&quot;) as v:
+    print(&quot;got&quot;, v)
+
+with suppress(ZeroDivisionError, KeyError):
+    print(&quot;before&quot;)
+    1 / 0
+    print(&quot;never&quot;)
+print(&quot;after&quot;)
+
+buf = io.StringIO()
+with redirect_stdout(buf):
+    print(&quot;hidden line&quot;)
+    print(&quot;another&quot;)
+print(buf.getvalue().splitlines(), len(buf.getvalue()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>suppress</code> ends the block at the first suppressed exception. <code>redirect_stdout</code> sends <code>print</code> output to the buffer.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>got value
+before
+after
+[&#x27;hidden line&#x27;, &#x27;another&#x27;] 20</pre></div><p><code>nullcontext</code> simply yields its argument and does nothing else. <code>suppress</code> behaves like <code>try</code>/<code>except ...: pass</code> around the block, so the division error ends the block without reaching "never", and execution continues after it. While stdout is redirected, <code>print</code> writes into the buffer (two lines, each with its newline, 12 + 8 = 20 characters), and printing returns to the console afterwards.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-open-a-variable-number-of-files" data-pid="m10-3-open-a-variable-number-of-files" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. Open a variable number of files</h3></header>
+<div class="prob-q"><p>Write a <code>contextlib.contextmanager</code> function <code>open_all(paths, encoding="utf-8")</code> that opens every path for reading and yields the list of file objects in the same order. All files must be closed when the block ends, also on error; if opening any file fails, the files already opened must be closed before the error propagates. Use <code>ExitStack</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from contextlib import ExitStack, contextmanager
+
+@contextmanager
+def open_all(paths, encoding=&quot;utf-8&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+paths = []
+for i, text in enumerate(["refund policy", "reset password", "invoice copy"]):
+    paths.append(os.path.join(d, f"doc{i}.txt"))
+    with open(paths[-1], "w", encoding="utf-8") as f:
+        f.write(text)
+
+with open_all(paths) as files:
+    contents = [f.read() for f in files]
+assert contents == ["refund policy", "reset password", "invoice copy"]
+assert all(f.closed for f in files)
+
+try:
+    with open_all(paths[:2] + [os.path.join(d, "nope.txt")]) as files:
+        pass
+    assert False
+except FileNotFoundError:
+    pass
+with open_all([]) as none:
+    pass
+assert none == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+paths = []
+for i, text in enumerate([&quot;refund policy&quot;, &quot;reset password&quot;, &quot;invoice copy&quot;]):
+    paths.append(os.path.join(d, f&quot;doc{i}.txt&quot;))
+    with open(paths[-1], &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(text)
+
+with open_all(paths) as files:
+    contents = [f.read() for f in files]
+assert contents == [&quot;refund policy&quot;, &quot;reset password&quot;, &quot;invoice copy&quot;]
+assert all(f.closed for f in files)
+
+try:
+    with open_all(paths[:2] + [os.path.join(d, &quot;nope.txt&quot;)]) as files:
+        pass
+    assert False
+except FileNotFoundError:
+    pass
+with open_all([]) as none:
+    pass
+assert none == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>with ExitStack() as stack:</code> then <code>files = [stack.enter_context(open(p, encoding=encoding)) for p in paths]</code>, then <code>yield files</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import ExitStack, contextmanager
+
+@contextmanager
+def open_all(paths, encoding=&quot;utf-8&quot;):
+    with ExitStack() as stack:
+        files = [stack.enter_context(open(p, encoding=encoding)) for p in paths]
+        yield files</code></pre></div><p>The stack registers each file the moment it is opened, so if the third <code>open</code> raises, the stack's own exit closes the first two before the <code>FileNotFoundError</code> propagates: there is no window in which an opened file is not owned by something. Yielding inside the <code>with ExitStack()</code> keeps all files open exactly for the caller's block, and the caller's exceptions pass through the stack too. Writing this with nested <code>with</code> statements is impossible for a variable number of paths, and writing it with <code>try</code>/<code>finally</code> correctly is surprisingly hard; this is the canonical <code>ExitStack</code> use.</p></div></details>
+</article>
+<article class="prob" id="p-resources-closed-before-the-caller-can-u" data-pid="m10-3-resources-closed-before-the-caller-can-u" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>6. Resources closed before the caller can use them</h3></header>
+<div class="prob-q"><p><code>connect_all(factories)</code> should create one connection per factory, closing the ones already created if any factory fails, and return the list of <strong>open</strong> connections together with a stack the caller uses to close them later. It returns connections that are already closed. Fix it with <code>ExitStack.pop_all()</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from contextlib import ExitStack
+
+def connect_all(factories):
+    with ExitStack() as stack:
+        conns = [stack.enter_context(f()) for f in factories]
+        return conns, stack
+</textarea>
+<script type="text/plain" class="prob-tests">class Conn:
+    log = []
+    def __init__(self, name, fail=False):
+        if fail:
+            raise ConnectionError(name)
+        self.name, self.open = name, True
+        Conn.log.append(f"open {name}")
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        self.open = False
+        Conn.log.append(f"close {self.name}")
+        return False
+
+conns, stack = connect_all([lambda: Conn("db"), lambda: Conn("cache")])
+assert all(c.open for c in conns)
+with stack:
+    pass
+assert not any(c.open for c in conns)
+Conn.log.clear()
+try:
+    connect_all([lambda: Conn("db"), lambda: Conn("bad", fail=True)])
+    assert False
+except ConnectionError:
+    assert Conn.log == ["open db", "close db"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class Conn:
+    log = []
+    def __init__(self, name, fail=False):
+        if fail:
+            raise ConnectionError(name)
+        self.name, self.open = name, True
+        Conn.log.append(f&quot;open {name}&quot;)
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        self.open = False
+        Conn.log.append(f&quot;close {self.name}&quot;)
+        return False
+
+conns, stack = connect_all([lambda: Conn(&quot;db&quot;), lambda: Conn(&quot;cache&quot;)])
+assert all(c.open for c in conns)
+with stack:
+    pass
+assert not any(c.open for c in conns)
+Conn.log.clear()
+try:
+    connect_all([lambda: Conn(&quot;db&quot;), lambda: Conn(&quot;bad&quot;, fail=True)])
+    assert False
+except ConnectionError:
+    assert Conn.log == [&quot;open db&quot;, &quot;close db&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>return conns, stack.pop_all()</code>: the new stack owns the connections, and the <code>with</code> block ends with nothing left to close.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import ExitStack
+
+def connect_all(factories):
+    with ExitStack() as stack:
+        conns = [stack.enter_context(f()) for f in factories]
+        return conns, stack.pop_all()</code></pre></div><p><code>return</code> inside a <code>with</code> block still exits it, so the stack closed every connection on the way out, and the caller received closed objects. The <code>with ExitStack()</code> is still the right structure for the <strong>acquisition</strong>: if the second factory fails, the first connection is closed (the last test). <code>pop_all()</code> transfers ownership of everything registered so far into a fresh stack and empties the current one, so the normal exit closes nothing, and the caller holds a stack that will close all connections when it is exited. This "acquire safely, then hand over" pattern is how connection setup in application start-up code is written.</p></div></details>
+</article>
+<article class="prob" id="p-a-client-that-owns-its-session" data-pid="m10-3-a-client-that-owns-its-session" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. A client that owns its session</h3></header>
+<div class="prob-q"><p>Write a class <code>LLMClient(make_session)</code> where <code>make_session()</code> returns a session object with <code>post(payload)</code> and <code>close()</code>. The client creates its session <strong>lazily</strong> on the first request; <code>complete(prompt)</code> posts <code>{"prompt": prompt}</code> and returns the result; <code>close()</code> closes the session (if one was created) and is idempotent; <code>closed</code> is a read-only property; using a closed client raises <code>RuntimeError("client is closed")</code>. Support <code>with</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class LLMClient:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">made = []
+class FakeSession:
+    def __init__(self):
+        self.closes = 0
+        made.append(self)
+    def post(self, payload):
+        return f"answer to {payload['prompt']}"
+    def close(self):
+        self.closes += 1
+
+with LLMClient(FakeSession) as client:
+    assert made == []
+    assert client.complete("refund?") == "answer to refund?" and client.complete("x") == "answer to x"
+assert len(made) == 1 and made[0].closes == 1 and client.closed
+client.close()
+assert made[0].closes == 1
+try:
+    client.complete("again")
+    assert False
+except RuntimeError as e:
+    assert str(e) == "client is closed"
+unused = LLMClient(FakeSession)
+unused.close()
+assert len(made) == 1 and unused.closed
+try:
+    unused.closed = False
+    assert False
+except AttributeError:
+    pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">made = []
+class FakeSession:
+    def __init__(self):
+        self.closes = 0
+        made.append(self)
+    def post(self, payload):
+        return f&quot;answer to {payload[&#x27;prompt&#x27;]}&quot;
+    def close(self):
+        self.closes += 1
+
+with LLMClient(FakeSession) as client:
+    assert made == []
+    assert client.complete(&quot;refund?&quot;) == &quot;answer to refund?&quot; and client.complete(&quot;x&quot;) == &quot;answer to x&quot;
+assert len(made) == 1 and made[0].closes == 1 and client.closed
+client.close()
+assert made[0].closes == 1
+try:
+    client.complete(&quot;again&quot;)
+    assert False
+except RuntimeError as e:
+    assert str(e) == &quot;client is closed&quot;
+unused = LLMClient(FakeSession)
+unused.close()
+assert len(made) == 1 and unused.closed
+try:
+    unused.closed = False
+    assert False
+except AttributeError:
+    pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._session = None</code> and <code>self._closed = False</code>; a private <code>_get_session()</code> creates the session on first use.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LLMClient:
+    def __init__(self, make_session):
+        self._make_session = make_session
+        self._session = None
+        self._closed = False
+
+    @property
+    def closed(self):
+        return self._closed
+
+    def _get_session(self):
+        if self._closed:
+            raise RuntimeError(&quot;client is closed&quot;)
+        if self._session is None:
+            self._session = self._make_session()
+        return self._session
+
+    def complete(self, prompt):
+        return self._get_session().post({&quot;prompt&quot;: prompt})
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._session is not None:
+            self._session.close()
+            self._session = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False</code></pre></div><p>The client is the single owner of the session: it creates it (lazily, so a client that is never used opens no connection), reuses it for every request (one connection pool, not one per call), and closes it exactly once, however many times <code>close()</code> is called and whether the <code>with</code> block succeeded or not. The closed state is read-only from outside (9.3), and use-after-close fails with a message that says what happened. Taking <code>make_session</code> as a parameter is dependency injection (9.5), so tests pass a fake session. Real SDK clients (<code>OpenAI()</code>, <code>anthropic.Anthropic()</code>, <code>httpx.Client()</code>) behave this way, which is why you should create one client per application and close it at shutdown rather than one per request.</p></div></details>
+</article>
+<article class="prob" id="p-callbacks-and-an-exception-on-the-stack" data-pid="m10-3-callbacks-and-an-exception-on-the-stack" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>8. Callbacks and an exception on the stack</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from contextlib import ExitStack
+log = []
+
+with ExitStack() as stack:
+    stack.callback(log.append, &quot;undo step 1&quot;)
+    stack.callback(log.append, &quot;undo step 2&quot;)
+    log.append(&quot;work&quot;)
+
+log.clear()
+try:
+    with ExitStack() as stack:
+        stack.callback(log.append, &quot;release a&quot;)
+        log.append(&quot;step a&quot;)
+        raise ValueError(&quot;step b failed&quot;)
+except ValueError:
+    log.append(&quot;caller&quot;)
+
+log.clear()
+with ExitStack() as stack:
+    stack.callback(log.append, &quot;should not run&quot;)
+    moved = stack.pop_all()
+    log.append(&quot;popped&quot;)
+moved.close()
+log.append(&quot;end&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside the block</td><td><input class="cell" data-a="[&#x27;work&#x27;]" data-s="[&#x27;work&#x27;]" aria-label="log at inside the block" autocomplete="off"></td></tr><tr><td>after a failure</td><td><input class="cell" data-a="[&#x27;step a&#x27;, &#x27;release a&#x27;, &#x27;caller&#x27;]" data-s="[&#x27;step a&#x27;, &#x27;release a&#x27;, &#x27;caller&#x27;]" aria-label="log at after a failure" autocomplete="off"></td></tr><tr><td>after pop_all and close</td><td><input class="cell" data-a="[&#x27;popped&#x27;, &#x27;should not run&#x27;, &#x27;end&#x27;]" data-s="[&#x27;popped&#x27;, &#x27;should not run&#x27;, &#x27;end&#x27;]" aria-label="log at after pop_all and close" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Callbacks run at the end of the block, last registered first. <code>pop_all</code> moves them to a new stack; <code>close()</code> runs them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside the block</td><td><code>[&#x27;work&#x27;]</code></td></tr><tr><td>after a failure</td><td><code>[&#x27;step a&#x27;, &#x27;release a&#x27;, &#x27;caller&#x27;]</code></td></tr><tr><td>after pop_all and close</td><td><code>[&#x27;popped&#x27;, &#x27;should not run&#x27;, &#x27;end&#x27;]</code></td></tr></table></div><p>Inside the block nothing has been undone yet; the callbacks run at the exit, in reverse order (not shown in the first row). On failure, the callback still runs, before the caller's handler, like a <code>finally</code>. After <code>pop_all</code>, the original stack is empty, so its exit runs nothing, and the callback runs only when the new stack is closed explicitly.</p></div></details>
+</article>
+<article class="prob" id="p-a-seed-scope-that-changes-global-randomn" data-pid="m10-3-a-seed-scope-that-changes-global-randomn" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. A seed scope that changes global randomness</h3></header>
+<div class="prob-q"><p><code>fixed_seed(seed)</code> should make a block reproducible without affecting the rest of the program, but it calls <code>random.seed(0)</code> on exit, so every random number after the block is the same on every run and different from what it would have been. Fix it to restore the previous state.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import random
+from contextlib import contextmanager
+
+@contextmanager
+def fixed_seed(seed):
+    random.seed(seed)
+    try:
+        yield
+    finally:
+        random.seed(0)
+</textarea>
+<script type="text/plain" class="prob-tests">import random
+random.seed(2024)
+reference = [random.random() for _ in range(3)]
+random.seed(2024)
+got = [random.random()]
+with fixed_seed(11):
+    inside = random.random()
+got += [random.random(), random.random()]
+assert got == reference
+with fixed_seed(11):
+    again = random.random()
+assert again == inside</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import random
+random.seed(2024)
+reference = [random.random() for _ in range(3)]
+random.seed(2024)
+got = [random.random()]
+with fixed_seed(11):
+    inside = random.random()
+got += [random.random(), random.random()]
+assert got == reference
+with fixed_seed(11):
+    again = random.random()
+assert again == inside</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Save <code>random.getstate()</code> before seeding and restore it with <code>random.setstate</code> in the <code>finally</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+from contextlib import contextmanager
+
+@contextmanager
+def fixed_seed(seed):
+    state = random.getstate()
+    random.seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(state)</code></pre></div><p>Seeding to a fixed value on exit is not "restoring": it replaces whatever state the program had with a new one, so every random choice after the block (data shuffling, dropout, sampling) changes, and a later experiment can no longer be reproduced from its own seed. Saving the full generator state and putting it back makes the block invisible from outside, which the test checks by comparing against a run without the block. The general rule for temporary global state: save the exact old value, restore that value, in <code>finally</code>.</p></div></details>
+</article>
+<article class="prob" id="p-nested-conditional-withs-into-an-exitsta" data-pid="m10-3-nested-conditional-withs-into-an-exitsta" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>10. Nested conditional withs into an ExitStack</h3></header>
+<div class="prob-q"><p>Replace the nested, duplicated <code>with</code> blocks by one <code>ExitStack</code>, same behaviour. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from contextlib import contextmanager
+
+LOG = []
+
+@contextmanager
+def resource(name):
+    LOG.append(f&quot;open {name}&quot;)
+    try:
+        yield name
+    finally:
+        LOG.append(f&quot;close {name}&quot;)
+
+def run(job, use_cache, use_lock):
+    if use_cache and use_lock:
+        with resource(&quot;cache&quot;):
+            with resource(&quot;lock&quot;):
+                return f&quot;{job} with cache+lock&quot;
+    elif use_cache:
+        with resource(&quot;cache&quot;):
+            return f&quot;{job} with cache&quot;
+    elif use_lock:
+        with resource(&quot;lock&quot;):
+            return f&quot;{job} with lock&quot;
+    return f&quot;{job} plain&quot;
+</textarea>
+<script type="text/plain" class="prob-tests">assert run("a", True, True) == "a with cache+lock"
+assert LOG == ["open cache", "open lock", "close lock", "close cache"]
+LOG.clear()
+assert run("b", False, True) == "b with lock" and LOG == ["open lock", "close lock"]
+LOG.clear()
+assert run("c", False, False) == "c plain" and LOG == []
+LOG.clear()
+assert run("d", True, False) == "d with cache" and LOG == ["open cache", "close cache"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert run(&quot;a&quot;, True, True) == &quot;a with cache+lock&quot;
+assert LOG == [&quot;open cache&quot;, &quot;open lock&quot;, &quot;close lock&quot;, &quot;close cache&quot;]
+LOG.clear()
+assert run(&quot;b&quot;, False, True) == &quot;b with lock&quot; and LOG == [&quot;open lock&quot;, &quot;close lock&quot;]
+LOG.clear()
+assert run(&quot;c&quot;, False, False) == &quot;c plain&quot; and LOG == []
+LOG.clear()
+assert run(&quot;d&quot;, True, False) == &quot;d with cache&quot; and LOG == [&quot;open cache&quot;, &quot;close cache&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Enter each optional resource with <code>stack.enter_context(...)</code> inside an <code>if</code>, collect their names, then build the result once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import ExitStack, contextmanager
+
+LOG = []
+
+@contextmanager
+def resource(name):
+    LOG.append(f&quot;open {name}&quot;)
+    try:
+        yield name
+    finally:
+        LOG.append(f&quot;close {name}&quot;)
+
+def run(job, use_cache, use_lock):
+    with ExitStack() as stack:
+        used = []
+        if use_cache:
+            used.append(stack.enter_context(resource(&quot;cache&quot;)))
+        if use_lock:
+            used.append(stack.enter_context(resource(&quot;lock&quot;)))
+        return f&quot;{job} with {&#x27;+&#x27;.join(used)}&quot; if used else f&quot;{job} plain&quot;</code></pre></div><p>Every combination of optional resources needed its own branch, so two options already meant four branches, and three would mean eight. With an <code>ExitStack</code>, each resource is an independent <code>if</code> that registers it, the order of opening (and therefore of closing) stays the same, and the work is written once. This is the general cure for "optional context managers" when there are several; for a single optional one, <code>nullcontext</code> is enough.</p></div></details>
+</article>
+<article class="prob" id="p-a-cooperative-deadline" data-pid="m10-3-a-cooperative-deadline" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. A cooperative deadline</h3></header>
+<div class="prob-q"><p>Write a class <code>Deadline(seconds, clock)</code> usable as a context manager. Inside the block, <code>remaining()</code> returns the seconds left (never below 0), <code>check(step)</code> raises <code>TimeoutError(f"deadline exceeded at {step}")</code> when no time is left, and <code>timeout_for(default)</code> returns <code>min(default, remaining())</code> for passing to network calls. On exit, record <code>self.elapsed</code> and <code>self.overrun</code> (true if the block ended after the deadline). The clock starts at <code>__enter__</code>, so the object can be created early and entered later; exceptions propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">class Deadline:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([100.0, 101.0, 102.0, 104.5, 106.0, 106.0])
+done = []
+try:
+    with Deadline(5, lambda: next(ticks)) as d:
+        for step in ["retrieve", "rerank", "generate", "verify"]:
+            d.check(step)
+            done.append(step)
+    assert False
+except TimeoutError as e:
+    assert str(e) == "deadline exceeded at verify" and done == ["retrieve", "rerank", "generate"]
+assert d.elapsed == 6.0 and d.overrun is True
+
+ticks2 = iter([0.0, 1.0, 1.0, 2.0])
+with Deadline(10, lambda: next(ticks2)) as d2:
+    assert d2.remaining() == 9.0 and d2.timeout_for(30) == 9.0
+assert d2.elapsed == 2.0 and d2.overrun is False</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([100.0, 101.0, 102.0, 104.5, 106.0, 106.0])
+done = []
+try:
+    with Deadline(5, lambda: next(ticks)) as d:
+        for step in [&quot;retrieve&quot;, &quot;rerank&quot;, &quot;generate&quot;, &quot;verify&quot;]:
+            d.check(step)
+            done.append(step)
+    assert False
+except TimeoutError as e:
+    assert str(e) == &quot;deadline exceeded at verify&quot; and done == [&quot;retrieve&quot;, &quot;rerank&quot;, &quot;generate&quot;]
+assert d.elapsed == 6.0 and d.overrun is True
+
+ticks2 = iter([0.0, 1.0, 1.0, 2.0])
+with Deadline(10, lambda: next(ticks2)) as d2:
+    assert d2.remaining() == 9.0 and d2.timeout_for(30) == 9.0
+assert d2.elapsed == 2.0 and d2.overrun is False</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Set <code>self.start = self.clock()</code> in <code>__enter__</code>. <code>remaining()</code> is <code>max(0.0, seconds - (clock() - start))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Deadline:
+    def __init__(self, seconds, clock):
+        self.seconds = seconds
+        self.clock = clock
+        self.elapsed = None
+        self.overrun = None
+
+    def __enter__(self):
+        self.start = self.clock()
+        return self
+
+    def remaining(self):
+        return max(0.0, self.seconds - (self.clock() - self.start))
+
+    def check(self, step):
+        if self.remaining() &lt;= 0:
+            raise TimeoutError(f&quot;deadline exceeded at {step}&quot;)
+
+    def timeout_for(self, default):
+        return min(default, self.remaining())
+
+    def __exit__(self, exc_type, exc, tb):
+        self.elapsed = self.clock() - self.start
+        self.overrun = self.elapsed &gt; self.seconds
+        return False</code></pre></div><p>Trace the first test: the deadline starts at 100; checks at 101 and 102 pass; at 104.5 there are 0.5 seconds left, so "generate" passes; at 106 no time is left, so "verify" raises with the step named. The exit reads the clock once more (106) and records the overrun. Because the block cannot be interrupted, the work itself must cooperate: check before each step, and give each network call at most <code>timeout_for(...)</code> seconds, so no single call can blow the whole budget (7.4). Starting the clock at <code>__enter__</code> rather than <code>__init__</code> measures exactly the block. Request handlers use exactly this to keep a RAG pipeline within the latency budget promised to users.</p></div></details>
+</article>
+<article class="prob" id="p-capturing-printed-output" data-pid="m10-3-capturing-printed-output" data-type="predict" data-level="medium" data-answer="20 loading 2 shards 3
+&#x27;warning: slow\n&#x27;">
+<header class="prob-head"><h3>12. Capturing printed output</h3></header>
+<div class="code"><pre><code class="py">import io, contextlib
+
+def noisy_library(n):
+    print(f&quot;loading {n} shards&quot;)
+    for i in range(n):
+        print(f&quot;shard {i} ok&quot;)
+    return n * 10
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    result = noisy_library(2)
+lines = buf.getvalue().splitlines()
+print(result, lines[0], len(lines))
+
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    import sys
+    print(&quot;warning: slow&quot;, file=sys.stderr)
+print(repr(err.getvalue()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>redirect_stdout</code> replaces <code>sys.stdout</code> for the block; <code>print(..., file=sys.stderr)</code> writes to stderr, which <code>redirect_stderr</code> captures.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>20 loading 2 shards 3
+&#x27;warning: slow\n&#x27;</pre></div><p>While stdout is redirected, every <code>print</code> inside the library goes into the buffer, so its three lines are captured and the function's return value is unaffected. The same works for stderr, where warnings and progress messages often go. This is how you silence or record chatty libraries, and how tests check printed output; note that it captures Python-level writes only, not output written directly by C extensions.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-a-resource-pool" data-pid="m10-3-a-resource-pool" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. A resource pool</h3></header>
+<div class="prob-q"><p>Write a class <code>Pool(factory, size)</code> lending out up to <code>size</code> resources created by <code>factory()</code>. <code>acquire()</code> returns a context manager: entering it hands out an idle resource (creating one if fewer than <code>size</code> exist; raise <code>RuntimeError("pool exhausted")</code> if all are busy); exiting returns it to the idle list, <strong>except</strong> when the block raised <code>ConnectionError</code>, in which case the resource is discarded (its <code>close()</code> is called) so a fresh one is created later. Track <code>created</code>, and <code>close()</code> the pool by closing every idle resource. Exceptions propagate.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from contextlib import contextmanager
+
+class Pool:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">made = []
+class Conn:
+    def __init__(self):
+        self.id = len(made)
+        self.closed = False
+        made.append(self)
+    def close(self):
+        self.closed = True
+
+pool = Pool(Conn, size=2)
+with pool.acquire() as a:
+    with pool.acquire() as b:
+        assert (a.id, b.id) == (0, 1)
+        try:
+            with pool.acquire():
+                pass
+            assert False
+        except RuntimeError as e:
+            assert str(e) == "pool exhausted"
+with pool.acquire() as c:
+    assert c.id in (0, 1) and pool.created == 2
+try:
+    with pool.acquire() as broken:
+        raise ConnectionError("dropped")
+except ConnectionError:
+    pass
+assert broken.closed and pool.created == 2
+with pool.acquire() as x, pool.acquire() as y:
+    assert pool.created == 3 and broken not in (x, y)
+try:
+    with pool.acquire() as fine:
+        raise ValueError("bad input")
+except ValueError:
+    pass
+assert not fine.closed
+pool.close()
+assert all(c.closed for c in made)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">made = []
+class Conn:
+    def __init__(self):
+        self.id = len(made)
+        self.closed = False
+        made.append(self)
+    def close(self):
+        self.closed = True
+
+pool = Pool(Conn, size=2)
+with pool.acquire() as a:
+    with pool.acquire() as b:
+        assert (a.id, b.id) == (0, 1)
+        try:
+            with pool.acquire():
+                pass
+            assert False
+        except RuntimeError as e:
+            assert str(e) == &quot;pool exhausted&quot;
+with pool.acquire() as c:
+    assert c.id in (0, 1) and pool.created == 2
+try:
+    with pool.acquire() as broken:
+        raise ConnectionError(&quot;dropped&quot;)
+except ConnectionError:
+    pass
+assert broken.closed and pool.created == 2
+with pool.acquire() as x, pool.acquire() as y:
+    assert pool.created == 3 and broken not in (x, y)
+try:
+    with pool.acquire() as fine:
+        raise ValueError(&quot;bad input&quot;)
+except ValueError:
+    pass
+assert not fine.closed
+pool.close()
+assert all(c.closed for c in made)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._idle</code> (a list) and <code>self._busy</code> (a set of ids or a count). <code>acquire</code> is a <code>@contextmanager</code> method.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In the generator: get a resource, then <code>try: yield res</code> / <code>except ConnectionError: discard; raise</code> / <code>else</code> or <code>finally</code>: return it to the idle list if not discarded.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+class Pool:
+    def __init__(self, factory, size):
+        self.factory = factory
+        self.size = size
+        self._idle = []
+        self._busy = 0
+        self.created = 0
+
+    def _take(self):
+        if self._idle:
+            res = self._idle.pop()
+        elif self._busy + len(self._idle) &lt; self.size:
+            res = self.factory()
+            self.created += 1
+        else:
+            raise RuntimeError(&quot;pool exhausted&quot;)
+        self._busy += 1
+        return res
+
+    @contextmanager
+    def acquire(self):
+        res = self._take()
+        try:
+            yield res
+        except ConnectionError:
+            self._busy -= 1
+            res.close()
+            raise
+        except BaseException:
+            self._busy -= 1
+            self._idle.append(res)
+            raise
+        else:
+            self._busy -= 1
+            self._idle.append(res)
+
+    def close(self):
+        while self._idle:
+            self._idle.pop().close()</code></pre></div><p>Lending is a scope, so <code>acquire</code> is a context manager: the resource is always returned, however the block ends. The pool distinguishes <strong>why</strong> the block failed: a <code>ConnectionError</code> means the resource itself is probably broken, so it is closed and dropped, and the next borrower gets a fresh one (the third connection created); any other error, such as bad input, says nothing about the resource, which goes back to the idle list. Counting busy resources keeps the total bounded by <code>size</code>, and an exhausted pool fails loudly rather than creating unlimited connections. A real pool would wait (with a timeout) instead of raising, and protect its state with a lock for threads or an <code>asyncio.Lock</code> for tasks (14.5).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-temporary-workspace" data-pid="m10-3-read-the-code-a-temporary-workspace" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>14. Read the code: a temporary workspace</h3></header>
+<div class="prob-q"><p><code>workspace(env)</code> should create a temporary directory, make it the current directory, set the given environment variables, and on exit restore the previous directory, restore or remove the variables, and delete the directory, <strong>even if the block raises</strong>. After a failure the process stays in the deleted directory, the variables leak, and the directory is not removed. Read it, find the bugs and fix them with <code>ExitStack</code> (or <code>try</code>/<code>finally</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">import os, shutil, tempfile
+from contextlib import contextmanager
+
+
+@contextmanager
+def workspace(env):
+    path = tempfile.mkdtemp()
+    old_cwd = os.getcwd()
+    os.chdir(path)
+    old_env = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    yield path
+    for k, v in old_env.items():
+        if v is not None:
+            os.environ[k] = v
+    os.chdir(old_cwd)
+    shutil.rmtree(path)
+</textarea>
+<script type="text/plain" class="prob-tests">import os
+os.environ.pop("RUN_ID", None)        # a clean slate, even after running the buggy version
+start = os.getcwd()
+os.environ["KEEP_ME"] = "yes"
+with workspace({"RUN_ID": "r1", "KEEP_ME": "temp"}) as path:
+    assert os.getcwd() == path and os.environ["RUN_ID"] == "r1" and os.environ["KEEP_ME"] == "temp"
+    open("scratch.txt", "w").close()
+assert os.getcwd() == start and "RUN_ID" not in os.environ and os.environ["KEEP_ME"] == "yes" and not os.path.exists(path)
+try:
+    with workspace({"RUN_ID": "r2"}) as path2:
+        raise RuntimeError("training crashed")
+except RuntimeError:
+    pass
+assert os.getcwd() == start and "RUN_ID" not in os.environ and not os.path.exists(path2)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os
+os.environ.pop(&quot;RUN_ID&quot;, None)        # a clean slate, even after running the buggy version
+start = os.getcwd()
+os.environ[&quot;KEEP_ME&quot;] = &quot;yes&quot;
+with workspace({&quot;RUN_ID&quot;: &quot;r1&quot;, &quot;KEEP_ME&quot;: &quot;temp&quot;}) as path:
+    assert os.getcwd() == path and os.environ[&quot;RUN_ID&quot;] == &quot;r1&quot; and os.environ[&quot;KEEP_ME&quot;] == &quot;temp&quot;
+    open(&quot;scratch.txt&quot;, &quot;w&quot;).close()
+assert os.getcwd() == start and &quot;RUN_ID&quot; not in os.environ and os.environ[&quot;KEEP_ME&quot;] == &quot;yes&quot; and not os.path.exists(path)
+try:
+    with workspace({&quot;RUN_ID&quot;: &quot;r2&quot;}) as path2:
+        raise RuntimeError(&quot;training crashed&quot;)
+except RuntimeError:
+    pass
+assert os.getcwd() == start and &quot;RUN_ID&quot; not in os.environ and not os.path.exists(path2)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Register each undo step on an <code>ExitStack</code> right after the change it undoes: <code>stack.callback(shutil.rmtree, path)</code>, <code>stack.callback(os.chdir, old_cwd)</code>, and a callback that restores the environment.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Variables that did not exist before must be removed with <code>os.environ.pop(k, None)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, shutil, tempfile
+from contextlib import ExitStack, contextmanager
+
+
+def _restore_env(old_env):
+    for k, v in old_env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+@contextmanager
+def workspace(env):
+    with ExitStack() as stack:
+        path = tempfile.mkdtemp()
+        stack.callback(shutil.rmtree, path, ignore_errors=True)
+        old_cwd = os.getcwd()
+        os.chdir(path)
+        stack.callback(os.chdir, old_cwd)
+        old_env = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        stack.callback(_restore_env, old_env)
+        yield path</code></pre></div><p>Three bugs. With no <code>finally</code>, an exception in the block was raised at the <code>yield</code> and every line after it was skipped: the process stayed in a directory that would never be deleted, and the variables stayed set, so the next run in the same process inherited <code>RUN_ID=r2</code>. The environment restore also only handled variables that existed before (<code>if v is not None</code>), so a new variable like <code>RUN_ID</code> was never removed even on success. Registering each undo on an <code>ExitStack</code> immediately after the change it reverses fixes everything at once: the undos run in reverse order (restore the environment, go back to the old directory, then delete the temporary one, which must not be the current directory on some systems), on success and on failure, and if a later setup step fails, only the steps already done are undone. <code>ignore_errors=True</code> keeps a cleanup failure from masking the original exception.</p></div></details>
+</article>
+<article class="prob" id="p-undo-completed-steps-when-a-later-one-fa" data-pid="m10-3-undo-completed-steps-when-a-later-one-fa" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. Undo completed steps when a later one fails</h3></header>
+<div class="prob-q"><p>An agent action may involve several steps with side effects (create a ticket, reserve stock, send a notification), and if a later step fails, the earlier ones must be undone: a <strong>compensating action</strong> for each. Write <code>run_saga(steps)</code> where each step is a <code>(name, do, undo)</code> triple: <code>do()</code> performs the step and returns a result; <code>undo(result)</code> reverses it. Run the steps in order; return the list of results if all succeed. If a step raises, run the undo of every <strong>completed</strong> step in reverse order (using <code>ExitStack</code> callbacks), then re-raise the error with the note <code>"rolled back: &lt;names&gt;"</code>. An undo that itself raises must not stop the other undos; record it in another note.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">from contextlib import ExitStack
+
+def run_saga(steps):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">log = []
+def step(name, fail=False, undo_fails=False):
+    def do():
+        if fail:
+            raise RuntimeError(f"{name} failed")
+        log.append(f"do {name}")
+        return f"{name}-result"
+    def undo(result):
+        if undo_fails:
+            raise OSError(f"cannot undo {name}")
+        log.append(f"undo {result}")
+    return (name, do, undo)
+
+assert run_saga([step("ticket"), step("reserve")]) == ["ticket-result", "reserve-result"]
+assert log == ["do ticket", "do reserve"]
+log.clear()
+try:
+    run_saga([step("ticket"), step("reserve"), step("notify", fail=True)])
+    assert False
+except RuntimeError as e:
+    assert str(e) == "notify failed" and e.__notes__ == ["rolled back: reserve, ticket"]
+assert log == ["do ticket", "do reserve", "undo reserve-result", "undo ticket-result"]
+log.clear()
+try:
+    run_saga([step("ticket"), step("reserve", undo_fails=True), step("notify", fail=True)])
+    assert False
+except RuntimeError as e:
+    assert e.__notes__ == ["rolled back: reserve, ticket", "undo of reserve failed: OSError: cannot undo reserve"]
+assert log == ["do ticket", "do reserve", "undo ticket-result"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">log = []
+def step(name, fail=False, undo_fails=False):
+    def do():
+        if fail:
+            raise RuntimeError(f&quot;{name} failed&quot;)
+        log.append(f&quot;do {name}&quot;)
+        return f&quot;{name}-result&quot;
+    def undo(result):
+        if undo_fails:
+            raise OSError(f&quot;cannot undo {name}&quot;)
+        log.append(f&quot;undo {result}&quot;)
+    return (name, do, undo)
+
+assert run_saga([step(&quot;ticket&quot;), step(&quot;reserve&quot;)]) == [&quot;ticket-result&quot;, &quot;reserve-result&quot;]
+assert log == [&quot;do ticket&quot;, &quot;do reserve&quot;]
+log.clear()
+try:
+    run_saga([step(&quot;ticket&quot;), step(&quot;reserve&quot;), step(&quot;notify&quot;, fail=True)])
+    assert False
+except RuntimeError as e:
+    assert str(e) == &quot;notify failed&quot; and e.__notes__ == [&quot;rolled back: reserve, ticket&quot;]
+assert log == [&quot;do ticket&quot;, &quot;do reserve&quot;, &quot;undo reserve-result&quot;, &quot;undo ticket-result&quot;]
+log.clear()
+try:
+    run_saga([step(&quot;ticket&quot;), step(&quot;reserve&quot;, undo_fails=True), step(&quot;notify&quot;, fail=True)])
+    assert False
+except RuntimeError as e:
+    assert e.__notes__ == [&quot;rolled back: reserve, ticket&quot;, &quot;undo of reserve failed: OSError: cannot undo reserve&quot;]
+assert log == [&quot;do ticket&quot;, &quot;do reserve&quot;, &quot;undo ticket-result&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inside <code>with ExitStack() as stack:</code>, after each successful <code>do</code>, register <code>stack.callback(safe_undo, name, undo, result)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>On success, <code>stack.pop_all()</code> so no undo runs. On failure, let the stack unwind inside a <code>try</code>, then add notes and re-raise.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import ExitStack
+
+def run_saga(steps):
+    completed, undo_errors = [], []
+
+    def safe_undo(name, undo, result):
+        try:
+            undo(result)
+        except Exception as e:
+            undo_errors.append(f&quot;undo of {name} failed: {type(e).__name__}: {e}&quot;)
+
+    try:
+        with ExitStack() as stack:
+            results = []
+            for name, do, undo in steps:
+                result = do()
+                results.append(result)
+                completed.append(name)
+                stack.callback(safe_undo, name, undo, result)
+            stack.pop_all()
+            return results
+    except Exception as e:
+        e.add_note(&quot;rolled back: &quot; + &quot;, &quot;.join(reversed(completed)))
+        for note in undo_errors:
+            e.add_note(note)
+        raise</code></pre></div><p>Each completed step registers its undo on the stack, so the stack always holds exactly the compensations needed for the work done so far, in the right reverse order. On success, <code>pop_all()</code> discards them (the work is kept); on failure, leaving the <code>with</code> block runs them all before the error reaches the handler that adds the notes. Wrapping each undo in <code>safe_undo</code> means one failed compensation is recorded rather than aborting the others, and the original error stays the one the caller sees, with the rollback story attached as notes (7.2). This is the "saga" pattern used in distributed systems where no single transaction can cover every step, and it is how a careful agent framework should treat tool calls with side effects.</p></div></details>
+</article>
+<article class="prob" id="p-errors-while-the-stack-unwinds" data-pid="m10-3-errors-while-the-stack-unwinds" data-type="predict" data-level="hard" data-answer="  first registered, last to run
+OSError | context: ValueError
+  callback after suppress
+continued">
+<header class="prob-head"><h3>16. Errors while the stack unwinds</h3></header>
+<div class="code"><pre><code class="py">from contextlib import ExitStack, contextmanager, suppress
+
+def bad_cleanup():
+    raise OSError(&quot;cleanup failed&quot;)
+
+try:
+    with ExitStack() as stack:
+        stack.callback(print, &quot;  first registered, last to run&quot;)
+        stack.callback(bad_cleanup)
+        raise ValueError(&quot;original&quot;)
+except Exception as e:
+    print(type(e).__name__, &quot;| context:&quot;, type(e.__context__).__name__)
+
+with ExitStack() as stack:
+    stack.enter_context(suppress(KeyError))
+    stack.callback(print, &quot;  callback after suppress&quot;)
+    {}[&quot;missing&quot;]
+print(&quot;continued&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If a cleanup raises while another exception is in flight, the new exception replaces it and keeps the old one as context.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A manager on the stack that suppresses an exception stops it for everything registered before it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  first registered, last to run
+OSError | context: ValueError
+  callback after suppress
+continued</pre></div><p>The stack unwinds in reverse: <code>bad_cleanup</code> runs first and raises <code>OSError</code> while the <code>ValueError</code> is propagating, so the <code>OSError</code> replaces it, with the original attached as <code>__context__</code> (7.2); the print callback still runs afterwards, because the stack keeps unwinding. That is why cleanup code should not raise, or should catch and record its own errors (as the saga did). In the second block, the <code>KeyError</code> first reaches the callback (registered last, so it runs first), then the <code>suppress</code> manager, which swallows it, so execution continues after the <code>with</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-is-contextlib-exitstack-for-give-co" data-pid="m10-3-what-is-contextlib-exitstack-for-give-co" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What is <code>contextlib.ExitStack</code> for? Give concrete uses.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It manages a set of context managers and cleanup callbacks that is only known at run time, unwinding all of them in reverse order when the block exits, on success or failure, like an arbitrary number of nested <code>with</code> statements. Uses: opening a variable number of files or connections (if one fails, the ones already opened are closed); entering optional context managers without combinatorial <code>if</code> branches; registering arbitrary undo steps with <code>callback</code>, such as deleting temporary files, restoring environment variables or the working directory, or compensating completed side effects when a later step fails; and acquiring several resources safely then transferring ownership to the caller with <code>pop_all()</code>, which returns a new stack holding them. <code>AsyncExitStack</code> is the asynchronous counterpart for <code>async with</code> resources.</p></div></details>
+</article>
+<article class="prob" id="p-why-should-you-not-rely-on-del-to-releas" data-pid="m10-3-why-should-you-not-rely-on-del-to-releas" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. Why should you not rely on <code>__del__</code> to release resources?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>__del__</code> runs when the object is about to be destroyed, which depends on the garbage collector, not on your program's logic. In CPython it usually runs when the last reference disappears, but reference cycles delay it until a collection, other interpreters (PyPy) collect at arbitrary times, a stored traceback or a cache can keep the object alive indefinitely, and at interpreter shutdown it may never run, or run when modules it depends on are already torn down. Exceptions raised inside it are ignored with a warning, so failures are invisible. Resources such as connections, file handles and locks therefore leak or are held far longer than intended. Release them deterministically with <code>with</code> or explicit <code>close()</code> calls (and <code>try</code>/<code>finally</code>), and if a safety net is needed, use <code>weakref.finalize</code>, which is more predictable and can be run explicitly.</p></div></details>
+</article>
+<article class="prob" id="p-design-the-resource-lifecycle-of-an-llm-" data-pid="m10-3-design-the-resource-lifecycle-of-an-llm-" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. Design the resource lifecycle of an LLM-backed web service.</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Separate resources by lifetime. <strong>Application scope</strong>: one LLM SDK client per provider (each holding an HTTP connection pool), database and vector store pools, the tokenizer and any loaded models, created once at start-up and closed at shutdown through the framework's lifespan context manager, using an <code>ExitStack</code> (or <code>AsyncExitStack</code>) so that if one fails to initialise, the others are cleaned up. <strong>Request scope</strong>: a tracing span, a deadline, a token budget, a database session or transaction, entered with <code>with</code> per request (often as framework dependencies with cleanup), so they close even when the client disconnects and the request task is cancelled. <strong>Stream scope</strong>: streaming responses as context managers, closed when the consumer stops, so the upstream connection is released and billing stops. Avoid creating clients per request, never rely on <code>__del__</code>, make <code>close()</code> idempotent, discard broken pooled connections, set timeouts on everything, and make temporary global state impossible by passing configuration explicitly. Test the lifecycle with fakes that count opens and closes, including on failures and cancellations, and monitor pool usage in production to catch leaks.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>ExitStack</code> manages a run-time number of managers and callbacks, unwinding them in reverse; <code>pop_all()</code> hands them over without closing.</li><li><code>contextlib</code> helpers: <code>suppress</code> for specific errors, <code>nullcontext</code> for optional managers, <code>closing</code> for objects with <code>close()</code>, <code>redirect_stdout</code> to capture prints.</li><li>Classes that own a resource offer an idempotent <code>close()</code>, <code>__enter__</code>/<code>__exit__</code>, and a clear error after closing; never rely on <code>__del__</code>.</li><li>Temporary global state (random seeds, env vars, cwd) is saved and restored exactly, in <code>finally</code>; better still, avoid global state.</li><li>Budgets and deadlines are cooperative scopes in synchronous code; pools lend resources per block and discard broken ones; sagas register undo steps as they go.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10.2 · Context managers</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m10-2" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 10 · Iterators and context managers</span></div>
+  <h1>10.2 Context managers</h1>
+  <p>The <code>with</code> statement pairs setup with guaranteed cleanup. What <code>with</code> does step by step, writing context managers as classes with <code>__enter__</code> and <code>__exit__</code>, deciding whether to suppress exceptions, the <code>contextlib.contextmanager</code> shortcut and its <code>try</code>/<code>finally</code> rule, several managers at once and their exit order, and reentrant managers. Applied to timers, temporary settings, atomic writes, transactions and tracing spans.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="why">
+<h2><span class="n">1</span>Setup and guaranteed cleanup</h2>
+<p>Many operations come in pairs: open a file and close it; acquire a lock and release it; start a timer and stop it; begin a transaction and commit or roll back; change a setting and restore it. The second half must happen <strong>even if the work in between fails</strong>, or you leak file handles, deadlock other threads, leave half-written data or keep a temporary setting forever. Lesson 7.1 showed the tool for that, <code>try</code>/<code>finally</code>; a <strong>context manager</strong> packages the pair once so every user gets it right with one line: <code>with open(path) as f:</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">why_with.py</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+
+path = os.path.join(tempfile.mkdtemp(), &quot;log.txt&quot;)
+
+f = open(path, &quot;w&quot;, encoding=&quot;utf-8&quot;)      # by hand: easy to forget the finally
+try:
+    f.write(&quot;first\n&quot;)
+finally:
+    f.close()
+
+with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:    # the same guarantee, built in
+    f.write(&quot;second\n&quot;)
+print(f.closed, open(path, encoding=&quot;utf-8&quot;).read().splitlines())
+
+try:
+    with open(path, encoding=&quot;utf-8&quot;) as f:
+        raise ValueError(&quot;failed while reading&quot;)
+except ValueError:
+    print(&quot;file closed anyway:&quot;, f.closed)</code></pre><div class="out"><span class="ol">Output</span><pre>True [&#x27;first&#x27;, &#x27;second&#x27;]
+file closed anyway: True</pre></div></div>
+</section>
+<section class="sec" id="steps">
+<h2><span class="n">2</span>What <code>with</code> does, step by step</h2>
+<p><code>with EXPR as name: BODY</code> runs these steps. Python evaluates <code>EXPR</code>, which gives the <strong>context manager</strong> object. It calls the manager's <code>__enter__()</code> method and binds the <strong>return value</strong> of <code>__enter__</code> to <code>name</code> (not the manager itself, unless <code>__enter__</code> returns <code>self</code>). It runs the body. Then, however the body ends (normally, with <code>return</code>, <code>break</code> or an exception), it calls <code>__exit__(exc_type, exc_value, traceback)</code>. If the body finished without an exception, the three arguments are <code>None</code>. If an exception occurred, they describe it, and the return value of <code>__exit__</code> decides what happens: a <strong>true</strong> value suppresses the exception, so execution continues after the <code>with</code>; anything else (including <code>None</code>, the default return) lets it propagate.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">with_steps.py</span><button class="copy">Copy</button></div><pre><code class="py">class Show:
+    def __init__(self, name, suppress=False):
+        self.name, self.suppress = name, suppress
+
+    def __enter__(self):
+        print(f&quot;  enter {self.name}&quot;)
+        return f&quot;resource:{self.name}&quot;         # this is what `as` receives
+
+    def __exit__(self, exc_type, exc, tb):
+        print(f&quot;  exit {self.name}, exception={exc_type.__name__ if exc_type else None}&quot;)
+        return self.suppress
+
+with Show(&quot;a&quot;) as r:
+    print(&quot;  body got&quot;, r)
+
+with Show(&quot;b&quot;, suppress=True):
+    raise KeyError(&quot;swallowed&quot;)
+print(&quot;after b: continued&quot;)
+
+try:
+    with Show(&quot;c&quot;):
+        raise KeyError(&quot;propagates&quot;)
+except KeyError:
+    print(&quot;after c: caught outside&quot;)</code></pre><div class="out"><span class="ol">Output</span><pre>  enter a
+  body got resource:a
+  exit a, exception=None
+  enter b
+  exit b, exception=KeyError
+after b: continued
+  enter c
+  exit c, exception=KeyError
+after c: caught outside</pre></div></div>
+<p>The <code>as</code> target is whatever <code>__enter__</code> returns: for <code>open</code>, the file object (which is also the manager); for a lock, <code>True</code>; for a database transaction, often a connection or cursor. <code>__exit__</code> is guaranteed to run once <code>__enter__</code> has succeeded; if <code>__enter__</code> itself raises, the body never runs and <code>__exit__</code> is not called, which is why <code>__enter__</code> should acquire the resource as its last step.</p>
+</section>
+<section class="sec" id="class">
+<h2><span class="n">3</span>Writing a context manager class</h2>
+<p>A class with <code>__enter__</code> and <code>__exit__</code> is a context manager. <code>__enter__</code> does the setup and returns whatever the block should use, very often <code>self</code>, so the block can read results from the manager later. <code>__exit__</code> does the cleanup and, in nearly all cases, returns <code>False</code> or nothing, so exceptions continue to the caller after the cleanup has happened. Returning <code>True</code> swallows <strong>every</strong> exception from the block, including bugs, so a manager should suppress only specific, intended exception types, as <code>contextlib.suppress</code> does (problem 3).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">class_manager.py</span><button class="copy">Copy</button></div><pre><code class="py">import time
+
+class Timer:
+    def __init__(self, clock=time.perf_counter):
+        self.clock = clock
+        self.elapsed = None
+
+    def __enter__(self):
+        self.start = self.clock()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.elapsed = self.clock() - self.start
+        return False                        # never hide errors
+
+ticks = iter([10.0, 10.25, 20.0, 21.5])
+with Timer(lambda: next(ticks)) as t:
+    pass
+print(t.elapsed)
+try:
+    with Timer(lambda: next(ticks)) as t2:
+        raise TimeoutError(&quot;model too slow&quot;)
+except TimeoutError:
+    print(&quot;timed the failure too:&quot;, t2.elapsed)</code></pre><div class="out"><span class="ol">Output</span><pre>0.25
+timed the failure too: 1.5</pre></div></div>
+<p>The timer records the duration in <code>__exit__</code>, so slow failures are measured as well as successes, which matters for latency dashboards (8.3). Context managers that should react to errors can inspect <code>exc_type</code> in <code>__exit__</code>: a transaction commits when it is <code>None</code> and rolls back otherwise; a tracing span marks itself as failed; a test helper checks that an expected error occurred (<code>pytest.raises</code> is a context manager, 13.1).</p>
+</section>
+<section class="sec" id="generator">
+<h2><span class="n">4</span><code>contextlib.contextmanager</code>: a generator with one yield</h2>
+<p>Writing a class is verbose for simple pairs. The decorator <code>contextlib.contextmanager</code> turns a <strong>generator function</strong> with exactly one <code>yield</code> into a context manager. The code before <code>yield</code> is the setup (<code>__enter__</code>), the value yielded is what <code>as</code> receives, and the code after <code>yield</code> is the cleanup (<code>__exit__</code>). If the <code>with</code> body raises, the exception is <strong>re-raised inside the generator, at the <code>yield</code></strong>. So the cleanup must sit in a <code>finally</code> block around the <code>yield</code>; otherwise an error in the body skips it entirely (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">contextmanager.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+@contextmanager
+def temporary(obj, **changes):
+    old = {k: getattr(obj, k) for k in changes}
+    for k, v in changes.items():
+        setattr(obj, k, v)
+    try:
+        yield obj
+    finally:
+        for k, v in old.items():
+            setattr(obj, k, v)
+
+class Settings:
+    temperature = 0.2
+    model = &quot;small&quot;
+
+s = Settings()
+with temporary(s, temperature=0.9) as cfg:
+    print(&quot;inside:&quot;, cfg.temperature, cfg.model)
+print(&quot;after:&quot;, s.temperature)
+try:
+    with temporary(s, model=&quot;large&quot;):
+        raise RuntimeError(&quot;request failed&quot;)
+except RuntimeError:
+    print(&quot;restored after error:&quot;, s.model)</code></pre><div class="out"><span class="ol">Output</span><pre>inside: 0.9 small
+after: 0.2
+restored after error: small</pre></div></div>
+<p>To react to the exception instead of just cleaning up, catch it around the <code>yield</code>: <code>except SomeError: ...</code> lets you log it, and then either <code>raise</code> (propagate) or not (suppress). As with classes, suppress only on purpose. A <code>@contextmanager</code> function can also be used as a <strong>decorator</strong> above another function, <code>@temporary(s, temperature=0)</code>, which wraps every call of that function in the block (a fresh generator is created per call). But a manager <strong>object</strong> obtained by calling it, <code>cm = temporary(s, ...)</code>, is single-use: its generator can run only once, so each <code>with</code> needs a fresh call (problem 16).</p>
+</section>
+<section class="sec" id="several">
+<h2><span class="n">5</span>Several managers, nesting and exit order</h2>
+<p>One <code>with</code> statement can open several managers, separated by commas; since Python 3.10 they can be wrapped in parentheses across lines. They are entered <strong>left to right</strong> and exited in <strong>reverse</strong> order, like nested <code>with</code> blocks, so a resource acquired later (a cursor) is released before one acquired earlier (its connection). If one of them fails to enter, those already entered are exited properly.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">several.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+log = []
+
+@contextmanager
+def step(name):
+    log.append(f&quot;enter {name}&quot;)
+    try:
+        yield name
+    finally:
+        log.append(f&quot;exit {name}&quot;)
+
+with (
+    step(&quot;connection&quot;) as conn,
+    step(&quot;transaction&quot;) as tx,
+    step(&quot;cursor&quot;) as cur,
+):
+    log.append(f&quot;work with {conn}, {tx}, {cur}&quot;)
+print(log)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;enter connection&#x27;, &#x27;enter transaction&#x27;, &#x27;enter cursor&#x27;, &#x27;work with connection, transaction, cursor&#x27;, &#x27;exit cursor&#x27;, &#x27;exit transaction&#x27;, &#x27;exit connection&#x27;]</pre></div></div>
+<p>Context managers also compose with everything else in this course: a decorator (8.1) can wrap a function body in a <code>with</code> block; a generator (6.3) can hold a <code>with</code> open while it yields, keeping a file open exactly as long as the stream is consumed; and when the number of managers is only known at run time (open N files), <code>contextlib.ExitStack</code> collects them dynamically (10.3).</p>
+</section>
+<section class="sec" id="reentrant">
+<h2><span class="n">6</span>Single-use, reusable and reentrant managers</h2>
+<p>Context managers differ in whether one object can be used more than once. <strong>Single-use</strong> managers work in one <code>with</code> only: file objects (once closed, they stay closed) and every <code>@contextmanager</code> object. <strong>Reusable</strong> managers can be used in several consecutive <code>with</code> blocks, like a <code>Timer</code> instance that resets on each enter. <strong>Reentrant</strong> managers can even be used in a <code>with</code> <strong>inside</strong> another <code>with</code> of the same object, which requires keeping a stack of saved state instead of one attribute: <code>threading.RLock</code> is reentrant, <code>threading.Lock</code> is not (it would deadlock). A manager that stores its saved state in a single attribute silently breaks when nested (problem 10).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">reentrant.py</span><button class="copy">Copy</button></div><pre><code class="py">class Indent:
+    &quot;&quot;&quot;Reentrant: nested blocks increase the indent, exits restore it.&quot;&quot;&quot;
+
+    def __init__(self):
+        self.level = 0
+        self._saved = []
+
+    def __enter__(self):
+        self._saved.append(self.level)
+        self.level += 2
+        return self
+
+    def __exit__(self, *exc):
+        self.level = self._saved.pop()
+        return False
+
+    def line(self, text):
+        return &quot; &quot; * self.level + text
+
+ind = Indent()
+out = [ind.line(&quot;start&quot;)]
+with ind:
+    out.append(ind.line(&quot;retrieve&quot;))
+    with ind:
+        out.append(ind.line(&quot;rerank&quot;))
+    out.append(ind.line(&quot;generate&quot;))
+out.append(ind.line(&quot;done&quot;))
+print(out)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;start&#x27;, &#x27;  retrieve&#x27;, &#x27;    rerank&#x27;, &#x27;  generate&#x27;, &#x27;done&#x27;]</pre></div></div>
+<p>The standard library is full of context managers worth knowing: <code>open</code>, <code>threading.Lock</code> and <code>RLock</code>, <code>tempfile.TemporaryDirectory</code>, <code>decimal.localcontext</code>, <code>warnings.catch_warnings</code> (7.3), <code>contextlib.suppress</code> and <code>redirect_stdout</code>, <code>unittest.mock.patch</code> (13.3), and in async code <code>async with</code> for HTTP sessions and locks (14.4). LLM SDKs make clients and streaming responses context managers, so connections are released even when a loop is abandoned midway.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-enter-exit-and-suppression" data-pid="m10-2-enter-exit-and-suppression" data-type="predict" data-level="easy" data-answer="open a
+using A
+close a -
+open b
+close b KeyError
+after b
+open c
+close c ValueError
+ValueError reached the caller">
+<header class="prob-head"><h3>1. Enter, exit and suppression</h3></header>
+<div class="code"><pre><code class="py">class Gate:
+    def __init__(self, name, swallow=()):
+        self.name, self.swallow = name, swallow
+    def __enter__(self):
+        print(&quot;open&quot;, self.name)
+        return self.name.upper()
+    def __exit__(self, exc_type, exc, tb):
+        print(&quot;close&quot;, self.name, exc_type.__name__ if exc_type else &quot;-&quot;)
+        return exc_type is not None and issubclass(exc_type, self.swallow)
+
+with Gate(&quot;a&quot;) as g:
+    print(&quot;using&quot;, g)
+with Gate(&quot;b&quot;, swallow=(KeyError,)):
+    {}[&quot;missing&quot;]
+print(&quot;after b&quot;)
+try:
+    with Gate(&quot;c&quot;, swallow=(KeyError,)):
+        int(&quot;x&quot;)
+except ValueError:
+    print(&quot;ValueError reached the caller&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>as</code> receives what <code>__enter__</code> returns. <code>__exit__</code> returning true swallows the exception; here only the listed types.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>open a
+using A
+close a -
+open b
+close b KeyError
+after b
+open c
+close c ValueError
+ValueError reached the caller</pre></div><p>The first block binds the upper-cased name and exits normally. In the second, the <code>KeyError</code> is in the swallow list, so <code>__exit__</code> returns <code>True</code>, the exception disappears and execution continues with "after b". In the third, <code>__exit__</code> still runs (printing <code>ValueError</code>), but returns <code>False</code> for a type it does not swallow, so the error propagates after the cleanup, which is the behaviour you want almost always.</p></div></details>
+</article>
+<article class="prob" id="p-a-timer-that-also-times-failures" data-pid="m10-2-a-timer-that-also-times-failures" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>2. A timer that also times failures</h3></header>
+<div class="prob-q"><p>Write a context manager class <code>Timer(clock, sink=None)</code> whose <code>__enter__</code> returns the timer, and whose <code>__exit__</code> stores the duration in <code>self.elapsed</code>, sets <code>self.failed</code> to whether an exception occurred, appends <code>(elapsed, failed)</code> to the list <code>sink</code> if given, and never suppresses exceptions. The same instance must be reusable in later <code>with</code> blocks.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class Timer:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([0.0, 0.5, 10.0, 12.0, 20.0, 20.25])
+sink = []
+t = Timer(lambda: next(ticks), sink)
+with t as same:
+    pass
+assert same is t and t.elapsed == 0.5 and t.failed is False
+try:
+    with t:
+        raise TimeoutError("slow model")
+    assert False
+except TimeoutError:
+    pass
+assert t.elapsed == 2.0 and t.failed is True
+with t:
+    pass
+assert sink == [(0.5, False), (2.0, True), (0.25, False)] and t.failed is False</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([0.0, 0.5, 10.0, 12.0, 20.0, 20.25])
+sink = []
+t = Timer(lambda: next(ticks), sink)
+with t as same:
+    pass
+assert same is t and t.elapsed == 0.5 and t.failed is False
+try:
+    with t:
+        raise TimeoutError(&quot;slow model&quot;)
+    assert False
+except TimeoutError:
+    pass
+assert t.elapsed == 2.0 and t.failed is True
+with t:
+    pass
+assert sink == [(0.5, False), (2.0, True), (0.25, False)] and t.failed is False</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Record <code>self.start</code> in <code>__enter__</code>; in <code>__exit__</code>, <code>failed = exc_type is not None</code>; return <code>False</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Timer:
+    def __init__(self, clock, sink=None):
+        self.clock = clock
+        self.sink = sink
+        self.elapsed = None
+        self.failed = None
+
+    def __enter__(self):
+        self.start = self.clock()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.elapsed = self.clock() - self.start
+        self.failed = exc_type is not None
+        if self.sink is not None:
+            self.sink.append((self.elapsed, self.failed))
+        return False</code></pre></div><p>All the measuring happens in <code>__exit__</code>, which runs on success and on failure alike, so slow timeouts are recorded rather than vanishing from the statistics. <code>exc_type is not None</code> is the standard test for "the block raised". Returning <code>False</code> lets the exception continue to the caller after it has been timed. Because every <code>__enter__</code> records a fresh start, the same timer can be reused for consecutive blocks (but not nested, since there is only one <code>start</code>). The injected clock makes all of it testable to the exact value.</p></div></details>
+</article>
+<article class="prob" id="p-a-manager-that-hides-every-error" data-pid="m10-2-a-manager-that-hides-every-error" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A manager that hides every error</h3></header>
+<div class="prob-q"><p><code>ignore_missing</code> was meant to ignore only <code>FileNotFoundError</code> when deleting temporary files. It returns <code>True</code> from <code>__exit__</code>, so it also hides a <code>PermissionError</code> and any bug inside the block. Fix it to suppress only <code>FileNotFoundError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class ignore_missing:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.suppressed = exc_type
+        return True
+</textarea>
+<script type="text/plain" class="prob-tests">with ignore_missing() as m:
+    raise FileNotFoundError("tmp.txt")
+assert m.suppressed is FileNotFoundError
+for err in (PermissionError("in use"), NameError("typo")):
+    try:
+        with ignore_missing():
+            raise err
+        assert False, "must propagate"
+    except type(err):
+        pass
+with ignore_missing() as m:
+    pass
+assert m.suppressed is None</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">with ignore_missing() as m:
+    raise FileNotFoundError(&quot;tmp.txt&quot;)
+assert m.suppressed is FileNotFoundError
+for err in (PermissionError(&quot;in use&quot;), NameError(&quot;typo&quot;)):
+    try:
+        with ignore_missing():
+            raise err
+        assert False, &quot;must propagate&quot;
+    except type(err):
+        pass
+with ignore_missing() as m:
+    pass
+assert m.suppressed is None</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Return <code>True</code> only when <code>exc_type</code> is not <code>None</code> and is <code>FileNotFoundError</code> or a subclass of it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ignore_missing:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.suppressed = exc_type
+        return exc_type is not None and issubclass(exc_type, FileNotFoundError)</code></pre></div><p>A context manager that returns <code>True</code> unconditionally is a bare <code>except: pass</code> in disguise (7.3): the <code>PermissionError</code> (a real problem) and the <code>NameError</code> (a bug) vanished just like the harmless missing file. Checking the type with <code>issubclass</code> suppresses only what the manager is named for. The standard library already provides exactly this, <code>contextlib.suppress(FileNotFoundError)</code>, which is usually the better choice than writing your own.</p></div></details>
+</article>
+<article class="prob" id="p-a-generator-manager-without-finally" data-pid="m10-2-a-generator-manager-without-finally" data-type="predict" data-level="easy" data-answer="acquire a
+work a
+release a
+acquire b
+caller saw the error
+acquire b
+release b
+caller saw the error">
+<header class="prob-head"><h3>4. A generator manager without finally</h3></header>
+<div class="code"><pre><code class="py">from contextlib import contextmanager
+
+@contextmanager
+def fragile(name):
+    print(&quot;acquire&quot;, name)
+    yield name
+    print(&quot;release&quot;, name)
+
+@contextmanager
+def safe(name):
+    print(&quot;acquire&quot;, name)
+    try:
+        yield name
+    finally:
+        print(&quot;release&quot;, name)
+
+with fragile(&quot;a&quot;):
+    print(&quot;work a&quot;)
+for manager in (fragile, safe):
+    try:
+        with manager(&quot;b&quot;):
+            raise ValueError(&quot;boom&quot;)
+    except ValueError:
+        print(&quot;caller saw the error&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An exception in the body is re-raised at the <code>yield</code>. Code after the <code>yield</code> runs only if nothing is raised there.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>acquire a
+work a
+release a
+acquire b
+caller saw the error
+acquire b
+release b
+caller saw the error</pre></div><p>Without an error, the code after <code>yield</code> runs, so <code>fragile</code> releases <code>a</code>. When the body raises, the exception is thrown into the generator at the <code>yield</code>; <code>fragile</code> has no <code>finally</code>, so its release line is skipped and the resource leaks, while the error still reaches the caller. <code>safe</code> puts the release in <code>finally</code>, so it runs before the error propagates. With <code>@contextmanager</code>, <code>try</code>/<code>finally</code> around the <code>yield</code> is not optional.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-temporary-settings-for-one-request" data-pid="m10-2-temporary-settings-for-one-request" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Temporary settings for one request</h3></header>
+<div class="prob-q"><p>Write a <code>contextlib.contextmanager</code> function <code>overrides(obj, **changes)</code> that sets attributes on <code>obj</code> for the duration of the block and restores them afterwards, even if the block raises. Attributes that did not exist before must be <strong>deleted</strong> afterwards, not set to <code>None</code>. If any name in <code>changes</code> starts with <code>_</code>, raise <code>ValueError</code> before changing anything. Yield <code>obj</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from contextlib import contextmanager
+
+@contextmanager
+def overrides(obj, **changes):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">class Client:
+    def __init__(self):
+        self.model = "small"
+        self.temperature = 0.2
+
+c = Client()
+with overrides(c, temperature=0.9, seed=7) as same:
+    assert same is c and (c.temperature, c.seed, c.model) == (0.9, 7, "small")
+assert c.temperature == 0.2 and not hasattr(c, "seed")
+try:
+    with overrides(c, model="large"):
+        raise TimeoutError("slow")
+except TimeoutError:
+    pass
+assert c.model == "small"
+try:
+    with overrides(c, _secret=1, model="x"):
+        pass
+    assert False
+except ValueError:
+    assert c.model == "small" and not hasattr(c, "_secret")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class Client:
+    def __init__(self):
+        self.model = &quot;small&quot;
+        self.temperature = 0.2
+
+c = Client()
+with overrides(c, temperature=0.9, seed=7) as same:
+    assert same is c and (c.temperature, c.seed, c.model) == (0.9, 7, &quot;small&quot;)
+assert c.temperature == 0.2 and not hasattr(c, &quot;seed&quot;)
+try:
+    with overrides(c, model=&quot;large&quot;):
+        raise TimeoutError(&quot;slow&quot;)
+except TimeoutError:
+    pass
+assert c.model == &quot;small&quot;
+try:
+    with overrides(c, _secret=1, model=&quot;x&quot;):
+        pass
+    assert False
+except ValueError:
+    assert c.model == &quot;small&quot; and not hasattr(c, &quot;_secret&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Validate first. Save <code>{name: getattr(obj, name)}</code> only for names that exist (<code>hasattr</code>), and remember the new ones.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>finally</code>, restore saved values and <code>delattr</code> the names that were new.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+_MISSING = object()
+
+@contextmanager
+def overrides(obj, **changes):
+    private = [k for k in changes if k.startswith(&quot;_&quot;)]
+    if private:
+        raise ValueError(f&quot;refusing to override private attributes: {private}&quot;)
+    saved = {k: getattr(obj, k, _MISSING) for k in changes}
+    for k, v in changes.items():
+        setattr(obj, k, v)
+    try:
+        yield obj
+    finally:
+        for k, old in saved.items():
+            if old is _MISSING:
+                delattr(obj, k)
+            else:
+                setattr(obj, k, old)</code></pre></div><p>Saving the old values before changing anything and restoring them in <code>finally</code> guarantees the object returns to its exact previous state, whether the request succeeds or times out, so a per-request override cannot leak into later requests (9.1's shared-state problem in another form). A sentinel distinguishes "the attribute did not exist" from "it existed and was <code>None</code>" (2.1), so new attributes are removed rather than left behind as <code>None</code>. Validation happens before the <code>yield</code> and before any change, so a rejected call leaves the object untouched. <code>unittest.mock.patch.object</code> (13.3) is the industrial version of this manager, used in tests to replace attributes temporarily.</p></div></details>
+</article>
+<article class="prob" id="p-a-lock-that-stays-locked-after-an-error" data-pid="m10-2-a-lock-that-stays-locked-after-an-error" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A lock that stays locked after an error</h3></header>
+<div class="prob-q"><p><code>hold(lock)</code> acquires a lock-like object for the block. When the block raises, the lock is never released, and every later caller blocks. Fix the context manager.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from contextlib import contextmanager
+
+@contextmanager
+def hold(lock):
+    lock.acquire()
+    yield lock
+    lock.release()
+</textarea>
+<script type="text/plain" class="prob-tests">class FakeLock:
+    def __init__(self):
+        self.held = False
+        self.events = []
+    def acquire(self):
+        assert not self.held, "deadlock: already held"
+        self.held = True
+        self.events.append("acquire")
+    def release(self):
+        self.held = False
+        self.events.append("release")
+
+lock = FakeLock()
+with hold(lock):
+    assert lock.held
+assert not lock.held
+try:
+    with hold(lock):
+        raise ValueError("work failed")
+except ValueError:
+    pass
+assert not lock.held and lock.events == ["acquire", "release", "acquire", "release"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">class FakeLock:
+    def __init__(self):
+        self.held = False
+        self.events = []
+    def acquire(self):
+        assert not self.held, &quot;deadlock: already held&quot;
+        self.held = True
+        self.events.append(&quot;acquire&quot;)
+    def release(self):
+        self.held = False
+        self.events.append(&quot;release&quot;)
+
+lock = FakeLock()
+with hold(lock):
+    assert lock.held
+assert not lock.held
+try:
+    with hold(lock):
+        raise ValueError(&quot;work failed&quot;)
+except ValueError:
+    pass
+assert not lock.held and lock.events == [&quot;acquire&quot;, &quot;release&quot;, &quot;acquire&quot;, &quot;release&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Wrap the <code>yield</code> in <code>try</code>/<code>finally</code> and release in the <code>finally</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+@contextmanager
+def hold(lock):
+    lock.acquire()
+    try:
+        yield lock
+    finally:
+        lock.release()</code></pre></div><p>With <code>@contextmanager</code>, an exception in the <code>with</code> body is raised at the <code>yield</code>, so the line after it never ran and the lock stayed held: the next <code>acquire</code> would wait forever in real threaded code (here, the fake raises "deadlock" instead). <code>finally</code> makes the release unconditional while letting the error propagate. The acquire stays <strong>before</strong> the <code>try</code>: if acquiring fails, there is nothing to release. Real <code>threading.Lock</code> objects are context managers already, so <code>with lock:</code> is the idiomatic form.</p></div></details>
+</article>
+<article class="prob" id="p-write-a-file-atomically" data-pid="m10-2-write-a-file-atomically" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Write a file atomically</h3></header>
+<div class="prob-q"><p>Write a <code>contextlib.contextmanager</code> function <code>atomic_write(path, encoding="utf-8")</code> that yields a text file handle to a temporary file in the same directory; when the block finishes normally, it closes the file and replaces <code>path</code> with it (<code>os.replace</code>); if the block raises, it closes and deletes the temporary file and lets the exception propagate, leaving any existing <code>path</code> untouched (7.3).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import os
+from contextlib import contextmanager
+
+@contextmanager
+def atomic_write(path, encoding=&quot;utf-8&quot;):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, "metrics.json")
+with atomic_write(p) as f:
+    f.write('{"f1": 0.81}')
+assert open(p, encoding="utf-8").read() == '{"f1": 0.81}'
+try:
+    with atomic_write(p) as f:
+        f.write('{"f1": 0.9')
+        raise RuntimeError("crashed while writing")
+except RuntimeError:
+    pass
+assert open(p, encoding="utf-8").read() == '{"f1": 0.81}'
+assert sorted(os.listdir(d)) == ["metrics.json"]
+with atomic_write(os.path.join(d, "new.txt")) as f:
+    f.write("ok")
+assert sorted(os.listdir(d)) == ["metrics.json", "new.txt"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, &quot;metrics.json&quot;)
+with atomic_write(p) as f:
+    f.write(&#x27;{&quot;f1&quot;: 0.81}&#x27;)
+assert open(p, encoding=&quot;utf-8&quot;).read() == &#x27;{&quot;f1&quot;: 0.81}&#x27;
+try:
+    with atomic_write(p) as f:
+        f.write(&#x27;{&quot;f1&quot;: 0.9&#x27;)
+        raise RuntimeError(&quot;crashed while writing&quot;)
+except RuntimeError:
+    pass
+assert open(p, encoding=&quot;utf-8&quot;).read() == &#x27;{&quot;f1&quot;: 0.81}&#x27;
+assert sorted(os.listdir(d)) == [&quot;metrics.json&quot;]
+with atomic_write(os.path.join(d, &quot;new.txt&quot;)) as f:
+    f.write(&quot;ok&quot;)
+assert sorted(os.listdir(d)) == [&quot;metrics.json&quot;, &quot;new.txt&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>tmp = path + ".tmp"</code>; open it before the <code>try</code>. Use <code>try</code> / <code>except BaseException:</code> to clean up and re-raise, and <code>else</code> for the replace.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+from contextlib import contextmanager
+
+@contextmanager
+def atomic_write(path, encoding=&quot;utf-8&quot;):
+    tmp = path + &quot;.tmp&quot;
+    f = open(tmp, &quot;w&quot;, encoding=encoding)
+    try:
+        yield f
+    except BaseException:
+        f.close()
+        os.remove(tmp)
+        raise
+    else:
+        f.close()
+        os.replace(tmp, path)</code></pre></div><p>The context manager turns the atomic-write pattern of 7.3 into one line for every caller: they write normally, and either the complete new file appears at <code>path</code> or nothing changes. <code>except BaseException</code> makes even Ctrl+C clean up the temporary file, and the bare <code>raise</code> keeps the original error. The replace happens in <code>else</code>, so it runs only when the block succeeded, and only after the file is closed (flushing everything to disk). Model checkpoints, evaluation results and index files should be written this way, since a crash mid-write would otherwise leave a corrupt file that the next run tries to load.</p></div></details>
+</article>
+<article class="prob" id="p-open-once-or-open-per-line" data-pid="m10-2-open-once-or-open-per-line" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. Open once or open per line</h3></header>
+<div class="prob-q"><p>Both write 3,000 log lines to a file. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import os, tempfile
+path = os.path.join(tempfile.mkdtemp(), &quot;out.log&quot;)
+lines = [f&quot;request {i} ok\n&quot; for i in range(3000)]</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">for line in lines:
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(line)</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+    for line in lines:
+        f.write(line)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does every <code>with open(...)</code> do at the start and at the end?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>61.85 ms</td></tr><tr><td>B</td><td>852.23 µs</td></tr></table></div><p>Each <code>with open(...)</code> asks the operating system to open the file, creates a file object with its buffer and encoder, and at exit flushes and closes it. Version A pays that 3,000 times; version B once, writing into a buffer that is flushed in large chunks. Keep the <code>with</code> around the whole job, not around each small step. The exception is long-running processes appending occasionally (a log written once a minute), where opening per write avoids holding the file open; logging handlers make that trade-off for you (12.3).</p></div></details>
+</article>
+<article class="prob" id="p-nested-managers-and-an-exception" data-pid="m10-2-nested-managers-and-an-exception" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Nested managers and an exception</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from contextlib import contextmanager
+log = []
+
+@contextmanager
+def tag(name):
+    log.append(f&quot;+{name}&quot;)
+    try:
+        yield
+    except KeyError:
+        log.append(f&quot;{name} handled KeyError&quot;)
+    finally:
+        log.append(f&quot;-{name}&quot;)
+
+with tag(&quot;outer&quot;), tag(&quot;inner&quot;):
+    log.append(&quot;body&quot;)
+log.clear()
+with tag(&quot;outer&quot;):
+    with tag(&quot;inner&quot;):
+        raise KeyError(&quot;k&quot;)
+log.append(&quot;after&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside</td><td><input class="cell" data-a="[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;body&#x27;]" data-s="[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;body&#x27;]" aria-label="log at inside" autocomplete="off"></td></tr><tr><td>KeyError in inner</td><td><input class="cell" data-a="[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;inner handled KeyError&#x27;, &#x27;-inner&#x27;, &#x27;-outer&#x27;, &#x27;after&#x27;]" data-s="[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;inner handled KeyError&#x27;, &#x27;-inner&#x27;, &#x27;-outer&#x27;, &#x27;after&#x27;]" aria-label="log at KeyError in inner" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The innermost manager sees the exception first. Catching it around the <code>yield</code> without re-raising suppresses it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside</td><td><code>[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;body&#x27;]</code></td></tr><tr><td>KeyError in inner</td><td><code>[&#x27;+outer&#x27;, &#x27;+inner&#x27;, &#x27;inner handled KeyError&#x27;, &#x27;-inner&#x27;, &#x27;-outer&#x27;, &#x27;after&#x27;]</code></td></tr></table></div><p>Managers enter left to right and exit in reverse, so <code>inner</code> closes before <code>outer</code>. When the body raises <code>KeyError</code>, it is thrown into the inner generator at its <code>yield</code>; its <code>except</code> handles it without re-raising, which <strong>suppresses</strong> it, so its <code>finally</code> runs, the outer manager sees a normal exit, and execution continues after the block. Suppressing inside a generator manager is as easy as forgetting <code>raise</code>, which is why the handler should re-raise unless suppression is the point.</p></div></details>
+</article>
+<article class="prob" id="p-a-manager-that-breaks-when-nested" data-pid="m10-2-a-manager-that-breaks-when-nested" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. A manager that breaks when nested</h3></header>
+<div class="prob-q"><p><code>no_grad</code> mimics a framework's "disable gradients" switch: inside the block, <code>STATE["grad"]</code> is <code>False</code>, and afterwards it is restored to its previous value. Nested use leaves gradients disabled after the outer block ends. Make it reentrant: each exit restores exactly the value that its own enter replaced.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">STATE = {&quot;grad&quot;: True}
+
+class no_grad:
+    def __enter__(self):
+        self.previous = STATE[&quot;grad&quot;]
+        STATE[&quot;grad&quot;] = False
+        return self
+
+    def __exit__(self, *exc):
+        STATE[&quot;grad&quot;] = self.previous
+        return False
+
+guard = no_grad()
+</textarea>
+<script type="text/plain" class="prob-tests">STATE["grad"] = True
+with guard:
+    assert STATE["grad"] is False
+    with guard:
+        assert STATE["grad"] is False
+    assert STATE["grad"] is False
+assert STATE["grad"] is True
+with no_grad():
+    pass
+assert STATE["grad"] is True</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">STATE[&quot;grad&quot;] = True
+with guard:
+    assert STATE[&quot;grad&quot;] is False
+    with guard:
+        assert STATE[&quot;grad&quot;] is False
+    assert STATE[&quot;grad&quot;] is False
+assert STATE[&quot;grad&quot;] is True
+with no_grad():
+    pass
+assert STATE[&quot;grad&quot;] is True</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>One <code>previous</code> attribute is overwritten by the inner <code>__enter__</code>. Keep a stack (a list) of saved values: push in <code>__enter__</code>, pop in <code>__exit__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">STATE = {&quot;grad&quot;: True}
+
+class no_grad:
+    def __init__(self):
+        self._saved = []
+
+    def __enter__(self):
+        self._saved.append(STATE[&quot;grad&quot;])
+        STATE[&quot;grad&quot;] = False
+        return self
+
+    def __exit__(self, *exc):
+        STATE[&quot;grad&quot;] = self._saved.pop()
+        return False
+
+guard = no_grad()</code></pre></div><p>The outer <code>__enter__</code> saved <code>True</code>; the inner one, on the <strong>same</strong> object, overwrote <code>previous</code> with <code>False</code>; the inner exit restored <code>False</code>, and the outer exit then restored the overwritten value, also <code>False</code>, so gradients stayed off for the rest of the program. A stack of saved values gives each enter its own slot, popped by the matching exit in reverse order, which is what makes a manager reentrant. Such global-switch managers are common in ML frameworks (<code>torch.no_grad()</code>, <code>torch.inference_mode()</code>), and nesting them happens naturally when one helper that disables gradients calls another.</p></div></details>
+</article>
+<article class="prob" id="p-repeated-try-finally-into-a-context-mana" data-pid="m10-2-repeated-try-finally-into-a-context-mana" data-type="refactor" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Repeated try/finally into a context manager</h3></header>
+<div class="prob-q"><p>Replace the repeated <code>try</code>/<code>finally</code> blocks with one context manager, <code>span(name)</code>, used by both functions. Same <code>EVENTS</code>. Keep the tests green.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">EVENTS = []
+
+def retrieve(query):
+    EVENTS.append((&quot;start&quot;, &quot;retrieve&quot;))
+    try:
+        if not query:
+            raise ValueError(&quot;empty query&quot;)
+        return [f&quot;doc about {query}&quot;]
+    finally:
+        EVENTS.append((&quot;end&quot;, &quot;retrieve&quot;))
+
+def generate(query, docs):
+    EVENTS.append((&quot;start&quot;, &quot;generate&quot;))
+    try:
+        return f&quot;answer from {len(docs)} docs&quot;
+    finally:
+        EVENTS.append((&quot;end&quot;, &quot;generate&quot;))
+</textarea>
+<script type="text/plain" class="prob-tests">docs = retrieve("refund")
+assert generate("refund", docs) == "answer from 1 docs"
+try:
+    retrieve("")
+except ValueError:
+    pass
+assert EVENTS == [("start", "retrieve"), ("end", "retrieve"), ("start", "generate"), ("end", "generate"),
+                  ("start", "retrieve"), ("end", "retrieve")]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">docs = retrieve(&quot;refund&quot;)
+assert generate(&quot;refund&quot;, docs) == &quot;answer from 1 docs&quot;
+try:
+    retrieve(&quot;&quot;)
+except ValueError:
+    pass
+assert EVENTS == [(&quot;start&quot;, &quot;retrieve&quot;), (&quot;end&quot;, &quot;retrieve&quot;), (&quot;start&quot;, &quot;generate&quot;), (&quot;end&quot;, &quot;generate&quot;),
+                  (&quot;start&quot;, &quot;retrieve&quot;), (&quot;end&quot;, &quot;retrieve&quot;)]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>@contextmanager def span(name):</code> appends the start event, then <code>try: yield</code> / <code>finally:</code> appends the end event.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+EVENTS = []
+
+@contextmanager
+def span(name):
+    EVENTS.append((&quot;start&quot;, name))
+    try:
+        yield
+    finally:
+        EVENTS.append((&quot;end&quot;, name))
+
+def retrieve(query):
+    with span(&quot;retrieve&quot;):
+        if not query:
+            raise ValueError(&quot;empty query&quot;)
+        return [f&quot;doc about {query}&quot;]
+
+def generate(query, docs):
+    with span(&quot;generate&quot;):
+        return f&quot;answer from {len(docs)} docs&quot;</code></pre></div><p>The begin/end pairing now lives in one place, and each function body contains only its work, inside a <code>with</code> that reads as "this is the retrieve span". A <code>return</code> inside the <code>with</code> block still triggers the exit, exactly like <code>finally</code>. Adding timing or error status to every span is now one change. Tracing libraries expose exactly this API: OpenTelemetry's <code>with tracer.start_as_current_span("retrieve"):</code>, Langfuse and LangSmith's context-manager spans.</p></div></details>
+</article>
+<article class="prob" id="p-what-exit-receives" data-pid="m10-2-what-exit-receives" data-type="predict" data-level="medium" data-answer=" value 42
+  None None False
+  ZeroDivisionError ZeroDivisionError(&#x27;division by zero&#x27;) True
+continued
+  None None False
+returned">
+<header class="prob-head"><h3>12. What __exit__ receives</h3></header>
+<div class="code"><pre><code class="py">class Inspect:
+    def __exit__(self, exc_type, exc, tb):
+        print(&quot; &quot;, exc_type.__name__ if exc_type else None, repr(exc), tb is not None)
+        return isinstance(exc, ZeroDivisionError)
+    def __enter__(self):
+        return 42
+
+with Inspect() as value:
+    print(&quot; value&quot;, value)
+with Inspect():
+    1 / 0
+print(&quot;continued&quot;)
+def early():
+    with Inspect():
+        return &quot;returned&quot;
+print(early())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A normal exit, including <code>return</code>, passes three <code>None</code>s. A suppressed exception lets execution continue after the block.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre> value 42
+  None None False
+  ZeroDivisionError ZeroDivisionError(&#x27;division by zero&#x27;) True
+continued
+  None None False
+returned</pre></div><p><code>as</code> receives 42 from <code>__enter__</code>. A normal exit passes <code>None</code> for all three arguments. The division error arrives as its type, the exception object and a traceback, and since <code>__exit__</code> returns <code>True</code> for that type, execution continues after the <code>with</code>. A <code>return</code> inside the block is a normal exit for the manager (it still gets <code>None</code>s), and the function returns its value after <code>__exit__</code> has run.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-nested-tracing-spans" data-pid="m10-2-nested-tracing-spans" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Nested tracing spans</h3></header>
+<div class="prob-q"><p>Write a class <code>Tracer(clock)</code> with a method <code>span(name)</code> returning a context manager (use <code>contextlib.contextmanager</code>) that records a dict <code>{"name", "parent", "start", "end", "error"}</code> in <code>self.spans</code> (appended when the span <strong>starts</strong>, so outer spans come first). <code>parent</code> is the name of the enclosing span (or <code>None</code>), tracked with a stack; <code>error</code> is the exception's type name or <code>None</code>; exceptions propagate. Inside the block, the yielded value is the span's dict, so code can add attributes (<code>s["tokens"] = 120</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from contextlib import contextmanager
+
+class Tracer:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">ticks = iter([0.0, 0.1, 0.5, 0.6, 0.9, 1.4, 2.0, 2.5])
+t = Tracer(lambda: next(ticks))
+with t.span("request"):
+    with t.span("retrieve") as s:
+        s["docs"] = 3
+    try:
+        with t.span("generate"):
+            raise TimeoutError("slow")
+    except TimeoutError:
+        pass
+names = [(s["name"], s["parent"], s["error"]) for s in t.spans]
+assert names == [("request", None, None), ("retrieve", "request", None), ("generate", "request", "TimeoutError")]
+assert [(s["start"], s["end"]) for s in t.spans] == [(0.0, 1.4), (0.1, 0.5), (0.6, 0.9)]
+assert t.spans[1]["docs"] == 3 and t._stack == []
+with t.span("solo"):
+    pass
+assert t.spans[-1]["parent"] is None and t.spans[-1]["start"] == 2.0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">ticks = iter([0.0, 0.1, 0.5, 0.6, 0.9, 1.4, 2.0, 2.5])
+t = Tracer(lambda: next(ticks))
+with t.span(&quot;request&quot;):
+    with t.span(&quot;retrieve&quot;) as s:
+        s[&quot;docs&quot;] = 3
+    try:
+        with t.span(&quot;generate&quot;):
+            raise TimeoutError(&quot;slow&quot;)
+    except TimeoutError:
+        pass
+names = [(s[&quot;name&quot;], s[&quot;parent&quot;], s[&quot;error&quot;]) for s in t.spans]
+assert names == [(&quot;request&quot;, None, None), (&quot;retrieve&quot;, &quot;request&quot;, None), (&quot;generate&quot;, &quot;request&quot;, &quot;TimeoutError&quot;)]
+assert [(s[&quot;start&quot;], s[&quot;end&quot;]) for s in t.spans] == [(0.0, 1.4), (0.1, 0.5), (0.6, 0.9)]
+assert t.spans[1][&quot;docs&quot;] == 3 and t._stack == []
+with t.span(&quot;solo&quot;):
+    pass
+assert t.spans[-1][&quot;parent&quot;] is None and t.spans[-1][&quot;start&quot;] == 2.0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._stack</code> of open span names. In <code>span</code>: build the dict with the parent from the top of the stack, append it, push the name, then <code>try: yield record</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>except BaseException as e:</code> to set <code>error</code>, then <code>raise</code>; in <code>finally</code>, set <code>end</code> and pop the stack.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import contextmanager
+
+class Tracer:
+    def __init__(self, clock):
+        self.clock = clock
+        self.spans = []
+        self._stack = []
+
+    @contextmanager
+    def span(self, name):
+        record = {&quot;name&quot;: name, &quot;parent&quot;: self._stack[-1] if self._stack else None,
+                  &quot;start&quot;: self.clock(), &quot;end&quot;: None, &quot;error&quot;: None}
+        self.spans.append(record)
+        self._stack.append(name)
+        try:
+            yield record
+        except BaseException as e:
+            record[&quot;error&quot;] = type(e).__name__
+            raise
+        finally:
+            record[&quot;end&quot;] = self.clock()
+            self._stack.pop()</code></pre></div><p>The stack of open span names is what turns flat timing into a <strong>tree</strong>: each new span takes the current top as its parent, and its exit pops itself, so nesting in the code becomes nesting in the trace, the structure a tracing UI draws as a waterfall. Recording the error type and then re-raising keeps the manager transparent to the program while making failures visible in the trace. <code>@contextmanager</code> works on methods too: <code>self</code> is just the first argument of the generator function. Yielding the record lets the body attach attributes such as token counts or the number of documents, as OpenTelemetry's <code>span.set_attribute</code> does. In concurrent code the stack would live in a <code>contextvars.ContextVar</code> so that parallel requests do not share it (14.4).</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-transaction-manager" data-pid="m10-2-read-the-code-a-transaction-manager" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a transaction manager</h3></header>
+<div class="prob-q"><p><code>Transaction(store)</code> should apply a batch of changes to a dict-like <code>store</code> atomically: inside the block, writes go to a staging dict obtained from <code>as</code>; on success they are committed to the store; on any exception the store is left unchanged and the exception propagates. The code commits after failures, binds <code>None</code> to the <code>as</code> name, and swallows exceptions. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class Transaction:
+    def __init__(self, store):
+        self.store = store
+        self.commits = 0
+
+    def __enter__(self):
+        self.staged = {}
+
+    def __exit__(self, exc_type, exc, tb):
+        self.store.update(self.staged)
+        self.commits += 1
+        return True
+</textarea>
+<script type="text/plain" class="prob-tests">store = {"balance": 100}
+tx = Transaction(store)
+with tx as staged:
+    staged["balance"] = 80
+    staged["last_order"] = "o-1"
+assert store == {"balance": 80, "last_order": "o-1"} and tx.commits == 1
+try:
+    with Transaction(store) as staged:
+        staged["balance"] = 0
+        raise ValueError("payment declined")
+    assert False, "the error must propagate"
+except ValueError:
+    pass
+assert store == {"balance": 80, "last_order": "o-1"}
+with Transaction(store) as staged:
+    pass
+assert store["balance"] == 80</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">store = {&quot;balance&quot;: 100}
+tx = Transaction(store)
+with tx as staged:
+    staged[&quot;balance&quot;] = 80
+    staged[&quot;last_order&quot;] = &quot;o-1&quot;
+assert store == {&quot;balance&quot;: 80, &quot;last_order&quot;: &quot;o-1&quot;} and tx.commits == 1
+try:
+    with Transaction(store) as staged:
+        staged[&quot;balance&quot;] = 0
+        raise ValueError(&quot;payment declined&quot;)
+    assert False, &quot;the error must propagate&quot;
+except ValueError:
+    pass
+assert store == {&quot;balance&quot;: 80, &quot;last_order&quot;: &quot;o-1&quot;}
+with Transaction(store) as staged:
+    pass
+assert store[&quot;balance&quot;] == 80</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__enter__</code> must return the staging dict.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Commit only when <code>exc_type is None</code>; return <code>False</code> so exceptions propagate.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Transaction:
+    def __init__(self, store):
+        self.store = store
+        self.commits = 0
+
+    def __enter__(self):
+        self.staged = {}
+        return self.staged
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.store.update(self.staged)
+            self.commits += 1
+        self.staged = {}
+        return False</code></pre></div><p>Three bugs, each a rule of this lesson. <code>__enter__</code> returned nothing, so <code>as staged</code> received <code>None</code> and the first write raised <code>TypeError</code>. <code>__exit__</code> committed unconditionally, so a declined payment was written to the store anyway, the exact opposite of a transaction. And returning <code>True</code> swallowed every exception, so the caller believed the declined payment succeeded. The fixed manager commits only on a clean exit, discards the staged changes in every case, and returns <code>False</code> so failures reach the caller after the rollback. Database libraries follow this pattern: <code>with connection:</code> in <code>sqlite3</code> commits on success and rolls back on an exception; SQLAlchemy's <code>session.begin()</code> does the same.</p></div></details>
+</article>
+<article class="prob" id="p-capture-log-records-in-a-block" data-pid="m10-2-capture-log-records-in-a-block" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>15. Capture log records in a block</h3></header>
+<div class="prob-q"><p>Write a context manager class <code>capture_logs(logger, level=logging.INFO)</code> that, for the duration of the block, attaches a handler to <code>logger</code> collecting records at or above <code>level</code>, temporarily lowers the logger's level if needed so they are emitted, and stops propagation to parent loggers. <code>__enter__</code> returns a list that fills with <code>(level_name, message)</code> tuples. On exit, everything is restored exactly (handler removed, level and propagation as before), also when the block raises.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">import logging
+
+class capture_logs:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import logging
+log = logging.getLogger("rag.pipeline")
+log.setLevel(logging.WARNING)
+log.propagate = True
+before = list(log.handlers)
+
+with capture_logs(log) as records:
+    log.debug("hidden")
+    log.info("retrieved %d docs", 3)
+    log.warning("slow reranker")
+assert records == [("INFO", "retrieved 3 docs"), ("WARNING", "slow reranker")]
+assert log.level == logging.WARNING and log.propagate is True and log.handlers == before
+
+try:
+    with capture_logs(log, level=logging.ERROR) as records:
+        log.warning("ignored")
+        log.error("model failed")
+        raise RuntimeError("boom")
+except RuntimeError:
+    pass
+assert records == [("ERROR", "model failed")] and log.handlers == before and log.level == logging.WARNING</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import logging
+log = logging.getLogger(&quot;rag.pipeline&quot;)
+log.setLevel(logging.WARNING)
+log.propagate = True
+before = list(log.handlers)
+
+with capture_logs(log) as records:
+    log.debug(&quot;hidden&quot;)
+    log.info(&quot;retrieved %d docs&quot;, 3)
+    log.warning(&quot;slow reranker&quot;)
+assert records == [(&quot;INFO&quot;, &quot;retrieved 3 docs&quot;), (&quot;WARNING&quot;, &quot;slow reranker&quot;)]
+assert log.level == logging.WARNING and log.propagate is True and log.handlers == before
+
+try:
+    with capture_logs(log, level=logging.ERROR) as records:
+        log.warning(&quot;ignored&quot;)
+        log.error(&quot;model failed&quot;)
+        raise RuntimeError(&quot;boom&quot;)
+except RuntimeError:
+    pass
+assert records == [(&quot;ERROR&quot;, &quot;model failed&quot;)] and log.handlers == before and log.level == logging.WARNING</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A handler subclass with <code>emit(self, record)</code> can append <code>(record.levelname, record.getMessage())</code> to a list (12.3).</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Save <code>logger.level</code> and <code>logger.propagate</code> in <code>__enter__</code>; restore them and <code>removeHandler</code> in <code>__exit__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import logging
+
+class _ListHandler(logging.Handler):
+    def __init__(self, records, level):
+        super().__init__(level)
+        self.records = records
+
+    def emit(self, record):
+        self.records.append((record.levelname, record.getMessage()))
+
+
+class capture_logs:
+    def __init__(self, logger, level=logging.INFO):
+        self.logger = logger
+        self.level = level
+
+    def __enter__(self):
+        self.records = []
+        self._handler = _ListHandler(self.records, self.level)
+        self._old_level = self.logger.level
+        self._old_propagate = self.logger.propagate
+        self.logger.addHandler(self._handler)
+        if self.logger.getEffectiveLevel() &gt; self.level:
+            self.logger.setLevel(self.level)
+        self.logger.propagate = False
+        return self.records
+
+    def __exit__(self, exc_type, exc, tb):
+        self.logger.removeHandler(self._handler)
+        self.logger.setLevel(self._old_level)
+        self.logger.propagate = self._old_propagate
+        return False</code></pre></div><p>The manager changes three pieces of global state (the handler list, the level, and propagation) and puts all three back on every exit, so a test or a debugging session cannot leave the application's logging configuration altered, even when the block fails. Lowering the logger's level matters: a logger set to <code>WARNING</code> drops <code>INFO</code> records before any handler sees them, so the capture would silently miss them; the handler's own level then filters to what was asked for. Stopping propagation keeps captured records out of other handlers during the block. <code>record.getMessage()</code> applies the <code>%</code>-style arguments, which is why the message reads "retrieved 3 docs". pytest's <code>caplog</code> fixture and <code>unittest</code>'s <code>assertLogs</code> are built the same way.</p></div></details>
+</article>
+<article class="prob" id="p-single-use-generator-managers" data-pid="m10-2-single-use-generator-managers" data-type="predict" data-level="hard" data-answer="  setup
+  first value
+  teardown
+second use failed: AttributeError
+RuntimeError: generator didn&#x27;t stop
+  swallowed
+after swallow">
+<header class="prob-head"><h3>16. Single-use generator managers</h3></header>
+<div class="code"><pre><code class="py">from contextlib import contextmanager
+
+@contextmanager
+def once():
+    print(&quot;  setup&quot;)
+    yield &quot;value&quot;
+    print(&quot;  teardown&quot;)
+
+cm = once()
+with cm as v:
+    print(&quot;  first&quot;, v)
+try:
+    with cm:
+        pass
+except (RuntimeError, AttributeError) as e:
+    print(&quot;second use failed:&quot;, type(e).__name__)
+
+@contextmanager
+def twice():
+    yield 1
+    yield 2
+
+try:
+    with twice():
+        pass
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)
+
+@contextmanager
+def swallow():
+    try:
+        yield
+    except ValueError:
+        print(&quot;  swallowed&quot;)
+
+with swallow():
+    raise ValueError(&quot;x&quot;)
+print(&quot;after swallow&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>A <code>@contextmanager</code> object wraps one generator, which can run once, so a second <code>with</code> on the same object fails. The generator must yield exactly once.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  setup
+  first value
+  teardown
+second use failed: AttributeError
+RuntimeError: generator didn&#x27;t stop
+  swallowed
+after swallow</pre></div><p>The first <code>with</code> runs the generator to its end. Reusing the same object fails: the manager discards its stored function and arguments on first use, so Python 3.14 raises <code>AttributeError</code> (older versions raised <code>RuntimeError</code>, "generator didn't yield"); either way, call <code>once()</code> again for each <code>with</code>. A generator that yields a second time breaks the protocol, since the manager expects it to finish after the block, so it raises <code>RuntimeError</code> ("generator didn't stop"). In <code>swallow</code>, catching the exception around the <code>yield</code> without re-raising suppresses it, so execution continues after the block, the generator-manager equivalent of returning <code>True</code> from <code>__exit__</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-what-does-the-with-statement-do-exactly" data-pid="m10-2-what-does-the-with-statement-do-exactly" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. What does the <code>with</code> statement do, exactly?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It evaluates the expression to get a context manager, calls its <code>__enter__()</code> and binds the return value to the <code>as</code> target, runs the block, and then always calls <code>__exit__(exc_type, exc_value, traceback)</code>, whether the block finished normally, returned, broke out of a loop, or raised. For a normal exit the three arguments are <code>None</code>; for an exception they describe it, and if <code>__exit__</code> returns a true value the exception is suppressed, otherwise it propagates after the cleanup. If <code>__enter__</code> raises, the block does not run and <code>__exit__</code> is not called. With several managers in one statement, they enter left to right and exit in reverse. It is equivalent to a carefully written <code>try</code>/<code>finally</code> (with exception information passed to the cleanup), packaged so that callers cannot forget the cleanup.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-write-a-context-manager-a" data-pid="m10-2-when-would-you-write-a-context-manager-a" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. When would you write a context manager as a class, and when with <code>contextlib.contextmanager</code>?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p><code>@contextmanager</code> is best for simple setup/cleanup pairs: a generator function with setup before a single <code>yield</code>, the value to bind yielded, and cleanup after it inside <code>finally</code> (mandatory, because exceptions from the block are re-raised at the <code>yield</code>). It is short and readable, but each call produces a single-use manager. A class with <code>__enter__</code> and <code>__exit__</code> fits when the manager has state or behaviour beyond the block: it is reused or must be reentrant (keeping a stack of saved state), it exposes results after the block (a timer's elapsed time), it is also an ordinary object with methods (a file, a client, a lock), it needs fine-grained exception handling in <code>__exit__</code>, or it will be subclassed. Either way, suppress exceptions only deliberately and for specific types, and use <code>contextlib.suppress</code>, <code>ExitStack</code> and <code>nullcontext</code> from the standard library before writing your own.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-make-sure-resources-such-as-h" data-pid="m10-2-how-do-you-make-sure-resources-such-as-h" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How do you make sure resources such as HTTP clients, streaming responses and connection pools are cleaned up in an LLM service?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Tie every resource to a scope with a context manager. Create long-lived resources (an HTTP client with its connection pool, a database pool, a vector store client) once at application start-up and close them at shutdown, using the framework's lifespan hook, which is itself a context manager (FastAPI's <code>lifespan</code>), rather than creating a client per request, which wastes connections. For per-request resources, use <code>with</code> (or <code>async with</code>): streaming responses from LLM SDKs are context managers that close the underlying connection even if the consumer stops reading early, temporary files go through <code>tempfile</code> managers, and locks are always taken with <code>with</code>. Make sure cleanup also runs on cancellation: when a client disconnects, the framework cancels the task, which raises inside your code, and only <code>finally</code> blocks and context managers still run, so put the release logic there. Use <code>ExitStack</code> (10.3) when the number of resources is dynamic, set timeouts so a stuck resource cannot block forever, and monitor pool usage to catch leaks early.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>with mgr as x:</code> calls <code>__enter__</code> (its return value becomes <code>x</code>), runs the block, then always calls <code>__exit__(type, value, tb)</code>.</li><li><code>__exit__</code> returning true suppresses the exception: do it only for specific types; return <code>False</code> to propagate after cleanup.</li><li><code>@contextmanager</code> turns a one-<code>yield</code> generator into a manager; put the cleanup in <code>finally</code> around the <code>yield</code>, or errors skip it.</li><li>Several managers enter left to right and exit in reverse; a <code>return</code> inside the block is a normal exit.</li><li>Generator managers are single-use; a reusable or reentrant class keeps a stack of saved state for nested use.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

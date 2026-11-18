@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10.P · Module 10 practice set and mini project</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m10-p" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 10 · Iterators and context managers</span></div>
+  <h1>10.P Module 10 practice set and mini project</h1>
+  <p>Mixed problems from all of Module 10: iterator classes and re-iterable containers, context managers written as classes and generators, and resource patterns with <code>ExitStack</code>. Then a mini project that needs all of it: a streaming export job that opens several sources, batches their records lazily and writes them transactionally.</p>
+  <div class="chips"><span class="chip">13 problems</span><span class="chip">3 easy · 5 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="how">
+<h2><span class="n">1</span>How to use this page</h2>
+<p>For anything that is iterated, ask: <strong>one pass or many?</strong> Containers hand out a fresh iterator each time (usually from a generator <code>__iter__</code>); streams are their own iterator and are used once (10.1). For anything that is acquired, ask: <strong>who releases it, and when?</strong> Tie the release to a scope with a context manager, put cleanup in <code>finally</code>, suppress nothing by accident (10.2), and use <code>ExitStack</code> when the number of resources or undo steps is decided at run time (10.3).</p>
+<p>The problems mix the lessons on purpose, and the mini project combines all three in one job of the kind data and LLM pipelines run every day.</p>
+</section>
+<section class="sec" id="set">
+<h2><span class="n">2</span>Practice set</h2>
+<article class="prob" id="p-iterators-inside-a-with-block" data-pid="m10-p-iterators-inside-a-with-block" data-type="predict" data-level="easy" data-answer="  open
+1 [2, 3]
+  close
+  open
+got a
+  close
+[&#x27;b&#x27;]">
+<header class="prob-head"><h3>1. Iterators inside a with block</h3></header>
+<div class="code"><pre><code class="py">from contextlib import contextmanager
+
+@contextmanager
+def source(items):
+    print(&quot;  open&quot;)
+    try:
+        yield iter(items)
+    finally:
+        print(&quot;  close&quot;)
+
+with source([1, 2, 3]) as it:
+    print(next(it), list(it))
+with source(&quot;ab&quot;) as it:
+    for ch in it:
+        print(&quot;got&quot;, ch)
+        break
+print(list(it))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The context manager yields a one-shot iterator. Leaving the <code>with</code> block closes the source, but the list iterator itself still works.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  open
+1 [2, 3]
+  close
+  open
+got a
+  close
+[&#x27;b&#x27;]</pre></div><p>The first block takes one item with <code>next</code> and drains the rest with <code>list</code>, then closes. The second loop breaks after one item; the <code>with</code> then exits and prints "close". The yielded object was a plain list iterator, so it can still produce the remaining item after the block, which shows that "closing a source" only means what the manager makes it mean: a real file iterator would raise <code>ValueError</code> when read after closing.</p></div></details>
+</article>
+<article class="prob" id="p-a-reader-that-counts-what-it-consumed" data-pid="m10-p-a-reader-that-counts-what-it-consumed" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A reader that counts what it consumed</h3></header>
+<div class="prob-q"><p>Write a context manager class <code>CountingReader(lines)</code> whose <code>__enter__</code> returns the reader itself, which is an <strong>iterator</strong> over the non-blank lines (stripped). It counts <code>self.consumed</code> (lines yielded) and <code>self.skipped</code> (blank lines passed over). <code>__exit__</code> sets <code>self.closed = True</code> and propagates exceptions. Iterating after the block raises <code>ValueError("reader is closed")</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">class CountingReader:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">with CountingReader(["a", "", "  b ", "   ", "c"]) as r:
+    first = next(r)
+    rest = list(r)
+assert (first, rest, r.consumed, r.skipped, r.closed) == ("a", ["b", "c"], 3, 2, True)
+try:
+    next(r)
+    assert False
+except ValueError as e:
+    assert str(e) == "reader is closed"
+with CountingReader([]) as empty:
+    assert list(empty) == []
+assert iter(r) is r and empty.consumed == 0</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">with CountingReader([&quot;a&quot;, &quot;&quot;, &quot;  b &quot;, &quot;   &quot;, &quot;c&quot;]) as r:
+    first = next(r)
+    rest = list(r)
+assert (first, rest, r.consumed, r.skipped, r.closed) == (&quot;a&quot;, [&quot;b&quot;, &quot;c&quot;], 3, 2, True)
+try:
+    next(r)
+    assert False
+except ValueError as e:
+    assert str(e) == &quot;reader is closed&quot;
+with CountingReader([]) as empty:
+    assert list(empty) == []
+assert iter(r) is r and empty.consumed == 0</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._it = iter(lines)</code>; <code>__next__</code> loops, counting blanks, until it finds a non-blank line (or <code>StopIteration</code> propagates).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class CountingReader:
+    def __init__(self, lines):
+        self._it = iter(lines)
+        self.consumed = 0
+        self.skipped = 0
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.closed = True
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.closed:
+            raise ValueError(&quot;reader is closed&quot;)
+        for line in self._it:
+            if line.strip():
+                self.consumed += 1
+                return line.strip()
+            self.skipped += 1
+        raise StopIteration</code></pre></div><p>The class is both a context manager (its scope) and an iterator (its content), like a file object. Looping over the shared <code>self._it</code> inside <code>__next__</code> keeps the position across calls, and the <code>for</code> loop simply continues where the last call stopped. When the source runs out, the method raises <code>StopIteration</code> explicitly, the correct signal for an iterator class (unlike a generator, 10.1). Raising <code>ValueError</code> after close mirrors files ("I/O operation on closed file") and turns use-after-close into a clear error. The counters make it easy to report how much of an input a job actually processed.</p></div></details>
+</article>
+<article class="prob" id="p-a-manager-whose-as-target-is-none" data-pid="m10-p-a-manager-whose-as-target-is-none" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>3. A manager whose as-target is None</h3></header>
+<div class="prob-q"><p><code>ChatScope</code> should give the block a list to collect messages in, and on exit store them in <code>self.saved</code> (only if the block succeeded). The block crashes with <code>AttributeError: 'NoneType' object has no attribute 'append'</code>. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class ChatScope:
+    def __init__(self):
+        self.saved = []
+
+    def __enter__(self):
+        self.buffer = []
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.saved.extend(self.buffer)
+        return False
+</textarea>
+<script type="text/plain" class="prob-tests">scope = ChatScope()
+with scope as msgs:
+    msgs.append("hi")
+    msgs.append("refund?")
+assert scope.saved == ["hi", "refund?"]
+try:
+    with scope as msgs:
+        msgs.append("lost")
+        raise TimeoutError("model timeout")
+except TimeoutError:
+    pass
+assert scope.saved == ["hi", "refund?"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">scope = ChatScope()
+with scope as msgs:
+    msgs.append(&quot;hi&quot;)
+    msgs.append(&quot;refund?&quot;)
+assert scope.saved == [&quot;hi&quot;, &quot;refund?&quot;]
+try:
+    with scope as msgs:
+        msgs.append(&quot;lost&quot;)
+        raise TimeoutError(&quot;model timeout&quot;)
+except TimeoutError:
+    pass
+assert scope.saved == [&quot;hi&quot;, &quot;refund?&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>as</code> receives the <strong>return value</strong> of <code>__enter__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class ChatScope:
+    def __init__(self):
+        self.saved = []
+
+    def __enter__(self):
+        self.buffer = []
+        return self.buffer
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.saved.extend(self.buffer)
+        return False</code></pre></div><p><code>with scope as msgs</code> binds <code>msgs</code> to whatever <code>__enter__</code> returns, and a method without a <code>return</code> returns <code>None</code>, so the block received <code>None</code> instead of the buffer (10.2). Returning the buffer gives the block exactly the object it should write to, while the manager keeps a reference and decides at exit what to keep: committed on success, discarded on failure, the transaction pattern in miniature.</p></div></details>
+</article>
+<article class="prob" id="p-exitstack-with-a-generator-source" data-pid="m10-p-exitstack-with-a-generator-source" data-type="predict" data-level="medium" data-answer="  open a
+  open b
+  close b
+  close a
+[&#x27;a:1&#x27;, &#x27;a:2&#x27;, &#x27;b:3&#x27;] []">
+<header class="prob-head"><h3>4. ExitStack with a generator source</h3></header>
+<div class="code"><pre><code class="py">from contextlib import ExitStack, contextmanager
+
+@contextmanager
+def opened(name, items):
+    print(f&quot;  open {name}&quot;)
+    try:
+        yield (f&quot;{name}:{x}&quot; for x in items)
+    finally:
+        print(f&quot;  close {name}&quot;)
+
+with ExitStack() as stack:
+    streams = [stack.enter_context(opened(n, items)) for n, items in [(&quot;a&quot;, [1, 2]), (&quot;b&quot;, [3])]]
+    merged = [x for s in streams for x in s]
+    again = [x for s in streams for x in s]
+print(merged, again)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The managers close in reverse order. Generator expressions are one-shot.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>  open a
+  open b
+  close b
+  close a
+[&#x27;a:1&#x27;, &#x27;a:2&#x27;, &#x27;b:3&#x27;] []</pre></div><p>Both sources are opened in order and closed in reverse when the stack exits. The first comprehension drains both generator expressions; the second finds them exhausted and produces nothing, the one-shot rule of 6.3 and 10.1: a stream handed out by a resource can be read once, so code that needs two passes must keep the values (here, <code>merged</code>) rather than re-reading the streams.</p></div></details>
+</article>
+<article class="prob" id="p-epochs-over-a-dataset" data-pid="m10-p-epochs-over-a-dataset" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Epochs over a dataset</h3></header>
+<div class="prob-q"><p>Write a class <code>Epochs(rows, batch_size, epochs, seed)</code> that is <strong>re-iterable</strong> and yields <code>(epoch, batch)</code> pairs: for each epoch from 0, it shuffles a copy of the rows with <code>random.Random(seed + epoch)</code> (so every epoch has its own, reproducible order), then yields batches of <code>batch_size</code> rows (the last may be shorter). <code>len()</code> returns the total number of batches across all epochs, computed arithmetically. The original <code>rows</code> must never be reordered.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import random
+
+class Epochs:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">rows = list(range(5))
+e = Epochs(rows, batch_size=2, epochs=2, seed=10)
+first = list(e)
+assert first == list(e) and len(e) == 6 and len(first) == 6
+assert [ep for ep, _ in first] == [0, 0, 0, 1, 1, 1]
+epoch0 = [x for ep, b in first if ep == 0 for x in b]
+epoch1 = [x for ep, b in first if ep == 1 for x in b]
+assert sorted(epoch0) == rows and sorted(epoch1) == rows and epoch0 != epoch1
+assert [len(b) for _, b in first[:3]] == [2, 2, 1] and rows == [0, 1, 2, 3, 4]
+assert epoch0 == [x for ep, b in Epochs(rows, 3, 1, 10) for x in b]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rows = list(range(5))
+e = Epochs(rows, batch_size=2, epochs=2, seed=10)
+first = list(e)
+assert first == list(e) and len(e) == 6 and len(first) == 6
+assert [ep for ep, _ in first] == [0, 0, 0, 1, 1, 1]
+epoch0 = [x for ep, b in first if ep == 0 for x in b]
+epoch1 = [x for ep, b in first if ep == 1 for x in b]
+assert sorted(epoch0) == rows and sorted(epoch1) == rows and epoch0 != epoch1
+assert [len(b) for _, b in first[:3]] == [2, 2, 1] and rows == [0, 1, 2, 3, 4]
+assert epoch0 == [x for ep, b in Epochs(rows, 3, 1, 10) for x in b]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>__iter__</code> is a generator: for each epoch, <code>order = list(self.rows)</code>; <code>random.Random(self.seed + epoch).shuffle(order)</code>; then slice.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Batches per epoch: <code>(n + batch_size - 1) // batch_size</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import random
+
+class Epochs:
+    def __init__(self, rows, batch_size, epochs, seed):
+        self.rows = list(rows)
+        self.batch_size = batch_size
+        self.epochs = epochs
+        self.seed = seed
+
+    def __len__(self):
+        per_epoch = (len(self.rows) + self.batch_size - 1) // self.batch_size
+        return per_epoch * self.epochs
+
+    def __iter__(self):
+        for epoch in range(self.epochs):
+            order = list(self.rows)
+            random.Random(self.seed + epoch).shuffle(order)
+            for start in range(0, len(order), self.batch_size):
+                yield epoch, order[start:start + self.batch_size]</code></pre></div><p>A private <code>random.Random</code> per epoch makes the shuffle reproducible (the same seed always gives the same order, so two iterations of the object agree), different between epochs, and independent of the global generator (10.3). The shuffle of epoch 0 does not depend on the batch size, which the last test checks by regrouping the same order into batches of 3. Shuffling a <strong>copy</strong> leaves the caller's rows untouched (2.4). The generator <code>__iter__</code> makes the object re-iterable, and <code>len</code> is cheap arithmetic, so a training loop can show progress without materialising anything: the job of PyTorch's sampler and <code>DataLoader</code> with <code>shuffle=True</code> and a seeded generator.</p></div></details>
+</article>
+<article class="prob" id="p-a-dataset-that-works-for-one-epoch-only" data-pid="m10-p-a-dataset-that-works-for-one-epoch-only" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A dataset that works for one epoch only</h3></header>
+<div class="prob-q"><p><code>Dataset</code> is built from a <strong>generator</strong> that reads records, and the training loop iterates over it once per epoch. The second epoch sees no data. Fix the class so it can be iterated any number of times: accept either an iterable or a zero-argument function that returns a fresh iterable, and in the function case call it on every iteration.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">class Dataset:
+    def __init__(self, source):
+        self.source = source
+
+    def __iter__(self):
+        for record in self.source:
+            if record.get(&quot;text&quot;):
+                yield record[&quot;text&quot;].strip()
+</textarea>
+<script type="text/plain" class="prob-tests">calls = []
+def read_records():
+    calls.append(1)
+    yield {"text": " refund "}
+    yield {"text": ""}
+    yield {"text": "reset"}
+
+ds = Dataset(read_records)
+epochs = [list(ds) for _ in range(3)]
+assert epochs == [["refund", "reset"]] * 3 and len(calls) == 3
+assert list(Dataset([{"text": "a"}, {"x": 1}])) == ["a"] and list(Dataset([{"text": "a"}])) == ["a"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">calls = []
+def read_records():
+    calls.append(1)
+    yield {&quot;text&quot;: &quot; refund &quot;}
+    yield {&quot;text&quot;: &quot;&quot;}
+    yield {&quot;text&quot;: &quot;reset&quot;}
+
+ds = Dataset(read_records)
+epochs = [list(ds) for _ in range(3)]
+assert epochs == [[&quot;refund&quot;, &quot;reset&quot;]] * 3 and len(calls) == 3
+assert list(Dataset([{&quot;text&quot;: &quot;a&quot;}, {&quot;x&quot;: 1}])) == [&quot;a&quot;] and list(Dataset([{&quot;text&quot;: &quot;a&quot;}])) == [&quot;a&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>callable(self.source)</code> tells a factory function from an iterable. Call it at the start of every <code>__iter__</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Dataset:
+    def __init__(self, source):
+        self.source = source
+
+    def __iter__(self):
+        records = self.source() if callable(self.source) else self.source
+        for record in records:
+            if record.get(&quot;text&quot;):
+                yield record[&quot;text&quot;].strip()</code></pre></div><p>The class was correctly re-iterable in shape (a generator <code>__iter__</code>), but the data underneath was a one-shot generator, so every epoch after the first iterated an exhausted source: "re-iterable" has to hold all the way down. Taking a <strong>factory</strong> (a function that opens the source afresh) instead of the source itself lets each iteration start a new read: a new file handle, a new database query. Lists still work as before, since they are re-iterable themselves. This is why frameworks such as Hugging Face <code>datasets</code> with streaming, or <code>tf.data</code>, describe data as a recipe to produce records rather than as an already-open stream.</p></div></details>
+</article>
+<article class="prob" id="p-resources-a-stream-and-a-failure" data-pid="m10-p-resources-a-stream-and-a-failure" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>7. Resources, a stream and a failure</h3></header>
+<div class="prob-q"><p>Fill in <code>log</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">from contextlib import ExitStack, contextmanager
+log = []
+
+@contextmanager
+def resource(name):
+    log.append(f&quot;open {name}&quot;)
+    try:
+        yield name
+    finally:
+        log.append(f&quot;close {name}&quot;)
+
+def numbers():
+    try:
+        for i in range(3):
+            yield i
+    finally:
+        log.append(&quot;stream closed&quot;)
+
+with ExitStack() as stack:
+    stack.enter_context(resource(&quot;db&quot;))
+    gen = numbers()
+    stack.callback(gen.close)
+    for n in gen:
+        if n == 1:
+            break
+    log.append(f&quot;stopped at {n}&quot;)
+log.append(&quot;end&quot;)</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside, after break</td><td><input class="cell" data-a="[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;]" data-s="[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;]" aria-label="log at inside, after break" autocomplete="off"></td></tr><tr><td>after the with</td><td><input class="cell" data-a="[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;, &#x27;stream closed&#x27;, &#x27;close db&#x27;, &#x27;end&#x27;]" data-s="[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;, &#x27;stream closed&#x27;, &#x27;close db&#x27;, &#x27;end&#x27;]" aria-label="log at after the with" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Breaking out of a <code>for</code> does not close a generator held in a variable. The stack's callback closes it at the end.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>log</code></th></tr><tr><td>inside, after break</td><td><code>[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;]</code></td></tr><tr><td>after the with</td><td><code>[&#x27;open db&#x27;, &#x27;stopped at 1&#x27;, &#x27;stream closed&#x27;, &#x27;close db&#x27;, &#x27;end&#x27;]</code></td></tr></table></div><p>The loop stops early but the generator object <code>gen</code> is still referenced, so it is merely paused, not closed: its <code>finally</code> has not run yet when "stopped at 1" is logged. At the end of the <code>with</code>, the stack unwinds in reverse: first the callback closes the generator (running its <code>finally</code>), then the database resource closes. Registering <code>gen.close</code> makes the cleanup of a half-consumed stream deterministic instead of waiting for garbage collection.</p></div></details>
+</article>
+<article class="prob" id="p-tee-a-stream-into-a-file-atomically" data-pid="m10-p-tee-a-stream-into-a-file-atomically" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Tee a stream into a file, atomically</h3></header>
+<div class="prob-q"><p>Write a generator function <code>tee_to_file(chunks, path)</code> that yields every chunk unchanged while writing it to a temporary file next to <code>path</code>. Only if the stream is consumed to the end does the temporary file replace <code>path</code> (<code>os.replace</code>). If the consumer stops early (the generator is closed) or the source raises, the temporary file is removed, <code>path</code> is left untouched, and an error from the source propagates.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">import os
+
+def tee_to_file(chunks, path):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, "answer.txt")
+assert "".join(tee_to_file(["Refunds ", "take ", "5 days."], p)) == "Refunds take 5 days."
+assert open(p, encoding="utf-8").read() == "Refunds take 5 days."
+
+g = tee_to_file(["New ", "partial ", "answer"], p)
+assert next(g) == "New "
+g.close()
+assert open(p, encoding="utf-8").read() == "Refunds take 5 days." and sorted(os.listdir(d)) == ["answer.txt"]
+
+def broken():
+    yield "a"
+    raise ConnectionError("stream dropped")
+try:
+    list(tee_to_file(broken(), p))
+    assert False
+except ConnectionError:
+    pass
+assert open(p, encoding="utf-8").read() == "Refunds take 5 days." and sorted(os.listdir(d)) == ["answer.txt"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import os, tempfile
+d = tempfile.mkdtemp()
+p = os.path.join(d, &quot;answer.txt&quot;)
+assert &quot;&quot;.join(tee_to_file([&quot;Refunds &quot;, &quot;take &quot;, &quot;5 days.&quot;], p)) == &quot;Refunds take 5 days.&quot;
+assert open(p, encoding=&quot;utf-8&quot;).read() == &quot;Refunds take 5 days.&quot;
+
+g = tee_to_file([&quot;New &quot;, &quot;partial &quot;, &quot;answer&quot;], p)
+assert next(g) == &quot;New &quot;
+g.close()
+assert open(p, encoding=&quot;utf-8&quot;).read() == &quot;Refunds take 5 days.&quot; and sorted(os.listdir(d)) == [&quot;answer.txt&quot;]
+
+def broken():
+    yield &quot;a&quot;
+    raise ConnectionError(&quot;stream dropped&quot;)
+try:
+    list(tee_to_file(broken(), p))
+    assert False
+except ConnectionError:
+    pass
+assert open(p, encoding=&quot;utf-8&quot;).read() == &quot;Refunds take 5 days.&quot; and sorted(os.listdir(d)) == [&quot;answer.txt&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Open the temporary file, then <code>try:</code> loop over the chunks writing and yielding each; after the loop (normal end), close and <code>os.replace</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>except BaseException:</code> (which includes the <code>GeneratorExit</code> sent by <code>close()</code>) to close, remove the temporary file, and <code>raise</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import os
+
+def tee_to_file(chunks, path):
+    tmp = path + &quot;.part&quot;
+    f = open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;)
+    try:
+        for chunk in chunks:
+            f.write(chunk)
+            yield chunk
+    except BaseException:
+        f.close()
+        os.remove(tmp)
+        raise
+    f.close()
+    os.replace(tmp, path)</code></pre></div><p>The generator keeps the file open exactly as long as the stream is being consumed (6.3), and three endings are handled differently. A complete stream falls out of the loop, so the file is closed and atomically swapped into place. A consumer that stops early closes the generator, which raises <code>GeneratorExit</code> at the paused <code>yield</code>; it is a <code>BaseException</code>, so the cleanup branch removes the partial file and re-raises it, as generators must. A source error takes the same branch and reaches the caller. Saving a streamed LLM answer this way means a cancelled or failed request never leaves a truncated answer on disk that a later step might mistake for a complete one.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-model-server-s-resources" data-pid="m10-p-read-the-code-a-model-server-s-resources" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Read the code: a model server's resources</h3></header>
+<div class="prob-q"><p><code>Server</code> should create <strong>one</strong> client when it starts (<code>with Server(make_client) as s:</code>) and close it when it stops; <code>handle(prompt)</code> streams a reply and returns the joined text; <code>handle_first(prompt, n)</code> returns the first <code>n</code> chunks and must close the stream so the provider stops sending. The current code creates a client per request, never closes clients when a request fails, and leaves streams open. Read it, find the bugs and fix them. (Streams are context managers that are also iterable.)</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">class Server:
+    def __init__(self, make_client):
+        self.make_client = make_client
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def handle(self, prompt):
+        client = self.make_client()
+        stream = client.stream(prompt)
+        text = &quot;&quot;.join(stream)
+        client.close()
+        return text
+
+    def handle_first(self, prompt, n):
+        client = self.make_client()
+        stream = client.stream(prompt)
+        chunks = []
+        for chunk in stream:
+            chunks.append(chunk)
+            if len(chunks) == n:
+                break
+        return chunks
+</textarea>
+<script type="text/plain" class="prob-tests">events = []
+
+class FakeStream:
+    def __init__(self, prompt, fail=False):
+        self.chunks, self.fail = prompt.split(), fail
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        events.append("stream closed")
+        return False
+    def __iter__(self):
+        for i, c in enumerate(self.chunks):
+            if self.fail and i == 1:
+                raise ConnectionError("dropped")
+            yield c
+
+class FakeClient:
+    def __init__(self):
+        events.append("client created")
+    def stream(self, prompt):
+        return FakeStream(prompt, fail="FAIL" in prompt)
+    def close(self):
+        events.append("client closed")
+
+results = []
+with Server(FakeClient) as s:
+    results.append(s.handle("a b c"))
+    results.append(s.handle_first("x y z", 2))
+    try:
+        s.handle("FAIL now please")
+        results.append("no error")
+    except ConnectionError:
+        results.append("error propagated")
+assert results == ["abc", ["x", "y"], "error propagated"]
+assert events == ["client created", "stream closed", "stream closed", "stream closed", "client closed"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">events = []
+
+class FakeStream:
+    def __init__(self, prompt, fail=False):
+        self.chunks, self.fail = prompt.split(), fail
+    def __enter__(self):
+        return self
+    def __exit__(self, *exc):
+        events.append(&quot;stream closed&quot;)
+        return False
+    def __iter__(self):
+        for i, c in enumerate(self.chunks):
+            if self.fail and i == 1:
+                raise ConnectionError(&quot;dropped&quot;)
+            yield c
+
+class FakeClient:
+    def __init__(self):
+        events.append(&quot;client created&quot;)
+    def stream(self, prompt):
+        return FakeStream(prompt, fail=&quot;FAIL&quot; in prompt)
+    def close(self):
+        events.append(&quot;client closed&quot;)
+
+results = []
+with Server(FakeClient) as s:
+    results.append(s.handle(&quot;a b c&quot;))
+    results.append(s.handle_first(&quot;x y z&quot;, 2))
+    try:
+        s.handle(&quot;FAIL now please&quot;)
+        results.append(&quot;no error&quot;)
+    except ConnectionError:
+        results.append(&quot;error propagated&quot;)
+assert results == [&quot;abc&quot;, [&quot;x&quot;, &quot;y&quot;], &quot;error propagated&quot;]
+assert events == [&quot;client created&quot;, &quot;stream closed&quot;, &quot;stream closed&quot;, &quot;stream closed&quot;, &quot;client closed&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Create the client in <code>__enter__</code>, close it in <code>__exit__</code>; requests use <code>self.client</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use <code>with self.client.stream(prompt) as stream:</code> in both handlers, so the stream is closed on success, on early exit and on error.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Server:
+    def __init__(self, make_client):
+        self.make_client = make_client
+        self.client = None
+
+    def __enter__(self):
+        self.client = self.make_client()
+        return self
+
+    def __exit__(self, *exc):
+        if self.client is not None:
+            self.client.close()
+            self.client = None
+        return False
+
+    def handle(self, prompt):
+        with self.client.stream(prompt) as stream:
+            return &quot;&quot;.join(stream)
+
+    def handle_first(self, prompt, n):
+        chunks = []
+        with self.client.stream(prompt) as stream:
+            for chunk in stream:
+                chunks.append(chunk)
+                if len(chunks) == n:
+                    break
+        return chunks</code></pre></div><p>Three resource bugs, each a lesson of this module. <strong>A client per request</strong> means a new connection pool per call, slow and wasteful; the client's lifetime belongs to the server's scope, so it is created in <code>__enter__</code> and closed in <code>__exit__</code> (10.3). <strong>Cleanup skipped on error</strong>: when the stream failed, <code>client.close()</code> was never reached; now the client's cleanup no longer depends on each request at all. <strong>Streams left open</strong>: <code>handle_first</code> stopped reading but never closed the stream, so a real provider would keep generating (and billing) the rest of the answer; <code>with ... as stream</code> closes it on the normal path, after a <code>break</code>, and when the stream raises (10.2). The event list in the test is the whole lifecycle in order: one client, three streams each closed exactly once, then one client close.</p></div></details>
+</article>
+<article class="prob" id="p-when-do-you-write-a-generator-an-iterato" data-pid="m10-p-when-do-you-write-a-generator-an-iterato" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>10. When do you write a generator, an iterator class, or a context manager?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A <strong>generator</strong> (function or <code>__iter__</code> method) is the default for producing a sequence: it is short, lazy, and manages its own position and <code>StopIteration</code>; containers use a generator <code>__iter__</code> to be re-iterable. An <strong>iterator class</strong> with <code>__next__</code> is for streams that need more than iteration: extra methods (<code>peek</code>, <code>close</code>), state that other code reads during iteration (text so far, pages fetched), or careful control of reading ahead. A <strong>context manager</strong> is about scope, not sequence: something acquired must be released (files, clients, locks, transactions, temporary settings), so the release is guaranteed by <code>__exit__</code> or a <code>finally</code> around a <code>yield</code>. They combine naturally: a file or SDK stream is both an iterator and a context manager, a generator can hold a <code>with</code> open while it yields, and <code>ExitStack</code> manages several resources whose number is known only at run time.</p></div></details>
+</article>
+<article class="prob" id="p-a-user-disconnects-while-your-service-is" data-pid="m10-p-a-user-disconnects-while-your-service-is" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>11. A user disconnects while your service is streaming an LLM answer. What happens to your resources, and how do you make it safe?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>The web framework notices the disconnect and stops consuming the response generator, typically by closing it (sync) or cancelling the task (async), which raises <code>GeneratorExit</code> or <code>CancelledError</code> at the point where your code is paused. Nothing after that point runs, except <code>finally</code> blocks and <code>__exit__</code> methods: so every resource opened during the request must be scoped with <code>with</code> or <code>try</code>/<code>finally</code>. The upstream LLM stream must be closed (the SDK stream as a context manager does it), or the provider keeps generating and billing the full answer; temporary files must be removed or committed atomically only on completion; spans and logs should record that the request was cancelled; locks and pooled connections must be returned. Do not catch <code>GeneratorExit</code> or <code>CancelledError</code> and continue, and do not do slow work in cleanup. Long-lived resources (the client and its connection pool) belong to the application scope and are unaffected. Test it by closing the response generator after a few chunks with fakes that record what was closed, as in the projects of this module.</p></div></details>
+</article>
+<article class="prob" id="p-everything-at-once" data-pid="m10-p-everything-at-once" data-type="predict" data-level="hard" data-answer="[&#x27;+a&#x27;, &#x27;+b&#x27;, &#x27;total=6&#x27;, &#x27;-b!ZeroDivisionError&#x27;, &#x27;-a&#x27;, &#x27;done&#x27;]">
+<header class="prob-head"><h3>12. Everything at once</h3></header>
+<div class="code"><pre><code class="py">from contextlib import ExitStack, suppress
+
+class Ticker:
+    def __init__(self, n):
+        self.n = n
+    def __iter__(self):
+        for i in range(self.n):
+            yield i
+
+class Guard:
+    def __init__(self, name, log):
+        self.name, self.log = name, log
+    def __enter__(self):
+        self.log.append(&quot;+&quot; + self.name)
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        self.log.append(&quot;-&quot; + self.name + (f&quot;!{exc_type.__name__}&quot; if exc_type else &quot;&quot;))
+        return False
+
+log = []
+t = Ticker(3)
+with ExitStack() as stack:
+    stack.enter_context(Guard(&quot;a&quot;, log))
+    stack.enter_context(suppress(ZeroDivisionError))
+    stack.enter_context(Guard(&quot;b&quot;, log))
+    total = sum(t) + sum(t)
+    log.append(f&quot;total={total}&quot;)
+    1 / 0
+log.append(&quot;done&quot;)
+print(log)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Ticker</code> is re-iterable. The stack unwinds in reverse; <code>suppress</code> stops the exception for everything registered before it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;+a&#x27;, &#x27;+b&#x27;, &#x27;total=6&#x27;, &#x27;-b!ZeroDivisionError&#x27;, &#x27;-a&#x27;, &#x27;done&#x27;]</pre></div><p><code>Ticker</code> returns a new generator for each <code>sum</code>, so both passes see 0, 1, 2, and the total is 6. The division error unwinds the stack in reverse: <code>b</code> exits first and sees the exception; <code>suppress</code> then swallows it; so <code>a</code>, registered before <code>suppress</code>, exits normally, and execution continues after the block with "done". The position of <code>suppress</code> on the stack decides which managers see the error.</p></div></details>
+</article>
+</section>
+<section class="sec" id="project">
+<h2><span class="n">3</span>Mini project: a streaming export job</h2>
+<p>A nightly job reads records from several sources (files, an API, a database query), skips blank and comment lines, batches the rest and writes them to a destination that supports transactions. Every source must be closed however the job ends, the destination must receive either everything or nothing, and the job must report what it did. Build it from the pieces of this module.</p>
+<article class="prob" id="p-export-job" data-pid="m10-p-export-job" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Project</span><h3>13. Export records from several sources</h3></header>
+<div class="prob-q"><p>Implement three classes and a function.</p>
+<ul><li><strong><code>Source(name, lines)</code></strong>: a context manager whose <code>__enter__</code> marks it open (appending <code>f"open {name}"</code> to a shared <code>EVENTS</code> list) and returns itself; <code>__exit__</code> closes it (appending <code>f"close {name}"</code>) and propagates errors; iterating an open source yields <code>(name, line_number, text)</code> for each line that is not blank and does not start with <code>#</code>, stripped, with line numbers counted from 1 over <strong>all</strong> lines. Iterating a closed or never-opened source raises <code>ValueError</code>.</li><li><strong><code>Batches(iterable, size)</code></strong>: an iterator class yielding lists of up to <code>size</code> items lazily, counting <code>self.made</code>.</li><li><strong><code>Destination()</code></strong>: a context manager for one transaction: <code>__enter__</code> returns itself; <code>write(batch)</code> stages a batch; on a clean exit the staged batches are appended to <code>self.committed</code> and <code>self.commits</code> is incremented; on an exception nothing is committed and <code>self.rollbacks</code> is incremented; errors propagate.</li><li><strong><code>export(sources, destination, batch_size)</code></strong>: inside one <code>ExitStack</code>, enter every source and the destination, chain the sources' records in order, write them in batches, and return <code>{"records": n, "batches": b}</code>. If anything fails, all sources are closed, the destination rolls back, and the error propagates with the note <code>f"export failed after {n} records"</code>.</li></ul></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from contextlib import ExitStack
+from itertools import chain
+
+EVENTS = []
+
+
+class Source:
+    pass
+
+
+class Batches:
+    pass
+
+
+class Destination:
+    pass
+
+
+def export(sources, destination, batch_size):
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">EVENTS.clear()
+a = Source("crm", ["# header", "ana@x.io", "", "  bo@x.io  "])
+b = Source("shop", ["cy@x.io", "# skip", "dee@x.io", "ed@x.io"])
+dest = Destination()
+stats = export([a, b], dest, batch_size=2)
+assert stats == {"records": 5, "batches": 3}
+assert dest.committed == [[("crm", 2, "ana@x.io"), ("crm", 4, "bo@x.io")], [("shop", 1, "cy@x.io"), ("shop", 3, "dee@x.io")], [("shop", 4, "ed@x.io")]]
+assert dest.commits == 1 and dest.rollbacks == 0
+assert EVENTS == ["open crm", "open shop", "close shop", "close crm"]
+
+class Exploding(Source):
+    def __iter__(self):
+        yield from super().__iter__()
+        raise ConnectionError("source dropped")
+
+EVENTS.clear()
+dest2 = Destination()
+try:
+    export([Source("ok", ["x", "y", "z"]), Exploding("api", ["p"])], dest2, batch_size=2)
+    assert False
+except ConnectionError as e:
+    assert e.__notes__ == ["export failed after 4 records"]
+assert dest2.committed == [] and dest2.rollbacks == 1 and dest2.commits == 0
+assert EVENTS == ["open ok", "open api", "close api", "close ok"]
+
+s = Source("late", ["a"])
+try:
+    list(s)
+    assert False
+except ValueError:
+    pass
+bt = Batches(iter(range(5)), 2)
+assert list(bt) == [[0, 1], [2, 3], [4]] and bt.made == 3 and iter(bt) is bt
+assert export([], Destination(), 3) == {"records": 0, "batches": 0}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 8 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">EVENTS.clear()
+a = Source(&quot;crm&quot;, [&quot;# header&quot;, &quot;ana@x.io&quot;, &quot;&quot;, &quot;  bo@x.io  &quot;])
+b = Source(&quot;shop&quot;, [&quot;cy@x.io&quot;, &quot;# skip&quot;, &quot;dee@x.io&quot;, &quot;ed@x.io&quot;])
+dest = Destination()
+stats = export([a, b], dest, batch_size=2)
+assert stats == {&quot;records&quot;: 5, &quot;batches&quot;: 3}
+assert dest.committed == [[(&quot;crm&quot;, 2, &quot;ana@x.io&quot;), (&quot;crm&quot;, 4, &quot;bo@x.io&quot;)], [(&quot;shop&quot;, 1, &quot;cy@x.io&quot;), (&quot;shop&quot;, 3, &quot;dee@x.io&quot;)], [(&quot;shop&quot;, 4, &quot;ed@x.io&quot;)]]
+assert dest.commits == 1 and dest.rollbacks == 0
+assert EVENTS == [&quot;open crm&quot;, &quot;open shop&quot;, &quot;close shop&quot;, &quot;close crm&quot;]
+
+class Exploding(Source):
+    def __iter__(self):
+        yield from super().__iter__()
+        raise ConnectionError(&quot;source dropped&quot;)
+
+EVENTS.clear()
+dest2 = Destination()
+try:
+    export([Source(&quot;ok&quot;, [&quot;x&quot;, &quot;y&quot;, &quot;z&quot;]), Exploding(&quot;api&quot;, [&quot;p&quot;])], dest2, batch_size=2)
+    assert False
+except ConnectionError as e:
+    assert e.__notes__ == [&quot;export failed after 4 records&quot;]
+assert dest2.committed == [] and dest2.rollbacks == 1 and dest2.commits == 0
+assert EVENTS == [&quot;open ok&quot;, &quot;open api&quot;, &quot;close api&quot;, &quot;close ok&quot;]
+
+s = Source(&quot;late&quot;, [&quot;a&quot;])
+try:
+    list(s)
+    assert False
+except ValueError:
+    pass
+bt = Batches(iter(range(5)), 2)
+assert list(bt) == [[0, 1], [2, 3], [4]] and bt.made == 3 and iter(bt) is bt
+assert export([], Destination(), 3) == {&quot;records&quot;: 0, &quot;batches&quot;: 0}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Source.__iter__</code> can be a generator that first checks <code>self._open</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Batches.__next__</code> pulls up to <code>size</code> items from <code>self._it</code> with <code>next(self._it, sentinel)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 3</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>export</code>, count records by wrapping the chained records in a small generator that increments a counter as items pass; catch exceptions outside the <code>with ExitStack()</code> to add the note.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from contextlib import ExitStack
+from itertools import chain
+
+EVENTS = []
+
+
+class Source:
+    def __init__(self, name, lines):
+        self.name = name
+        self.lines = list(lines)
+        self._open = False
+
+    def __enter__(self):
+        self._open = True
+        EVENTS.append(f&quot;open {self.name}&quot;)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._open = False
+        EVENTS.append(f&quot;close {self.name}&quot;)
+        return False
+
+    def __iter__(self):
+        if not self._open:
+            raise ValueError(f&quot;source {self.name} is not open&quot;)
+        for number, line in enumerate(self.lines, start=1):
+            text = line.strip()
+            if text and not text.startswith(&quot;#&quot;):
+                yield self.name, number, text
+
+
+_DONE = object()
+
+
+class Batches:
+    def __init__(self, iterable, size):
+        self._it = iter(iterable)
+        self.size = size
+        self.made = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        batch = []
+        for _ in range(self.size):
+            item = next(self._it, _DONE)
+            if item is _DONE:
+                break
+            batch.append(item)
+        if not batch:
+            raise StopIteration
+        self.made += 1
+        return batch
+
+
+class Destination:
+    def __init__(self):
+        self.committed = []
+        self.commits = 0
+        self.rollbacks = 0
+        self._staged = []
+
+    def __enter__(self):
+        self._staged = []
+        return self
+
+    def write(self, batch):
+        self._staged.append(list(batch))
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.committed.extend(self._staged)
+            self.commits += 1
+        else:
+            self.rollbacks += 1
+        self._staged = []
+        return False
+
+
+def export(sources, destination, batch_size):
+    count = 0
+
+    def counted(records):
+        nonlocal count
+        for record in records:
+            count += 1
+            yield record
+
+    try:
+        with ExitStack() as stack:
+            opened = [stack.enter_context(s) for s in sources]
+            dest = stack.enter_context(destination)
+            batches = Batches(counted(chain.from_iterable(opened)), batch_size)
+            for batch in batches:
+                dest.write(batch)
+            return {&quot;records&quot;: count, &quot;batches&quot;: batches.made}
+    except Exception as e:
+        e.add_note(f&quot;export failed after {count} records&quot;)
+        raise</code></pre></div><p>Every lesson of the module has a job here:</p>
+<ul><li><strong>Iterator classes (10.1):</strong> <code>Source</code> is a re-iterable container whose generator <code>__iter__</code> refuses to run while closed; <code>Batches</code> is a one-shot iterator class because it carries state (<code>made</code>) that the job reports; <code>counted</code> is a pass-through generator that measures the stream without materialising it, and <code>chain.from_iterable</code> (6.4) joins the sources lazily, so records flow from source to batch to destination one batch at a time.</li><li><strong>Context managers (10.2):</strong> sources open and close as scopes, and <code>Destination</code> is a transaction: staged batches are committed only on a clean exit and discarded on an exception, which still propagates.</li><li><strong>Resource patterns (10.3):</strong> one <code>ExitStack</code> holds a run-time number of sources plus the destination, so a failure anywhere unwinds everything in reverse order, the destination first (rolling back) and then the sources (closing), exactly as the event log shows.</li></ul>
+<p>The note added outside the stack tells the operator how far the job got, without changing the exception type (7.2). In production the sources would be file readers, API paginators or database cursors, the destination a database transaction or an atomic file write, and the same structure would hold.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Containers return a fresh iterator per loop (generator <code>__iter__</code>); streams are one-shot iterators, and re-iterable data needs a re-openable source all the way down.</li><li>Context managers tie release to scope: <code>as</code> gets <code>__enter__</code>'s return value, cleanup goes in <code>__exit__</code> or a <code>finally</code> around the <code>yield</code>.</li><li>Suppress exceptions only on purpose; commit on clean exit, roll back on error, and let the error propagate.</li><li><code>ExitStack</code> manages any number of resources and undo callbacks, unwinding in reverse; <code>pop_all</code> hands them over.</li><li>Close half-consumed streams explicitly; share long-lived clients per application and scope everything else per request.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

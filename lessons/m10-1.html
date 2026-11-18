@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10.1 · Iterator classes</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m10-1" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module 10 · Iterators and context managers</span></div>
+  <h1>10.1 Iterator classes</h1>
+  <p>Writing your own iterables and iterators: the protocol by hand with <code>__iter__</code> and <code>__next__</code>, the difference between a re-iterable container and a one-shot iterator, generators as the easy way to implement <code>__iter__</code>, the two-argument <code>iter()</code>, peeking, and the traps: exhausted iterators, <code>StopIteration</code> leaking out of generators, and changing a collection while looping. Applied to pagination, batching, windows and token streams.</p>
+  <div class="chips"><span class="chip">19 problems</span><span class="chip">4 easy · 10 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="protocol">
+<h2><span class="n">1</span>The protocol, by hand</h2>
+<p>Lesson 6.3 showed what a <code>for</code> loop does: it calls <code>iter(obj)</code> once to get an <strong>iterator</strong>, then <code>next(iterator)</code> repeatedly until <code>StopIteration</code> is raised. In terms of the data model (9.2), <code>iter(obj)</code> calls <code>obj.__iter__()</code> and <code>next(it)</code> calls <code>it.__next__()</code>. So to make your own objects work with <code>for</code>, <code>list()</code>, <code>sum()</code>, unpacking and comprehensions, you implement those two methods. An <strong>iterator</strong> class keeps the position of the walk as state: <code>__next__</code> returns the next item and advances, or raises <code>StopIteration</code> when there is nothing left; its <code>__iter__</code> returns <code>self</code>, so an iterator can be used wherever an iterable is expected.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">by_hand.py</span><button class="copy">Copy</button></div><pre><code class="py">class Countdown:
+    &quot;&quot;&quot;An iterator: it remembers where it is.&quot;&quot;&quot;
+
+    def __init__(self, start):
+        self.current = start
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.current &lt;= 0:
+            raise StopIteration
+        value = self.current
+        self.current -= 1
+        return value
+
+c = Countdown(3)
+print(next(c), next(c), list(c), list(c))
+print(sum(Countdown(4)), [x * 10 for x in Countdown(2)], max(Countdown(5)))</code></pre><div class="out"><span class="ol">Output</span><pre>3 2 [1] []
+10 [20, 10] 5</pre></div></div>
+<p><code>next(c)</code> twice takes 3 and 2; <code>list(c)</code> drains what is left, 1; and a second <code>list(c)</code> gets nothing, because the iterator's state is exhausted and nothing resets it. That is the defining property of an iterator: <strong>one pass</strong>. Raising <code>StopIteration</code> is the only correct way to say "no more items"; returning <code>None</code> would be treated as an item, and a loop would never end.</p>
+</section>
+<section class="sec" id="iterable">
+<h2><span class="n">2</span>Iterable containers and one-shot iterators</h2>
+<p>A list can be looped over any number of times because it is not an iterator itself: each <code>iter(my_list)</code> creates a <strong>new</strong> list iterator starting at the beginning. Your container classes should work the same way. Their <code>__iter__</code> must return a <strong>fresh</strong> iterator each time, not <code>self</code>, so that two loops (or a nested loop over the same object) each get their own position. Making a container its own iterator is a classic bug: the second loop silently sees nothing (problem 3).</p>
+<p>There are therefore two separate roles, often played by two classes: the <strong>iterable</strong> (the container, holding the data, with an <code>__iter__</code> that builds an iterator) and the <strong>iterator</strong> (a lightweight object holding only a reference to the data and a position). Python's built-ins follow this split: <code>list</code> and <code>list_iterator</code>, <code>dict</code> and <code>dict_keyiterator</code>, <code>range</code> and <code>range_iterator</code>.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">iterable_vs_iterator.py</span><button class="copy">Copy</button></div><pre><code class="py">class Playlist:
+    def __init__(self, songs):
+        self._songs = list(songs)
+
+    def __iter__(self):
+        return PlaylistIterator(self._songs)     # a new iterator every time
+
+class PlaylistIterator:
+    def __init__(self, songs):
+        self._songs = songs
+        self._i = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._i &gt;= len(self._songs):
+            raise StopIteration
+        song = self._songs[self._i]
+        self._i += 1
+        return song
+
+p = Playlist([&quot;intro&quot;, &quot;verse&quot;, &quot;outro&quot;])
+print(list(p), list(p))
+print([(a, b) for a in p for b in p if a &lt; b][:3])     # nested loops need independent iterators
+it = iter(p)
+print(next(it), iter(it) is it, iter(p) is iter(p))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;intro&#x27;, &#x27;verse&#x27;, &#x27;outro&#x27;] [&#x27;intro&#x27;, &#x27;verse&#x27;, &#x27;outro&#x27;]
+[(&#x27;intro&#x27;, &#x27;verse&#x27;), (&#x27;intro&#x27;, &#x27;outro&#x27;), (&#x27;outro&#x27;, &#x27;verse&#x27;)]
+intro True False</pre></div></div>
+</section>
+<section class="sec" id="generators">
+<h2><span class="n">3</span>Generators: the easy way to write <code>__iter__</code></h2>
+<p>Writing a separate iterator class is a lot of ceremony for "walk my items". A generator function returns a new generator, which is an iterator, every time it is called (6.3), so making <code>__iter__</code> itself a generator gives you exactly the fresh-iterator behaviour of a container, with the position and the <code>StopIteration</code> handled for you. In most code this is the right way to make a class iterable.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">generator_iter.py</span><button class="copy">Copy</button></div><pre><code class="py">class Playlist:
+    def __init__(self, songs):
+        self._songs = list(songs)
+
+    def __iter__(self):
+        for song in self._songs:          # or simply: yield from self._songs
+            yield song
+
+    def __len__(self):
+        return len(self._songs)
+
+class Dataset:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __iter__(self):
+        for row in self._rows:
+            if row.get(&quot;label&quot;) is not None:     # iteration can filter or transform lazily
+                yield row[&quot;text&quot;], row[&quot;label&quot;]
+
+p = Playlist([&quot;intro&quot;, &quot;verse&quot;])
+print(list(p), list(p), len(p))
+d = Dataset([{&quot;text&quot;: &quot;win now&quot;, &quot;label&quot;: 1}, {&quot;text&quot;: &quot;?&quot;, &quot;label&quot;: None}, {&quot;text&quot;: &quot;lunch&quot;, &quot;label&quot;: 0}])
+print(list(d), dict(d))</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;intro&#x27;, &#x27;verse&#x27;] [&#x27;intro&#x27;, &#x27;verse&#x27;] 2
+[(&#x27;win now&#x27;, 1), (&#x27;lunch&#x27;, 0)] {&#x27;win now&#x27;: 1, &#x27;lunch&#x27;: 0}</pre></div></div>
+<p>Write a class with <code>__next__</code> by hand when the iterator needs <strong>more than iteration</strong>: extra methods such as <code>peek()</code> or <code>close()</code>, state that callers inspect while iterating (how many pages fetched, the text accumulated so far), or a way to be passed around and resumed by several consumers. Otherwise, a generator method is shorter, harder to get wrong, and faster (problem 8).</p>
+</section>
+<section class="sec" id="tools">
+<h2><span class="n">4</span>Useful forms: <code>iter(callable, sentinel)</code> and peeking</h2>
+<p><code>iter()</code> has a second form: <code>iter(func, sentinel)</code> creates an iterator that calls <code>func()</code> with no arguments on every step and stops when the result equals <code>sentinel</code>. It turns "call this until it returns the end marker" into a loop, and the classic use is reading a binary stream in fixed-size chunks: <code>iter(lambda: f.read(8192), b"")</code> yields chunks until <code>read</code> returns empty bytes. Combined with <code>functools.partial</code>, it reads queues, sockets and paginated APIs in the same way.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">iter_sentinel.py</span><button class="copy">Copy</button></div><pre><code class="py">import io
+from functools import partial
+
+stream = io.BytesIO(b&quot;abcdefghij&quot;)
+print(list(iter(partial(stream.read, 4), b&quot;&quot;)))
+
+queue = [&quot;job1&quot;, &quot;job2&quot;, &quot;STOP&quot;, &quot;job3&quot;]
+for job in iter(lambda: queue.pop(0), &quot;STOP&quot;):
+    print(&quot;processing&quot;, job)
+print(&quot;left in queue:&quot;, queue)</code></pre><div class="out"><span class="ol">Output</span><pre>[b&#x27;abcd&#x27;, b&#x27;efgh&#x27;, b&#x27;ij&#x27;]
+processing job1
+processing job2
+left in queue: [&#x27;job3&#x27;]</pre></div></div>
+<p>Another common need is to <strong>look at the next item without consuming it</strong>: a parser deciding what to do based on the next token, a merge step comparing heads of streams. Plain iterators cannot do that, so a small wrapper class keeps one item in a buffer: <code>peek()</code> fills the buffer if needed and returns it; <code>__next__</code> returns the buffered item first. Because it needs an extra method, this is a case where a hand-written iterator class is the right tool (problem 7).</p>
+</section>
+<section class="sec" id="lazy">
+<h2><span class="n">5</span>Lazy objects: computing on demand</h2>
+<p>An iterable does not have to hold its items. <code>range(10**12)</code> uses almost no memory because it computes each number when asked. Your classes can do the same: a <strong>paginated API client</strong> fetches one page of results at a time while the caller loops, and stops fetching as soon as the caller stops; a <strong>sliding window</strong> over a token list computes each window on the fly; a dataset reads rows from disk as they are needed. Laziness means the first item is available immediately and memory does not grow with the total size (problem 5).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">lazy_pages.py</span><button class="copy">Copy</button></div><pre><code class="py">class Pages:
+    &quot;&quot;&quot;Iterate over all items of a paginated API, fetching pages only as needed.&quot;&quot;&quot;
+
+    def __init__(self, fetch):
+        self.fetch = fetch                 # fetch(cursor) -&gt; (items, next_cursor or None)
+        self.pages_fetched = 0
+
+    def __iter__(self):
+        cursor = None
+        while True:
+            items, cursor = self.fetch(cursor)
+            self.pages_fetched += 1
+            yield from items
+            if cursor is None:
+                return
+
+DATA = {None: ([&quot;a&quot;, &quot;b&quot;], &quot;p2&quot;), &quot;p2&quot;: ([&quot;c&quot;, &quot;d&quot;], &quot;p3&quot;), &quot;p3&quot;: ([&quot;e&quot;], None)}
+pages = Pages(lambda cursor: DATA[cursor])
+print(list(pages), pages.pages_fetched)
+pages.pages_fetched = 0
+first_three = []
+for item in pages:
+    first_three.append(item)
+    if len(first_three) == 3:
+        break
+print(first_three, pages.pages_fetched)</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;, &#x27;d&#x27;, &#x27;e&#x27;] 3
+[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;] 2</pre></div></div>
+<p>Stopping after three items fetched only two pages, because the generator inside <code>__iter__</code> was simply never resumed. A lazy class can still offer <code>__len__</code> when the length can be computed without iterating (a window count from the list length, 9.2); if it cannot, it should not pretend, since <code>len()</code> is expected to be cheap.</p>
+</section>
+<section class="sec" id="traps">
+<h2><span class="n">6</span>Iteration traps</h2>
+<p><strong><code>StopIteration</code> inside a generator.</strong> Calling <code>next(it)</code> without a default inside a generator body, when <code>it</code> is exhausted, raises <code>StopIteration</code> inside the generator. Before Python 3.7 that silently ended the generator; since PEP 479 it is turned into a <code>RuntimeError: generator raised StopIteration</code>, because silently ending hid bugs. Use <code>next(it, default)</code> or catch <code>StopIteration</code> explicitly and <code>return</code> (problem 6).</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pep479.py</span><button class="copy">Copy</button></div><pre><code class="py">def pairs(items):
+    it = iter(items)
+    for first in it:
+        second = next(it)            # raises StopIteration when the length is odd
+        yield first, second
+
+def safe_pairs(items):
+    it = iter(items)
+    for first in it:
+        second = next(it, None)
+        yield first, second
+
+print(list(safe_pairs([1, 2, 3])))
+try:
+    list(pairs([1, 2, 3]))
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)</code></pre><div class="out"><span class="ol">Output</span><pre>[(1, 2), (3, None)]
+RuntimeError: generator raised StopIteration</pre></div></div>
+<p><strong>Changing what you are iterating.</strong> Adding to or removing from a list while looping over it skips or repeats items (2.2), and changing a dict's or set's size during iteration raises <code>RuntimeError: dictionary changed size during iteration</code>. Iterate over a copy (<code>list(d)</code>) or collect changes and apply them after the loop. Your own iterators should either detect such changes or document that the underlying data must not change during iteration (problem 12).</p>
+<p><strong>Sharing one iterator.</strong> Two consumers of the same iterator split its items between them, which is sometimes the point (<code>zip(it, it)</code>, 6.4) and usually a bug. Hand each consumer its own iterator from the iterable, or use <code>itertools.tee</code> if the source can only be read once.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">7</span>Warm-up</h2>
+<article class="prob" id="p-an-iterator-by-hand" data-pid="m10-1-an-iterator-by-hand" data-type="predict" data-level="easy" data-answer="0 2 [4, 6]
+[] done [0, 2]
+0 2 [4, 6, 8, 10]">
+<header class="prob-head"><h3>1. An iterator by hand</h3></header>
+<div class="code"><pre><code class="py">class Evens:
+    def __init__(self, limit):
+        self.n = 0
+        self.limit = limit
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if self.n &gt; self.limit:
+            raise StopIteration
+        value = self.n
+        self.n += 2
+        return value
+
+e = Evens(6)
+print(next(e), next(e), list(e))
+print(list(e), next(e, &quot;done&quot;), list(Evens(3)))
+a, b, *rest = Evens(10)
+print(a, b, rest)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>An iterator's state is consumed by every <code>next</code>, <code>list</code> or loop; nothing resets it.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0 2 [4, 6]
+[] done [0, 2]
+0 2 [4, 6, 8, 10]</pre></div><p><code>next</code> takes 0 and 2, and <code>list</code> drains the rest up to the limit: 4 and 6. A second <code>list</code> finds the iterator exhausted, and <code>next</code> with a default returns the default instead of raising. A fresh <code>Evens(3)</code> yields 0 and 2. Unpacking works with any iterable, including your own: two names take the first items and <code>*rest</code> collects the remainder.</p></div></details>
+</article>
+<article class="prob" id="p-a-re-iterable-range-of-dates" data-pid="m10-1-a-re-iterable-range-of-dates" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A re-iterable range of dates</h3></header>
+<div class="prob-q"><p>Write a class <code>DayRange(start, end)</code> (both <code>datetime.date</code>, end inclusive) that can be iterated <strong>any number of times</strong>, yielding each date in order, with <code>__len__</code> (number of days, 0 if <code>end &lt; start</code>), <code>__contains__</code> for dates (computed without iterating) and a <code>__repr__</code> like <code>DayRange(2025-01-30, 2025-02-02)</code>. Use a generator for <code>__iter__</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import datetime as dt
+
+class DayRange:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">import datetime as dt
+r = DayRange(dt.date(2025, 1, 30), dt.date(2025, 2, 2))
+days = [d.isoformat() for d in r]
+assert days == ["2025-01-30", "2025-01-31", "2025-02-01", "2025-02-02"] and [d.day for d in r] == [30, 31, 1, 2]
+assert len(r) == 4 and dt.date(2025, 2, 1) in r and dt.date(2025, 2, 3) not in r
+assert repr(r) == "DayRange(2025-01-30, 2025-02-02)" and len(DayRange(dt.date(2025, 1, 2), dt.date(2025, 1, 1))) == 0
+assert list(DayRange(dt.date(2025, 1, 2), dt.date(2025, 1, 1))) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import datetime as dt
+r = DayRange(dt.date(2025, 1, 30), dt.date(2025, 2, 2))
+days = [d.isoformat() for d in r]
+assert days == [&quot;2025-01-30&quot;, &quot;2025-01-31&quot;, &quot;2025-02-01&quot;, &quot;2025-02-02&quot;] and [d.day for d in r] == [30, 31, 1, 2]
+assert len(r) == 4 and dt.date(2025, 2, 1) in r and dt.date(2025, 2, 3) not in r
+assert repr(r) == &quot;DayRange(2025-01-30, 2025-02-02)&quot; and len(DayRange(dt.date(2025, 1, 2), dt.date(2025, 1, 1))) == 0
+assert list(DayRange(dt.date(2025, 1, 2), dt.date(2025, 1, 1))) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>end - start</code> is a <code>timedelta</code>; <code>.days + 1</code> is the count. Step with <code>start + dt.timedelta(days=i)</code> (5.3).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import datetime as dt
+
+class DayRange:
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+
+    def __len__(self):
+        return max(0, (self.end - self.start).days + 1)
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self.start + dt.timedelta(days=i)
+
+    def __contains__(self, day):
+        return self.start &lt;= day &lt;= self.end
+
+    def __repr__(self):
+        return f&quot;DayRange({self.start}, {self.end})&quot;</code></pre></div><p>Because <code>__iter__</code> is a generator function, every loop gets a new generator starting at day 0, so the range can be iterated twice, as the test does. The dates are computed on demand, like <code>range</code>, so a range of ten years costs nothing until it is used. <code>__contains__</code> answers with two comparisons instead of walking every day, which is what <code>in</code> would do by default (9.2). Month and year boundaries are handled by <code>timedelta</code> arithmetic, never by hand. Date ranges like this drive backfills and daily evaluation jobs.</p></div></details>
+</article>
+<article class="prob" id="p-a-collection-that-can-be-looped-over-onl" data-pid="m10-1-a-collection-that-can-be-looped-over-onl" data-type="fix" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. A collection that can be looped over only once</h3></header>
+<div class="prob-q"><p><code>Vocabulary</code> returns itself from <code>__iter__</code> and keeps the position in an attribute, so the second loop over the same vocabulary is empty, and a nested loop stops early. Fix it so every loop gets an independent pass.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">class Vocabulary:
+    def __init__(self, words):
+        self.words = sorted(set(words))
+        self._i = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._i &gt;= len(self.words):
+            raise StopIteration
+        word = self.words[self._i]
+        self._i += 1
+        return word
+</textarea>
+<script type="text/plain" class="prob-tests">v = Vocabulary(["refund", "policy", "refund", "window"])
+assert list(v) == ["policy", "refund", "window"] and list(v) == ["policy", "refund", "window"]
+pairs = [(a, b) for a in v for b in v if a < b]
+assert pairs == [("policy", "refund"), ("policy", "window"), ("refund", "window")]
+assert len(list(v)) == 3</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">v = Vocabulary([&quot;refund&quot;, &quot;policy&quot;, &quot;refund&quot;, &quot;window&quot;])
+assert list(v) == [&quot;policy&quot;, &quot;refund&quot;, &quot;window&quot;] and list(v) == [&quot;policy&quot;, &quot;refund&quot;, &quot;window&quot;]
+pairs = [(a, b) for a in v for b in v if a &lt; b]
+assert pairs == [(&quot;policy&quot;, &quot;refund&quot;), (&quot;policy&quot;, &quot;window&quot;), (&quot;refund&quot;, &quot;window&quot;)]
+assert len(list(v)) == 3</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make <code>__iter__</code> a generator over <code>self.words</code>, and remove <code>__next__</code> and <code>_i</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Vocabulary:
+    def __init__(self, words):
+        self.words = sorted(set(words))
+
+    def __iter__(self):
+        yield from self.words</code></pre></div><p>Returning <code>self</code> made the container its own iterator, with one shared position: after the first full loop <code>_i</code> stayed at the end, so every later loop was empty, and in the nested comprehension the inner loop consumed the same position as the outer one. A container must hand out a new iterator per loop; a generator <code>__iter__</code> does that automatically, since each call creates a fresh generator. Having fewer methods also means there is no state to get out of sync.</p></div></details>
+</article>
+<article class="prob" id="p-iterating-until-a-sentinel" data-pid="m10-1-iterating-until-a-sentinel" data-type="predict" data-level="easy" data-answer="[&#x27;01234&#x27;, &#x27;56789&#x27;, &#x27;AB&#x27;]
+[&#x27;header&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]
+[3, 2, 1] [-1]">
+<header class="prob-head"><h3>4. Iterating until a sentinel</h3></header>
+<div class="code"><pre><code class="py">import io
+from functools import partial
+
+data = io.BytesIO(b&quot;0123456789AB&quot;)
+print([c.decode() for c in iter(partial(data.read, 5), b&quot;&quot;)])
+lines = iter([&quot;header&quot;, &quot;a&quot;, &quot;b&quot;, &quot;&quot;, &quot;ignored&quot;])
+print(list(iter(lambda: next(lines), &quot;&quot;)))
+counter = iter([3, 2, 1, 0, -1])
+print(list(iter(counter.__next__, 0)), list(counter))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>iter(func, sentinel)</code> calls <code>func()</code> repeatedly and stops, without yielding it, when the result equals the sentinel.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;01234&#x27;, &#x27;56789&#x27;, &#x27;AB&#x27;]
+[&#x27;header&#x27;, &#x27;a&#x27;, &#x27;b&#x27;]
+[3, 2, 1] [-1]</pre></div><p>Reading five bytes at a time gives two full chunks and a shorter last one; the next read returns <code>b""</code>, the sentinel, which ends the loop. The second loop stops at the empty line, so <code>"ignored"</code> is never read. With the counter, the loop stops when it reads 0, which consumes the 0; the <code>-1</code> is still in the underlying iterator afterwards.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">8</span>Medium</h2>
+<article class="prob" id="p-paginate-a-search-api-lazily" data-pid="m10-1-paginate-a-search-api-lazily" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>5. Paginate a search API lazily</h3></header>
+<div class="prob-q"><p>Write a class <code>SearchResults(fetch, page_size)</code> where <code>fetch(offset, limit)</code> returns a list of up to <code>limit</code> results starting at <code>offset</code> (an empty or short list means the end). Iterating yields results one by one, fetching pages only when needed; record every <code>fetch</code> call's offset in <code>self.offsets</code>. It must be re-iterable (a new loop starts again from offset 0). Add <code>first(n)</code> returning the first <code>n</code> results without fetching more pages than necessary.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">class SearchResults:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">DATA = [f"doc{i}" for i in range(7)]
+def fetch(offset, limit):
+    return DATA[offset:offset + limit]
+
+r = SearchResults(fetch, page_size=3)
+assert list(r) == DATA and r.offsets == [0, 3, 6]
+r.offsets = []
+assert r.first(4) == ["doc0", "doc1", "doc2", "doc3"] and r.offsets == [0, 3]
+r.offsets = []
+assert list(r) == DATA and r.offsets == [0, 3, 6]
+exact = SearchResults(lambda o, l: [f"x{i}" for i in range(6)][o:o + l], page_size=3)
+assert list(exact) == ["x0", "x1", "x2", "x3", "x4", "x5"] and exact.offsets == [0, 3, 6]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">DATA = [f&quot;doc{i}&quot; for i in range(7)]
+def fetch(offset, limit):
+    return DATA[offset:offset + limit]
+
+r = SearchResults(fetch, page_size=3)
+assert list(r) == DATA and r.offsets == [0, 3, 6]
+r.offsets = []
+assert r.first(4) == [&quot;doc0&quot;, &quot;doc1&quot;, &quot;doc2&quot;, &quot;doc3&quot;] and r.offsets == [0, 3]
+r.offsets = []
+assert list(r) == DATA and r.offsets == [0, 3, 6]
+exact = SearchResults(lambda o, l: [f&quot;x{i}&quot; for i in range(6)][o:o + l], page_size=3)
+assert list(exact) == [&quot;x0&quot;, &quot;x1&quot;, &quot;x2&quot;, &quot;x3&quot;, &quot;x4&quot;, &quot;x5&quot;] and exact.offsets == [0, 3, 6]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make <code>__iter__</code> a generator: loop fetching pages, <code>yield from page</code>, stop when the page is shorter than <code>page_size</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>first(n)</code> can use <code>itertools.islice(self, n)</code> (6.4), which stops pulling from the generator after <code>n</code> items.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from itertools import islice
+
+class SearchResults:
+    def __init__(self, fetch, page_size):
+        self.fetch = fetch
+        self.page_size = page_size
+        self.offsets = []
+
+    def __iter__(self):
+        offset = 0
+        while True:
+            self.offsets.append(offset)
+            page = self.fetch(offset, self.page_size)
+            yield from page
+            if len(page) &lt; self.page_size:
+                return
+            offset += self.page_size
+
+    def first(self, n):
+        return list(islice(self, n))</code></pre></div><p>The generator fetches a page, hands its results out one at a time, and fetches the next page only when the consumer asks for more, so <code>first(4)</code> stops after two pages: <code>islice</code> simply stops pulling. A short page signals the end; when the total is an exact multiple of the page size, one extra fetch returns an empty page, which is unavoidable without a total count (the last test). Each <code>for</code> loop gets a new generator starting at offset 0, so the object is re-iterable. Vector database clients, Slack and GitHub API wrappers, and <code>boto3</code> paginators expose large result sets exactly this way.</p></div></details>
+</article>
+<article class="prob" id="p-a-generator-that-dies-with-runtimeerror" data-pid="m10-1-a-generator-that-dies-with-runtimeerror" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>6. A generator that dies with RuntimeError</h3></header>
+<div class="prob-q"><p><code>key_values(tokens)</code> turns a flat list <code>[k1, v1, k2, v2, ...]</code> into pairs. With an odd number of tokens it crashes with <code>RuntimeError: generator raised StopIteration</code>. Fix it so a trailing key gets the value <code>None</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">def key_values(tokens):
+    it = iter(tokens)
+    for key in it:
+        value = next(it)
+        yield key, value
+</textarea>
+<script type="text/plain" class="prob-tests">assert list(key_values(["model", "small", "temperature", "0.2"])) == [("model", "small"), ("temperature", "0.2")]
+assert list(key_values(["a", 1, "b"])) == [("a", 1), ("b", None)]
+assert list(key_values([])) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert list(key_values([&quot;model&quot;, &quot;small&quot;, &quot;temperature&quot;, &quot;0.2&quot;])) == [(&quot;model&quot;, &quot;small&quot;), (&quot;temperature&quot;, &quot;0.2&quot;)]
+assert list(key_values([&quot;a&quot;, 1, &quot;b&quot;])) == [(&quot;a&quot;, 1), (&quot;b&quot;, None)]
+assert list(key_values([])) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>next(it, None)</code> returns <code>None</code> instead of raising when the iterator is exhausted.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">def key_values(tokens):
+    it = iter(tokens)
+    for key in it:
+        value = next(it, None)
+        yield key, value</code></pre></div><p>Inside a generator, an exhausted <code>next(it)</code> raises <code>StopIteration</code> from the generator's own body. Since Python 3.7 (PEP 479), Python converts that into a <code>RuntimeError</code>, because silently ending the generator early used to hide real bugs: the caller would just see fewer items. <code>next(it, default)</code> handles "no more items" explicitly. Note that <code>for key in it</code> and <code>next(it)</code> share one iterator on purpose: each step of the loop takes a key, and <code>next</code> takes the value after it, the pairing idiom of 6.4.</p></div></details>
+</article>
+<article class="prob" id="p-a-peekable-iterator" data-pid="m10-1-a-peekable-iterator" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. A peekable iterator</h3></header>
+<div class="prob-q"><p>Write a class <code>Peekable(iterable)</code> that is an iterator (with <code>__iter__</code> and <code>__next__</code>) and also has <code>peek(default=...)</code> returning the next item <strong>without consuming it</strong> (if the iterator is exhausted, return <code>default</code> when given, otherwise raise <code>StopIteration</code>). Add <code>__bool__</code>, true while items remain. It must work on any iterable, including generators, and must not read ahead more than one item.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">class Peekable:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">read = []
+def source():
+    for x in ["a", "b", "c"]:
+        read.append(x)
+        yield x
+
+p = Peekable(source())
+assert p.peek() == "a" and p.peek() == "a" and read == ["a"]
+assert next(p) == "a" and next(p) == "b" and bool(p) and read == ["a", "b", "c"]
+assert list(p) == ["c"] and not p and p.peek("end") == "end"
+try:
+    p.peek()
+    assert False
+except StopIteration:
+    pass
+try:
+    next(p)
+    assert False
+except StopIteration:
+    pass
+assert list(Peekable([])) == [] and iter(p) is p</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">read = []
+def source():
+    for x in [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]:
+        read.append(x)
+        yield x
+
+p = Peekable(source())
+assert p.peek() == &quot;a&quot; and p.peek() == &quot;a&quot; and read == [&quot;a&quot;]
+assert next(p) == &quot;a&quot; and next(p) == &quot;b&quot; and bool(p) and read == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+assert list(p) == [&quot;c&quot;] and not p and p.peek(&quot;end&quot;) == &quot;end&quot;
+try:
+    p.peek()
+    assert False
+except StopIteration:
+    pass
+try:
+    next(p)
+    assert False
+except StopIteration:
+    pass
+assert list(Peekable([])) == [] and iter(p) is p</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._buffer</code> as an empty list or a list with one item. <code>peek</code> fills it with <code>next(self._it)</code> if empty.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Use a private sentinel object to tell "no default given" from <code>default=None</code> (2.1).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">_MISSING = object()
+
+
+class Peekable:
+    def __init__(self, iterable):
+        self._it = iter(iterable)
+        self._buffer = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._buffer:
+            return self._buffer.pop()
+        return next(self._it)
+
+    def peek(self, default=_MISSING):
+        if not self._buffer:
+            try:
+                self._buffer.append(next(self._it))
+            except StopIteration:
+                if default is _MISSING:
+                    raise
+                return default
+        return self._buffer[0]
+
+    def __bool__(self):
+        try:
+            self.peek()
+        except StopIteration:
+            return False
+        return True</code></pre></div><p>Peeking needs state that survives between calls (the buffered item) and an extra method, so this is a job for an iterator class rather than a generator. The buffer holds at most one item, and <code>next</code> drains it first, so the order of items is preserved and the source is never read more than one item ahead, which the <code>read</code> list checks; that matters when the source is a network stream. <code>__bool__</code> peeks to answer "anything left?". The sentinel default distinguishes <code>peek()</code> (raise) from <code>peek(None)</code> (return <code>None</code>). The <code>more-itertools</code> package ships this as <code>peekable</code>, which parsers and tokenisers use constantly.</p></div></details>
+</article>
+<article class="prob" id="p-a-hand-written-iterator-or-a-generator" data-pid="m10-1-a-hand-written-iterator-or-a-generator" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><h3>8. A hand-written iterator or a generator</h3></header>
+<div class="prob-q"><p>Both produce the squares of 0 to 299,999 and sum them. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">class Squares:
+    def __init__(self, n):
+        self.n = n
+        self.i = 0
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if self.i &gt;= self.n:
+            raise StopIteration
+        value = self.i * self.i
+        self.i += 1
+        return value
+
+def squares(n):
+    for i in range(n):
+        yield i * i</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">total = sum(Squares(300_000))</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">total = sum(squares(300_000))</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>What does each step of the class-based iterator cost compared with resuming a generator?</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>146.90 ms</td></tr><tr><td>B</td><td>111.08 ms</td></tr></table></div><p>Every step of the class iterator is a full method call into <code>__next__</code>, with attribute reads and writes on <code>self</code> (<code>self.i</code>, <code>self.n</code>) and a comparison done in Python. The generator keeps its state in local variables of a suspended frame, and resuming it is cheaper than a method call; the loop counter comes from <code>range</code>, implemented in C. The generator is also shorter and cannot forget <code>StopIteration</code>. Write the class only when the iterator needs extra methods or inspectable state.</p></div></details>
+</article>
+<article class="prob" id="p-independent-and-shared-iterators" data-pid="m10-1-independent-and-shared-iterators" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Independent and shared iterators</h3></header>
+<div class="prob-q"><p>Fill in <code>a</code>, <code>b</code> and <code>rest</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">class Box:
+    def __init__(self, items):
+        self.items = items
+    def __iter__(self):
+        yield from self.items
+
+box = Box([1, 2, 3, 4])
+i1, i2 = iter(box), iter(box)
+a, b, rest = next(i1), next(i2), None
+a, b, rest = next(i1), next(i1), list(i2)
+shared = iter(box)
+a, b, rest = next(shared), next(shared), list(zip(shared, shared))</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>rest</code></th></tr><tr><td>two iterators</td><td><input class="cell" data-a="1" data-s="1" aria-label="a at two iterators" autocomplete="off"></td><td><input class="cell" data-a="1" data-s="1" aria-label="b at two iterators" autocomplete="off"></td><td><input class="cell" data-a="None" data-s="None" aria-label="rest at two iterators" autocomplete="off"></td></tr><tr><td>advance i1, drain i2</td><td><input class="cell" data-a="2" data-s="2" aria-label="a at advance i1, drain i2" autocomplete="off"></td><td><input class="cell" data-a="3" data-s="3" aria-label="b at advance i1, drain i2" autocomplete="off"></td><td><input class="cell" data-a="[2, 3, 4]" data-s="[2, 3, 4]" aria-label="rest at advance i1, drain i2" autocomplete="off"></td></tr><tr><td>one shared iterator</td><td><input class="cell" data-a="1" data-s="1" aria-label="a at one shared iterator" autocomplete="off"></td><td><input class="cell" data-a="2" data-s="2" aria-label="b at one shared iterator" autocomplete="off"></td><td><input class="cell" data-a="[(3, 4)]" data-s="[(3, 4)]" aria-label="rest at one shared iterator" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each <code>iter(box)</code> starts a new generator. <code>zip(shared, shared)</code> pulls from the same iterator for both slots.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>a</code></th><th><code>b</code></th><th><code>rest</code></th></tr><tr><td>two iterators</td><td><code>1</code></td><td><code>1</code></td><td><code>None</code></td></tr><tr><td>advance i1, drain i2</td><td><code>2</code></td><td><code>3</code></td><td><code>[2, 3, 4]</code></td></tr><tr><td>one shared iterator</td><td><code>1</code></td><td><code>2</code></td><td><code>[(3, 4)]</code></td></tr></table></div><p><code>iter(box)</code> creates a new generator each time, so <code>i1</code> and <code>i2</code> both start at 1. Advancing <code>i1</code> twice gives 2 and 3, while draining <code>i2</code> continues from its own position. One shared iterator splits its items among all its consumers: after two <code>next</code> calls only 3 and 4 remain, and <code>zip</code> pairs them with each other.</p></div></details>
+</article>
+<article class="prob" id="p-batches-that-lose-the-last-items" data-pid="m10-1-batches-that-lose-the-last-items" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Batches that lose the last items</h3></header>
+<div class="prob-q"><p><code>Batches(rows, size)</code> should yield lists of <code>size</code> rows and a final shorter batch, and be iterable many times (one pass per training epoch). It drops the last partial batch, and the second epoch is empty. Fix it.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">class Batches:
+    def __init__(self, rows, size):
+        self.rows = list(rows)
+        self.size = size
+        self.pos = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.pos + self.size &gt; len(self.rows):
+            raise StopIteration
+        batch = self.rows[self.pos:self.pos + self.size]
+        self.pos += self.size
+        return batch
+
+    def __len__(self):
+        return len(self.rows) // self.size
+</textarea>
+<script type="text/plain" class="prob-tests">b = Batches(range(7), 3)
+assert list(b) == [[0, 1, 2], [3, 4, 5], [6]] and len(b) == 3
+epochs = [sum(len(batch) for batch in b) for _ in range(3)]
+assert epochs == [7, 7, 7]
+assert list(Batches([], 4)) == [] and len(Batches([], 4)) == 0 and len(Batches(range(6), 3)) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">b = Batches(range(7), 3)
+assert list(b) == [[0, 1, 2], [3, 4, 5], [6]] and len(b) == 3
+epochs = [sum(len(batch) for batch in b) for _ in range(3)]
+assert epochs == [7, 7, 7]
+assert list(Batches([], 4)) == [] and len(Batches([], 4)) == 0 and len(Batches(range(6), 3)) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make <code>__iter__</code> a generator over <code>range(0, len(self.rows), self.size)</code> (6.1); drop <code>pos</code> and <code>__next__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The number of batches is a ceiling division: <code>-(-n // size)</code> or <code>(n + size - 1) // size</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Batches:
+    def __init__(self, rows, size):
+        if size &lt; 1:
+            raise ValueError(&quot;size must be at least 1&quot;)
+        self.rows = list(rows)
+        self.size = size
+
+    def __iter__(self):
+        for start in range(0, len(self.rows), self.size):
+            yield self.rows[start:start + self.size]
+
+    def __len__(self):
+        return (len(self.rows) + self.size - 1) // self.size</code></pre></div><p>Two bugs. The end test <code>pos + size &gt; len(rows)</code> refused to produce a batch unless a <strong>full</strong> one fitted, so the last row was silently never trained on, and <code>__len__</code> used floor division and agreed with the bug. And the object was its own iterator, so after the first epoch <code>pos</code> stayed at the end and every later epoch iterated nothing, which in a training loop looks like "the model stopped improving". Generating batches with a stepped <code>range</code> and slices (which stop safely at the end) fixes both, and <code>__len__</code> now uses ceiling division, so progress bars and learning-rate schedules based on <code>len(batches)</code> are right. PyTorch's <code>DataLoader</code> has a <code>drop_last</code> option precisely because dropping the partial batch should be a choice, not an accident.</p></div></details>
+</article>
+<article class="prob" id="p-sliding-windows-with-a-length" data-pid="m10-1-sliding-windows-with-a-length" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">RAG</span><h3>11. Sliding windows with a length</h3></header>
+<div class="prob-q"><p>Write a class <code>Windows(tokens, size, stride)</code> that yields overlapping windows (lists) of <code>size</code> tokens starting every <code>stride</code> tokens, plus a final window aligned to the end if the last regular window does not reach it (as in 6.1). It must be re-iterable, never build the whole list of windows, and have a <code>__len__</code> computed <strong>arithmetically</strong> (no iteration). Fewer than <code>size</code> tokens give one window with all of them (none for an empty list). Validate <code>1 &lt;= stride &lt;= size</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">class Windows:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">t = list(range(10))
+w = Windows(t, 4, 3)
+assert list(w) == [[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]] and len(w) == 3
+w2 = Windows(t, 4, 2)
+assert list(w2) == [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7], [6, 7, 8, 9]] and len(w2) == 4
+w3 = Windows(t, 6, 6)
+assert list(w3) == [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]] and len(w3) == 2 and list(w3) == list(w3)
+assert list(Windows([1, 2], 5, 1)) == [[1, 2]] and len(Windows([1, 2], 5, 1)) == 1 and len(Windows([], 3, 1)) == 0
+for bad in [(4, 0), (4, 5)]:
+    try:
+        Windows(t, *bad)
+        assert False, bad
+    except ValueError:
+        pass</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = list(range(10))
+w = Windows(t, 4, 3)
+assert list(w) == [[0, 1, 2, 3], [3, 4, 5, 6], [6, 7, 8, 9]] and len(w) == 3
+w2 = Windows(t, 4, 2)
+assert list(w2) == [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7], [6, 7, 8, 9]] and len(w2) == 4
+w3 = Windows(t, 6, 6)
+assert list(w3) == [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]] and len(w3) == 2 and list(w3) == list(w3)
+assert list(Windows([1, 2], 5, 1)) == [[1, 2]] and len(Windows([1, 2], 5, 1)) == 1 and len(Windows([], 3, 1)) == 0
+for bad in [(4, 0), (4, 5)]:
+    try:
+        Windows(t, *bad)
+        assert False, bad
+    except ValueError:
+        pass</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Regular window starts: <code>range(0, n - size + 1, stride)</code>, whose length you can take with <code>len(range(...))</code> without iterating.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>There is an extra final window when the last regular start plus <code>size</code> is less than <code>n</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class Windows:
+    def __init__(self, tokens, size, stride):
+        if not 1 &lt;= stride &lt;= size:
+            raise ValueError(&quot;need 1 &lt;= stride &lt;= size&quot;)
+        self.tokens = list(tokens)
+        self.size = size
+        self.stride = stride
+
+    def _starts(self):
+        return range(0, len(self.tokens) - self.size + 1, self.stride)
+
+    def __len__(self):
+        n = len(self.tokens)
+        if n == 0:
+            return 0
+        if n &lt;= self.size:
+            return 1
+        starts = self._starts()
+        return len(starts) + (starts[-1] + self.size &lt; n)
+
+    def __iter__(self):
+        n = len(self.tokens)
+        if n == 0:
+            return
+        if n &lt;= self.size:
+            yield list(self.tokens)
+            return
+        starts = self._starts()
+        for s in starts:
+            yield self.tokens[s:s + self.size]
+        if starts[-1] + self.size &lt; n:
+            yield self.tokens[-self.size:]</code></pre></div><p>The windows are computed lazily, one slice per step, so a long document never has all its windows in memory at once; the generator <code>__iter__</code> makes the object re-iterable. <code>len()</code> is answered by arithmetic on a <code>range</code> object (whose own <code>len</code> and indexing are O(1)), plus one for the end-aligned window, so it is cheap and always agrees with the iteration, which the tests check case by case. The boolean in <code>len(starts) + (condition)</code> counts as 0 or 1. Embedding pipelines use the length to size progress bars and to batch requests before reading any window.</p></div></details>
+</article>
+<article class="prob" id="p-changing-collections-while-iterating" data-pid="m10-1-changing-collections-while-iterating" data-type="predict" data-level="medium" data-answer="[1, 3, 5]
+RuntimeError: dictionary changed size during iteration
+{&#x27;a&#x27;: 1, &#x27;c&#x27;: 2}">
+<header class="prob-head"><h3>12. Changing collections while iterating</h3></header>
+<div class="code"><pre><code class="py">nums = [1, 2, 3, 4, 5, 6]
+for n in nums:
+    if n % 2 == 0:
+        nums.remove(n)
+print(nums)
+
+scores = {&quot;a&quot;: 1, &quot;b&quot;: 0, &quot;c&quot;: 2}
+try:
+    for k in scores:
+        if scores[k] == 0:
+            del scores[k]
+except RuntimeError as e:
+    print(&quot;RuntimeError:&quot;, e)
+
+scores = {&quot;a&quot;: 1, &quot;b&quot;: 0, &quot;c&quot;: 2}
+for k in list(scores):
+    if scores[k] == 0:
+        del scores[k]
+print(scores)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Removing from a list shifts later items under the loop's index. Dicts check their size during iteration.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[1, 3, 5]
+RuntimeError: dictionary changed size during iteration
+{&#x27;a&#x27;: 1, &#x27;c&#x27;: 2}</pre></div><p>Here removing the even numbers happens to work: each removal shifts the list, the loop skips the item after the removed one, and that item is odd every time, so nothing even is missed. With other data the same loop skips items (2.2), so it is never a safe pattern. The dict detects the change and raises <code>RuntimeError</code> rather than iterating over a structure that has been reorganised. Iterating over a <strong>copy</strong> of the keys (<code>list(scores)</code>) makes the deletion safe.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">9</span>Hard</h2>
+<article class="prob" id="p-round-robin-over-several-streams" data-pid="m10-1-round-robin-over-several-streams" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>13. Round-robin over several streams</h3></header>
+<div class="prob-q"><p>Write an iterator class <code>RoundRobin(*iterables)</code> that yields one item from each iterable in turn (<code>a1, b1, c1, a2, b2, ...</code>), skipping iterables as they run out, until all are exhausted. It must work with generators and infinite iterables (it must not read ahead), and expose <code>active</code>, the number of iterables not yet exhausted.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">from collections import deque
+
+class RoundRobin:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">assert list(RoundRobin("ABC", "D", "EF")) == ["A", "D", "E", "B", "F", "C"]
+assert list(RoundRobin()) == [] and list(RoundRobin([], [1])) == [1]
+import itertools
+rr = RoundRobin(itertools.count(), "xy")
+assert [next(rr) for _ in range(6)] == [0, "x", 1, "y", 2, 3] and rr.active == 1
+r2 = RoundRobin([1, 2], [3])
+assert r2.active == 2
+list(r2)
+assert r2.active == 0 and iter(r2) is r2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">assert list(RoundRobin(&quot;ABC&quot;, &quot;D&quot;, &quot;EF&quot;)) == [&quot;A&quot;, &quot;D&quot;, &quot;E&quot;, &quot;B&quot;, &quot;F&quot;, &quot;C&quot;]
+assert list(RoundRobin()) == [] and list(RoundRobin([], [1])) == [1]
+import itertools
+rr = RoundRobin(itertools.count(), &quot;xy&quot;)
+assert [next(rr) for _ in range(6)] == [0, &quot;x&quot;, 1, &quot;y&quot;, 2, 3] and rr.active == 1
+r2 = RoundRobin([1, 2], [3])
+assert r2.active == 2
+list(r2)
+assert r2.active == 0 and iter(r2) is r2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep a <code>deque</code> of iterators. <code>__next__</code> pops one from the left, tries <code>next</code> on it, and appends it back on the right if it produced an item.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>If it is exhausted, drop it and try the next; raise <code>StopIteration</code> when the deque is empty.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from collections import deque
+
+class RoundRobin:
+    def __init__(self, *iterables):
+        self._queue = deque(iter(it) for it in iterables)
+
+    @property
+    def active(self):
+        return len(self._queue)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while self._queue:
+            it = self._queue.popleft()
+            try:
+                item = next(it)
+            except StopIteration:
+                continue
+            self._queue.append(it)
+            return item
+        raise StopIteration</code></pre></div><p>A deque of iterators rotates in O(1): take the front one, get one item, put it at the back, which produces the round-robin order. An exhausted iterator is simply not put back, so <code>active</code> (a property over the deque's length, 9.3) shrinks as streams end. Because each step pulls exactly one item from exactly one iterator, infinite sources work and nothing is read ahead. Interleaving like this is used to mix training data sources fairly, to merge results from several retrievers, and in schedulers that give tasks equal turns. A generator could produce the same order, but the class exposes <code>active</code> while iterating.</p></div></details>
+</article>
+<article class="prob" id="p-read-the-code-a-line-reader" data-pid="m10-1-read-the-code-a-line-reader" data-type="fix" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>14. Read the code: a line reader</h3></header>
+<div class="prob-q"><p><code>LineReader(text)</code> should iterate over the non-blank lines of a text (stripped), any number of times, number them from 1 in <code>numbered()</code>, and report <code>len()</code> without consuming anything. The second loop is empty, <code>numbered()</code> starts at 0 and skips the first line, and <code>len()</code> consumes the lines. Read it, find the bugs and fix them.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 14">class LineReader:
+    def __init__(self, text):
+        self._lines = iter(text.splitlines())
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = next(self._lines)
+        while not line.strip():
+            line = next(self._lines)
+        return line.strip()
+
+    def numbered(self):
+        next(self)
+        return [(i, line) for i, line in enumerate(self)]
+
+    def __len__(self):
+        return sum(1 for _ in self)
+</textarea>
+<script type="text/plain" class="prob-tests">text = "first line\n\n  second line  \n   \nthird"
+r = LineReader(text)
+assert len(r) == 3 and list(r) == ["first line", "second line", "third"]
+assert list(r) == ["first line", "second line", "third"]
+assert r.numbered() == [(1, "first line"), (2, "second line"), (3, "third")]
+assert len(LineReader("")) == 0 and list(LineReader("\n \n")) == []</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">text = &quot;first line\n\n  second line  \n   \nthird&quot;
+r = LineReader(text)
+assert len(r) == 3 and list(r) == [&quot;first line&quot;, &quot;second line&quot;, &quot;third&quot;]
+assert list(r) == [&quot;first line&quot;, &quot;second line&quot;, &quot;third&quot;]
+assert r.numbered() == [(1, &quot;first line&quot;), (2, &quot;second line&quot;), (3, &quot;third&quot;)]
+assert len(LineReader(&quot;&quot;)) == 0 and list(LineReader(&quot;\n \n&quot;)) == []</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Storing <code>iter(...)</code> in <code>__init__</code> makes the object one-shot. Store the list of cleaned lines instead.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>numbered</code> should use <code>enumerate(self, start=1)</code>; <code>len</code> can use the stored list.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class LineReader:
+    def __init__(self, text):
+        self._lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    def __iter__(self):
+        yield from self._lines
+
+    def numbered(self):
+        return list(enumerate(self, start=1))
+
+    def __len__(self):
+        return len(self._lines)</code></pre></div><p>Three bugs grew from one decision: storing an <strong>iterator</strong> in <code>__init__</code> made the object one-shot. <code>len()</code> counted by iterating, which consumed every line, so the very first <code>list(r)</code> after <code>len(r)</code> was empty, a destructive <code>len</code> that no caller would expect. <code>numbered()</code> called <code>next(self)</code> to "skip" something, which threw away the first line, and <code>enumerate</code> without <code>start=1</code> numbered from 0. Storing the cleaned list makes iteration repeatable, <code>len</code> O(1) and non-destructive, and <code>numbered</code> a one-liner. For huge files, where storing every line is not an option, the class would keep the <strong>path</strong> and open the file afresh in each <code>__iter__</code> (10.2), still re-iterable, and <code>len</code> would have to be dropped or documented as expensive.</p></div></details>
+</article>
+<article class="prob" id="p-a-token-stream-object" data-pid="m10-1-a-token-stream-object" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>15. A token stream object</h3></header>
+<div class="prob-q"><p>Write an iterator class <code>TokenStream(deltas)</code> wrapping an iterable of streamed text pieces. Iterating yields the pieces; meanwhile the object exposes <code>text</code> (everything received so far), <code>count</code> (pieces received) and <code>finished</code> (true once the source is exhausted). Add <code>close()</code>, which stops the stream early (later <code>next</code> calls raise <code>StopIteration</code>, and <code>finished</code> stays false) and closes the source if it has a <code>close</code> method, and <code>read_all()</code> returning the remaining text joined, then the full text.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 15">class TokenStream:
+    pass
+</textarea>
+<script type="text/plain" class="prob-tests">closed = []
+def source():
+    try:
+        for piece in ["Refunds ", "take ", "five ", "days."]:
+            yield piece
+    finally:
+        closed.append(True)
+
+s = TokenStream(source())
+assert next(s) == "Refunds " and next(s) == "take " and (s.text, s.count, s.finished) == ("Refunds take ", 2, False)
+assert s.read_all() == "Refunds take five days." and s.finished and s.count == 4
+assert list(s) == [] and closed == [True]
+
+t = TokenStream(source())
+next(t)
+t.close()
+assert list(t) == [] and not t.finished and t.text == "Refunds " and closed == [True, True]
+assert TokenStream(["a", "b"]).read_all() == "ab"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">closed = []
+def source():
+    try:
+        for piece in [&quot;Refunds &quot;, &quot;take &quot;, &quot;five &quot;, &quot;days.&quot;]:
+            yield piece
+    finally:
+        closed.append(True)
+
+s = TokenStream(source())
+assert next(s) == &quot;Refunds &quot; and next(s) == &quot;take &quot; and (s.text, s.count, s.finished) == (&quot;Refunds take &quot;, 2, False)
+assert s.read_all() == &quot;Refunds take five days.&quot; and s.finished and s.count == 4
+assert list(s) == [] and closed == [True]
+
+t = TokenStream(source())
+next(t)
+t.close()
+assert list(t) == [] and not t.finished and t.text == &quot;Refunds &quot; and closed == [True, True]
+assert TokenStream([&quot;a&quot;, &quot;b&quot;]).read_all() == &quot;ab&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Keep <code>self._it = iter(deltas)</code>, a list of received pieces, and flags. <code>__next__</code> raises <code>StopIteration</code> if closed or finished.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>read_all</code> can loop over <code>self</code> to consume the rest, then return <code>self.text</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">class TokenStream:
+    def __init__(self, deltas):
+        self._source = deltas
+        self._it = iter(deltas)
+        self._pieces = []
+        self.finished = False
+        self._closed = False
+
+    @property
+    def text(self):
+        return &quot;&quot;.join(self._pieces)
+
+    @property
+    def count(self):
+        return len(self._pieces)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed or self.finished:
+            raise StopIteration
+        try:
+            piece = next(self._it)
+        except StopIteration:
+            self.finished = True
+            raise
+        self._pieces.append(piece)
+        return piece
+
+    def close(self):
+        self._closed = True
+        close = getattr(self._it, &quot;close&quot;, None)
+        if close is not None:
+            close()
+
+    def read_all(self):
+        for _ in self:
+            pass
+        return self.text</code></pre></div><p>A streaming response is consumed incrementally, but other code (a UI, a logger, a token counter) needs to ask <strong>during</strong> the stream how much has arrived, and the handler needs to stop it when the user cancels. That combination of iteration plus inspectable state plus extra methods is exactly when a hand-written iterator class beats a generator. <code>finished</code> is set only when the source itself is exhausted, so a closed stream is distinguishable from a completed one, which matters when logging whether an answer was cut short. <code>close()</code> forwards to the source's <code>close</code>, which for a generator runs its <code>finally</code> block (6.3), releasing the HTTP connection in a real SDK. The OpenAI and Anthropic SDKs return stream objects with this shape (iterable, closable, with accumulated state).</p></div></details>
+</article>
+<article class="prob" id="p-iteration-fallbacks-and-reversal" data-pid="m10-1-iteration-fallbacks-and-reversal" data-type="predict" data-level="hard" data-answer="[0, 10, 20] True [20, 10, 0]
+TypeError: TypeError
+reversed needs a sequence
+[3, 2, 1]">
+<header class="prob-head"><h3>16. Iteration fallbacks and reversal</h3></header>
+<div class="code"><pre><code class="py">class Seq:
+    def __init__(self, n):
+        self.n = n
+    def __getitem__(self, i):
+        if i &gt;= self.n:
+            raise IndexError(i)
+        return i * 10
+    def __len__(self):
+        return self.n
+
+class NotIterable(Seq):
+    __iter__ = None
+
+s = Seq(3)
+print(list(s), 20 in s, list(reversed(s)))
+try:
+    iter(NotIterable(3))
+except TypeError as e:
+    print(&quot;TypeError:&quot;, type(e).__name__)
+
+class OnlyIter:
+    def __iter__(self):
+        yield from [1, 2, 3]
+try:
+    reversed(OnlyIter())
+except TypeError:
+    print(&quot;reversed needs a sequence&quot;)
+print(list(reversed(list(OnlyIter()))))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Without <code>__iter__</code>, iteration falls back to <code>__getitem__</code> with 0, 1, 2, ... until <code>IndexError</code>. <code>reversed</code> needs <code>__reversed__</code> or <code>__len__</code> plus <code>__getitem__</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Setting <code>__iter__ = None</code> explicitly marks a class as not iterable.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[0, 10, 20] True [20, 10, 0]
+TypeError: TypeError
+reversed needs a sequence
+[3, 2, 1]</pre></div><p><code>Seq</code> has no <code>__iter__</code>, so <code>list</code>, <code>in</code> and <code>for</code> use the old sequence protocol: calling <code>__getitem__(0)</code>, <code>__getitem__(1)</code>, ... until <code>IndexError</code>. <code>reversed</code> works because <code>Seq</code> has both <code>__len__</code> and <code>__getitem__</code>. Assigning <code>__iter__ = None</code> in a subclass is the documented way to block iteration, so <code>iter()</code> raises <code>TypeError</code> even though <code>__getitem__</code> exists. A class with only <code>__iter__</code> cannot be reversed lazily, because Python cannot know the last item without consuming everything; materialise it into a list first, or implement <code>__reversed__</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">10</span>Interview questions</h2>
+<article class="prob" id="p-when-you-design-a-class-that-should-be-i" data-pid="m10-1-when-you-design-a-class-that-should-be-i" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. When you design a class that should be iterable, how do you decide between returning <code>self</code> from <code>__iter__</code> and returning a new iterator?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Containers (objects that hold or can recompute their items: a collection, a dataset, a range, a result set that can be fetched again) should return a <strong>new</strong> iterator from every <code>__iter__</code> call, so that several loops, nested loops and repeated epochs each get their own position, like lists do; the simplest implementation is a generator method. An object should return <strong>self</strong> only if it is itself a one-shot stream whose state is the position: a network stream, a file object, a token stream, a peekable wrapper, a cursor. Such iterators must also implement <code>__next__</code> and raise <code>StopIteration</code> at the end. The classic bug is a container that returns <code>self</code> and keeps a position attribute: the second loop is silently empty. If re-iteration is expensive (re-fetching pages), document it, or cache the results deliberately.</p></div></details>
+</article>
+<article class="prob" id="p-what-happens-when-stopiteration-is-raise" data-pid="m10-1-what-happens-when-stopiteration-is-raise" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>18. What happens when <code>StopIteration</code> is raised inside a generator, and why?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Since Python 3.7 (PEP 479), if a <code>StopIteration</code> propagates out of a generator's body, for example from a bare <code>next(it)</code> on an exhausted iterator, Python replaces it with <code>RuntimeError: generator raised StopIteration</code>. Before that change, the stray <code>StopIteration</code> simply ended the generator, so a bug in the middle of the generator looked like a normal, shorter stream, and loops consuming it silently lost data. The correct ways to end a generator are to fall off the end of its body or to <code>return</code> (whose value becomes the <code>StopIteration.value</code>, used by <code>yield from</code>). When pulling from another iterator inside a generator, use <code>next(it, default)</code> or catch <code>StopIteration</code> and <code>return</code> explicitly. In hand-written iterator classes, raising <code>StopIteration</code> from <code>__next__</code> is still the correct signal.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-expose-a-large-remote-resu" data-pid="m10-1-how-would-you-expose-a-large-remote-resu" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>19. How would you expose a large remote result set (a paginated API or a database cursor) as a Python iterable?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Wrap it in a class whose <code>__iter__</code> is a generator that fetches one page (or batch of rows) at a time and yields its items, so memory stays bounded, the first results arrive immediately, and the consumer stopping early (a <code>break</code>, <code>islice</code>) stops the fetching. Use the API's cursor or continuation token rather than offsets where possible, since offsets shift when data changes and get slower deep into the set. Handle transient errors per page with retries and backoff, respect rate limits between pages, and set timeouts (7.4). Decide and document whether the object is re-iterable (each loop re-queries from the start) or a one-shot stream (like a DB cursor); offer a <code>first(n)</code> helper and avoid <code>__len__</code> unless the API reports a total cheaply. Make sure resources are released when iteration stops early: closing the generator runs its <code>finally</code>, and a context manager (10.2) makes that explicit. Expose counters such as pages fetched for observability.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>for</code> calls <code>iter(obj)</code> then <code>next(it)</code> until <code>StopIteration</code>; implement <code>__iter__</code> (and, for iterators, <code>__next__</code> raising <code>StopIteration</code>).</li><li>Containers return a new iterator from every <code>__iter__</code> (usually a generator method); only one-shot streams return <code>self</code>.</li><li>Prefer a generator <code>__iter__</code>; write an iterator class when you need extra methods (<code>peek</code>, <code>close</code>) or inspectable state.</li><li><code>iter(func, sentinel)</code> loops until a sentinel; lazy classes fetch or compute on demand and can offer an arithmetic <code>__len__</code>.</li><li>Traps: exhausted iterators, <code>StopIteration</code> inside generators becomes <code>RuntimeError</code> (use <code>next(it, default)</code>), and changing collections while iterating.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
