@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m10-1", num="10.1", title="Iterator classes",
@@ -15,6 +16,9 @@ term("Iterator", "An object with `__next__` (returning the next item or raising 
 term("Sentinel", "A special value that marks the end of a stream, such as `b\"\"` from `read()`; `iter(func, sentinel)` calls `func` until it appears.")
 
 section("protocol", "The protocol, by hand",
+    fig(stage_map(10, "a streaming export job"), "Module 10 at a glance: writing iterators and context managers yourself, building up to a job that streams data and always cleans up."),
+    fig(chain(["iter(obj)", "calls obj.__iter__()", "next(it) calls|it.__next__()", ("StopIteration|ends the loop", "accent")]),
+        "The iterator protocol is two methods: `__iter__` returns an iterator, and the iterator's `__next__` returns values until it raises `StopIteration`."),
     p("""Lesson 6.3 showed what a `for` loop does: it calls `iter(obj)` once to get an **iterator**, then `next(iterator)` repeatedly until
     `StopIteration` is raised. In terms of the data model (9.2), `iter(obj)` calls `obj.__iter__()` and `next(it)` calls `it.__next__()`. So
     to make your own objects work with `for`, `list()`, `sum()`, unpacking and comprehensions, you implement those two methods. An
@@ -47,6 +51,13 @@ section("protocol", "The protocol, by hand",
 )
 
 section("iterable", "Iterable containers and one-shot iterators",
+    fig(table(["", "iterable container", "one-shot iterator"], [
+        ["__iter__ returns", "a new iterator each time", "itself"],
+        ["has __next__", "no", "yes"],
+        ["second for loop", "runs again from the start", "finds nothing"],
+        ["examples", "list, dict, range, your container", "file, generator, map()"],
+    ], hl={(2, 2)}, label="iterables versus iterators"),
+        "Containers hand out fresh iterators, so they can be looped over many times; an iterator is consumed once."),
     p("""A list can be looped over any number of times because it is not an iterator itself: each `iter(my_list)` creates a **new** list
     iterator starting at the beginning. Your container classes should work the same way. Their `__iter__` must return a **fresh**
     iterator each time, not `self`, so that two loops (or a nested loop over the same object) each get their own position. Making a
@@ -182,6 +193,8 @@ section("lazy", "Lazy objects: computing on demand",
 )
 
 section("traps", "Iteration traps",
+    fig(chain(["it = iter(data)", "first pass consumes it", ("second pass:|silently empty", "bad")]),
+        "The commonest iteration bug: reusing an exhausted iterator gives no error, just no items."),
     p("""**`StopIteration` inside a generator.** Calling `next(it)` without a default inside a generator body, when `it` is exhausted, raises
     `StopIteration` inside the generator. Before Python 3.7 that silently ended the generator; since PEP 479 it is turned into a
     `RuntimeError: generator raised StopIteration`, because silently ending hid bugs. Use `next(it, default)` or catch `StopIteration`

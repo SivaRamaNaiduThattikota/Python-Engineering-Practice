@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m10-p", num="10.P", title="Module 10 practice set and mini project",
@@ -10,6 +11,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(10, "a streaming export job"), "Module 10 at a glance: writing iterators and context managers yourself, building up to a job that streams data and always cleans up."),
     p("""For anything that is iterated, ask: **one pass or many?** Containers hand out a fresh iterator each time (usually from a generator `__iter__`); streams
     are their own iterator and are used once (10.1). For anything that is acquired, ask: **who releases it, and when?** Tie the release to a scope
     with a context manager, put cleanup in `finally`, suppress nothing by accident (10.2), and use `ExitStack` when the number of resources or
@@ -521,6 +523,8 @@ section("set", "Practice set",
 )
 
 section("project", "Mini project: a streaming export job",
+    fig(chain(["open all sources|(ExitStack)", "chain the records|lazily", "batch them", "write in a|transaction", ("close everything,|commit or roll back", "good")]),
+        "The export job: iterators keep memory flat, and context managers guarantee every source is closed and the destination is all-or-nothing."),
     p("""A nightly job reads records from several sources (files, an API, a database query), skips blank and comment lines, batches the rest and
     writes them to a destination that supports transactions. Every source must be closed however the job ends, the destination must receive
     either everything or nothing, and the job must report what it did. Build it from the pieces of this module."""),

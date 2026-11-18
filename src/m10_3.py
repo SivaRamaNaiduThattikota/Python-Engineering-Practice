@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m10-3", num="10.3", title="Resource patterns",
@@ -15,6 +16,8 @@ term("Idempotent close", "A `close()` that can safely be called more than once: 
 term("Compensating action", "An undo step registered after an action succeeds, run if a later step fails, so a multi-step operation leaves no half-done state.")
 
 section("exitstack", "`ExitStack`: a dynamic number of resources",
+    fig(chain(["with ExitStack() as stack:", "stack.enter_context(r)|for each resource", "the block runs", ("exit: last to first,|even after an error", "good")]),
+        "`ExitStack` manages a number of resources decided at run time, with the same guarantees as nested `with` blocks."),
     p("""A `with` statement names its context managers in the code, so it cannot open "one file per input path" when the number of paths is only
     known at run time. **`contextlib.ExitStack`** solves that: it is a context manager that you fill while the block runs. `stack.enter_context(cm)`
     enters `cm` and remembers to exit it; `stack.callback(func, *args)` registers any cleanup function. When the `with ExitStack()` block ends,
@@ -232,6 +235,8 @@ section("deadline", "Timers, deadlines and budgets as scopes",
 )
 
 section("pools", "Pools: borrowing and returning resources",
+    fig(chain(["pool of connections", "borrow one (with)", "use it", ("returned to the pool,|even on errors", "good")]),
+        "A pool hands out existing resources as context managers, so borrowing and returning can never get out of step."),
     p("""Some resources are expensive to create and limited in number: database connections, browser instances, GPU workers, licensed API sessions.
     A **pool** creates a few, lends one out per task, and takes it back afterwards, so tasks do not pay the creation cost and the total stays
     bounded. Lending is a context manager: `with pool.acquire() as conn:` returns the connection to the pool when the block ends, even if it

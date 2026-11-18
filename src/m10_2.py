@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m10-2", num="10.2", title="Context managers",
@@ -43,6 +44,19 @@ section("why", "Setup and guaranteed cleanup",
 )
 
 section("steps", "What `with` does, step by step",
+    fig(flowchart({
+        "with": ("start", 1, 0, "with mgr as f:"),
+        "enter": ("step", 1, 1, "f = mgr.__enter__()"),
+        "body": ("accent", 1, 2, "run the block"),
+        "exc": ("ask", 1, 3, "did it raise?"),
+        "ok": ("good", 0, 3, "__exit__(None,|None, None)"),
+        "exit": ("step", 1, 4, "__exit__(type, value, tb)"),
+        "sup": ("ask", 1, 5, "__exit__ returned|True?"),
+        "s": ("warn", 0, 5, "exception suppressed"),
+        "p": ("bad", 1, 6, "exception propagates"),
+    }, [("with", "enter"), ("enter", "body"), ("body", "exc"), ("exc", "ok", "no"), ("exc", "exit", "yes"),
+        ("exit", "sup"), ("sup", "s", "yes"), ("sup", "p", "no")], cell=(230, 70), label="what a with statement does"),
+        "`__exit__` always runs, with or without an exception; it decides whether the exception continues by its return value."),
     p("""`with EXPR as name: BODY` runs these steps. Python evaluates `EXPR`, which gives the **context manager** object. It calls the manager's
     `__enter__()` method and binds the **return value** of `__enter__` to `name` (not the manager itself, unless `__enter__` returns
     `self`). It runs the body. Then, however the body ends (normally, with `return`, `break` or an exception), it calls
@@ -160,6 +174,10 @@ section("generator", "`contextlib.contextmanager`: a generator with one yield",
 )
 
 section("several", "Several managers, nesting and exit order",
+    fig(table(["with a() as x, b() as y:", "order"], [
+        ["a.__enter__()", "1"], ["b.__enter__()", "2"], ["the block", "3"], ["b.__exit__()", "4"], ["a.__exit__()", "5"],
+    ], hl={(3, 0), (4, 0)}, label="managers exit in reverse order"),
+        "Several managers enter left to right and exit in reverse, so each resource is released before the one it depends on."),
     p("""One `with` statement can open several managers, separated by commas; since Python 3.10 they can be wrapped in parentheses across lines.
     They are entered **left to right** and exited in **reverse** order, like nested `with` blocks, so a resource acquired later (a cursor) is
     released before one acquired earlier (its connection). If one of them fails to enter, those already entered are exited properly."""),
