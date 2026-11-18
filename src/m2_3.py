@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m2-3", num="2.3", title="Copies: shallow and deep",
@@ -41,6 +42,15 @@ COPY_FIG = """
 </svg>"""
 
 section("three", "Alias, shallow copy, deep copy",
+    fig(flowchart({
+        "ask": ("ask", 0, 0, "will you change|the data?"),
+        "none": ("good", 1, 0, "no copy needed|(just read it)"),
+        "nest": ("ask", 0, 1, "does it hold|mutable parts?"),
+        "shallow": ("step", 1, 1, "shallow copy|list(x), x.copy(), x[:]"),
+        "deep": ("accent", 0, 2, "deep copy, or rebuild|the nested parts"),
+    }, [("ask", "none", "no"), ("ask", "nest", "yes"), ("nest", "shallow", "no"), ("nest", "deep", "yes")], cell=(240, 84),
+        label="choosing between no copy, a shallow copy and a deep copy"),
+        "Choosing a copy: a shallow copy is enough when the inner objects are immutable; nested lists or dicts you will edit need a deep copy."),
     p("""There are three different things people mean by "copy", and choosing the wrong one is behind most of the
     aliasing bugs from 2.2:"""),
     p("""- **Alias:** `b = a`. No copy at all, just a second name for the same object.

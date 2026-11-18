@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m2-2", num="2.2", title="Mutable and immutable objects, and aliasing",
@@ -38,6 +39,15 @@ PLUS_FIG = """
 </svg>"""
 
 section("kinds", "Objects that can change and objects that cannot",
+    fig(flowchart({
+        "ask": ("ask", 0, 0, "is the object|mutable?"),
+        "imm": ("good", 1, 0, "operations build a|new object"),
+        "how": ("ask", 0, 1, "in-place method?|(append, +=, sort)"),
+        "alias": ("bad", 1, 1, "every name for it|sees the change"),
+        "new": ("good", 0, 2, "x = x + [..], sorted(x)|give a new object"),
+    }, [("ask", "imm", "no"), ("ask", "how", "yes"), ("how", "alias", "yes"), ("how", "new", "no")], cell=(230, 84),
+        label="will this operation change an object other names share?"),
+        "The question to ask before every operation on shared data: does it change the object in place, or build a new one?"),
     p("""Every object is either **mutable** (it can be changed in place after it is created) or **immutable** (it can
     never change). When an object changes in place, its identity stays the same: same `id()`, same object, new
     contents. When you "change" an immutable value, Python builds a new object and moves the name, exactly like the
@@ -144,6 +154,12 @@ section("aliasing", "Aliasing: one object, several names",
 )
 
 section("operators", "Changing versus rebinding: `+=`, `+` and friends",
+    fig(table(["after x += ...", "list: x = [1]; y = x", "tuple: x = (1,); y = x"], [
+        ["x", "[1, 2]", "(1, 2)"],
+        ["y", "[1, 2]", "(1,)"],
+        ["x is y", "True", "False"],
+    ], hl={(1, 1), (2, 1)}, label="+= changes a list in place but rebinds a tuple name"),
+        "`+=` on a list extends the same object, so the alias `y` changes too; on a tuple it builds a new tuple and rebinds only `x`."),
     p("""For a list, `x += y` changes the list **in place** (it is `x.extend(y)` under the hood), while `x = x + y`
     builds a **new** list and moves the name. With an alias around, they give different results. For immutable types
     there is no in-place version, so `+=` on a str, tuple or int always builds a new object."""),

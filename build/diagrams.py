@@ -13,6 +13,8 @@ Text in boxes can be split onto two lines with "|".
 import html
 import itertools
 
+__all__ = ["flowchart", "chain", "refs", "table", "module_map", "stage_map"]
+
 _ids = itertools.count(1)
 CHAR = 6.9          # rough width of one character at the figure font size
 
@@ -264,3 +266,13 @@ def module_map(lessons, project, label=""):
     for a, b in zip(keys, keys[1:]):
         edges.append((a, b, "", {"style": "a"}))
     return flowchart(nodes, edges, cell=(206, 92), label=label or "how the lessons of this module lead to its mini project")
+
+
+def stage_map(stage, project, label=""):
+    """module_map for a module, with lesson numbers and titles read from assets/app.js."""
+    import re
+    from pathlib import Path
+    js = (Path(__file__).resolve().parent.parent / "assets" / "app.js").read_text(encoding="utf-8")
+    found = re.findall(r"\{ id: 'm(\d+)-(\d+)', stage: (\d+), num: '([^']+)'[^}]*?title: '((?:[^'\\]|\\.)*)'", js, re.S)
+    lessons = [(num, title.replace("\'", "'")) for _, _, st, num, title in found if int(st) == stage]
+    return module_map(lessons, project, label=label)

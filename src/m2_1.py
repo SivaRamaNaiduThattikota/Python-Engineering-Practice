@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m2-1", num="2.1", title="Names, objects and identity",
@@ -37,6 +38,10 @@ NAMES_FIG = """
 </svg>"""
 
 section("names", "Names point at objects",
+    fig(stage_map(2, "a safe conversation store"), "Module 2 at a glance: how Python names, objects and copies work, building up to a store that never leaks changes."),
+    fig(refs(["a", "b", "c"], [("[1, 2, 3]  (a list)", "accent"), "42  (an int)"], [(0, 0), (1, 0), (2, 1)],
+        label="a and b name the same list, c names an int"),
+        "After `a = [1, 2, 3]`, `b = a` and `c = 42`: assignment never copies, it adds another name for an existing object."),
     p("""Every value in Python is an **object** living somewhere in memory. A variable is a **name** that points at an
     object. `x = something` does one thing only: it makes the name `x` point at that object. It never copies the
     object, and it never changes the object that `x` pointed at before. Your theory notes call this a tag on an
@@ -85,6 +90,12 @@ section("names", "Names point at objects",
 )
 
 section("identity", "Identity and equality",
+    fig(table(["check", "b = a", "b = [1, 2] (a new list)"], [
+        ["a == b", "True", "True"],
+        ["a is b", "True", "False"],
+        ["id(a) == id(b)", "True", "False"],
+    ], hl={(1, 2), (2, 2)}, label="equality compares values, identity compares objects"),
+        "`==` asks whether two objects have equal values; `is` asks whether two names point at the very same object."),
     p("""Every object has an **identity**: a number that stays the same for the object's whole life. `id(x)` returns
     it. Two questions sound alike but are completely different:"""),
     p("""- `a is b` asks: **is this the same object?** It compares identities. Nothing else is looked at.
@@ -127,6 +138,8 @@ section("identity", "Identity and equality",
 )
 
 section("singletons", "None, singletons and sentinels",
+    fig(chain(["x is None", "compares identity", "there is only one None", ("fast, and no __eq__ can fool it", "good")]),
+        "Why `is None` is the rule: `None` is a singleton, so an identity check is exact, while `== None` calls a method that a class can override."),
     p("""A **singleton** is a type that only ever has one object. `None`, `True`, `False` and `...` (Ellipsis) are
     singletons: every `None` in your program is the same object. That is why `x is None` is the right test. It is exact
     (nothing can pretend to be `None`), and it works on numpy arrays and pandas objects, where `x == None` either returns an
@@ -200,6 +213,17 @@ section("caching", "Caching is not a rule",
 )
 
 section("containers", "Containers check identity first",
+    fig(flowchart({
+        "start": ("start", 1, 0, "x in items"),
+        "next": ("ask", 1, 1, "another item?"),
+        "no": ("end", 2, 1, "False"),
+        "same": ("ask", 1, 2, "item is x?"),
+        "yes": ("good", 2, 2, "True"),
+        "eq": ("ask", 1, 3, "item == x?"),
+    }, [("start", "next"), ("next", "no", "no"), ("next", "same", "yes"), ("same", "yes", "yes"),
+        ("same", "eq", "no"), ("eq", "yes", "yes", {"route": "hv"}), ("eq", "next", "no", {"route": [(0.4, 3), (0.4, 1)]})],
+        cell=(200, 78), label="membership checks identity first, then equality, item by item"),
+        "Membership checks identity before equality, which is why a list containing `float('nan')` still finds that same `nan` object."),
     p("""When a list, tuple or dict looks for a value (for `in`, `==`, `count`, `index`, `remove` or a dict key), it
     compares each item with `x is item or x == item`: identity first, equality second. Usually you never notice. Two
     cases make it visible."""),
@@ -220,6 +244,8 @@ section("containers", "Containers check identity first",
 )
 
 section("lifetime", "Object lifetime and id reuse",
+    fig(chain(["object created", "names refer to it|(reference count > 0)", "last reference gone|(count reaches 0)", ("memory freed|its id can be reused", "warn")]),
+        "An `id` is only unique while the object is alive; after it is freed, a new object may get the same number."),
     p("""`del x` deletes the **name** `x`, not the object. An object stays alive as long as at least one name or
     container still points at it. When nothing points at it any more, Python frees it, and its memory can be reused for
     the next object. Since `id()` is based on that memory, **an id can be reused** after its object is gone."""),

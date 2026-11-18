@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m2-4", num="2.4", title="How arguments are passed",
@@ -33,6 +34,8 @@ CALL_FIG = """
 </svg>"""
 
 section("rule", "One rule: parameters are assigned, not copied",
+    fig(refs(["caller: items", "function: xs"], [("['a', 'b']  (one list)", "accent")], [(0, 0), (1, 0)], label="the parameter is a second name for the caller's object"),
+        "Calling `f(items)` assigns the parameter `xs = items`: both names point at one list, so `xs.append(...)` changes the caller's data, while `xs = [...]` only rebinds the local name."),
     p("""When you call `f(cart)`, Python does what `items = cart` would do: it points the parameter name `items` at
     the **same object** that `cart` points at. Nothing is copied, which is why passing a million-row list to a function
     is instant. People argue whether this is "pass by value" or "pass by reference"; the accurate name is **pass by
@@ -91,6 +94,8 @@ section("rule", "One rule: parameters are assigned, not copied",
 )
 
 section("defaults", "Mutable default arguments",
+    fig(chain(["def runs once", "default [] created once", "call 1 appends 'a'", ("call 2 sees ['a']", "bad")]),
+        "Default values are evaluated when `def` runs, not on each call, so a mutable default is shared by every call that does not pass the argument."),
     p("""A default value is evaluated **once, when the `def` statement runs**, and stored on the function object (you
     can see them in `f.__defaults__`). Every call that uses the default gets that same object. For immutable defaults this
     is harmless. For a list, dict or set, every call shares and changes one object, so data leaks from one call into the
@@ -131,6 +136,12 @@ section("defaults", "Mutable default arguments",
 )
 
 section("design", "Designing functions that are safe to call",
+    fig(flowchart({
+        "ask": ("ask", 0, 0, "must the function change|its argument?"),
+        "pure": ("good", 1, 0, "build a new object|and return it"),
+        "mut": ("warn", 0, 1, "change it in place,|name it so, return None"),
+    }, [("ask", "pure", "no"), ("ask", "mut", "yes")], cell=(250, 86), label="returning new data versus changing the argument"),
+        "Most functions should not change their inputs; the ones that must should say so in their name and return `None`, like `list.sort`."),
     p("""Because a function receives your actual objects, every function makes a choice, whether it says so or not:"""),
     p("""- **Pure:** read the arguments, return a new result, change nothing. Easiest to test, safe to call twice, safe
       to retry. The default choice for data transformations: `sorted`, `dict | dict`, comprehensions.

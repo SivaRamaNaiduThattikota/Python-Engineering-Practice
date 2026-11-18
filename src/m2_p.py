@@ -1,4 +1,5 @@
 from lesson import *
+from diagrams import *
 
 lesson(
     id="m2-p", num="2.P", title="Module 2 practice set and mini project",
@@ -9,6 +10,7 @@ lesson(
 )
 
 section("how", "How to use this page",
+    fig(stage_map(2, "a safe conversation store"), "Module 2 at a glance: how Python names, objects and copies work, building up to a store that never leaks changes."),
     p("""The problems are deliberately not grouped by lesson: part of the skill is recognising which idea a bug comes
     from. Before opening a hint, say out loud which of these it is: identity versus equality (2.1), a shared mutable
     object (2.2), a copy that is too shallow or too deep (2.3), or something a function did to its arguments or
@@ -317,6 +319,8 @@ config = {"retriever": {"k": 5, "stopwords": [f"w{i}" for i in range(20000)]},
 )
 
 section("project", "Mini project: a safe conversation store",
+    fig(chain(["add(conversation)", "store a deep copy", "get() returns a copy", ("caller edits never|reach the store", "good")]),
+        "The store copies on the way in and on the way out, so no outside name ever shares an object with its internal state."),
     p("""A chat service keeps sessions in memory. Earlier versions had every bug from this module: users saw each other's
     messages, deleting one "ok" deleted another, editing a returned history changed the stored one, and forking a
     session for an A/B test changed the original. Build the store so none of that can happen. The tests check every
