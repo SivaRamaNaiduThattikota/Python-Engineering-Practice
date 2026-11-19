@@ -47,7 +47,7 @@ const STAGES = {
   14: { name: 'Module 14 · Concurrency and async' },
   15: { name: 'Module 15 · Modules and packaging' },
   16: { name: 'Module 16 · Algorithms for interviews' },
-  17: { name: 'Later · Data libraries' },
+  17: { name: 'Module D · Data libraries' },
 };
 
 const COURSE = [
@@ -387,7 +387,34 @@ const COURSE = [
     title: 'Module 16 practice set and mini project',
     desc: 'Mixed problems from the whole module, then one small program that uses all of it.',
     keys: 'practice mixed review project search engine inverted index tf-idf heap top-k snippet sliding window union-find knapsack merge intervals critical path dag grid bfs integer square root' },
-  { id: 'd1', stage: 17, num: 'D', soon: true, title: 'numpy, pandas, matplotlib, sklearn practice', desc: 'After the core modules. Practice for the notebooks in python-data-libraries.' },
+  { id: 'm17-1', stage: 17, num: 'D.1', file: 'lessons/m17-1.html', probs: 17,
+    title: 'NumPy for ML: arrays, broadcasting and vectorisation',
+    desc: 'Arrays, dtypes, views and copies, broadcasting, axis reductions, and vectorised ML building blocks.',
+    keys: 'numpy ndarray array dtype shape ndim reshape view copy shares_memory slicing boolean mask fancy indexing broadcasting keepdims axis reduction sum mean argmax argsort argpartition where ufunc vectorisation softmax log-sum-exp cosine similarity embeddings normalise top-k euclidean distance one-hot bincount mean pooling attention mask default_rng float32 overflow' },
+  { id: 'm17-2', stage: 17, num: 'D.2', file: 'lessons/m17-2.html', probs: 16,
+    title: 'pandas essentials: selection, cleaning and dtypes',
+    desc: 'DataFrames, loc and iloc, filters, missing values, dtypes, pandas 3 strings and Copy-on-Write, cleaning for ML.',
+    keys: 'pandas dataframe series index read_csv stringio dtypes info describe head loc iloc boolean filter isin between query missing nan isna fillna dropna nullable int64 pd.NA astype to_numeric coerce str dtype string copy-on-write chained assignment ChainedAssignmentError assign method chaining duplicated drop_duplicates value_counts data quality report imputation leakage train test split memory_usage' },
+  { id: 'm17-3', stage: 17, num: 'D.3', file: 'lessons/m17-3.html', probs: 16,
+    title: 'pandas: groupby, merge and reshape',
+    desc: 'groupby and named aggregation, transform and filter, merge with validate and indicator, anti-joins, pivot_table, melt and concat.',
+    keys: 'pandas groupby split apply combine agg named aggregation size count nunique transform filter rank cumcount merge join inner left right outer validate one_to_one one_to_many many_to_many indicator anti join left_anti suffixes concat pivot pivot_table melt long wide crosstab target encoding leakage evaluation report pass rate percentile' },
+  { id: 'm17-4', stage: 17, num: 'D.4', file: 'lessons/m17-4.html', probs: 17,
+    title: 'pandas: time series, text and categoricals',
+    desc: 'Dates, resampling, rolling and lag features without leakage, time-based splits, the .str accessor, regex, chunking, categoricals and one-hot encoding.',
+    keys: 'pandas datetime to_datetime format mixed errors coerce dt accessor dayofweek timedelta time zone utc tz_localize tz_convert resample asfreq date_range rolling expanding ewm shift lag feature leakage time-based split str accessor regex extract contains replace split explode chunking category dtype codes ordered categorical get_dummies one-hot unseen categories reindex sessionize' },
+  { id: 'm17-5', stage: 17, num: 'D.5', file: 'lessons/m17-5.html', probs: 13,
+    title: 'matplotlib: plots that explain data and models',
+    desc: 'Figure and Axes, the object-oriented API, chart choice, pandas plotting, training curves, confusion matrices, thresholds, embeddings, honest charts.',
+    keys: 'matplotlib pyplot figure axes subplots object oriented api plot scatter hist bar barh imshow colorbar annotate text legend title xlabel ylabel xlim ylim log scale axvline axhline twinx sharex savefig dpi close tight_layout pandas plot learning curve loss confusion matrix heatmap precision recall threshold pca embeddings scatter honest chart' },
+  { id: 'm17-6', stage: 17, num: 'D.6', file: 'lessons/m17-6.html', probs: 16,
+    title: 'scikit-learn: pipelines, validation and metrics',
+    desc: 'fit/predict/transform, stratified splits, cross-validation, Pipeline and ColumnTransformer, metrics and baselines, TF-IDF text models, grid search, custom transformers.',
+    keys: 'scikit-learn sklearn estimator fit predict predict_proba transform fit_transform score random_state train_test_split stratify cross_val_score cross_validate StratifiedKFold TimeSeriesSplit pipeline make_pipeline ColumnTransformer SimpleImputer StandardScaler OneHotEncoder handle_unknown leakage DummyClassifier baseline accuracy precision recall f1 confusion_matrix classification_report roc_auc average_precision imbalanced class_weight TfidfVectorizer LogisticRegression GridSearchCV param grid get_params clone BaseEstimator TransformerMixin cohen_kappa' },
+  { id: 'm17-p', stage: 17, num: 'D.P', file: 'lessons/m17-p.html', probs: 11,
+    title: 'Module D practice set and mini project',
+    desc: 'Mixed problems from the whole module, then one end-to-end classifier from raw CSV to evaluated model and report.',
+    keys: 'practice mixed review project end to end classifier csv cleaning time split tfidf column transformer pipeline baseline metrics confusion matrix calibration reliability diagram drift psi population stability error analysis near duplicate embeddings cosine pivot resample leakage' },
 ];
 
 (function () {
@@ -729,7 +756,7 @@ const COURSE = [
       const g = GUIDES[st];
       const links = g ? g.notes.map(([t, u]) => `<a ${href(u)}>${t}${arrow(u)}</a>`).join('')
         : '<span class="muted">New in this workbook: the short explanations are on the lesson pages.</span>';
-      return `<div class="row tm-row" data-stage="${st}"><div class="icon bg-accent">${st === '17' ? 'D' : st}</div><div style="flex:1"><div class="t">${STAGES[st].name.replace(/^Module \d+ · |^Later · /, '')}</div><div class="tm-links">${links}</div></div></div>`;
+      return `<div class="row tm-row" data-stage="${st}"><div class="icon bg-accent">${st === '17' ? 'D' : st}</div><div style="flex:1"><div class="t">${STAGES[st].name.replace(/^Module \w+ · /, '')}</div><div class="tm-links">${links}</div></div></div>`;
     }).join('');
   }
   const rmap = document.getElementById('repo-map');

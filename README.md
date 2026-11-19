@@ -19,7 +19,7 @@ option is not actually faster.
 
 The build needs a few package wheels next to the local Pyodide:
 
-    python build/fetch_wheels.py numpy pandas pydantic pytest packaging
+    python build/fetch_wheels.py numpy pandas pydantic pytest packaging matplotlib scikit-learn
 
 ## How some modules are graded
 
@@ -33,6 +33,13 @@ The build needs a few package wheels next to the local Pyodide:
   `asyncio.run` uses an event loop on simulated time, so timings are exact.
 - Module 15 (imports): `lessontools.make_tree` writes small packages to disk and puts them on
   `sys.path`; `forget` clears them from the import cache.
+- Module D (data libraries): matplotlib uses the Agg backend. After each run the helper turns
+  every open figure into a PNG, so the browser shows what the code drew and the build saves
+  example figures to `lessons/img/`. Plot problems are graded by inspecting the Axes
+  (lines, patches, texts, labels).
+
+The course map on the home page is generated from `assets/app.js` by `build-tools/course_map.py`
+in the workspace; re-run it when a module is added or renamed.
 
 ## Running locally
 

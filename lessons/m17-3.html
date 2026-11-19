@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>D.3 · pandas: groupby, merge and reshape</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m17-3" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module D · Data libraries</span></div>
+  <h1>D.3 pandas: groupby, merge and reshape</h1>
+  <p>Most feature engineering and most evaluation reports are a group-by, a join or a reshape. Split-apply-combine with named aggregations, <code>transform</code> for per-row group features, joins and the row explosions they cause, anti-joins, and moving between long and wide tables with <code>pivot_table</code> and <code>melt</code>.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">4 easy · 9 medium · 3 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="groupby">
+<h2><span class="n">1</span>Split, apply, combine</h2>
+<p><code>df.groupby(key)</code> <strong>splits</strong> the rows into groups that share a key, you <strong>apply</strong> a function to each group, and pandas <strong>combines</strong> the results into a new table with one row per group. It is SQL's <code>GROUP BY</code> and Power BI's summarise-by-a-column, with Python functions available inside. The clearest form is <strong>named aggregation</strong>: <code>agg(new_name=("column", "function"))</code>, which says exactly which output column comes from which input and which function, and gives the result flat, readable column names.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 618 98" role="img" aria-label="7 complaint rows then split by customer then apply: count, sum, mean per group then combine: 1 row per customer" style="max-width:618px;min-width:min(618px,540px);margin:0 auto"><defs><marker id="m72n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m72a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m72r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m72g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><rect x="16.0" y="16.0" width="138.4" height="66.0" rx="12.0" class="box"/><text x="85.2" y="53.5" class="v mid">7 complaint rows</text><path d="M157.4 49.0 H185.4" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m72n)"/><rect x="188.4" y="16.0" width="96.0" height="66.0" rx="12.0" class="box a"/><text x="236.4" y="46.0" class="w mid">split by</text><text x="236.4" y="61.0" class="w mid">customer</text><path d="M287.4 49.0 H315.4" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m72n)"/><rect x="318.4" y="16.0" width="124.6" height="66.0" rx="12.0" class="box"/><text x="380.7" y="38.5" class="v mid">apply: count,</text><text x="380.7" y="53.5" class="v mid">sum,</text><text x="380.7" y="68.5" class="v mid">mean per group</text><path d="M446.0 49.0 H474.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m72n)"/><rect x="477.0" y="16.0" width="124.6" height="66.0" rx="12.0" class="box g"/><text x="539.3" y="46.0" class="w mid">combine: 1 row</text><text x="539.3" y="61.0" class="w mid">per customer</text></svg></div><figcaption>Split-apply-combine: one input row per complaint, one output row per customer.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">groupby.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+complaints = pd.DataFrame({
+    &quot;id&quot;: [1, 2, 3, 4, 5, 6, 7],
+    &quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;cy&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;dee&quot;],
+    &quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;card&quot;, &quot;loan&quot;, None],
+    &quot;amount&quot;: [20.0, 300.0, 35.0, 1200.0, 15.0, 250.0, 60.0],
+    &quot;timely&quot;: [True, False, True, True, False, True, True],
+})
+per_customer = complaints.groupby(&quot;customer&quot;).agg(
+    complaints=(&quot;id&quot;, &quot;size&quot;),
+    total=(&quot;amount&quot;, &quot;sum&quot;),
+    avg=(&quot;amount&quot;, &quot;mean&quot;),
+    products=(&quot;product&quot;, &quot;nunique&quot;),
+    timely_rate=(&quot;timely&quot;, &quot;mean&quot;),
+)
+print(per_customer.round(2))
+print(complaints.groupby(&quot;product&quot;)[&quot;id&quot;].count().to_dict())
+print(complaints.groupby(&quot;product&quot;, dropna=False)[&quot;id&quot;].count().to_dict())
+print(complaints.groupby([&quot;customer&quot;, &quot;product&quot;]).size().head(3).to_dict())
+print(complaints.groupby(&quot;customer&quot;, as_index=False)[&quot;amount&quot;].max().head(2))</code></pre><div class="out"><span class="ol">Output</span><pre>          complaints   total      avg  products  timely_rate
+customer                                                    
+ana                3   305.0   101.67         2          1.0
+ben                2   315.0   157.50         2          0.0
+cy                 1  1200.0  1200.00         1          1.0
+dee                1    60.0    60.00         0          1.0
+{&#x27;card&#x27;: 3, &#x27;loan&#x27;: 2, &#x27;mortgage&#x27;: 1}
+{&#x27;card&#x27;: 3, &#x27;loan&#x27;: 2, &#x27;mortgage&#x27;: 1, nan: 1}
+{(&#x27;ana&#x27;, &#x27;card&#x27;): 2, (&#x27;ana&#x27;, &#x27;loan&#x27;): 1, (&#x27;ben&#x27;, &#x27;card&#x27;): 1}
+  customer  amount
+0      ana   250.0
+1      ben   300.0</pre></div></div>
+<p>Four details. <code>size</code> counts rows in each group and <code>count</code> counts non-missing values in a column, the same difference as SQL's <code>COUNT(*)</code> and <code>COUNT(col)</code>. The <strong>mean of a boolean</strong> column is the fraction of <code>True</code>, the quickest way to get a rate. Rows whose key is <strong>missing are dropped</strong> from the groups by default (complaint 7 has no product), like a join on <code>NULL</code>; pass <code>dropna=False</code> to keep them as their own group. And the group keys become the <strong>index</strong> of the result; <code>as_index=False</code> (or <code>.reset_index()</code>) keeps them as ordinary columns, which is what you want before a merge or a plot.</p>
+</section>
+<section class="sec" id="transform">
+<h2><span class="n">2</span>transform and filter: group facts on every row</h2>
+<p><code>agg</code> shrinks each group to one row. <strong><code>transform</code></strong> returns a result <strong>the same length as the input</strong>, aligned to the original rows: each row gets its group's value. That is how you build features such as "this complaint's amount compared with the customer's average" or "the share of the customer's total", the pandas version of a SQL window function (<code>AVG(amount) OVER (PARTITION BY customer)</code>) or a Power BI calculated column using <code>ALLEXCEPT</code>. <code>rank</code>, <code>cumsum</code>, <code>cumcount</code> and <code>shift</code> on a group-by work the same way, row by row within each group. <strong><code>filter</code></strong> keeps or drops whole groups by a condition on the group, like <code>HAVING</code>.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 716 168" role="img" aria-label="three things a group-by can return" style="max-width:716px;min-width:min(716px,540px);margin:0 auto"><rect x="17" y="17" width="99.9" height="32" rx="7" class="box b"/><text x="67.0" y="37.5" class="w mid"></text><rect x="118.9" y="17" width="127.5" height="32" rx="7" class="box b"/><text x="182.7" y="37.5" class="w mid">agg</text><rect x="248.4" y="17" width="265.5" height="32" rx="7" class="box b"/><text x="381.1" y="37.5" class="w mid">transform</text><rect x="515.9" y="17" width="182.70000000000002" height="32" rx="7" class="box b"/><text x="607.2" y="37.5" class="w mid">filter</text><rect x="17" y="51" width="99.9" height="32" rx="7" class="box"/><text x="67.0" y="71.5" class="tk">rows out</text><rect x="118.9" y="51" width="127.5" height="32" rx="7" class="box"/><text x="182.7" y="71.5" class="tk">one per group</text><rect x="248.4" y="51" width="265.5" height="32" rx="7" class="box a"/><text x="381.1" y="71.5" class="tk w">same as input</text><rect x="515.9" y="51" width="182.70000000000002" height="32" rx="7" class="box"/><text x="607.2" y="71.5" class="tk">the rows of kept groups</text><rect x="17" y="85" width="99.9" height="32" rx="7" class="box"/><text x="67.0" y="105.5" class="tk">SQL</text><rect x="118.9" y="85" width="127.5" height="32" rx="7" class="box"/><text x="182.7" y="105.5" class="tk">GROUP BY</text><rect x="248.4" y="85" width="265.5" height="32" rx="7" class="box"/><text x="381.1" y="105.5" class="tk">window function OVER (PARTITION BY)</text><rect x="515.9" y="85" width="182.70000000000002" height="32" rx="7" class="box"/><text x="607.2" y="105.5" class="tk">HAVING</text><rect x="17" y="119" width="99.9" height="32" rx="7" class="box"/><text x="67.0" y="139.5" class="tk">typical use</text><rect x="118.9" y="119" width="127.5" height="32" rx="7" class="box"/><text x="182.7" y="139.5" class="tk">a summary table</text><rect x="248.4" y="119" width="265.5" height="32" rx="7" class="box"/><text x="381.1" y="139.5" class="tk">a feature column</text><rect x="515.9" y="119" width="182.70000000000002" height="32" rx="7" class="box"/><text x="607.2" y="139.5" class="tk">drop small groups</text></svg></div><figcaption>Use <code>agg</code> for reports, <code>transform</code> for features, <code>filter</code> to drop groups.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">transform.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+complaints = pd.DataFrame({
+    &quot;id&quot;: [1, 2, 3, 4, 5, 6, 7],
+    &quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;cy&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;dee&quot;],
+    &quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;card&quot;, &quot;loan&quot;, None],
+    &quot;amount&quot;: [20.0, 300.0, 35.0, 1200.0, 15.0, 250.0, 60.0],
+    &quot;timely&quot;: [True, False, True, True, False, True, True],
+})
+g = complaints.groupby(&quot;customer&quot;)[&quot;amount&quot;]
+complaints[&quot;cust_avg&quot;] = g.transform(&quot;mean&quot;)
+complaints[&quot;share&quot;] = (complaints[&quot;amount&quot;] / g.transform(&quot;sum&quot;)).round(2)
+complaints[&quot;nth&quot;] = complaints.groupby(&quot;customer&quot;).cumcount() + 1
+complaints[&quot;rank&quot;] = g.rank(ascending=False).astype(int)
+print(complaints[[&quot;id&quot;, &quot;customer&quot;, &quot;amount&quot;, &quot;cust_avg&quot;, &quot;share&quot;, &quot;nth&quot;, &quot;rank&quot;]])
+repeat = complaints.groupby(&quot;customer&quot;).filter(lambda grp: len(grp) &gt;= 2)
+print(sorted(repeat[&quot;customer&quot;].unique().tolist()))</code></pre><div class="out"><span class="ol">Output</span><pre>   id customer  amount     cust_avg  share  nth  rank
+0   1      ana    20.0   101.666667   0.07    1     3
+1   2      ben   300.0   157.500000   0.95    1     1
+2   3      ana    35.0   101.666667   0.11    2     2
+3   4       cy  1200.0  1200.000000   1.00    1     1
+4   5      ben    15.0   157.500000   0.05    2     2
+5   6      ana   250.0   101.666667   0.82    3     1
+6   7      dee    60.0    60.000000   1.00    1     1
+[&#x27;ana&#x27;, &#x27;ben&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="merge">
+<h2><span class="n">3</span>Joins and how they go wrong</h2>
+<p><code>pd.merge(left, right, on="key", how=...)</code> is SQL's join: <code>"inner"</code> keeps keys in both tables, <code>"left"</code> keeps every left row and fills missing right columns with NaN, <code>"right"</code> the reverse, <code>"outer"</code> keeps all. When both tables have a non-key column with the same name, the result gets <code>_x</code> and <code>_y</code> suffixes (choose better ones with <code>suffixes=</code>). As in SQL, if a key appears several times on <strong>both</strong> sides, every pair is produced: three rows times two rows gives six. When you expected one match per row, that silently duplicates data, inflates sums and leaks rows between train and test splits.</p>
+<p>Two arguments make joins safe. <strong><code>validate="many_to_one"</code></strong> (or <code>"one_to_one"</code>, <code>"one_to_many"</code>) checks your assumption about the keys and raises <code>MergeError</code> if it is wrong, so a duplicated row in a lookup table fails loudly instead of doubling a revenue figure. <strong><code>indicator=True</code></strong> adds a <code>_merge</code> column saying <code>left_only</code>, <code>right_only</code> or <code>both</code> for every row, the quickest way to see what did not match. pandas 3 also supports <strong>anti-joins</strong> directly: <code>how="left_anti"</code> keeps the left rows with <strong>no</strong> match, the "complaints whose customer is not in the CRM" question.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 640 168" role="img" aria-label="how many rows a join returns" style="max-width:640px;min-width:min(640px,540px);margin:0 auto"><rect x="17" y="17" width="106.80000000000001" height="32" rx="7" class="box b"/><text x="70.4" y="37.5" class="w mid">left rows</text><rect x="125.80000000000001" y="17" width="106.80000000000001" height="32" rx="7" class="box b"/><text x="179.2" y="37.5" class="w mid">right rows</text><rect x="234.60000000000002" y="17" width="148.2" height="32" rx="7" class="box b"/><text x="308.7" y="37.5" class="w mid">key per side</text><rect x="384.8" y="17" width="237.9" height="32" rx="7" class="box b"/><text x="503.8" y="37.5" class="w mid">result rows</text><rect x="17" y="51" width="106.80000000000001" height="32" rx="7" class="box"/><text x="70.4" y="71.5" class="tk">3</text><rect x="125.80000000000001" y="51" width="106.80000000000001" height="32" rx="7" class="box"/><text x="179.2" y="71.5" class="tk">3</text><rect x="234.60000000000002" y="51" width="148.2" height="32" rx="7" class="box"/><text x="308.7" y="71.5" class="tk">unique, unique</text><rect x="384.8" y="51" width="237.9" height="32" rx="7" class="box"/><text x="503.8" y="71.5" class="tk">up to 3 (one_to_one)</text><rect x="17" y="85" width="106.80000000000001" height="32" rx="7" class="box"/><text x="70.4" y="105.5" class="tk">7</text><rect x="125.80000000000001" y="85" width="106.80000000000001" height="32" rx="7" class="box"/><text x="179.2" y="105.5" class="tk">4</text><rect x="234.60000000000002" y="85" width="148.2" height="32" rx="7" class="box"/><text x="308.7" y="105.5" class="tk">repeated, unique</text><rect x="384.8" y="85" width="237.9" height="32" rx="7" class="box"/><text x="503.8" y="105.5" class="tk">7 for a left join (many_to_one)</text><rect x="17" y="119" width="106.80000000000001" height="32" rx="7" class="box"/><text x="70.4" y="139.5" class="tk">3 with key k</text><rect x="125.80000000000001" y="119" width="106.80000000000001" height="32" rx="7" class="box"/><text x="179.2" y="139.5" class="tk">2 with key k</text><rect x="234.60000000000002" y="119" width="148.2" height="32" rx="7" class="box"/><text x="308.7" y="139.5" class="tk">repeated, repeated</text><rect x="384.8" y="119" width="237.9" height="32" rx="7" class="box a"/><text x="503.8" y="139.5" class="tk w">3 x 2 = 6 for key k</text></svg></div><figcaption>Repeated keys on both sides multiply; <code>validate=</code> turns that surprise into an error.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">merge.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+complaints = pd.DataFrame({
+    &quot;id&quot;: [1, 2, 3, 4, 5, 6, 7],
+    &quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;cy&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;dee&quot;],
+    &quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;card&quot;, &quot;loan&quot;, None],
+    &quot;amount&quot;: [20.0, 300.0, 35.0, 1200.0, 15.0, 250.0, 60.0],
+    &quot;timely&quot;: [True, False, True, True, False, True, True],
+})
+customers = pd.DataFrame({&quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;cy&quot;, &quot;eve&quot;], &quot;segment&quot;: [&quot;retail&quot;, &quot;retail&quot;, &quot;premium&quot;, &quot;premium&quot;]})
+m = complaints.merge(customers, on=&quot;customer&quot;, how=&quot;left&quot;, validate=&quot;many_to_one&quot;, indicator=True)
+print(m[[&quot;id&quot;, &quot;customer&quot;, &quot;segment&quot;, &quot;_merge&quot;]].tail(3))
+print(m[&quot;_merge&quot;].value_counts().to_dict())
+print(complaints.merge(customers, on=&quot;customer&quot;, how=&quot;left_anti&quot;)[&quot;id&quot;].tolist())
+print(customers.merge(complaints, on=&quot;customer&quot;, how=&quot;left_anti&quot;)[&quot;customer&quot;].tolist())
+dup = pd.concat([customers, customers.iloc[[0]]])
+print(len(complaints.merge(dup, on=&quot;customer&quot;)))
+try:
+    complaints.merge(dup, on=&quot;customer&quot;, validate=&quot;many_to_one&quot;)
+except pd.errors.MergeError as e:
+    print(type(e).__name__, str(e)[:45])</code></pre><div class="out"><span class="ol">Output</span><pre>   id customer segment     _merge
+4   5      ben  retail       both
+5   6      ana  retail       both
+6   7      dee     NaN  left_only
+{&#x27;both&#x27;: 6, &#x27;left_only&#x27;: 1, &#x27;right_only&#x27;: 0}
+[7]
+[&#x27;eve&#x27;]
+9
+MergeError Merge keys are not unique in right dataset; n</pre></div></div>
+</section>
+<section class="sec" id="reshape">
+<h2><span class="n">4</span>Long and wide: pivot_table, melt and concat</h2>
+<p>The same data can be <strong>long</strong> (one row per observation: model, metric, value) or <strong>wide</strong> (one row per model, one column per metric). Long is what <code>groupby</code>, plotting libraries and databases prefer; wide is what people read and what most models need as features. <strong><code>pivot_table(index, columns, values, aggfunc)</code></strong> goes from long to wide, aggregating duplicates (it is Excel's pivot table and Power BI's matrix visual); <code>pivot</code> does the same but raises if a cell would get two values. <strong><code>melt(id_vars, value_vars)</code></strong> goes back from wide to long, Power Query's "unpivot columns". <strong><code>pd.concat([a, b])</code></strong> stacks frames with the same columns, like <code>UNION ALL</code>, and <code>ignore_index=True</code> renumbers the rows.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 693 114" role="img" aria-label="long: model, metric, value rows then pivot_table then wide: one row per model, a column per metric then melt then long again" style="max-width:693px;min-width:min(693px,540px);margin:0 auto"><defs><marker id="m73n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m73a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m73r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m73g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><rect x="16.0" y="16.0" width="110.8" height="82.0" rx="12.0" class="box"/><text x="71.4" y="46.5" class="v mid">long: model,</text><text x="71.4" y="61.5" class="v mid">metric,</text><text x="71.4" y="76.5" class="v mid">value rows</text><path d="M129.8 57.0 H157.8" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m73n)"/><rect x="160.8" y="16.0" width="103.9" height="82.0" rx="12.0" class="box a"/><text x="212.8" y="61.5" class="w mid">pivot_table</text><path d="M267.7 57.0 H295.7" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m73n)"/><rect x="298.7" y="16.0" width="117.7" height="82.0" rx="12.0" class="box"/><text x="357.6" y="39.0" class="v mid">wide: one row</text><text x="357.6" y="54.0" class="v mid">per model,</text><text x="357.6" y="69.0" class="v mid">a column per</text><text x="357.6" y="84.0" class="v mid">metric</text><path d="M419.4 57.0 H447.4" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m73n)"/><rect x="450.4" y="16.0" width="96.0" height="82.0" rx="12.0" class="box b"/><text x="498.4" y="61.5" class="w mid">melt</text><path d="M549.4 57.0 H577.4" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m73n)"/><rect x="580.4" y="16.0" width="97.0" height="82.0" rx="12.0" class="box"/><text x="628.9" y="61.5" class="v mid">long again</text></svg></div><figcaption><code>pivot_table</code> and <code>melt</code> are inverses: long for computing and plotting, wide for reading and modelling.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">reshape.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+runs = pd.DataFrame({
+    &quot;model&quot;: [&quot;small&quot;, &quot;small&quot;, &quot;large&quot;, &quot;large&quot;, &quot;small&quot;, &quot;large&quot;],
+    &quot;metric&quot;: [&quot;accuracy&quot;, &quot;latency_ms&quot;, &quot;accuracy&quot;, &quot;latency_ms&quot;, &quot;accuracy&quot;, &quot;accuracy&quot;],
+    &quot;value&quot;: [0.81, 120, 0.88, 410, 0.83, 0.90],
+})
+wide = runs.pivot_table(index=&quot;model&quot;, columns=&quot;metric&quot;, values=&quot;value&quot;, aggfunc=&quot;mean&quot;)
+print(wide)
+print(wide.columns.name, wide.reset_index().columns.tolist())
+long = wide.reset_index().melt(id_vars=&quot;model&quot;, var_name=&quot;metric&quot;, value_name=&quot;value&quot;)
+print(long.sort_values([&quot;model&quot;, &quot;metric&quot;]).to_dict(&quot;records&quot;)[:2])
+print(pd.crosstab(runs[&quot;model&quot;], runs[&quot;metric&quot;]))
+both = pd.concat([runs.head(2), runs.tail(1)], ignore_index=True)
+print(both.index.tolist(), len(both))</code></pre><div class="out"><span class="ol">Output</span><pre>metric  accuracy  latency_ms
+model                       
+large       0.89       410.0
+small       0.82       120.0
+metric [&#x27;model&#x27;, &#x27;accuracy&#x27;, &#x27;latency_ms&#x27;]
+[{&#x27;model&#x27;: &#x27;large&#x27;, &#x27;metric&#x27;: &#x27;accuracy&#x27;, &#x27;value&#x27;: 0.89}, {&#x27;model&#x27;: &#x27;large&#x27;, &#x27;metric&#x27;: &#x27;latency_ms&#x27;, &#x27;value&#x27;: 410.0}]
+metric  accuracy  latency_ms
+model                       
+large          2           1
+small          2           1
+[0, 1, 2] 3</pre></div></div>
+<p><code>pivot_table</code> averaged the two <code>small</code> accuracy runs into 0.82, which is what you want for a report and exactly what hides problems if you expected one value per cell: use <code>pivot</code> there, or <code>aggfunc="count"</code> first to see the duplicates. <code>crosstab</code> is a shortcut for counting combinations. After a pivot the column index carries a <strong>name</strong> (<code>metric</code>), which is why the printed table has an extra header line; <code>reset_index()</code> and <code>rename_axis(columns=None)</code> flatten it before saving.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">5</span>Warm-up</h2>
+<article class="prob" id="p-size-count-missing-keys-and-as-index" data-pid="m17-3-size-count-missing-keys-and-as-index" data-type="predict" data-level="easy" data-answer="{&#x27;a&#x27;: 3, &#x27;b&#x27;: 2}
+{&#x27;a&#x27;: 2, &#x27;b&#x27;: 1}
+{&#x27;a&#x27;: 4.0, &#x27;b&#x27;: 5.0}
+[3, 2, 1]
+[&#x27;k&#x27;, &#x27;v&#x27;]
+[2.0, 5.0, 2.0, nan, 5.0, 2.0]">
+<header class="prob-head"><h3>1. size, count, missing keys and as_index</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+df = pd.DataFrame({&quot;k&quot;: [&quot;a&quot;, &quot;b&quot;, &quot;a&quot;, None, &quot;b&quot;, &quot;a&quot;], &quot;v&quot;: [1.0, None, 3.0, 4.0, 5.0, None]})
+print(df.groupby(&quot;k&quot;).size().to_dict())
+print(df.groupby(&quot;k&quot;)[&quot;v&quot;].count().to_dict())
+print(df.groupby(&quot;k&quot;)[&quot;v&quot;].sum().to_dict())
+print(df.groupby(&quot;k&quot;, dropna=False).size().tolist())
+print(df.groupby(&quot;k&quot;, as_index=False)[&quot;v&quot;].mean().columns.tolist())
+print(df.groupby(&quot;k&quot;)[&quot;v&quot;].transform(&quot;mean&quot;).tolist())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>size</code> counts rows, <code>count</code> counts non-missing values, and rows with a missing key are left out unless <code>dropna=False</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>{&#x27;a&#x27;: 3, &#x27;b&#x27;: 2}
+{&#x27;a&#x27;: 2, &#x27;b&#x27;: 1}
+{&#x27;a&#x27;: 4.0, &#x27;b&#x27;: 5.0}
+[3, 2, 1]
+[&#x27;k&#x27;, &#x27;v&#x27;]
+[2.0, 5.0, 2.0, nan, 5.0, 2.0]</pre></div><p>Group <code>a</code> has three rows, <code>b</code> two, and the row with a missing key belongs to no group, so <code>size</code> is <code>{a: 3, b: 2}</code>. <code>count</code> ignores the NaN values: <code>a</code> has 2 and <code>b</code> has 1. <code>sum</code> skips NaN, giving 4.0 and 5.0. With <code>dropna=False</code> the missing key becomes a third group of size 1. <code>as_index=False</code> keeps <code>k</code> as a column. <code>transform</code> returns one value per original row: group means for <code>a</code> (2.0) and <code>b</code> (5.0), and NaN for the row with no group.</p></div></details>
+</article>
+<article class="prob" id="p-how-many-rows-does-the-join-return" data-pid="m17-3-how-many-rows-does-the-join-return" data-type="predict" data-level="easy" data-answer="4
+5
+6
+130
+[&#x27;z&#x27;]
+{&#x27;both&#x27;: 4, &#x27;left_only&#x27;: 1, &#x27;right_only&#x27;: 1}">
+<header class="prob-head"><h3>2. How many rows does the join return</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+orders = pd.DataFrame({&quot;cust&quot;: [&quot;x&quot;, &quot;x&quot;, &quot;y&quot;, &quot;z&quot;], &quot;amt&quot;: [10, 20, 30, 40]})
+people = pd.DataFrame({&quot;cust&quot;: [&quot;x&quot;, &quot;y&quot;, &quot;y&quot;, &quot;w&quot;], &quot;name&quot;: [&quot;Xia&quot;, &quot;Yan&quot;, &quot;Yan B&quot;, &quot;Wu&quot;]})
+print(len(orders.merge(people, on=&quot;cust&quot;)))
+print(len(orders.merge(people, on=&quot;cust&quot;, how=&quot;left&quot;)))
+print(len(orders.merge(people, on=&quot;cust&quot;, how=&quot;outer&quot;)))
+print(orders.merge(people, on=&quot;cust&quot;, how=&quot;left&quot;)[&quot;amt&quot;].sum())
+print(orders.merge(people, on=&quot;cust&quot;, how=&quot;left_anti&quot;)[&quot;cust&quot;].tolist())
+print(orders.merge(people, on=&quot;cust&quot;, how=&quot;outer&quot;, indicator=True)[&quot;_merge&quot;].value_counts().to_dict())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>x</code> appears twice on the left and once on the right; <code>y</code> once on the left and twice on the right. Count matches key by key.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>4
+5
+6
+130
+[&#x27;z&#x27;]
+{&#x27;both&#x27;: 4, &#x27;left_only&#x27;: 1, &#x27;right_only&#x27;: 1}</pre></div><p>Key <code>x</code>: 2 left rows times 1 right row is 2; key <code>y</code>: 1 times 2 is 2; so the inner join has 4 rows. The left join adds <code>z</code> with no match: 5. The outer join adds <code>w</code> from the right too: 6. The sum of <code>amt</code> after the left join is 130, not the true total of 100, because order <code>y</code> (30) appears twice: the classic inflated-revenue bug. Only <code>z</code> has no match on the right. The indicator counts 4 <code>both</code>, 1 <code>left_only</code> and 1 <code>right_only</code>.</p></div></details>
+</article>
+<article class="prob" id="p-per-customer-features" data-pid="m17-3-per-customer-features" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. Per-customer features</h3></header>
+<div class="prob-q"><p>A churn model needs one row per customer. Write <code>customer_features(df)</code> for a complaints frame with <code>customer</code>, <code>amount</code>, <code>timely</code> (bool) and <code>product</code>, returning a frame <strong>with <code>customer</code> as an ordinary column</strong>, sorted by customer, with columns <code>n_complaints</code>, <code>total_amount</code>, <code>max_amount</code>, <code>late_rate</code> (the fraction of complaints that were <strong>not</strong> timely, rounded to 2) and <code>n_products</code> (distinct non-missing products). Use one <code>groupby(...).agg(...)</code> with named aggregations.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import pandas as pd
+
+
+def customer_features(df):
+    return df.groupby(&quot;customer&quot;).sum()
+</textarea>
+<script type="text/plain" class="prob-tests">df = pd.DataFrame({"customer": ["ana", "ben", "ana", "ana", "ben"], "amount": [10.0, 5.0, 30.0, None, 5.0],
+                   "timely": [True, False, False, True, False], "product": ["card", "loan", "card", None, "card"]})
+f = customer_features(df)
+assert list(f.columns) == ["customer", "n_complaints", "total_amount", "max_amount", "late_rate", "n_products"]
+assert f["customer"].tolist() == ["ana", "ben"]
+assert f["n_complaints"].tolist() == [3, 2] and f["total_amount"].tolist() == [40.0, 10.0]
+assert f["late_rate"].tolist() == [0.33, 1.0] and f["n_products"].tolist() == [1, 2]
+assert f["max_amount"].tolist() == [30.0, 5.0]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">df = pd.DataFrame({&quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;ana&quot;, &quot;ben&quot;], &quot;amount&quot;: [10.0, 5.0, 30.0, None, 5.0],
+                   &quot;timely&quot;: [True, False, False, True, False], &quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, None, &quot;card&quot;]})
+f = customer_features(df)
+assert list(f.columns) == [&quot;customer&quot;, &quot;n_complaints&quot;, &quot;total_amount&quot;, &quot;max_amount&quot;, &quot;late_rate&quot;, &quot;n_products&quot;]
+assert f[&quot;customer&quot;].tolist() == [&quot;ana&quot;, &quot;ben&quot;]
+assert f[&quot;n_complaints&quot;].tolist() == [3, 2] and f[&quot;total_amount&quot;].tolist() == [40.0, 10.0]
+assert f[&quot;late_rate&quot;].tolist() == [0.33, 1.0] and f[&quot;n_products&quot;].tolist() == [1, 2]
+assert f[&quot;max_amount&quot;].tolist() == [30.0, 5.0]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Make a <code>late</code> column first with <code>~df["timely"]</code> (via <code>assign</code>), then average it.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>size</code> counts rows even when <code>amount</code> is missing; <code>as_index=False</code> keeps the key as a column.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def customer_features(df):
+    out = (
+        df.assign(late=~df[&quot;timely&quot;])
+          .groupby(&quot;customer&quot;, as_index=False)
+          .agg(n_complaints=(&quot;customer&quot;, &quot;size&quot;), total_amount=(&quot;amount&quot;, &quot;sum&quot;), max_amount=(&quot;amount&quot;, &quot;max&quot;),
+               late_rate=(&quot;late&quot;, &quot;mean&quot;), n_products=(&quot;product&quot;, &quot;nunique&quot;))
+    )
+    out[&quot;late_rate&quot;] = out[&quot;late_rate&quot;].round(2)
+    return out.sort_values(&quot;customer&quot;).reset_index(drop=True)</code></pre></div><p><code>sum</code> over every column adds booleans as counts and concatenates strings, which is meaningless as features. Named aggregations state each feature's source and function. <code>size</code> counts complaints, including the one with no amount, while <code>sum</code> and <code>max</code> skip the missing amount. The mean of a boolean is a rate, so building <code>late</code> as the negation of <code>timely</code> and averaging it gives the late rate. <code>nunique</code> ignores missing products. This is the usual shape of feature engineering for a per-entity model: many event rows aggregated into one row per entity, joined later to the label table.</p></div></details>
+</article>
+<article class="prob" id="p-the-most-common-product-in-each-state" data-pid="m17-3-the-most-common-product-in-each-state" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>4. The most common product in each state</h3></header>
+<div class="prob-q"><p>Write <code>top_product(df)</code> returning a frame with columns <code>state</code>, <code>product</code> and <code>n</code>: for each state, the product with the most complaints and its count. Break ties by the alphabetically first product. Rows with a missing state or product are ignored. Sort by state.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">import pandas as pd
+
+
+def top_product(df):
+    return df.groupby(&quot;state&quot;)[&quot;product&quot;].max()
+</textarea>
+<script type="text/plain" class="prob-tests">df = pd.DataFrame({"state": ["CA", "CA", "CA", "NY", "NY", "TX", None, "NY"],
+                   "product": ["card", "loan", "card", "loan", "card", "mortgage", "card", None]})
+out = top_product(df)
+assert list(out.columns) == ["state", "product", "n"]
+assert out.values.tolist() == [["CA", "card", 2], ["NY", "card", 1], ["TX", "mortgage", 1]]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 2 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">df = pd.DataFrame({&quot;state&quot;: [&quot;CA&quot;, &quot;CA&quot;, &quot;CA&quot;, &quot;NY&quot;, &quot;NY&quot;, &quot;TX&quot;, None, &quot;NY&quot;],
+                   &quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;card&quot;, None]})
+out = top_product(df)
+assert list(out.columns) == [&quot;state&quot;, &quot;product&quot;, &quot;n&quot;]
+assert out.values.tolist() == [[&quot;CA&quot;, &quot;card&quot;, 2], [&quot;NY&quot;, &quot;card&quot;, 1], [&quot;TX&quot;, &quot;mortgage&quot;, 1]]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count each (state, product) pair with <code>groupby([...]).size()</code>, then sort by state, count descending and product ascending.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>drop_duplicates("state")</code> keeps the first row per state.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def top_product(df):
+    counts = df.groupby([&quot;state&quot;, &quot;product&quot;]).size().reset_index(name=&quot;n&quot;)
+    ranked = counts.sort_values([&quot;state&quot;, &quot;n&quot;, &quot;product&quot;], ascending=[True, False, True])
+    return ranked.drop_duplicates(&quot;state&quot;).reset_index(drop=True)</code></pre></div><p><code>max</code> of a text column returns the alphabetically last product, not the most frequent. Counting pairs first gives a long table of <code>(state, product, n)</code>; sorting by count descending within each state, with the product name as the tie-breaker, puts the winner first, and <code>drop_duplicates("state")</code> keeps that first row. Grouping by both keys already drops rows where either is missing. NY has one <code>loan</code> and one <code>card</code>, a tie that the alphabetical rule settles. The same sort-then-keep-first pattern answers every "top 1 per group" question; <code>nlargest</code> within groups or <code>idxmax</code> are alternatives.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">6</span>Medium</h2>
+<article class="prob" id="p-a-join-that-doubles-the-revenue" data-pid="m17-3-a-join-that-doubles-the-revenue" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>5. A join that doubles the revenue</h3></header>
+<div class="prob-q"><p><code>add_segment</code> attaches each complaint's customer segment, and the dashboard's total refund amount doubled overnight: the CRM export now contains a customer twice. Fix the function so it uses one row per customer (keep the <strong>last</strong> row for a duplicated customer, the most recent export line), and so that it raises <code>pandas.errors.MergeError</code> if a future change brings back a many-to-many join. Every complaint must be kept, even without a segment.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import pandas as pd
+
+
+def add_segment(complaints, crm):
+    return complaints.merge(crm, on=&quot;customer&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">complaints = pd.DataFrame({"id": [1, 2, 3, 4], "customer": ["ana", "ben", "ana", "cy"], "refund": [10.0, 20.0, 30.0, 40.0]})
+crm = pd.DataFrame({"customer": ["ana", "ben", "ana"], "segment": ["retail", "premium", "premium"]})
+out = add_segment(complaints, crm)
+assert len(out) == 4 and out["refund"].sum() == 100.0
+assert out.sort_values("id")["segment"].tolist()[:3] == ["premium", "premium", "premium"]
+assert pd.isna(out.loc[out["id"] == 4, "segment"]).all()
+assert "validate" in __source__</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">complaints = pd.DataFrame({&quot;id&quot;: [1, 2, 3, 4], &quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;, &quot;cy&quot;], &quot;refund&quot;: [10.0, 20.0, 30.0, 40.0]})
+crm = pd.DataFrame({&quot;customer&quot;: [&quot;ana&quot;, &quot;ben&quot;, &quot;ana&quot;], &quot;segment&quot;: [&quot;retail&quot;, &quot;premium&quot;, &quot;premium&quot;]})
+out = add_segment(complaints, crm)
+assert len(out) == 4 and out[&quot;refund&quot;].sum() == 100.0
+assert out.sort_values(&quot;id&quot;)[&quot;segment&quot;].tolist()[:3] == [&quot;premium&quot;, &quot;premium&quot;, &quot;premium&quot;]
+assert pd.isna(out.loc[out[&quot;id&quot;] == 4, &quot;segment&quot;]).all()
+assert &quot;validate&quot; in __source__</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>crm.drop_duplicates("customer", keep="last")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>how="left", validate="many_to_one"</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def add_segment(complaints, crm):
+    lookup = crm.drop_duplicates(&quot;customer&quot;, keep=&quot;last&quot;)
+    return complaints.merge(lookup, on=&quot;customer&quot;, how=&quot;left&quot;, validate=&quot;many_to_one&quot;)</code></pre></div><p>Customer <code>ana</code> appears twice in the CRM, so each of her two complaints matched twice and her refunds were counted twice; the inner join also dropped <code>cy</code>, who has no CRM row. De-duplicating the lookup table states the business rule (the last export line wins), a left join keeps every complaint, and <code>validate="many_to_one"</code> records the assumption that the right side has unique keys, so the next duplicated export fails the job instead of corrupting a dashboard. Asserting that a join does not change the row count of the left table is another cheap safety check.</p></div></details>
+</article>
+<article class="prob" id="p-standardise-amounts-within-each-product" data-pid="m17-3-standardise-amounts-within-each-product" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Standardise amounts within each product</h3></header>
+<div class="prob-q"><p>A refund of 300 is large for a credit card and small for a mortgage. Write <code>add_group_z(df, value, by)</code> returning a copy of <code>df</code> with a new column <code>f"{value}_z"</code>: the z-score of each row's value <strong>within its group</strong>, <code>(x - group mean) / group std</code> (pandas' default std, <code>ddof=1</code>), rounded to 3. Groups with a single row or zero spread get 0.0 instead of NaN. Use <code>transform</code>, not a merge or a loop over groups.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import pandas as pd
+
+
+def add_group_z(df, value, by):
+    out = df.copy()
+    out[f&quot;{value}_z&quot;] = (out[value] - out[value].mean()) / out[value].std()
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">df = pd.DataFrame({"product": ["card", "card", "card", "mortgage", "mortgage", "loan"], "amount": [10.0, 20.0, 30.0, 1000.0, 3000.0, 50.0]})
+out = add_group_z(df, "amount", "product")
+assert out["amount_z"].tolist() == [-1.0, 0.0, 1.0, -0.707, 0.707, 0.0]
+same = pd.DataFrame({"g": ["a", "a"], "x": [5.0, 5.0]})
+assert add_group_z(same, "x", "g")["x_z"].tolist() == [0.0, 0.0]
+assert "amount_z" not in df.columns
+assert "transform" in __source__</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">df = pd.DataFrame({&quot;product&quot;: [&quot;card&quot;, &quot;card&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;mortgage&quot;, &quot;loan&quot;], &quot;amount&quot;: [10.0, 20.0, 30.0, 1000.0, 3000.0, 50.0]})
+out = add_group_z(df, &quot;amount&quot;, &quot;product&quot;)
+assert out[&quot;amount_z&quot;].tolist() == [-1.0, 0.0, 1.0, -0.707, 0.707, 0.0]
+same = pd.DataFrame({&quot;g&quot;: [&quot;a&quot;, &quot;a&quot;], &quot;x&quot;: [5.0, 5.0]})
+assert add_group_z(same, &quot;x&quot;, &quot;g&quot;)[&quot;x_z&quot;].tolist() == [0.0, 0.0]
+assert &quot;amount_z&quot; not in df.columns
+assert &quot;transform&quot; in __source__</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>g = df.groupby(by)[value]</code>, then <code>g.transform("mean")</code> and <code>g.transform("std")</code> are aligned to the rows.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Replace NaN or 0 std before dividing, then <code>fillna(0.0)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def add_group_z(df, value, by):
+    out = df.copy()
+    g = out.groupby(by)[value]
+    std = g.transform(&quot;std&quot;)
+    z = (out[value] - g.transform(&quot;mean&quot;)) / std.where(std &gt; 0)
+    out[f&quot;{value}_z&quot;] = z.fillna(0.0).round(3)
+    return out</code></pre></div><p>The starter standardised against the whole column, so every mortgage looks extreme and every card looks tiny: the feature mostly encodes the product, which the model already has. <code>transform("mean")</code> and <code>transform("std")</code> give each row its own group's statistics, aligned to the original rows, so the arithmetic is ordinary column math. A single-row group has an undefined sample std (NaN), and a constant group has std 0; <code>where(std &gt; 0)</code> turns both into NaN for the division, and <code>fillna(0.0)</code> reports "average for its group". Group statistics computed on the full dataset leak information like the imputer in D.2, so in a real pipeline they are learned on the training split.</p></div></details>
+</article>
+<article class="prob" id="p-new-complaints-since-the-last-export" data-pid="m17-3-new-complaints-since-the-last-export" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>7. New complaints since the last export</h3></header>
+<div class="prob-q"><p>Write <code>new_since(current, previous)</code> returning the rows of <code>current</code> whose <code>id</code> does not appear in <code>previous</code>, using a join (pandas 3's <code>how="left_anti"</code>), keeping <code>current</code>'s columns and order. Then write <code>changed(current, previous, cols)</code> returning the ids present in both whose values differ in any of <code>cols</code>, sorted. Treat two missing values as equal.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import pandas as pd
+
+
+def new_since(current, previous):
+    return current[current[&quot;id&quot;] != previous[&quot;id&quot;]]
+
+
+def changed(current, previous, cols):
+    return []
+</textarea>
+<script type="text/plain" class="prob-tests">prev = pd.DataFrame({"id": [1, 2, 3], "status": ["open", "open", "closed"], "amount": [10.0, None, 5.0]})
+cur = pd.DataFrame({"id": [1, 2, 3, 4, 5], "status": ["closed", "open", "closed", "open", "open"], "amount": [10.0, None, 7.0, 1.0, 2.0]})
+assert new_since(cur, prev)["id"].tolist() == [4, 5]
+assert list(new_since(cur, prev).columns) == ["id", "status", "amount"]
+assert changed(cur, prev, ["status", "amount"]) == [1, 3]
+assert changed(cur, prev, ["status"]) == [1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">prev = pd.DataFrame({&quot;id&quot;: [1, 2, 3], &quot;status&quot;: [&quot;open&quot;, &quot;open&quot;, &quot;closed&quot;], &quot;amount&quot;: [10.0, None, 5.0]})
+cur = pd.DataFrame({&quot;id&quot;: [1, 2, 3, 4, 5], &quot;status&quot;: [&quot;closed&quot;, &quot;open&quot;, &quot;closed&quot;, &quot;open&quot;, &quot;open&quot;], &quot;amount&quot;: [10.0, None, 7.0, 1.0, 2.0]})
+assert new_since(cur, prev)[&quot;id&quot;].tolist() == [4, 5]
+assert list(new_since(cur, prev).columns) == [&quot;id&quot;, &quot;status&quot;, &quot;amount&quot;]
+assert changed(cur, prev, [&quot;status&quot;, &quot;amount&quot;]) == [1, 3]
+assert changed(cur, prev, [&quot;status&quot;]) == [1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>current.merge(previous[["id"]], on="id", how="left_anti")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Inner-join on <code>id</code> with <code>suffixes=("", "_old")</code>, then compare each column pair; <code>a.eq(b) | (a.isna() &amp; b.isna())</code> treats NaN pairs as equal.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def new_since(current, previous):
+    return current.merge(previous[[&quot;id&quot;]], on=&quot;id&quot;, how=&quot;left_anti&quot;)
+
+
+def changed(current, previous, cols):
+    both = current.merge(previous, on=&quot;id&quot;, suffixes=(&quot;&quot;, &quot;_old&quot;))
+    diff = pd.Series(False, index=both.index)
+    for c in cols:
+        a, b = both[c], both[f&quot;{c}_old&quot;]
+        same = a.eq(b) | (a.isna() &amp; b.isna())
+        diff |= ~same
+    return sorted(both.loc[diff, &quot;id&quot;].tolist())</code></pre></div><p>Comparing <code>current["id"] != previous["id"]</code> aligns the two Series by <strong>index</strong>, not by value, so it compares row 0 with row 0 and fails when lengths differ. The anti-join asks the real question: which current ids have no partner in the previous export. Only <code>id</code> is taken from <code>previous</code>, so no other columns come along. For changes, an inner join puts the old and new values side by side, and a plain <code>!=</code> would report the unchanged missing amount of complaint 2 as a change, because NaN never equals NaN; the explicit "both missing" check fixes that. Looping over a few column names is fine; each comparison is vectorised. This is the core of incremental loads and change data capture.</p></div></details>
+</article>
+<article class="prob" id="p-a-group-by-or-a-loop-over-the-groups" data-pid="m17-3-a-group-by-or-a-loop-over-the-groups" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">Data work</span><h3>8. A group-by or a loop over the groups</h3></header>
+<div class="prob-q"><p>Both compute the mean amount per customer for 100,000 rows and 2,000 customers. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import pandas as pd
+rng = np.random.default_rng(1)
+df = pd.DataFrame({&quot;customer&quot;: rng.integers(0, 2_000, 100_000), &quot;amount&quot;: rng.uniform(0, 500, 100_000)})</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">means = {c: df.loc[df[&quot;customer&quot;] == c, &quot;amount&quot;].mean() for c in df[&quot;customer&quot;].unique()}</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">means = df.groupby(&quot;customer&quot;)[&quot;amount&quot;].mean()</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Option A scans all 100,000 rows once for every customer.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.22 s</td></tr><tr><td>B</td><td>3.75 ms</td></tr></table></div><p>Option A builds a boolean mask over all 100,000 rows for each of the 2,000 customers: 200 million comparisons plus 2,000 filtered copies. <code>groupby</code> sorts or hashes the keys once and then computes every group's mean in a single pass in compiled code. The gap is two to three orders of magnitude, and it is the same mistake as running one SQL query per customer instead of one <code>GROUP BY</code>.</p></div></details>
+</article>
+<article class="prob" id="p-shapes-through-pivot-and-melt" data-pid="m17-3-shapes-through-pivot-and-melt" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>9. Shapes through pivot and melt</h3></header>
+<div class="prob-q"><p>Fill in <code>shape</code> and <code>cols</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import pandas as pd
+
+runs = pd.DataFrame({&quot;prompt&quot;: [&quot;v1&quot;, &quot;v1&quot;, &quot;v2&quot;, &quot;v2&quot;, &quot;v2&quot;, &quot;v3&quot;],
+                     &quot;judge&quot;: [&quot;gpt&quot;, &quot;claude&quot;, &quot;gpt&quot;, &quot;claude&quot;, &quot;gpt&quot;, &quot;gpt&quot;],
+                     &quot;score&quot;: [0.7, 0.8, 0.9, 0.85, 0.95, 0.6]})
+t = runs.pivot_table(index=&quot;prompt&quot;, columns=&quot;judge&quot;, values=&quot;score&quot;, aggfunc=&quot;mean&quot;)
+shape, cols = t.shape, t.columns.tolist()
+t = t.reset_index()
+shape, cols = t.shape, t.columns.tolist()
+t = t.melt(id_vars=&quot;prompt&quot;, var_name=&quot;judge&quot;, value_name=&quot;score&quot;)
+shape, cols = t.shape, t.columns.tolist()
+t = t.dropna()
+shape, cols = t.shape, sorted(t[&quot;prompt&quot;].unique().tolist())</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>shape</code></th><th><code>cols</code></th></tr><tr><td>pivot</td><td><input class="cell" data-a="(3, 2)" data-s="(3, 2)" aria-label="shape at pivot" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;claude&#x27;, &#x27;gpt&#x27;]" data-s="[&#x27;claude&#x27;, &#x27;gpt&#x27;]" aria-label="cols at pivot" autocomplete="off"></td></tr><tr><td>reset</td><td><input class="cell" data-a="(3, 3)" data-s="(3, 3)" aria-label="shape at reset" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;prompt&#x27;, &#x27;claude&#x27;, &#x27;gpt&#x27;]" data-s="[&#x27;prompt&#x27;, &#x27;claude&#x27;, &#x27;gpt&#x27;]" aria-label="cols at reset" autocomplete="off"></td></tr><tr><td>melt</td><td><input class="cell" data-a="(6, 3)" data-s="(6, 3)" aria-label="shape at melt" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;prompt&#x27;, &#x27;judge&#x27;, &#x27;score&#x27;]" data-s="[&#x27;prompt&#x27;, &#x27;judge&#x27;, &#x27;score&#x27;]" aria-label="cols at melt" autocomplete="off"></td></tr><tr><td>dropna</td><td><input class="cell" data-a="(5, 3)" data-s="(5, 3)" aria-label="shape at dropna" autocomplete="off"></td><td><input class="cell" data-a="[&#x27;v1&#x27;, &#x27;v2&#x27;, &#x27;v3&#x27;]" data-s="[&#x27;v1&#x27;, &#x27;v2&#x27;, &#x27;v3&#x27;]" aria-label="cols at dropna" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>The pivot has one row per prompt and one column per judge; <code>v3</code> has no <code>claude</code> score, so that cell is NaN.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>shape</code></th><th><code>cols</code></th></tr><tr><td>pivot</td><td><code>(3, 2)</code></td><td><code>[&#x27;claude&#x27;, &#x27;gpt&#x27;]</code></td></tr><tr><td>reset</td><td><code>(3, 3)</code></td><td><code>[&#x27;prompt&#x27;, &#x27;claude&#x27;, &#x27;gpt&#x27;]</code></td></tr><tr><td>melt</td><td><code>(6, 3)</code></td><td><code>[&#x27;prompt&#x27;, &#x27;judge&#x27;, &#x27;score&#x27;]</code></td></tr><tr><td>dropna</td><td><code>(5, 3)</code></td><td><code>[&#x27;v1&#x27;, &#x27;v2&#x27;, &#x27;v3&#x27;]</code></td></tr></table></div><p>Three prompts and two judges give a 3 by 2 table whose columns are the judges, sorted. <code>reset_index</code> moves <code>prompt</code> back into a column: 3 by 3. <code>melt</code> turns the two judge columns into rows: 3 prompts times 2 judges is 6 rows of <code>prompt, judge, score</code>. The missing <code>(v3, claude)</code> cell becomes a NaN row in the long table, and <code>dropna</code> removes it, leaving 5 rows that still cover all three prompts. Note that the pivot averaged the two <code>(v2, gpt)</code> runs into 0.925.</p></div></details>
+</article>
+<article class="prob" id="p-an-evaluation-report-per-prompt-version" data-pid="m17-3-an-evaluation-report-per-prompt-version" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. An evaluation report per prompt version</h3></header>
+<div class="prob-q"><p>Each row of <code>results</code> is one test case run against an LLM: <code>prompt_version</code>, <code>case_id</code>, <code>passed</code> (bool), <code>latency_ms</code> and <code>tokens</code>. Write <code>eval_report(results)</code> returning one row per prompt version, sorted by version, with columns <code>prompt_version</code>, <code>cases</code>, <code>pass_rate</code> (rounded to 3), <code>p50_ms</code> and <code>p95_ms</code> (latency percentiles via <code>quantile</code>, rounded to 1), and <code>tokens_per_pass</code> (total tokens divided by the number of passing cases, rounded to 1; NaN if none passed).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import pandas as pd
+
+
+def eval_report(results):
+    return results.groupby(&quot;prompt_version&quot;).mean()
+</textarea>
+<script type="text/plain" class="prob-tests">r = pd.DataFrame({"prompt_version": ["v1"] * 4 + ["v2"] * 3,
+                  "case_id": [1, 2, 3, 4, 1, 2, 3],
+                  "passed": [True, False, True, True, False, False, False],
+                  "latency_ms": [100.0, 200.0, 300.0, 400.0, 50.0, 60.0, 70.0],
+                  "tokens": [500, 700, 600, 800, 300, 300, 300]})
+rep = eval_report(r)
+assert list(rep.columns) == ["prompt_version", "cases", "pass_rate", "p50_ms", "p95_ms", "tokens_per_pass"]
+assert rep["cases"].tolist() == [4, 3] and rep["pass_rate"].tolist() == [0.75, 0.0]
+assert rep["p50_ms"].tolist() == [250.0, 60.0] and rep["p95_ms"].tolist() == [385.0, 69.0]
+assert rep["tokens_per_pass"].iloc[0] == 866.7 and pd.isna(rep["tokens_per_pass"].iloc[1])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">r = pd.DataFrame({&quot;prompt_version&quot;: [&quot;v1&quot;] * 4 + [&quot;v2&quot;] * 3,
+                  &quot;case_id&quot;: [1, 2, 3, 4, 1, 2, 3],
+                  &quot;passed&quot;: [True, False, True, True, False, False, False],
+                  &quot;latency_ms&quot;: [100.0, 200.0, 300.0, 400.0, 50.0, 60.0, 70.0],
+                  &quot;tokens&quot;: [500, 700, 600, 800, 300, 300, 300]})
+rep = eval_report(r)
+assert list(rep.columns) == [&quot;prompt_version&quot;, &quot;cases&quot;, &quot;pass_rate&quot;, &quot;p50_ms&quot;, &quot;p95_ms&quot;, &quot;tokens_per_pass&quot;]
+assert rep[&quot;cases&quot;].tolist() == [4, 3] and rep[&quot;pass_rate&quot;].tolist() == [0.75, 0.0]
+assert rep[&quot;p50_ms&quot;].tolist() == [250.0, 60.0] and rep[&quot;p95_ms&quot;].tolist() == [385.0, 69.0]
+assert rep[&quot;tokens_per_pass&quot;].iloc[0] == 866.7 and pd.isna(rep[&quot;tokens_per_pass&quot;].iloc[1])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Named aggregation accepts a function: <code>p95_ms=("latency_ms", lambda s: s.quantile(0.95))</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Aggregate <code>passes=("passed", "sum")</code> and <code>tokens=("tokens", "sum")</code>, then divide, using <code>where(passes &gt; 0)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def eval_report(results):
+    rep = results.groupby(&quot;prompt_version&quot;, as_index=False).agg(
+        cases=(&quot;case_id&quot;, &quot;size&quot;),
+        pass_rate=(&quot;passed&quot;, &quot;mean&quot;),
+        p50_ms=(&quot;latency_ms&quot;, &quot;median&quot;),
+        p95_ms=(&quot;latency_ms&quot;, lambda s: s.quantile(0.95)),
+        tokens=(&quot;tokens&quot;, &quot;sum&quot;),
+        passes=(&quot;passed&quot;, &quot;sum&quot;),
+    )
+    rep[&quot;tokens_per_pass&quot;] = (rep[&quot;tokens&quot;] / rep[&quot;passes&quot;].where(rep[&quot;passes&quot;] &gt; 0)).round(1)
+    rep[[&quot;pass_rate&quot;]] = rep[[&quot;pass_rate&quot;]].round(3)
+    rep[[&quot;p50_ms&quot;, &quot;p95_ms&quot;]] = rep[[&quot;p50_ms&quot;, &quot;p95_ms&quot;]].round(1)
+    return rep.drop(columns=[&quot;tokens&quot;, &quot;passes&quot;]).sort_values(&quot;prompt_version&quot;).reset_index(drop=True)</code></pre></div><p>An average latency hides the slow tail that users feel, so evaluation reports give percentiles: <code>quantile(0.95)</code> interpolates between the sorted values (385 lies three quarters of the way from 300 to 400). The mean of <code>passed</code> is the pass rate. Tokens per <strong>passing</strong> case is a cost-of-quality metric: a prompt that passes more cases with fewer tokens wins on both axes, and a version with no passes has no meaningful value, so the division is masked rather than allowed to produce infinity. Helper aggregates such as <code>tokens</code> and <code>passes</code> are computed in the same pass and dropped at the end.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">7</span>Hard</h2>
+<article class="prob" id="p-target-encoding-without-leakage" data-pid="m17-3-target-encoding-without-leakage" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. Target encoding without leakage</h3></header>
+<div class="prob-q"><p>Target encoding replaces a category (such as <code>company</code>) with the average label of training rows in that category. Write <code>TargetEncoder(smoothing=10)</code> with <code>fit(X, y, col)</code> and <code>transform(X)</code>. The learned value for a category with <code>n</code> training rows and label mean <code>m</code> is the <strong>smoothed</strong> mean <code>(n * m + smoothing * prior) / (n + smoothing)</code>, where <code>prior</code> is the overall training label mean, so rare categories are pulled towards the prior. <code>transform</code> returns a new Series named <code>f"{col}_te"</code> aligned to <code>X</code>'s index, rounded to 4, using the prior for unseen or missing categories. Use group-by and a mapping, no row loops.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import pandas as pd
+
+
+class TargetEncoder:
+    def __init__(self, smoothing=10):
+        self.smoothing = smoothing
+
+    def fit(self, X, y, col):
+        self.col = col
+        return self
+
+    def transform(self, X):
+        return X[self.col].map(X.groupby(self.col).size())
+</textarea>
+<script type="text/plain" class="prob-tests">Xtr = pd.DataFrame({"company": ["a", "a", "a", "a", "b", "c", "c"]})
+ytr = pd.Series([1, 1, 1, 0, 0, 1, 0])
+enc = TargetEncoder(smoothing=2).fit(Xtr, ytr, "company")
+Xte = pd.DataFrame({"company": ["a", "b", "zzz", None]}, index=[10, 11, 12, 13])
+out = enc.transform(Xte)
+assert out.name == "company_te" and out.index.tolist() == [10, 11, 12, 13]
+prior = 4 / 7
+assert out.loc[10] == round((4 * 0.75 + 2 * prior) / 6, 4)
+assert out.loc[11] == round((1 * 0.0 + 2 * prior) / 3, 4)
+assert out.loc[12] == round(prior, 4) and out.loc[13] == round(prior, 4)
+assert enc.transform(Xtr).loc[5] == round((2 * 0.5 + 2 * prior) / 4, 4)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">Xtr = pd.DataFrame({&quot;company&quot;: [&quot;a&quot;, &quot;a&quot;, &quot;a&quot;, &quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;c&quot;]})
+ytr = pd.Series([1, 1, 1, 0, 0, 1, 0])
+enc = TargetEncoder(smoothing=2).fit(Xtr, ytr, &quot;company&quot;)
+Xte = pd.DataFrame({&quot;company&quot;: [&quot;a&quot;, &quot;b&quot;, &quot;zzz&quot;, None]}, index=[10, 11, 12, 13])
+out = enc.transform(Xte)
+assert out.name == &quot;company_te&quot; and out.index.tolist() == [10, 11, 12, 13]
+prior = 4 / 7
+assert out.loc[10] == round((4 * 0.75 + 2 * prior) / 6, 4)
+assert out.loc[11] == round((1 * 0.0 + 2 * prior) / 3, 4)
+assert out.loc[12] == round(prior, 4) and out.loc[13] == round(prior, 4)
+assert enc.transform(Xtr).loc[5] == round((2 * 0.5 + 2 * prior) / 4, 4)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Group the <strong>training labels</strong> by the training column: <code>y.groupby(X[col]).agg(["count", "mean"])</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>X[col].map(table).fillna(prior)</code> handles unseen and missing categories.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+class TargetEncoder:
+    def __init__(self, smoothing=10):
+        self.smoothing = smoothing
+
+    def fit(self, X, y, col):
+        self.col = col
+        self.prior_ = float(y.mean())
+        stats = y.groupby(X[col]).agg([&quot;count&quot;, &quot;mean&quot;])
+        n, m = stats[&quot;count&quot;], stats[&quot;mean&quot;]
+        self.table_ = (n * m + self.smoothing * self.prior_) / (n + self.smoothing)
+        return self
+
+    def transform(self, X):
+        out = X[self.col].map(self.table_).astype(float).fillna(self.prior_).round(4)
+        return out.rename(f&quot;{self.col}_te&quot;)</code></pre></div><p>A category's raw label mean is a powerful feature and a dangerous one. Computed on the rows being scored, it contains each row's own label, so the model sees the answer (leakage); computed for a category with one training row, it is either 0 or 1, pure noise that the model trusts completely. Learning the table in <code>fit</code> from training labels only fixes the first problem; smoothing fixes the second: with <code>n</code> rows, the estimate moves from the prior towards the category mean as evidence grows (<code>b</code>, with one row of label 0, gets 0.381 rather than 0.0). <code>y.groupby(X[col])</code> groups the labels by the aligned category values. Unseen categories and missing values get the prior, the honest "no information" answer. In practice the training rows themselves are encoded out of fold (K-fold), so even the training features never include their own label; scikit-learn's <code>TargetEncoder</code> does that automatically.</p></div></details>
+</article>
+<article class="prob" id="p-a-win-rate-table-for-model-comparisons" data-pid="m17-3-a-win-rate-table-for-model-comparisons" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. A win-rate table for model comparisons</h3></header>
+<div class="prob-q"><p>A pairwise evaluation asks a judge which of two answers is better. Each row of <code>votes</code> has <code>model_a</code>, <code>model_b</code> and <code>winner</code> (<code>"a"</code>, <code>"b"</code> or <code>"tie"</code>). Write <code>win_rates(votes)</code> returning a square DataFrame indexed and columned by every model (sorted), where cell <code>[x, y]</code> is the fraction of x-versus-y comparisons that x won, counting a tie as half a win, rounded to 3; the diagonal and pairs that never met are NaN. A comparison counts for the pair whichever side each model was on. Use concat, groupby and pivot, no loops over rows.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import pandas as pd
+
+
+def win_rates(votes):
+    return pd.crosstab(votes[&quot;model_a&quot;], votes[&quot;model_b&quot;])
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+votes = pd.DataFrame({"model_a": ["m1", "m1", "m2", "m3", "m1"],
+                      "model_b": ["m2", "m2", "m1", "m1", "m3"],
+                      "winner": ["a", "tie", "a", "b", "b"]})
+w = win_rates(votes)
+assert w.index.tolist() == ["m1", "m2", "m3"] and w.columns.tolist() == ["m1", "m2", "m3"]
+assert w.loc["m1", "m2"] == 0.5 and w.loc["m2", "m1"] == 0.5
+assert w.loc["m1", "m3"] == 0.5 and w.loc["m3", "m1"] == 0.5
+assert np.isnan(w.loc["m2", "m3"]) and np.isnan(w.loc["m1", "m1"])
+assert ((w + w.T).stack().dropna().round(3) == 1.0).all()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+votes = pd.DataFrame({&quot;model_a&quot;: [&quot;m1&quot;, &quot;m1&quot;, &quot;m2&quot;, &quot;m3&quot;, &quot;m1&quot;],
+                      &quot;model_b&quot;: [&quot;m2&quot;, &quot;m2&quot;, &quot;m1&quot;, &quot;m1&quot;, &quot;m3&quot;],
+                      &quot;winner&quot;: [&quot;a&quot;, &quot;tie&quot;, &quot;a&quot;, &quot;b&quot;, &quot;b&quot;]})
+w = win_rates(votes)
+assert w.index.tolist() == [&quot;m1&quot;, &quot;m2&quot;, &quot;m3&quot;] and w.columns.tolist() == [&quot;m1&quot;, &quot;m2&quot;, &quot;m3&quot;]
+assert w.loc[&quot;m1&quot;, &quot;m2&quot;] == 0.5 and w.loc[&quot;m2&quot;, &quot;m1&quot;] == 0.5
+assert w.loc[&quot;m1&quot;, &quot;m3&quot;] == 0.5 and w.loc[&quot;m3&quot;, &quot;m1&quot;] == 0.5
+assert np.isnan(w.loc[&quot;m2&quot;, &quot;m3&quot;]) and np.isnan(w.loc[&quot;m1&quot;, &quot;m1&quot;])
+assert ((w + w.T).stack().dropna().round(3) == 1.0).all()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Build a long table with one row per (model, opponent, score) for side a, and another for side b; <code>concat</code> them.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Score: 1 for a win, 0.5 for a tie, 0 for a loss; then <code>pivot_table(index="model", columns="opponent", values="score", aggfunc="mean")</code> and <code>reindex</code> both axes with every model.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def win_rates(votes):
+    score_a = votes[&quot;winner&quot;].map({&quot;a&quot;: 1.0, &quot;tie&quot;: 0.5, &quot;b&quot;: 0.0})
+    side_a = pd.DataFrame({&quot;model&quot;: votes[&quot;model_a&quot;], &quot;opponent&quot;: votes[&quot;model_b&quot;], &quot;score&quot;: score_a})
+    side_b = pd.DataFrame({&quot;model&quot;: votes[&quot;model_b&quot;], &quot;opponent&quot;: votes[&quot;model_a&quot;], &quot;score&quot;: 1.0 - score_a})
+    long = pd.concat([side_a, side_b], ignore_index=True)
+    models = sorted(set(long[&quot;model&quot;]))
+    table = long.pivot_table(index=&quot;model&quot;, columns=&quot;opponent&quot;, values=&quot;score&quot;, aggfunc=&quot;mean&quot;)
+    table = table.reindex(index=models, columns=models)
+    return table.round(3).rename_axis(index=None, columns=None)</code></pre></div><p>The raw votes are in a "match" format where each model can appear on either side, which a crosstab treats as different things. Turning every vote into two rows, one from each model's point of view (<code>model</code>, <code>opponent</code>, <code>score</code>), gives a long table where a model's results are in one column no matter which side it was on, and the scores of each pair add up to 1. A mean per <code>(model, opponent)</code> is the win rate, and <code>pivot_table</code> spreads it into a matrix. <code>reindex</code> with the full sorted list adds rows and columns for pairs that never met, as NaN. m1 against m2: a win for m1, a tie, and a win for m2 averages to 0.5. The last test checks the symmetry that any correct table must have. Leaderboards such as Chatbot Arena start from exactly this table before fitting Elo or Bradley-Terry ratings.</p></div></details>
+</article>
+<article class="prob" id="p-group-by-details-that-change-results" data-pid="m17-3-group-by-details-that-change-results" data-type="predict" data-level="hard" data-answer="[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;] [&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]
+[1, 5]
+{&#x27;a&#x27;: [1, 5], &#x27;b&#x27;: [3, 2], &#x27;c&#x27;: [4]}
+[nan, nan, 3.0, 1.0, nan]
+{&#x27;a&#x27;: 6, &#x27;b&#x27;: 5, &#x27;c&#x27;: 4, &#x27;d&#x27;: 0}
+[2, 2, 1]
+{False: [&#x27;a&#x27;, &#x27;b&#x27;], True: [&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]}">
+<header class="prob-head"><h3>13. Group-by details that change results</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+df = pd.DataFrame({&quot;team&quot;: [&quot;b&quot;, &quot;a&quot;, &quot;b&quot;, &quot;a&quot;, &quot;c&quot;], &quot;pts&quot;: [3, 1, 2, 5, 4]})
+print(df.groupby(&quot;team&quot;).sum().index.tolist(), df.groupby(&quot;team&quot;, sort=False).sum().index.tolist())
+print(df.groupby(&quot;team&quot;)[&quot;pts&quot;].agg([&quot;min&quot;, &quot;max&quot;]).loc[&quot;a&quot;].tolist())
+print(df.groupby(&quot;team&quot;)[&quot;pts&quot;].apply(lambda s: s.tolist()).to_dict())
+print(df.groupby(&quot;team&quot;)[&quot;pts&quot;].shift(1).tolist())
+cat = df.assign(team=pd.Categorical(df[&quot;team&quot;], categories=[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;]))
+print(cat.groupby(&quot;team&quot;, observed=False)[&quot;pts&quot;].sum().to_dict())
+print(cat.groupby(&quot;team&quot;, observed=True).size().tolist())
+print(df.groupby(df[&quot;pts&quot;] &gt; 2)[&quot;team&quot;].apply(list).to_dict())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Groups are sorted by key unless <code>sort=False</code>. <code>shift</code> works inside each group. A categorical key can produce groups for unused categories.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;a&#x27;, &#x27;b&#x27;, &#x27;c&#x27;] [&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]
+[1, 5]
+{&#x27;a&#x27;: [1, 5], &#x27;b&#x27;: [3, 2], &#x27;c&#x27;: [4]}
+[nan, nan, 3.0, 1.0, nan]
+{&#x27;a&#x27;: 6, &#x27;b&#x27;: 5, &#x27;c&#x27;: 4, &#x27;d&#x27;: 0}
+[2, 2, 1]
+{False: [&#x27;a&#x27;, &#x27;b&#x27;], True: [&#x27;b&#x27;, &#x27;a&#x27;, &#x27;c&#x27;]}</pre></div><p>By default the group keys are sorted (<code>a, b, c</code>); <code>sort=False</code> keeps them in order of first appearance (<code>b, a, c</code>). Team <code>a</code> has points 1 and 5. <code>apply</code> with a function receives each group's values in their original order. <code>shift(1)</code> within groups moves each value down by one inside its own team, so the first row of every team is NaN, the basis of lag features in D.4. A categorical key with <code>observed=False</code> creates a group for <strong>every</strong> category, including the unused <code>d</code>, whose sum is 0; <code>observed=True</code> (the pandas 3 default) gives only the three groups that occur. Grouping by a boolean Series splits the rows into <code>False</code> and <code>True</code>.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">8</span>Interview questions</h2>
+<article class="prob" id="p-what-is-the-difference-between-agg-trans" data-pid="m17-3-what-is-the-difference-between-agg-trans" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What is the difference between agg, transform and apply on a group-by?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>All three run per group, but they return different shapes. <code>agg</code> (with names such as <code>"sum"</code> or named aggregations) reduces each group to one row: a summary table, SQL's <code>GROUP BY</code>. <code>transform</code> returns a result with the <strong>same index as the input</strong>, broadcasting each group's value back to its rows (or returning a same-length result such as a rank or cumulative sum): SQL's window functions with <code>PARTITION BY</code>, used to add feature columns such as "amount relative to the customer mean" without a merge. <code>apply</code> is the general escape hatch: it passes each group as a DataFrame to any Python function and stitches whatever comes back together, so it is flexible but slower (Python per group) and its output shape depends on the function. Prefer built-in aggregation names (they run in optimised code), use <code>transform</code> for row-level features, <code>filter</code> to keep or drop whole groups, and <code>apply</code> only when nothing else fits. And remember the defaults: missing keys are dropped (<code>dropna=True</code>), keys become the index (<code>as_index=True</code>), and keys are sorted.</p></div></details>
+</article>
+<article class="prob" id="p-a-join-produced-more-rows-than-you-expec" data-pid="m17-3-a-join-produced-more-rows-than-you-expec" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. A join produced more rows than you expected. What happened, and how do you prevent it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>A join outputs one row for every matching pair of rows, so if a key is duplicated on the side you assumed was unique, each left row matches several right rows and the result grows: three orders for a customer with two CRM rows become six. It silently inflates sums and counts, can duplicate examples across train and test splits, and the row count often goes unnoticed. To find it: compare <code>len(result)</code> with <code>len(left)</code>, check <code>right[key].duplicated().any()</code>, and use <code>indicator=True</code> to see matches. To prevent it: de-duplicate the lookup table with an explicit rule (keep the latest, or aggregate), and pass <code>validate="many_to_one"</code> (or <code>"one_to_one"</code>) so pandas raises <code>MergeError</code> when the assumption breaks; for left joins assert that the row count is unchanged. Also check key types and formatting (an <code>int</code> key will not match a <code>str</code> one, and <code>" ana"</code> will not match <code>"ana"</code>), and remember missing keys: in pandas, unlike SQL, NaN keys match each other in a merge, which can create surprising pairs.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-keep-data-in-long-format-" data-pid="m17-3-when-would-you-keep-data-in-long-format-" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. When would you keep data in long format, and when in wide format?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Long format has one row per observation, with columns such as <code>entity, variable, value</code> (or <code>date, metric, value</code>). It is the natural shape for storing and computing: new metrics or dates are new rows, not schema changes, group-bys and filters are simple, and plotting libraries such as seaborn and plotly expect it. Databases and event logs are long. Wide format has one row per entity and one column per variable; it is easier for people to read and compare, it is what spreadsheets and reports show, and it is what most ML models require: a feature matrix with one row per example and one column per feature. Typical workflow: keep raw data long, compute aggregates with <code>groupby</code>, then <code>pivot_table</code> into wide features or report tables, and <code>melt</code> back when you need to plot or append. Watch for the reshaping traps: <code>pivot</code> raises on duplicate entries, <code>pivot_table</code> silently aggregates them, and missing combinations become NaN cells that need a decision.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li><code>groupby(...).agg(name=("col", "func"))</code> is GROUP BY with clear names; <code>size</code> counts rows, <code>count</code> non-missing values; missing keys are dropped unless <code>dropna=False</code>.</li><li><code>transform</code> returns one value per original row (window functions); <code>filter</code> keeps whole groups (HAVING); <code>cumcount</code>, <code>rank</code> and <code>shift</code> work within groups.</li><li>Joins multiply repeated keys; de-duplicate lookups, pass <code>validate=</code>, use <code>indicator=True</code>, and <code>how="left_anti"</code> for rows with no match.</li><li><code>pivot_table</code> goes long to wide and aggregates duplicates; <code>melt</code> goes back; <code>concat</code> stacks frames like UNION ALL.</li><li>Group statistics used as features (z-scores, target encoding) must be learned on training data only, with smoothing for rare categories.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>D.4 · pandas: time series, text and categoricals</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m17-4" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module D · Data libraries</span></div>
+  <h1>D.4 pandas: time series, text and categoricals</h1>
+  <p>Real ML data has timestamps, free text and categories. Parsing dates, resampling to a regular calendar, rolling windows and lag features that do not peek into the future, time-based splits, vectorised text cleaning and regex extraction, chunking text for retrieval, and the <code>category</code> dtype with encodings that survive new data.</p>
+  <div class="chips"><span class="chip">17 problems</span><span class="chip">4 easy · 9 medium · 4 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="dates">
+<h2><span class="n">1</span>Parsing and using dates</h2>
+<p>Dates arrive as text, and nothing date-like works until they are parsed. <strong><code>pd.to_datetime</code></strong> converts a column to <code>datetime64</code>; give it the <code>format=</code> you expect (<code>"%Y-%m-%d"</code>, <code>"%d/%m/%Y"</code>) so ambiguous strings such as <code>05/01/2026</code> are read the way your source writes them, and <code>errors="coerce"</code> so bad values become <code>NaT</code> (the missing timestamp) that you can count. pandas 3 infers the format from the first value and <strong>raises</strong> if later values use a different one; <code>format="mixed"</code> parses each value separately, slower and only for genuinely messy sources, and it has to <strong>guess</strong>: below it reads <code>05/01/2026</code> month first, as 1 May, which is wrong if the source writes day first. The resolution is inferred too (<code>datetime64[us]</code> for these strings), not always nanoseconds as in older versions.</p>
+<p>The <strong><code>.dt</code> accessor</strong> extracts parts for features: <code>dt.dayofweek</code> (Monday is 0), <code>dt.hour</code>, <code>dt.month</code>, <code>dt.day_name()</code>, <code>dt.date</code>. Subtracting timestamps gives a <strong><code>Timedelta</code></strong>, and <code>.dt.total_seconds()</code> or <code>/ pd.Timedelta("1D")</code> turns it into a number, such as "days the company took to respond". Store times in <strong>UTC</strong> and convert for display: <code>tz_localize("UTC")</code> marks naive timestamps as UTC, <code>tz_convert(...)</code> changes the zone. Named zones such as <code>America/New_York</code> need the tz database (the <code>tzdata</code> package in some environments); fixed offsets such as <code>"+05:30"</code> always work.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">dates.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+raw = pd.Series([&quot;2026-01-02 09:15&quot;, &quot;2026-01-02 23:40&quot;, &quot;2026-01-05 08:00&quot;, &quot;not a date&quot;])
+ts = pd.to_datetime(raw, format=&quot;%Y-%m-%d %H:%M&quot;, errors=&quot;coerce&quot;)
+print(ts.dtype, ts.isna().sum())
+print(ts.dt.dayofweek.tolist(), ts.dt.day_name().tolist()[:3], ts.dt.hour.tolist())
+try:
+    pd.to_datetime(pd.Series([&quot;2026-01-05&quot;, &quot;05/01/2026&quot;]))
+except ValueError as e:
+    print(&quot;ValueError:&quot;, str(e)[:60])
+print(pd.to_datetime(pd.Series([&quot;2026-01-05&quot;, &quot;05/01/2026&quot;]), format=&quot;mixed&quot;).dt.date.tolist())
+sent, answered = pd.Timestamp(&quot;2026-01-02 09:15&quot;), pd.Timestamp(&quot;2026-01-04 15:15&quot;)
+gap = answered - sent
+print(gap, gap / pd.Timedelta(&quot;1D&quot;), gap.total_seconds())
+utc = ts.iloc[0].tz_localize(&quot;UTC&quot;)
+print(utc, utc.tz_convert(&quot;+05:30&quot;))</code></pre><div class="out"><span class="ol">Output</span><pre>datetime64[us] 1
+[4.0, 4.0, 0.0, nan] [&#x27;Friday&#x27;, &#x27;Friday&#x27;, &#x27;Monday&#x27;] [9.0, 23.0, 8.0, nan]
+ValueError: time data &quot;05/01/2026&quot; doesn&#x27;t match format &quot;%Y-%m-%d&quot;. You 
+[datetime.date(2026, 1, 5), datetime.date(2026, 5, 1)]
+2 days 06:00:00 2.25 194400.0
+2026-01-02 09:15:00+00:00 2026-01-02 14:45:00+05:30</pre></div></div>
+</section>
+<section class="sec" id="resample">
+<h2><span class="n">2</span>Regular calendars: resample and date ranges</h2>
+<p>Events happen at irregular times; models and dashboards usually want a <strong>regular</strong> series: complaints per day, revenue per week. Put the timestamps in the index (<code>set_index("submitted")</code>) and <strong><code>resample(rule)</code></strong> groups rows into calendar bins and aggregates them, a group-by on time: <code>"D"</code> for days, <code>"W"</code> for weeks (ending on Sunday by default), <code>"ME"</code> for month ends, <code>"h"</code> for hours. Days with no events do appear in the result, as 0 for <code>count</code>/<code>sum</code> or NaN for <code>mean</code>, which a plain <code>groupby(dt.date)</code> would silently skip; Power BI solves the same problem with a separate date table.</p>
+<p>A <code>DatetimeIndex</code> also allows <strong>date slicing</strong> with strings: <code>ts["2026-01"]</code> is all of January, and <code>ts["2026-01-03":"2026-01-05"]</code> includes both end days, like <code>loc</code>. <code>pd.date_range(start, periods=..., freq=...)</code> builds a calendar to <code>reindex</code> against when you need an explicit list of dates.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">resample.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+events = pd.DataFrame({
+    &quot;submitted&quot;: pd.to_datetime([&quot;2026-01-01 10:00&quot;, &quot;2026-01-01 15:30&quot;, &quot;2026-01-03 09:00&quot;, &quot;2026-01-06 11:00&quot;, &quot;2026-01-06 12:00&quot;]),
+    &quot;amount&quot;: [20.0, 35.0, 300.0, 15.0, 60.0],
+}).set_index(&quot;submitted&quot;)
+daily = events.resample(&quot;D&quot;).agg(n=(&quot;amount&quot;, &quot;size&quot;), total=(&quot;amount&quot;, &quot;sum&quot;), avg=(&quot;amount&quot;, &quot;mean&quot;))
+print(daily)
+print(events.groupby(events.index.date).size().to_dict())
+print(events.resample(&quot;W&quot;)[&quot;amount&quot;].sum().to_dict())
+print(daily.loc[&quot;2026-01-02&quot;:&quot;2026-01-03&quot;, &quot;n&quot;].tolist())
+print(pd.date_range(&quot;2026-01-31&quot;, periods=3, freq=&quot;ME&quot;).strftime(&quot;%Y-%m-%d&quot;).tolist())</code></pre><div class="out"><span class="ol">Output</span><pre>            n  total    avg
+submitted                  
+2026-01-01  2   55.0   27.5
+2026-01-02  0    0.0    NaN
+2026-01-03  1  300.0  300.0
+2026-01-04  0    0.0    NaN
+2026-01-05  0    0.0    NaN
+2026-01-06  2   75.0   37.5
+{datetime.date(2026, 1, 1): 2, datetime.date(2026, 1, 3): 1, datetime.date(2026, 1, 6): 2}
+{Timestamp(&#x27;2026-01-04 00:00:00&#x27;): 355.0, Timestamp(&#x27;2026-01-11 00:00:00&#x27;): 75.0}
+[0, 1]
+[&#x27;2026-01-31&#x27;, &#x27;2026-02-28&#x27;, &#x27;2026-03-31&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="windows">
+<h2><span class="n">3</span>Rolling windows and lag features without leakage</h2>
+<p><strong><code>rolling(window)</code></strong> computes a statistic over a moving window of the last <code>window</code> rows (or a time span such as <code>"7D"</code> on a <code>DatetimeIndex</code>); the first rows have too little history and give NaN unless you set <code>min_periods</code>. <strong><code>expanding()</code></strong> uses all rows so far, and <strong><code>ewm(span=...)</code></strong> weights recent rows more. <strong><code>shift(k)</code></strong> moves a series down by <code>k</code> rows, so each row sees the value from <code>k</code> steps earlier: a <strong>lag feature</strong>. On a group-by, <code>shift</code> and <code>rolling</code> work within each group, so one customer's history never leaks into another's.</p>
+<p>The rule that decides whether a time-series model works in production: <strong>a feature for time t may only use data available before t</strong>. <code>rolling(7).mean()</code> on day t <strong>includes day t itself</strong>; if the label is "complaints on day t", the feature contains the answer. Shift first: <code>s.shift(1).rolling(7).mean()</code> is the average of the seven days <strong>before</strong> t. The same rule applies to splitting: shuffled train/test splits put future rows in the training set, so the test score measures memory of the future. Split by <strong>time</strong> instead: train on everything before a cut-off date, test on everything after.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 660 114" role="img" aria-label="day t: predict its count then rolling(7) includes day t: leaks the label then shift(1) then rolling(7): days t-7 to t-1 then time-based split: train before the cut-off" style="max-width:660px;min-width:min(660px,540px);margin:0 auto"><defs><marker id="m74n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m74a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m74r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m74g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><rect x="16.0" y="16.0" width="124.6" height="82.0" rx="12.0" class="box"/><text x="78.3" y="54.0" class="v mid">day t: predict</text><text x="78.3" y="69.0" class="v mid">its count</text><path d="M143.6 57.0 H171.6" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m74n)"/><rect x="174.6" y="16.0" width="131.5" height="82.0" rx="12.0" class="box r"/><text x="240.4" y="46.5" class="w mid">rolling(7)</text><text x="240.4" y="61.5" class="w mid">includes day t:</text><text x="240.4" y="76.5" class="w mid">leaks the label</text><path d="M309.1 57.0 H337.1" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m74n)"/><rect x="340.1" y="16.0" width="131.5" height="82.0" rx="12.0" class="box g"/><text x="405.9" y="46.5" class="w mid">shift(1) then</text><text x="405.9" y="61.5" class="w mid">rolling(7):</text><text x="405.9" y="76.5" class="w mid">days t-7 to t-1</text><path d="M474.6 57.0 H502.6" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m74n)"/><rect x="505.6" y="16.0" width="138.4" height="82.0" rx="12.0" class="box"/><text x="574.8" y="39.0" class="v mid">time-based</text><text x="574.8" y="54.0" class="v mid">split:</text><text x="574.8" y="69.0" class="v mid">train before the</text><text x="574.8" y="84.0" class="v mid">cut-off</text></svg></div><figcaption>Features and splits must respect time: only the past is allowed.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">windows.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+counts = pd.Series([5, 7, 6, 9, 30, 8, 7], index=pd.date_range(&quot;2026-01-01&quot;, periods=7, freq=&quot;D&quot;), name=&quot;n&quot;)
+feats = pd.DataFrame({
+    &quot;n&quot;: counts,
+    &quot;roll3_leaky&quot;: counts.rolling(3).mean().round(2),
+    &quot;roll3&quot;: counts.shift(1).rolling(3).mean().round(2),
+    &quot;lag1&quot;: counts.shift(1),
+    &quot;ewm&quot;: counts.shift(1).ewm(span=3).mean().round(2),
+    &quot;best_so_far&quot;: counts.expanding().max(),
+})
+print(feats)
+print(counts.rolling(&quot;3D&quot;).sum().tolist())
+cut = pd.Timestamp(&quot;2026-01-05&quot;)
+train, test = feats[feats.index &lt; cut], feats[feats.index &gt;= cut]
+print(len(train), len(test), test.index.min().date())</code></pre><div class="out"><span class="ol">Output</span><pre>             n  roll3_leaky  roll3  lag1    ewm  best_so_far
+2026-01-01   5          NaN    NaN   NaN    NaN          5.0
+2026-01-02   7          NaN    NaN   5.0   5.00          7.0
+2026-01-03   6         6.00    NaN   7.0   6.33          7.0
+2026-01-04   9         7.33   6.00   6.0   6.14          9.0
+2026-01-05  30        15.00   7.33   9.0   7.67         30.0
+2026-01-06   8        15.67  15.00  30.0  19.19         30.0
+2026-01-07   7        15.00  15.67   8.0  13.51         30.0
+[5.0, 12.0, 18.0, 22.0, 45.0, 47.0, 45.0]
+4 3 2026-01-05</pre></div></div>
+<p>Look at 5 January, the spike of 30. <code>roll3_leaky</code> already shows 15.0 on that day, because the window contains the spike: a model trained on it would look brilliant at predicting spikes and fail in production, where the day's count is unknown until the day is over. The shifted <code>roll3</code> is 7.33, built only from the three previous days. Note also that a time-based window (<code>"3D"</code>) works on irregular data and accepts partial windows at the start.</p>
+</section>
+<section class="sec" id="text">
+<h2><span class="n">4</span>Text with the .str accessor</h2>
+<p>Text columns have a <strong><code>.str</code></strong> accessor with vectorised versions of Python's string methods (<code>lower</code>, <code>strip</code>, <code>replace</code>, <code>startswith</code>, <code>len</code>, <code>split</code>) plus regular-expression tools: <code>str.contains(pattern)</code> for filtering, <code>str.extract(pattern)</code> to pull <strong>capture groups</strong> into new columns, <code>str.replace(pattern, repl, regex=True)</code> to normalise, <code>str.count(pattern)</code>. Missing values pass through as missing. These run per value in optimised code and keep NaN handling consistent, so they beat <code>apply</code> with a Python function for anything they can express (Module 5's regex lesson applies directly).</p>
+<p>For LLM and retrieval work, two more tools matter. <code>str.split()</code> turns text into lists of words, and <strong><code>explode</code></strong> turns a column of lists into one row per element, keeping the index, which is how a narrative becomes words for counting or <strong>chunks</strong> for embedding. CFPB narratives also contain redactions written as runs of <code>X</code> (<code>XXXX</code>), which are noise for a model and should be normalised to one token before embedding or classification: in the example, the two most common "words" are redaction markers.</p>
+<p>One measured surprise: with pandas' default Python-backed strings, each <code>.str</code> method is still a loop over Python strings, so a chain of two <code>.str</code> calls ran at about the same speed as one <code>apply</code> with a precompiled regex (138 ms against 142 ms for 40,000 texts when this page was built). The advantages of <code>.str</code> are clarity and missing-value handling; with the PyArrow-backed string storage, which pandas 3 uses when PyArrow is installed, many <code>.str</code> methods run in compiled code and are much faster.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">text.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+notes = pd.Series([
+    &quot;I was charged $1,200.50 on XX/XX/2026 by XXXX XXXX.&quot;,
+    &quot;Refund of $35 never arrived!!   Called 3 times.&quot;,
+    None,
+    &quot;Account closed without notice&quot;,
+])
+print(notes.str.contains(&quot;refund&quot;, case=False).tolist())
+money = notes.str.extract(r&quot;\$([\d,]+(?:\.\d+)?)&quot;, expand=False)
+print(money.tolist(), pd.to_numeric(money.str.replace(&quot;,&quot;, &quot;&quot;)).tolist())
+clean = (notes.str.replace(r&quot;\bX{2,}\b&quot;, &quot;[REDACTED]&quot;, regex=True)
+              .str.replace(r&quot;\s+&quot;, &quot; &quot;, regex=True).str.strip())
+print(clean.tolist()[0])
+words = notes.str.lower().str.findall(r&quot;[a-z]+&quot;)
+print(words.str.len().tolist())
+print(words.explode().value_counts().head(3).to_dict())</code></pre><div class="out"><span class="ol">Output</span><pre>[False, True, False, False]
+[&#x27;1,200.50&#x27;, &#x27;35&#x27;, nan, nan] [1200.5, 35.0, nan, nan]
+I was charged $1,200.50 on [REDACTED]/[REDACTED]/2026 by [REDACTED] [REDACTED].
+[9.0, 6.0, nan, 4.0]
+{&#x27;xx&#x27;: 2, &#x27;xxxx&#x27;: 2, &#x27;i&#x27;: 1}</pre></div></div>
+</section>
+<section class="sec" id="categoricals">
+<h2><span class="n">5</span>Categoricals and encodings</h2>
+<p>The <strong><code>category</code></strong> dtype stores each distinct value once and every row as a small integer <strong>code</strong> (D.2 showed the memory saving). Its categories can be <strong>ordered</strong> (<code>pd.Categorical(values, categories=["low", "medium", "high"], ordered=True)</code>), which makes comparisons and sorting follow the business order instead of the alphabet, the pandas version of a "sort by column" setting in Power BI. Codes are also an encoding: <code>cat.codes</code> gives integers for an ordinal feature.</p>
+<p>Most models need numbers. <strong>One-hot encoding</strong> creates one 0/1 column per category (<code>pd.get_dummies</code>). The trap is at inference time: new data may lack a category (no <code>mortgage</code> complaints today) or contain one never seen in training, so <code>get_dummies</code> produces <strong>different columns</strong>, and a model receiving them gets features in the wrong positions. Fix the column list from training and <strong><code>reindex</code></strong> new data to it, filling 0; or use scikit-learn's <code>OneHotEncoder(handle_unknown="ignore")</code>, which remembers its categories (D.6). Converting to a categorical with the training categories before <code>get_dummies</code> achieves the same, once unseen values have been turned into missing ones with <code>where(isin(...))</code>: pandas 3 warns that passing unknown values to <code>pd.Categorical</code> will become an error.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">categoricals.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+sev = pd.Categorical([&quot;high&quot;, &quot;low&quot;, &quot;medium&quot;, &quot;low&quot;], categories=[&quot;low&quot;, &quot;medium&quot;, &quot;high&quot;], ordered=True)
+s = pd.Series(sev)
+print(s.sort_values().tolist(), (s &gt; &quot;low&quot;).tolist(), s.cat.codes.tolist())
+train = pd.DataFrame({&quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;, &quot;card&quot;]})
+today = pd.DataFrame({&quot;product&quot;: [&quot;card&quot;, &quot;crypto&quot;]})
+X_train = pd.get_dummies(train[&quot;product&quot;], prefix=&quot;p&quot;, dtype=int)
+X_today = pd.get_dummies(today[&quot;product&quot;], prefix=&quot;p&quot;, dtype=int)
+print(X_train.columns.tolist(), X_today.columns.tolist())
+aligned = X_today.reindex(columns=X_train.columns, fill_value=0)
+print(aligned.values.tolist())
+known = [&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;]
+fixed = pd.Categorical(today[&quot;product&quot;].where(today[&quot;product&quot;].isin(known)), categories=known)
+print(pd.get_dummies(fixed, prefix=&quot;p&quot;, dtype=int).values.tolist())</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;low&#x27;, &#x27;low&#x27;, &#x27;medium&#x27;, &#x27;high&#x27;] [True, False, True, False] [2, 0, 1, 0]
+[&#x27;p_card&#x27;, &#x27;p_loan&#x27;, &#x27;p_mortgage&#x27;] [&#x27;p_card&#x27;, &#x27;p_crypto&#x27;]
+[[1, 0, 0], [0, 0, 0]]
+[[1, 0, 0], [0, 0, 0]]</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-dates-and-their-parts" data-pid="m17-4-dates-and-their-parts" data-type="predict" data-level="easy" data-answer="[False, False, True] [2.0, 3.0, nan]
+[&#x27;Friday&#x27;, &#x27;Sunday&#x27;] [False, False]
+1 days 08:30:00 32.5
+2026-03-01 2026-02-28">
+<header class="prob-head"><h3>1. Dates and their parts</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+s = pd.to_datetime(pd.Series([&quot;2026-02-27 22:00&quot;, &quot;2026-03-01 06:30&quot;, &quot;bad&quot;]), format=&quot;%Y-%m-%d %H:%M&quot;, errors=&quot;coerce&quot;)
+print(s.isna().tolist(), s.dt.month.tolist())
+print(s.dt.day_name().tolist()[:2], s.dt.is_month_end.tolist()[:2])
+print((s.iloc[1] - s.iloc[0]), (s.iloc[1] - s.iloc[0]) / pd.Timedelta(&quot;1h&quot;))
+print((s.iloc[0] + pd.Timedelta(days=2)).date(), (s.iloc[0] + pd.offsets.MonthEnd(1)).date())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>2026 is not a leap year, so February has 28 days. Missing timestamps are <code>NaT</code>, and their parts are NaN.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[False, False, True] [2.0, 3.0, nan]
+[&#x27;Friday&#x27;, &#x27;Sunday&#x27;] [False, False]
+1 days 08:30:00 32.5
+2026-03-01 2026-02-28</pre></div><p><code>"bad"</code> becomes <code>NaT</code>, and <code>dt.month</code> of <code>NaT</code> is NaN, so the months come back as floats (2.0, 3.0, nan). 27 February 2026 is a Friday and 1 March a Sunday; 27 February is not the last day of the month. From 22:00 on the 27th to 06:30 on 1 March is 1 day 8 hours 30 minutes, which is 32.5 hours. Adding two days crosses into March because February 2026 has 28 days, and <code>MonthEnd(1)</code> rolls forward to the end of the current month, the 28th.</p></div></details>
+</article>
+<article class="prob" id="p-rolling-shift-and-the-first-rows" data-pid="m17-4-rolling-shift-and-the-first-rows" data-type="predict" data-level="easy" data-answer="[nan, 2.0, 4.0, 6.0, 8.0]
+[nan, 6.0, 10.0, 14.0, 18.0]
+[2.0, 3.0, 4.0, 6.0, 8.0]
+[nan, nan, 3.0, 5.0, 7.0]
+[nan, 2.0, 2.0, 2.0, 2.0] [nan, 1.0, 0.5, 0.33, 0.25]
+[2.0, 6.0, 12.0, 20.0, 30.0]">
+<header class="prob-head"><h3>2. Rolling, shift and the first rows</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+s = pd.Series([2, 4, 6, 8, 10])
+print(s.shift(1).tolist())
+print(s.rolling(2).sum().tolist())
+print(s.rolling(3, min_periods=1).mean().tolist())
+print(s.shift(1).rolling(2).mean().tolist())
+print(s.diff().tolist(), s.pct_change().round(2).tolist())
+print(s.expanding().sum().tolist())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>shift(1)</code> puts NaN in the first position. A rolling window with too few values gives NaN unless <code>min_periods</code> allows fewer.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[nan, 2.0, 4.0, 6.0, 8.0]
+[nan, 6.0, 10.0, 14.0, 18.0]
+[2.0, 3.0, 4.0, 6.0, 8.0]
+[nan, nan, 3.0, 5.0, 7.0]
+[nan, 2.0, 2.0, 2.0, 2.0] [nan, 1.0, 0.5, 0.33, 0.25]
+[2.0, 6.0, 12.0, 20.0, 30.0]</pre></div><p><code>shift(1)</code> moves every value down one row. A window of 2 has no complete window at the first row. With <code>min_periods=1</code> the first windows are partial: 2, then the mean of 2 and 4, then of 2, 4 and 6, and so on. Shifting first means each window covers the previous two values only, so the first two rows are NaN. <code>diff</code> is the change from the previous row and <code>pct_change</code> the relative change (4 is 100% more than 2). <code>expanding().sum()</code> is a running total.</p></div></details>
+</article>
+<article class="prob" id="p-daily-complaint-counts-with-no-gaps" data-pid="m17-4-daily-complaint-counts-with-no-gaps" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. Daily complaint counts with no gaps</h3></header>
+<div class="prob-q"><p>Write <code>daily_counts(df, start, end)</code> for a frame with a <code>submitted</code> timestamp column: return a Series indexed by <strong>every</strong> day from <code>start</code> to <code>end</code> inclusive (strings such as <code>"2026-01-01"</code>), named <code>"complaints"</code>, holding the number of complaints submitted on each day as <code>int</code>, with 0 for days without any. Complaints outside the range are ignored.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import pandas as pd
+
+
+def daily_counts(df, start, end):
+    return df.groupby(df[&quot;submitted&quot;].dt.date).size()
+</textarea>
+<script type="text/plain" class="prob-tests">df = pd.DataFrame({"submitted": pd.to_datetime(["2026-01-01 09:00", "2026-01-01 17:00", "2026-01-03 12:00",
+                                                 "2025-12-31 23:00", "2026-01-05 08:00"])})
+out = daily_counts(df, "2026-01-01", "2026-01-04")
+assert out.name == "complaints" and out.dtype.kind == "i"
+assert out.tolist() == [2, 0, 1, 0]
+assert [d.strftime("%m-%d") for d in out.index] == ["01-01", "01-02", "01-03", "01-04"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 3 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">df = pd.DataFrame({&quot;submitted&quot;: pd.to_datetime([&quot;2026-01-01 09:00&quot;, &quot;2026-01-01 17:00&quot;, &quot;2026-01-03 12:00&quot;,
+                                                 &quot;2025-12-31 23:00&quot;, &quot;2026-01-05 08:00&quot;])})
+out = daily_counts(df, &quot;2026-01-01&quot;, &quot;2026-01-04&quot;)
+assert out.name == &quot;complaints&quot; and out.dtype.kind == &quot;i&quot;
+assert out.tolist() == [2, 0, 1, 0]
+assert [d.strftime(&quot;%m-%d&quot;) for d in out.index] == [&quot;01-01&quot;, &quot;01-02&quot;, &quot;01-03&quot;, &quot;01-04&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>set_index("submitted").resample("D").size()</code> counts per day, but only between the first and last event.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>reindex(pd.date_range(start, end, freq="D"), fill_value=0)</code> adds the missing days at both ends.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def daily_counts(df, start, end):
+    days = pd.date_range(start, end, freq=&quot;D&quot;)
+    counts = df.set_index(&quot;submitted&quot;).resample(&quot;D&quot;).size()
+    return counts.reindex(days, fill_value=0).astype(int).rename(&quot;complaints&quot;)</code></pre></div><p>Grouping by date only produces days that have events, so a quiet day simply disappears, and a model or chart reading the series thinks the days are consecutive. <code>resample("D")</code> fills gaps <strong>between</strong> the first and last event, but not the days before the first or after the last one in your requested range, and it includes events outside the range. Reindexing to an explicit <code>date_range</code> solves both: days outside are dropped, missing days get 0. Both ends of <code>date_range</code> are inclusive. This calendar-first habit is the pandas version of joining to a date dimension.</p></div></details>
+</article>
+<article class="prob" id="p-extract-amounts-and-dates-from-narrative" data-pid="m17-4-extract-amounts-and-dates-from-narrative" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>4. Extract amounts and dates from narratives</h3></header>
+<div class="prob-q"><p>Write <code>extract_fields(texts)</code> for a Series of complaint narratives. Return a DataFrame with the same index and two columns: <code>amount</code>, the first dollar amount in the text as a float (<code>"$1,200.50"</code> becomes 1200.5, <code>"$35"</code> becomes 35.0), and <code>date</code>, the first date written as <code>YYYY-MM-DD</code>, as a timestamp. Missing or absent values are NaN / NaT. Use <code>str.extract</code>, no Python loop.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">import pandas as pd
+
+
+def extract_fields(texts):
+    return pd.DataFrame({&quot;amount&quot;: texts.str.extract(r&quot;(\d+)&quot;, expand=False)})
+</textarea>
+<script type="text/plain" class="prob-tests">texts = pd.Series(["Paid $1,200.50 on 2026-01-04, refunded $5", "No money here, see 2026-02-30", None, "Fee of $35 charged 2026-03-01"],
+                  index=[10, 11, 12, 13])
+out = extract_fields(texts)
+assert out.index.tolist() == [10, 11, 12, 13] and list(out.columns) == ["amount", "date"]
+assert out["amount"].iloc[0] == 1200.5 and out["amount"].iloc[3] == 35.0 and out["amount"].isna().sum() == 2
+assert str(out["date"].iloc[0].date()) == "2026-01-04" and pd.isna(out["date"].iloc[1])
+assert out["date"].dtype.kind == "M"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">texts = pd.Series([&quot;Paid $1,200.50 on 2026-01-04, refunded $5&quot;, &quot;No money here, see 2026-02-30&quot;, None, &quot;Fee of $35 charged 2026-03-01&quot;],
+                  index=[10, 11, 12, 13])
+out = extract_fields(texts)
+assert out.index.tolist() == [10, 11, 12, 13] and list(out.columns) == [&quot;amount&quot;, &quot;date&quot;]
+assert out[&quot;amount&quot;].iloc[0] == 1200.5 and out[&quot;amount&quot;].iloc[3] == 35.0 and out[&quot;amount&quot;].isna().sum() == 2
+assert str(out[&quot;date&quot;].iloc[0].date()) == &quot;2026-01-04&quot; and pd.isna(out[&quot;date&quot;].iloc[1])
+assert out[&quot;date&quot;].dtype.kind == &quot;M&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Amount pattern: a <code>$</code> then digits and commas, optionally a dot and more digits: <code>r"\$([\d,]+(?:\.\d+)?)"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Dates: <code>r"(\d{4}-\d{2}-\d{2})"</code>, then <code>pd.to_datetime(..., format="%Y-%m-%d", errors="coerce")</code> turns the impossible 30 February into NaT.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def extract_fields(texts):
+    amount = texts.str.extract(r&quot;\$([\d,]+(?:\.\d+)?)&quot;, expand=False)
+    date = texts.str.extract(r&quot;(\d{4}-\d{2}-\d{2})&quot;, expand=False)
+    return pd.DataFrame({
+        &quot;amount&quot;: pd.to_numeric(amount.str.replace(&quot;,&quot;, &quot;&quot;)),
+        &quot;date&quot;: pd.to_datetime(date, format=&quot;%Y-%m-%d&quot;, errors=&quot;coerce&quot;),
+    })</code></pre></div><p><code>str.extract</code> with one capture group and <code>expand=False</code> returns a Series of the first match per row, NaN where there is none, aligned to the original index. The amount pattern anchors on <code>$</code>, so the starter's "first run of digits" (which picked up <code>1</code>) is avoided, allows thousands separators, and makes the decimal part optional with a non-capturing group <code>(?:...)</code>. Commas are removed before <code>to_numeric</code>. A string that looks like a date is not necessarily one: <code>2026-02-30</code> matches the pattern, and <code>errors="coerce"</code> turns it into <code>NaT</code> instead of raising. Extracting structured fields from text with regex is cheap and exact; an LLM is the tool when the wording varies too much for a pattern.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-a-rolling-feature-that-sees-the-label" data-pid="m17-4-a-rolling-feature-that-sees-the-label" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. A rolling feature that sees the label</h3></header>
+<div class="prob-q"><p><code>add_features</code> builds features to predict each day's complaint count <code>n</code>. The model scored suspiciously well offline and badly in production. Fix the two leaky features so that each uses only days <strong>before</strong> the current one: <code>avg7</code> (mean of the previous 7 days, allowing partial windows of at least 3 days) and <code>max_so_far</code> (the maximum of all previous days). The first rows should be NaN where there is not enough history.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import pandas as pd
+
+
+def add_features(daily):
+    out = daily.copy()
+    out[&quot;avg7&quot;] = out[&quot;n&quot;].rolling(7, min_periods=3).mean()
+    out[&quot;max_so_far&quot;] = out[&quot;n&quot;].expanding().max()
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+daily = pd.DataFrame({"n": [4, 6, 8, 100, 6, 4, 2, 9]}, index=pd.date_range("2026-01-01", periods=8))
+f = add_features(daily)
+assert f["avg7"].iloc[:3].isna().all()
+assert f["avg7"].iloc[3] == 6.0 and f["avg7"].iloc[7] == np.mean([4, 6, 8, 100, 6, 4, 2])
+assert np.isnan(f["max_so_far"].iloc[0]) and f["max_so_far"].iloc[3] == 8 and f["max_so_far"].iloc[4] == 100
+assert not f["avg7"].equals(f["n"].rolling(7, min_periods=3).mean())</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+daily = pd.DataFrame({&quot;n&quot;: [4, 6, 8, 100, 6, 4, 2, 9]}, index=pd.date_range(&quot;2026-01-01&quot;, periods=8))
+f = add_features(daily)
+assert f[&quot;avg7&quot;].iloc[:3].isna().all()
+assert f[&quot;avg7&quot;].iloc[3] == 6.0 and f[&quot;avg7&quot;].iloc[7] == np.mean([4, 6, 8, 100, 6, 4, 2])
+assert np.isnan(f[&quot;max_so_far&quot;].iloc[0]) and f[&quot;max_so_far&quot;].iloc[3] == 8 and f[&quot;max_so_far&quot;].iloc[4] == 100
+assert not f[&quot;avg7&quot;].equals(f[&quot;n&quot;].rolling(7, min_periods=3).mean())</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Shift the series by one before the window, so the window ends yesterday.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def add_features(daily):
+    out = daily.copy()
+    past = out[&quot;n&quot;].shift(1)
+    out[&quot;avg7&quot;] = past.rolling(7, min_periods=3).mean()
+    out[&quot;max_so_far&quot;] = past.expanding().max()
+    return out</code></pre></div><p>Both windows ended <strong>today</strong>: on 4 January the "average" already contained the spike of 100 it was supposed to predict, and <code>max_so_far</code> equalled the label whenever a new record was set. Offline, the model learns to read the answer from the feature; in production the day's value is not known until the day is over, so the feature is unavailable or different, and accuracy collapses. Shifting by one first makes every window end yesterday. On 8 January the window holds exactly the seven days before it, 1 to 7 January; on 4 January it holds the three days that exist, which <code>min_periods=3</code> allows. Leakage of this kind is the most common reason a time-series model looks too good.</p></div></details>
+</article>
+<article class="prob" id="p-a-time-based-train-and-test-split" data-pid="m17-4-a-time-based-train-and-test-split" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A time-based train and test split</h3></header>
+<div class="prob-q"><p>Write <code>time_split(df, time_col, test_size=0.25, gap="0D")</code> returning <code>(train, test)</code>: sort by <code>time_col</code>, put the latest <code>test_size</code> fraction of <strong>rows</strong> (rounded up) in <code>test</code>, and everything strictly earlier than <code>test</code>'s first timestamp minus <code>gap</code> (a <code>Timedelta</code> string) in <code>train</code>, so rows inside the gap are in neither. Rows sharing a timestamp must never be split across train and test: if the boundary falls inside a timestamp, the whole timestamp goes to <code>test</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import pandas as pd
+
+
+def time_split(df, time_col, test_size=0.25, gap=&quot;0D&quot;):
+    test = df.sample(frac=test_size, random_state=0)
+    train = df.drop(test.index)
+    return train, test
+</textarea>
+<script type="text/plain" class="prob-tests">t = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-04", "2026-01-05", "2026-01-06", "2026-01-07"])
+df = pd.DataFrame({"t": t[::-1], "y": range(8)})
+train, test = time_split(df, "t", test_size=0.25)
+assert test["t"].min() == pd.Timestamp("2026-01-06") and len(test) == 2
+assert train["t"].max() < test["t"].min() and len(train) == 6
+train, test = time_split(df, "t", test_size=0.5)
+assert len(test) == 5 and test["t"].min() == pd.Timestamp("2026-01-04")
+train, test = time_split(df, "t", test_size=0.25, gap="2D")
+assert train["t"].max() == pd.Timestamp("2026-01-03") and len(train) + len(test) == 5</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = pd.to_datetime([&quot;2026-01-01&quot;, &quot;2026-01-02&quot;, &quot;2026-01-03&quot;, &quot;2026-01-04&quot;, &quot;2026-01-04&quot;, &quot;2026-01-05&quot;, &quot;2026-01-06&quot;, &quot;2026-01-07&quot;])
+df = pd.DataFrame({&quot;t&quot;: t[::-1], &quot;y&quot;: range(8)})
+train, test = time_split(df, &quot;t&quot;, test_size=0.25)
+assert test[&quot;t&quot;].min() == pd.Timestamp(&quot;2026-01-06&quot;) and len(test) == 2
+assert train[&quot;t&quot;].max() &lt; test[&quot;t&quot;].min() and len(train) == 6
+train, test = time_split(df, &quot;t&quot;, test_size=0.5)
+assert len(test) == 5 and test[&quot;t&quot;].min() == pd.Timestamp(&quot;2026-01-04&quot;)
+train, test = time_split(df, &quot;t&quot;, test_size=0.25, gap=&quot;2D&quot;)
+assert train[&quot;t&quot;].max() == pd.Timestamp(&quot;2026-01-03&quot;) and len(train) + len(test) == 5</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>n_test = math.ceil(len(df) * test_size)</code>; after sorting, the cut-off time is the timestamp at position <code>len(df) - n_test</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Test is every row with time <code>&gt;= cutoff</code>, train every row with time <code>&lt; cutoff - pd.Timedelta(gap)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import math
+import pandas as pd
+
+
+def time_split(df, time_col, test_size=0.25, gap=&quot;0D&quot;):
+    s = df.sort_values(time_col, kind=&quot;stable&quot;)
+    n_test = math.ceil(len(s) * test_size)
+    cutoff = s[time_col].iloc[len(s) - n_test]
+    test = s[s[time_col] &gt;= cutoff]
+    train = s[s[time_col] &lt; cutoff - pd.Timedelta(gap)]
+    return train, test</code></pre></div><p>A random split puts complaints from next week in the training set and asks the model to "predict" last week, which measures how well it interpolates the past, not how it will do on tomorrow's data. A time-based split mirrors production: train on the past, evaluate on the most recent period. Defining the test set by a cut-off <strong>time</strong> rather than a row count keeps rows with the same timestamp together (with <code>test_size=0.5</code> the boundary falls between the two 4 January rows, so both go to test, making 5). The optional gap leaves a buffer so that features computed over recent days (rolling windows, slowly arriving labels) cannot overlap the test period. scikit-learn's <code>TimeSeriesSplit</code> generalises this into several expanding folds, and it has a <code>gap</code> parameter for the same reason.</p></div></details>
+</article>
+<article class="prob" id="p-lag-features-per-customer" data-pid="m17-4-lag-features-per-customer" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Lag features per customer</h3></header>
+<div class="prob-q"><p>Write <code>add_customer_lags(df)</code> for complaints with <code>customer</code>, <code>submitted</code> and <code>amount</code>. Return a copy sorted by <code>customer</code> then <code>submitted</code>, with three new columns computed within each customer from <strong>earlier</strong> complaints only: <code>prev_amount</code> (the previous complaint's amount), <code>days_since_prev</code> (days since the previous complaint, as a float) and <code>n_before</code> (how many complaints the customer filed before this one). The first complaint of each customer has NaN for the first two and 0 for <code>n_before</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import pandas as pd
+
+
+def add_customer_lags(df):
+    out = df.sort_values(&quot;submitted&quot;).copy()
+    out[&quot;prev_amount&quot;] = out[&quot;amount&quot;].shift(1)
+    out[&quot;days_since_prev&quot;] = out[&quot;submitted&quot;].diff().dt.days
+    out[&quot;n_before&quot;] = range(len(out))
+    return out
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+df = pd.DataFrame({"customer": ["b", "a", "a", "b", "a"],
+                   "submitted": pd.to_datetime(["2026-01-03 00:00", "2026-01-01 00:00", "2026-01-04 12:00", "2026-01-10 00:00", "2026-01-02 00:00"]),
+                   "amount": [50.0, 10.0, 30.0, 70.0, 20.0]})
+out = add_customer_lags(df)
+assert out["customer"].tolist() == ["a", "a", "a", "b", "b"]
+assert np.isnan(out["prev_amount"].iloc[0]) and out["prev_amount"].tolist()[1:3] == [10.0, 20.0]
+assert np.isnan(out["prev_amount"].iloc[3]) and out["prev_amount"].iloc[4] == 50.0
+assert out["days_since_prev"].tolist()[1:3] == [1.0, 2.5] and out["days_since_prev"].iloc[4] == 7.0
+assert out["n_before"].tolist() == [0, 1, 2, 0, 1]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+df = pd.DataFrame({&quot;customer&quot;: [&quot;b&quot;, &quot;a&quot;, &quot;a&quot;, &quot;b&quot;, &quot;a&quot;],
+                   &quot;submitted&quot;: pd.to_datetime([&quot;2026-01-03 00:00&quot;, &quot;2026-01-01 00:00&quot;, &quot;2026-01-04 12:00&quot;, &quot;2026-01-10 00:00&quot;, &quot;2026-01-02 00:00&quot;]),
+                   &quot;amount&quot;: [50.0, 10.0, 30.0, 70.0, 20.0]})
+out = add_customer_lags(df)
+assert out[&quot;customer&quot;].tolist() == [&quot;a&quot;, &quot;a&quot;, &quot;a&quot;, &quot;b&quot;, &quot;b&quot;]
+assert np.isnan(out[&quot;prev_amount&quot;].iloc[0]) and out[&quot;prev_amount&quot;].tolist()[1:3] == [10.0, 20.0]
+assert np.isnan(out[&quot;prev_amount&quot;].iloc[3]) and out[&quot;prev_amount&quot;].iloc[4] == 50.0
+assert out[&quot;days_since_prev&quot;].tolist()[1:3] == [1.0, 2.5] and out[&quot;days_since_prev&quot;].iloc[4] == 7.0
+assert out[&quot;n_before&quot;].tolist() == [0, 1, 2, 0, 1]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>g = out.groupby("customer")</code>, then <code>g["amount"].shift(1)</code>, <code>g["submitted"].diff()</code> and <code>g.cumcount()</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Convert a Timedelta column to fractional days with <code>/ pd.Timedelta("1D")</code>; <code>dt.days</code> drops the hours.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def add_customer_lags(df):
+    out = df.sort_values([&quot;customer&quot;, &quot;submitted&quot;], kind=&quot;stable&quot;).reset_index(drop=True)
+    g = out.groupby(&quot;customer&quot;)
+    out[&quot;prev_amount&quot;] = g[&quot;amount&quot;].shift(1)
+    out[&quot;days_since_prev&quot;] = g[&quot;submitted&quot;].diff() / pd.Timedelta(&quot;1D&quot;)
+    out[&quot;n_before&quot;] = g.cumcount()
+    return out</code></pre></div><p>Without the group-by, the "previous complaint" of a customer's first complaint is someone else's last one, so information flows between customers and the first row of each customer gets a meaningless value. Grouped <code>shift</code>, <code>diff</code> and <code>cumcount</code> restart for every customer. Sorting by customer and time first makes "previous" mean "previous in time". <code>dt.days</code> keeps only whole days (2 days 12 hours becomes 2); dividing by one day keeps the fraction, 2.5, which is the more useful feature. <code>cumcount</code> counts earlier rows in the group, exactly "complaints before this one", and none of these features look at later rows.</p></div></details>
+</article>
+<article class="prob" id="p-lags-with-a-group-by-or-a-loop-over-cust" data-pid="m17-4-lags-with-a-group-by-or-a-loop-over-cust" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Lags with a group-by or a loop over customers</h3></header>
+<div class="prob-q"><p>Both add the previous amount per customer for 60,000 complaints and 3,000 customers, already sorted. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import pandas as pd
+rng = np.random.default_rng(2)
+df = pd.DataFrame({&quot;customer&quot;: np.sort(rng.integers(0, 3_000, 60_000)), &quot;amount&quot;: rng.uniform(0, 500, 60_000)})</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">prev = pd.concat([g[&quot;amount&quot;].shift(1) for _, g in df.groupby(&quot;customer&quot;)])</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">prev = df.groupby(&quot;customer&quot;)[&quot;amount&quot;].shift(1)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Option A creates 3,000 small DataFrames and 3,000 Series, then concatenates them.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>701.71 ms</td></tr><tr><td>B</td><td>2.94 ms</td></tr></table></div><p>Iterating over a group-by is convenient, but every group becomes a separate DataFrame object, and each <code>shift</code> call pays pandas' fixed overhead, so option A spends almost all its time on bookkeeping for 3,000 tiny operations, plus a final <code>concat</code>. Option B computes the group boundaries once and shifts the whole column in compiled code, respecting the boundaries. The same goes for <code>cumsum</code>, <code>diff</code>, <code>rank</code> and <code>rolling</code> on a group-by: call them on the group-by object, not inside a loop over groups.</p></div></details>
+</article>
+<article class="prob" id="p-clean-narratives-before-embedding" data-pid="m17-4-clean-narratives-before-embedding" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Clean narratives before embedding</h3></header>
+<div class="prob-q"><p>Before embedding complaint narratives for retrieval, write <code>prepare_texts(s, min_words=5)</code>: replace every redaction (a word made only of two or more <code>X</code>s, optionally followed by <code>/</code> and more <code>X</code>s, such as <code>XXXX</code> or <code>XX/XX</code>) with the single token <code>[X]</code>, merge runs of consecutive <code>[X]</code> tokens into one, collapse whitespace, strip, and drop texts with fewer than <code>min_words</code> words, or missing ones. Return a Series keeping the original index of the kept rows.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import pandas as pd
+
+
+def prepare_texts(s, min_words=5):
+    return s.str.replace(&quot;XXXX&quot;, &quot;[X]&quot;)
+</textarea>
+<script type="text/plain" class="prob-tests">s = pd.Series(["Called XXXX XXXX on XX/XX/2026   and got nothing.", "XXXX", None, "My card was blocked again today", "Too short now"],
+              index=[3, 5, 8, 9, 12])
+out = prepare_texts(s)
+assert out.index.tolist() == [3, 9]
+assert out.loc[3] == "Called [X] on [X]/2026 and got nothing."
+assert out.loc[9] == "My card was blocked again today"
+assert prepare_texts(s, min_words=1).index.tolist() == [3, 5, 9, 12]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">s = pd.Series([&quot;Called XXXX XXXX on XX/XX/2026   and got nothing.&quot;, &quot;XXXX&quot;, None, &quot;My card was blocked again today&quot;, &quot;Too short now&quot;],
+              index=[3, 5, 8, 9, 12])
+out = prepare_texts(s)
+assert out.index.tolist() == [3, 9]
+assert out.loc[3] == &quot;Called [X] on [X]/2026 and got nothing.&quot;
+assert out.loc[9] == &quot;My card was blocked again today&quot;
+assert prepare_texts(s, min_words=1).index.tolist() == [3, 5, 9, 12]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Redactions: <code>r"\bX{2,}(?:/X{2,})*\b"</code>. Merge repeats with <code>r"\[X\](?:\s+\[X\])+"</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Count words with <code>str.split().str.len()</code>; missing texts give NaN, which fails <code>&gt;=</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def prepare_texts(s, min_words=5):
+    t = s.str.replace(r&quot;\bX{2,}(?:/X{2,})*\b&quot;, &quot;[X]&quot;, regex=True)
+    t = t.str.replace(r&quot;\[X\](?:\s+\[X\])+&quot;, &quot;[X]&quot;, regex=True)
+    t = t.str.replace(r&quot;\s+&quot;, &quot; &quot;, regex=True).str.strip()
+    words = t.str.split().str.len()
+    return t[words &gt;= min_words]</code></pre></div><p>Redaction markers carry no meaning, but embedding models still spend tokens and attention on them, and narratives that share many <code>XXXX</code> runs look similar to each other for the wrong reason. Normalising them to one token keeps the information "something was redacted here" without the noise. The <code>\b</code> word boundaries stop the pattern from eating the <code>XX</code> inside a real word, and the <code>(?:/X{2,})*</code> part handles redacted dates such as <code>XX/XX</code>, leaving the visible year. Very short texts make poor retrieval units and poor training examples, so they are filtered after cleaning (a text of only <code>XXXX</code> becomes one word). Keeping the original index lets you join embeddings back to the complaint ids.</p></div></details>
+</article>
+<article class="prob" id="p-categories-codes-and-order" data-pid="m17-4-categories-codes-and-order" data-type="trace" data-level="medium">
+<header class="prob-head"><h3>10. Categories, codes and order</h3></header>
+<div class="prob-q"><p>Fill in <code>out</code> after each marked line.</p></div>
+<div class="code"><pre><code class="py">import pandas as pd
+
+s = pd.Series(pd.Categorical([&quot;med&quot;, &quot;low&quot;, &quot;high&quot;, &quot;med&quot;], categories=[&quot;low&quot;, &quot;med&quot;, &quot;high&quot;], ordered=True))
+out = s.cat.codes.tolist()
+out = s.sort_values().tolist()
+out = (s &gt;= &quot;med&quot;).tolist()
+out = s.max()
+t = s.cat.add_categories([&quot;critical&quot;])
+out = t.cat.categories.tolist()
+out = t.value_counts().tolist()
+u = pd.Series(pd.Categorical([&quot;b&quot;, &quot;a&quot;, &quot;b&quot;]))
+out = u.cat.codes.tolist()</code></pre></div>
+<div class="tbl"><table class="trace"><tr><th>step</th><th><code>out</code></th></tr><tr><td>codes</td><td><input class="cell" data-a="[1, 0, 2, 1]" data-s="[1, 0, 2, 1]" aria-label="out at codes" autocomplete="off"></td></tr><tr><td>sorted</td><td><input class="cell" data-a="[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;med&#x27;, &#x27;high&#x27;]" data-s="[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;med&#x27;, &#x27;high&#x27;]" aria-label="out at sorted" autocomplete="off"></td></tr><tr><td>compare</td><td><input class="cell" data-a="[True, False, True, True]" data-s="[True, False, True, True]" aria-label="out at compare" autocomplete="off"></td></tr><tr><td>max</td><td><input class="cell" data-a="&#x27;high&#x27;" data-s="high" aria-label="out at max" autocomplete="off"></td></tr><tr><td>added</td><td><input class="cell" data-a="[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;high&#x27;, &#x27;critical&#x27;]" data-s="[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;high&#x27;, &#x27;critical&#x27;]" aria-label="out at added" autocomplete="off"></td></tr><tr><td>counts</td><td><input class="cell" data-a="[2, 1, 1, 0]" data-s="[2, 1, 1, 0]" aria-label="out at counts" autocomplete="off"></td></tr><tr><td>unordered codes</td><td><input class="cell" data-a="[1, 0, 1]" data-s="[1, 0, 1]" aria-label="out at unordered codes" autocomplete="off"></td></tr></table></div>
+<div class="answer-row"><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Codes follow the order of <code>categories</code>, not of appearance. <code>value_counts</code> includes categories with zero rows, sorted by count.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table class="trace"><tr><th>step</th><th><code>out</code></th></tr><tr><td>codes</td><td><code>[1, 0, 2, 1]</code></td></tr><tr><td>sorted</td><td><code>[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;med&#x27;, &#x27;high&#x27;]</code></td></tr><tr><td>compare</td><td><code>[True, False, True, True]</code></td></tr><tr><td>max</td><td><code>&#x27;high&#x27;</code></td></tr><tr><td>added</td><td><code>[&#x27;low&#x27;, &#x27;med&#x27;, &#x27;high&#x27;, &#x27;critical&#x27;]</code></td></tr><tr><td>counts</td><td><code>[2, 1, 1, 0]</code></td></tr><tr><td>unordered codes</td><td><code>[1, 0, 1]</code></td></tr></table></div><p>Codes are positions in the category list: <code>low</code> is 0, <code>med</code> 1, <code>high</code> 2. Sorting follows that order, and so do comparisons and <code>max</code>, because the categorical is ordered; with plain strings, <code>"high" &lt; "low"</code> alphabetically. Adding a category extends the list without changing any row. <code>value_counts</code> reports every category, including <code>critical</code> with 0, ordered by count (ties keep the category order). Without explicit categories, pandas sorts the distinct values, so <code>a</code> is 0 and <code>b</code> is 1 regardless of which came first.</p></div></details>
+</article>
+<article class="prob" id="p-one-hot-features-that-survive-new-data" data-pid="m17-4-one-hot-features-that-survive-new-data" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>11. One-hot features that survive new data</h3></header>
+<div class="prob-q"><p>Write <code>OneHot</code> with <code>fit(df, cols)</code> that remembers, for each column in <code>cols</code>, the categories seen in training (sorted, missing values excluded), and <code>transform(df)</code> that returns an int DataFrame with one column per (column, category) named <code>f"{col}={value}"</code>, in a fixed order (columns in <code>cols</code> order, categories sorted), with all zeros for unseen or missing values. The output must have identical columns for any input, even an empty frame. Then add a method <code>unseen(df)</code> returning a dict from column to the sorted list of values not seen in training.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">import pandas as pd
+
+
+class OneHot:
+    def fit(self, df, cols):
+        self.cols = cols
+        return self
+
+    def transform(self, df):
+        return pd.get_dummies(df[self.cols], dtype=int)
+
+    def unseen(self, df):
+        return {}
+</textarea>
+<script type="text/plain" class="prob-tests">train = pd.DataFrame({"product": ["card", "loan", "card", None], "channel": ["web", "phone", "web", "web"]})
+enc = OneHot().fit(train, ["product", "channel"])
+new = pd.DataFrame({"product": ["crypto", "loan"], "channel": ["web", "fax"]}, index=[7, 8])
+X = enc.transform(new)
+assert X.columns.tolist() == ["product=card", "product=loan", "channel=phone", "channel=web"]
+assert X.values.tolist() == [[0, 0, 0, 1], [0, 1, 0, 0]] and X.index.tolist() == [7, 8]
+assert enc.transform(new.iloc[:0]).columns.tolist() == X.columns.tolist()
+assert enc.unseen(new) == {"product": ["crypto"], "channel": ["fax"]}
+assert enc.transform(train).sum().tolist() == [2, 1, 1, 3]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">train = pd.DataFrame({&quot;product&quot;: [&quot;card&quot;, &quot;loan&quot;, &quot;card&quot;, None], &quot;channel&quot;: [&quot;web&quot;, &quot;phone&quot;, &quot;web&quot;, &quot;web&quot;]})
+enc = OneHot().fit(train, [&quot;product&quot;, &quot;channel&quot;])
+new = pd.DataFrame({&quot;product&quot;: [&quot;crypto&quot;, &quot;loan&quot;], &quot;channel&quot;: [&quot;web&quot;, &quot;fax&quot;]}, index=[7, 8])
+X = enc.transform(new)
+assert X.columns.tolist() == [&quot;product=card&quot;, &quot;product=loan&quot;, &quot;channel=phone&quot;, &quot;channel=web&quot;]
+assert X.values.tolist() == [[0, 0, 0, 1], [0, 1, 0, 0]] and X.index.tolist() == [7, 8]
+assert enc.transform(new.iloc[:0]).columns.tolist() == X.columns.tolist()
+assert enc.unseen(new) == {&quot;product&quot;: [&quot;crypto&quot;], &quot;channel&quot;: [&quot;fax&quot;]}
+assert enc.transform(train).sum().tolist() == [2, 1, 1, 3]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Store <code>sorted(df[c].dropna().unique())</code> per column in <code>fit</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>In <code>transform</code>, set unseen values to missing with <code>df[c].where(df[c].isin(known))</code>, then convert to <code>pd.Categorical(..., categories=known)</code>; <code>get_dummies</code> of that produces exactly the known columns.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+class OneHot:
+    def fit(self, df, cols):
+        self.cols = list(cols)
+        self.cats_ = {c: sorted(df[c].dropna().unique().tolist()) for c in self.cols}
+        return self
+
+    def transform(self, df):
+        parts = []
+        for c in self.cols:
+            known = self.cats_[c]
+            cat = pd.Categorical(df[c].where(df[c].isin(known)), categories=known)
+            d = pd.get_dummies(cat, dtype=int)
+            d.columns = [f&quot;{c}={v}&quot; for v in self.cats_[c]]
+            d.index = df.index
+            parts.append(d)
+        return pd.concat(parts, axis=1)
+
+    def unseen(self, df):
+        out = {}
+        for c in self.cols:
+            extra = set(df[c].dropna()) - set(self.cats_[c])
+            if extra:
+                out[c] = sorted(extra)
+        return out</code></pre></div><p><code>get_dummies</code> creates columns from whatever values are present, so a batch without loans has no <code>loan</code> column and a batch with a new product has an extra one: the model then receives features in the wrong positions, usually without any error, because it only sees a matrix. Fixing the categories at <code>fit</code> time, turning unknown values into missing ones and converting to a categorical with the known categories means <code>get_dummies</code> always creates one column per category, even with no rows. Looping over a few columns is fine. Reporting unseen values is the monitoring half: a new product appearing in production is data drift that someone should know about. scikit-learn's <code>OneHotEncoder(handle_unknown="ignore")</code> implements the same contract inside a pipeline.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-sessions-from-an-event-log" data-pid="m17-4-sessions-from-an-event-log" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">Data work</span><h3>12. Sessions from an event log</h3></header>
+<div class="prob-q"><p>An agent's tool-call log has <code>user</code> and <code>time</code> columns. A <strong>session</strong> is a run of a user's events where each event is at most <code>gap</code> minutes after the previous one. Write <code>sessionize(events, gap=30)</code> returning a copy sorted by user and time with an int column <code>session</code> numbering each user's sessions from 1, and <code>summarise(sessions)</code> returning one row per <code>(user, session)</code> with <code>start</code>, <code>end</code>, <code>events</code> and <code>minutes</code> (duration as a float). Vectorised: group-by <code>diff</code>, comparison and <code>cumsum</code>, no Python loop over rows.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">import pandas as pd
+
+
+def sessionize(events, gap=30):
+    out = events.copy()
+    out[&quot;session&quot;] = 1
+    return out
+
+
+def summarise(sessions):
+    return sessions.groupby(&quot;user&quot;).size()
+</textarea>
+<script type="text/plain" class="prob-tests">t = pd.to_datetime(["2026-01-01 10:00", "2026-01-01 10:20", "2026-01-01 11:30", "2026-01-01 10:05", "2026-01-01 11:00", "2026-01-01 11:29"])
+ev = pd.DataFrame({"user": ["u1", "u1", "u1", "u2", "u2", "u2"], "time": t}).sample(frac=1, random_state=3)
+s = sessionize(ev)
+assert s["user"].tolist() == ["u1", "u1", "u1", "u2", "u2", "u2"]
+assert s["session"].tolist() == [1, 1, 2, 1, 2, 2]
+summ = summarise(s)
+assert list(summ.columns) == ["user", "session", "start", "end", "events", "minutes"]
+assert summ["events"].tolist() == [2, 1, 1, 2] and summ["minutes"].tolist() == [20.0, 0.0, 0.0, 29.0]
+assert len(ev) == 6 and "session" not in ev.columns</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">t = pd.to_datetime([&quot;2026-01-01 10:00&quot;, &quot;2026-01-01 10:20&quot;, &quot;2026-01-01 11:30&quot;, &quot;2026-01-01 10:05&quot;, &quot;2026-01-01 11:00&quot;, &quot;2026-01-01 11:29&quot;])
+ev = pd.DataFrame({&quot;user&quot;: [&quot;u1&quot;, &quot;u1&quot;, &quot;u1&quot;, &quot;u2&quot;, &quot;u2&quot;, &quot;u2&quot;], &quot;time&quot;: t}).sample(frac=1, random_state=3)
+s = sessionize(ev)
+assert s[&quot;user&quot;].tolist() == [&quot;u1&quot;, &quot;u1&quot;, &quot;u1&quot;, &quot;u2&quot;, &quot;u2&quot;, &quot;u2&quot;]
+assert s[&quot;session&quot;].tolist() == [1, 1, 2, 1, 2, 2]
+summ = summarise(s)
+assert list(summ.columns) == [&quot;user&quot;, &quot;session&quot;, &quot;start&quot;, &quot;end&quot;, &quot;events&quot;, &quot;minutes&quot;]
+assert summ[&quot;events&quot;].tolist() == [2, 1, 1, 2] and summ[&quot;minutes&quot;].tolist() == [20.0, 0.0, 0.0, 29.0]
+assert len(ev) == 6 and &quot;session&quot; not in ev.columns</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>After sorting, <code>new = events.groupby("user")["time"].diff() &gt; pd.Timedelta(minutes=gap)</code>; the first event of each user has NaT, which compares False.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>new.groupby(user).cumsum() + 1</code> numbers the sessions within each user.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def sessionize(events, gap=30):
+    out = events.sort_values([&quot;user&quot;, &quot;time&quot;], kind=&quot;stable&quot;).reset_index(drop=True)
+    new = out.groupby(&quot;user&quot;)[&quot;time&quot;].diff() &gt; pd.Timedelta(minutes=gap)
+    out[&quot;session&quot;] = new.groupby(out[&quot;user&quot;]).cumsum().astype(int) + 1
+    return out
+
+
+def summarise(sessions):
+    summ = sessions.groupby([&quot;user&quot;, &quot;session&quot;], as_index=False).agg(
+        start=(&quot;time&quot;, &quot;min&quot;), end=(&quot;time&quot;, &quot;max&quot;), events=(&quot;time&quot;, &quot;size&quot;))
+    summ[&quot;minutes&quot;] = (summ[&quot;end&quot;] - summ[&quot;start&quot;]) / pd.Timedelta(&quot;1min&quot;)
+    return summ</code></pre></div><p>Sessionisation is the gaps-and-islands problem from SQL, and the pandas answer is three vectorised steps. Within each user, <code>diff</code> gives the time since the previous event; comparing it with the gap marks the events that <strong>start</strong> a new session (the first event of each user has no previous one, so its <code>NaT</code> compares as False). The running sum of those booleans within each user increases by one at every new session, so adding 1 numbers them from 1. u2's events at 11:00 and 11:29 are 29 minutes apart, inside the gap, so they share a session. The summary is then an ordinary named aggregation. Shuffling the input in the test makes sure the function sorts instead of trusting the order.</p></div></details>
+</article>
+<article class="prob" id="p-chunk-narratives-for-retrieval" data-pid="m17-4-chunk-narratives-for-retrieval" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>13. Chunk narratives for retrieval</h3></header>
+<div class="prob-q"><p>Write <code>chunk_texts(df, size, overlap)</code> for a frame with <code>id</code> and <code>text</code>: split every text into words and cut it into chunks of at most <code>size</code> words, where each chunk starts <code>size - overlap</code> words after the previous one, and a text with no more than <code>size</code> words gives one chunk. Return a DataFrame with columns <code>id</code>, <code>chunk</code> (0, 1, 2... within each text), <code>text</code> (the chunk's words joined by spaces) and <code>n_words</code>. Missing or empty texts give no chunks. Raise <code>ValueError</code> unless <code>0 &lt;= overlap &lt; size</code>. Use <code>explode</code> for the rows; a Python function per text (not per word) is fine.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 13">import pandas as pd
+
+
+def chunk_texts(df, size, overlap):
+    return df.assign(chunk=0)
+</textarea>
+<script type="text/plain" class="prob-tests">df = pd.DataFrame({"id": [1, 2, 3, 4], "text": ["a b c d e f g", "short text", None, "   "]})
+out = chunk_texts(df, size=4, overlap=1)
+assert list(out.columns) == ["id", "chunk", "text", "n_words"]
+assert out["id"].tolist() == [1, 1, 2] and out["chunk"].tolist() == [0, 1, 0]
+assert out["text"].tolist() == ["a b c d", "d e f g", "short text"]
+assert out["n_words"].tolist() == [4, 4, 2]
+assert chunk_texts(df, 3, 0)["text"].tolist()[:3] == ["a b c", "d e f", "g"]
+assert chunk_texts(df, 5, 2)["text"].tolist()[:2] == ["a b c d e", "d e f g"]
+import pytest
+with pytest.raises(ValueError):
+    chunk_texts(df, 3, 3)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">df = pd.DataFrame({&quot;id&quot;: [1, 2, 3, 4], &quot;text&quot;: [&quot;a b c d e f g&quot;, &quot;short text&quot;, None, &quot;   &quot;]})
+out = chunk_texts(df, size=4, overlap=1)
+assert list(out.columns) == [&quot;id&quot;, &quot;chunk&quot;, &quot;text&quot;, &quot;n_words&quot;]
+assert out[&quot;id&quot;].tolist() == [1, 1, 2] and out[&quot;chunk&quot;].tolist() == [0, 1, 0]
+assert out[&quot;text&quot;].tolist() == [&quot;a b c d&quot;, &quot;d e f g&quot;, &quot;short text&quot;]
+assert out[&quot;n_words&quot;].tolist() == [4, 4, 2]
+assert chunk_texts(df, 3, 0)[&quot;text&quot;].tolist()[:3] == [&quot;a b c&quot;, &quot;d e f&quot;, &quot;g&quot;]
+assert chunk_texts(df, 5, 2)[&quot;text&quot;].tolist()[:2] == [&quot;a b c d e&quot;, &quot;d e f g&quot;]
+import pytest
+with pytest.raises(ValueError):
+    chunk_texts(df, 3, 3)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Write <code>windows(words)</code> returning a list of word lists: start at 0, step <code>size - overlap</code>, and stop once a window reaches the last word.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>df.assign(chunks=words.map(windows)).explode("chunks")</code>, then <code>groupby("id").cumcount()</code> numbers the chunks.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+
+
+def chunk_texts(df, size, overlap):
+    if not 0 &lt;= overlap &lt; size:
+        raise ValueError(&quot;need 0 &lt;= overlap &lt; size&quot;)
+    step = size - overlap
+
+    def windows(words):
+        out = []
+        for start in range(0, len(words), step):
+            out.append(words[start:start + size])
+            if start + size &gt;= len(words):
+                break
+        return out
+
+    words = df[&quot;text&quot;].fillna(&quot;&quot;).str.split()
+    exploded = (df[[&quot;id&quot;]].assign(chunks=words.map(windows))
+                .explode(&quot;chunks&quot;).dropna(subset=[&quot;chunks&quot;]))
+    exploded[&quot;chunk&quot;] = exploded.groupby(&quot;id&quot;).cumcount()
+    exploded[&quot;text&quot;] = exploded[&quot;chunks&quot;].map(&quot; &quot;.join)
+    exploded[&quot;n_words&quot;] = exploded[&quot;chunks&quot;].map(len)
+    return exploded[[&quot;id&quot;, &quot;chunk&quot;, &quot;text&quot;, &quot;n_words&quot;]].reset_index(drop=True)</code></pre></div><p>Retrieval works on chunks, not whole documents: an embedding of a long narrative blurs its topics, and a prompt has a token budget. Overlap keeps a sentence that straddles a boundary intact in at least one chunk (with size 4 and overlap 1, the word <code>d</code> ends one chunk and starts the next). The loop stops as soon as a window reaches the end, so the tail is never a duplicate fragment already inside the previous chunk (size 5, overlap 2 gives two chunks, not three). Building the list of chunks per text and then <code>explode</code> produces one row per chunk with the document's id carried along; an empty list explodes to NaN, which <code>dropna</code> removes, so empty texts disappear. Real chunkers count tokens rather than words and prefer sentence boundaries, but the bookkeeping is the same.</p></div></details>
+</article>
+<article class="prob" id="p-time-series-details-that-bite" data-pid="m17-4-time-series-details-that-bite" data-type="predict" data-level="hard" data-answer="[2, 3, 4]
+[4, 5, 6]
+[&#x27;01-31&#x27;, &#x27;02-28&#x27;]
+[10, 11]
+[1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+[1, 3, 5]
+True">
+<header class="prob-head"><h3>14. Time-series details that bite</h3></header>
+<div class="code"><pre><code class="py">import pandas as pd
+
+idx = pd.date_range(&quot;2026-01-29&quot;, periods=6, freq=&quot;D&quot;)
+s = pd.Series([1, 2, 3, 4, 5, 6], index=idx)
+print(s[&quot;2026-01-30&quot;:&quot;2026-02-01&quot;].tolist())
+print(s[&quot;2026-02&quot;].tolist())
+print(s.resample(&quot;ME&quot;).sum().index.strftime(&quot;%m-%d&quot;).tolist())
+print(s.resample(&quot;W&quot;).sum().tolist())
+print(s.rolling(&quot;2D&quot;).sum().tolist())
+print(s.asfreq(&quot;2D&quot;).tolist())
+print((s.index[1:] - s.index[:-1]).unique().tolist() == [pd.Timedelta(&quot;1D&quot;)])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>String slices on a DatetimeIndex include both ends. <code>"W"</code> weeks end on Sunday; 1 February 2026 is a Sunday. <code>asfreq</code> keeps the values at the new dates without aggregating.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[2, 3, 4]
+[4, 5, 6]
+[&#x27;01-31&#x27;, &#x27;02-28&#x27;]
+[10, 11]
+[1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+[1, 3, 5]
+True</pre></div><p>Date-string slices include the end day, so 30 January to 1 February is three values, and <code>s["2026-02"]</code> selects the whole of February present (3 values). Monthly resampling labels each bin with its <strong>end</strong> date (31 January, 28 February), a frequent surprise when joining with tables keyed by the first of the month. Weekly bins end on Sunday: 29 January to 1 February sums to 10, and 2 to 3 February to 11. A time-based rolling window of <code>"2D"</code> covers the current day and the one before, with a partial first window. <code>asfreq("2D")</code> simply samples every second day, keeping values rather than summing them. The regular spacing check confirms the index has no gaps.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-how-do-you-avoid-leakage-when-building-f" data-pid="m17-4-how-do-you-avoid-leakage-when-building-f" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. How do you avoid leakage when building features and splits for time-series data?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Leakage means a feature or a training row uses information that would not be available at prediction time, so offline scores are optimistic and production performance collapses. For features: every value for time t must be computed from data before t (or before t minus the latency with which data really arrives), so lags use <code>shift</code>, rolling and expanding windows are applied to the shifted series, group-wise features are computed within the entity and in time order, and aggregates such as target encodings or normalisation statistics are fitted on the training period only. Watch for subtle sources: a "last status" column that is updated after the event, data back-filled later, or features joined from a table snapshot taken after the cut-off. For splits: never shuffle; train on a period, validate on the next period, and test on the latest, optionally with a gap; for model selection use rolling-origin or expanding-window cross-validation (<code>TimeSeriesSplit</code>), and make sure rows from the same entity and timestamp do not straddle the boundary. A good check is to simulate prediction: rebuild features "as of" a past date and compare with the training features.</p></div></details>
+</article>
+<article class="prob" id="p-how-do-you-encode-categorical-features-a" data-pid="m17-4-how-do-you-encode-categorical-features-a" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. How do you encode categorical features, and what goes wrong in production?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>It depends on the model and the cardinality. One-hot encoding (one 0/1 column per category) suits linear models and low-cardinality columns; ordinal codes suit genuinely ordered categories (low, medium, high) and tree models; target encoding (the smoothed mean label per category, fitted out of fold) handles high cardinality such as merchants or zip codes; hashing bounds the number of columns; and learned embeddings are the neural option. Gradient-boosting libraries such as LightGBM and CatBoost can take categoricals natively. In production the problems are consistency and change: <code>pd.get_dummies</code> on new data creates different columns when a category is missing or new, so the feature matrix silently shifts; new categories appear (a new product), so the encoder must handle unknowns (<code>handle_unknown="ignore"</code>, an "other" bucket, or the prior for target encoding); rare categories overfit, so group them; and the category list must be saved with the model, ideally as a fitted encoder inside a pipeline. Monitoring the share of unseen categories is a cheap drift alarm.</p></div></details>
+</article>
+<article class="prob" id="p-how-would-you-prepare-free-text-complain" data-pid="m17-4-how-would-you-prepare-free-text-complain" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>17. How would you prepare free-text complaint narratives for a classical classifier versus an LLM or embedding model?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>For a classical model (TF-IDF plus logistic regression), preprocessing shapes the vocabulary, so you lower-case, normalise or remove punctuation, numbers and redaction markers, possibly remove stop words or lemmatise, and keep n-grams; the text is reduced to counts, so noise directly becomes features. For an LLM or a modern embedding model, the tokenizer and the model already handle case, punctuation and word forms, and aggressive cleaning removes signal (negation, casing, structure), so you clean only what is genuinely noise: collapse redaction runs, strip HTML and boilerplate, fix encoding problems, normalise whitespace, and remove or mask personal data. You also manage length: truncate or chunk to the model's context and token budget, with overlap for retrieval, and keep ids so chunks can be traced back. In both cases de-duplicate, drop empty or near-empty texts, keep the raw text for audit, apply exactly the same preprocessing at training and inference time, and check language and length distributions, because a few huge or non-English documents can dominate costs or results.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>Parse with <code>pd.to_datetime(format=..., errors="coerce")</code> and count the <code>NaT</code>s; pandas 3 raises on mixed formats unless <code>format="mixed"</code>. Use <code>.dt</code> for parts and store UTC.</li><li><code>resample</code> groups by calendar bins and keeps empty days; reindex to a <code>date_range</code> for a fixed calendar. Date-string slices include both ends; monthly bins are labelled by month end.</li><li>Lag and window features must end before the row they describe: <code>shift(1)</code> before <code>rolling</code> or <code>expanding</code>, and within groups. Split by time, never shuffle.</li><li><code>.str</code> methods handle missing values and regex (<code>contains</code>, <code>extract</code>, <code>replace</code>); <code>split</code> plus <code>explode</code> turns text into words or chunks.</li><li><code>category</code> stores codes and can be ordered; fix categories at training time and align new data, so one-hot columns never shift.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

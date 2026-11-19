@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>D.5 · matplotlib: plots that explain data and models</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m17-5" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module D · Data libraries</span></div>
+  <h1>D.5 matplotlib: plots that explain data and models</h1>
+  <p>A plot is how you find problems in data and how you convince people a model works. Figures and axes and the object-oriented API, choosing a chart for the question, plotting from pandas, the standard ML plots (training curves, confusion matrices, threshold trade-offs, embeddings), and the habits that keep a chart honest. Every figure your code draws on this page appears under the output, and the tests inspect the axes.</p>
+  <div class="chips"><span class="chip">13 problems</span><span class="chip">3 easy · 7 medium · 3 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="anatomy">
+<h2><span class="n">1</span>Figures, Axes and the object-oriented API</h2>
+<p>matplotlib draws a <strong>Figure</strong> (the canvas) containing one or more <strong>Axes</strong> (individual plots; the name is unlucky, since each Axes has an x <strong>axis</strong> and a y <strong>axis</strong>). Everything you see is an object you can inspect: an Axes has <code>lines</code> (from <code>plot</code>), <code>patches</code> (bars and histogram bins), <code>collections</code> (scatter points), <code>images</code> (from <code>imshow</code>), <code>texts</code>, a title, labels and a legend. That is also how this page grades your plots: the tests read those objects, while the picture appears under the output so you can see what you drew.</p>
+<p>There are two ways to call it. The <strong>pyplot</strong> style, <code>plt.plot(...)</code>, <code>plt.title(...)</code>, acts on a hidden "current" figure and axes, which is convenient in a notebook and confusing as soon as there are two plots. The <strong>object-oriented</strong> style creates them explicitly with <code>fig, ax = plt.subplots()</code> and calls methods on <code>ax</code>. Use the object-oriented style in any code you keep, and write plotting helpers that <strong>take an <code>ax</code> argument and return it</strong>, so callers can place them in any grid; pandas and seaborn plotting functions follow the same convention.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 620 284" role="img" aria-label="what plt.subplots() and ax.plot() create" style="max-width:620px;min-width:min(620px,540px);margin:0 auto"><defs><marker id="m75n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m75a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m75r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m75g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><text x="110" y="18" class="h mid">names</text><text x="430" y="18" class="h mid">objects</text><rect x="40" y="45.0" width="140" height="36" rx="18" class="box"/><text x="110" y="67.5" class="tk">fig</text><rect x="40" y="103.0" width="140" height="36" rx="18" class="box"/><text x="110" y="125.5" class="tk">ax</text><rect x="40" y="161.0" width="140" height="36" rx="18" class="box"/><text x="110" y="183.5" class="tk">ax.lines[0]</text><rect x="40" y="219.0" width="140" height="36" rx="18" class="box"/><text x="110" y="241.5" class="tk">ax.title</text><rect x="300.0" y="43.0" width="260.0" height="40.0" rx="12.0" class="box"/><text x="430.0" y="67.5" class="tk">Figure (the canvas)</text><rect x="300.0" y="101.0" width="260.0" height="40.0" rx="12.0" class="box a"/><text x="430.0" y="125.5" class="w mid">Axes (one plot)</text><rect x="300.0" y="159.0" width="260.0" height="40.0" rx="12.0" class="box"/><text x="430.0" y="183.5" class="tk">Line2D: the plotted data</text><rect x="300.0" y="217.0" width="260.0" height="40.0" rx="12.0" class="box"/><text x="430.0" y="241.5" class="tk">Text: &#x27;Daily complaints&#x27;</text><path d="M182 63.0 C250.0 63.0, 290.0 63.0, 296 63.0" style="stroke:var(--accent);stroke-width:2;fill:none" marker-end="url(#m75a)"/><path d="M182 121.0 C250.0 121.0, 290.0 121.0, 296 121.0" style="stroke:var(--accent);stroke-width:2;fill:none" marker-end="url(#m75a)"/><path d="M182 179.0 C250.0 179.0, 290.0 179.0, 296 179.0" style="stroke:var(--accent);stroke-width:2;fill:none" marker-end="url(#m75a)"/><path d="M182 237.0 C250.0 237.0, 290.0 237.0, 296 237.0" style="stroke:var(--accent);stroke-width:2;fill:none" marker-end="url(#m75a)"/></svg></div><figcaption>A figure is a tree of objects; <code>ax</code> is the one you draw on, and every line, label and title hangs off it.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">anatomy.py</span><button class="copy">Copy</button></div><pre><code class="py">import matplotlib.pyplot as plt
+
+days = [1, 2, 3, 4, 5, 6, 7]
+counts = [12, 15, 11, 30, 14, 13, 16]
+fig, ax = plt.subplots(figsize=(5, 2.6))
+ax.plot(days, counts, marker=&quot;o&quot;, label=&quot;complaints&quot;)
+ax.axhline(sum(counts) / len(counts), color=&quot;gray&quot;, linestyle=&quot;--&quot;, label=&quot;mean&quot;)
+ax.set(title=&quot;Daily complaints&quot;, xlabel=&quot;day of January&quot;, ylabel=&quot;complaints&quot;)
+ax.legend()
+print(type(fig).__name__, type(ax).__name__, len(fig.axes))
+print(len(ax.lines), ax.lines[0].get_ydata().tolist()[:3], ax.get_title())
+print([t.get_text() for t in ax.get_legend().get_texts()])</code></pre><div class="out"><span class="ol">Output</span><pre>Figure Axes 1
+2 [12, 15, 11] Daily complaints
+[&#x27;complaints&#x27;, &#x27;mean&#x27;]</pre></div><div class="o-figs"><img src="img/m17-5-anatomy-3-1.png" alt="Figure 1 drawn by the example above" loading="lazy"></div></div>
+</section>
+<section class="sec" id="kinds">
+<h2><span class="n">2</span>Choosing a chart for the question</h2>
+<p>Pick the chart from the <strong>question</strong>, not from the menu. <strong>How does it change over time?</strong> A line chart, time on the x axis. <strong>How do categories compare?</strong> A bar chart, sorted by value, horizontal when the labels are long. <strong>What does the distribution look like?</strong> A histogram (or a box plot to compare several distributions), which shows skew, outliers and multiple peaks that a mean hides. <strong>How do two numbers relate?</strong> A scatter plot, with transparency (<code>alpha</code>) when points overlap. <strong>How do counts split across two categories?</strong> A heatmap of a cross-tabulation. Pie charts and 3D effects make comparisons harder and are rarely the right choice.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 690 236" role="img" aria-label="question first, then the chart" style="max-width:690px;min-width:min(690px,540px);margin:0 auto"><rect x="17" y="17" width="224.10000000000002" height="32" rx="7" class="box b"/><text x="129.1" y="37.5" class="w mid">question</text><rect x="243.10000000000002" y="17" width="155.1" height="32" rx="7" class="box b"/><text x="320.7" y="37.5" class="w mid">chart</text><rect x="400.20000000000005" y="17" width="272.4" height="32" rx="7" class="box b"/><text x="536.4" y="37.5" class="w mid">matplotlib</text><rect x="17" y="51" width="224.10000000000002" height="32" rx="7" class="box"/><text x="129.1" y="71.5" class="tk">how does it change over time?</text><rect x="243.10000000000002" y="51" width="155.1" height="32" rx="7" class="box"/><text x="320.7" y="71.5" class="tk">line</text><rect x="400.20000000000005" y="51" width="272.4" height="32" rx="7" class="box"/><text x="536.4" y="71.5" class="tk">ax.plot(dates, values)</text><rect x="17" y="85" width="224.10000000000002" height="32" rx="7" class="box"/><text x="129.1" y="105.5" class="tk">how do categories compare?</text><rect x="243.10000000000002" y="85" width="155.1" height="32" rx="7" class="box"/><text x="320.7" y="105.5" class="tk">bar, sorted</text><rect x="400.20000000000005" y="85" width="272.4" height="32" rx="7" class="box"/><text x="536.4" y="105.5" class="tk">ax.barh(labels, values)</text><rect x="17" y="119" width="224.10000000000002" height="32" rx="7" class="box"/><text x="129.1" y="139.5" class="tk">what is the distribution?</text><rect x="243.10000000000002" y="119" width="155.1" height="32" rx="7" class="box"/><text x="320.7" y="139.5" class="tk">histogram, box plot</text><rect x="400.20000000000005" y="119" width="272.4" height="32" rx="7" class="box"/><text x="536.4" y="139.5" class="tk">ax.hist(x, bins=30), ax.boxplot(...)</text><rect x="17" y="153" width="224.10000000000002" height="32" rx="7" class="box"/><text x="129.1" y="173.5" class="tk">how do two numbers relate?</text><rect x="243.10000000000002" y="153" width="155.1" height="32" rx="7" class="box"/><text x="320.7" y="173.5" class="tk">scatter</text><rect x="400.20000000000005" y="153" width="272.4" height="32" rx="7" class="box"/><text x="536.4" y="173.5" class="tk">ax.scatter(x, y, alpha=0.4)</text><rect x="17" y="187" width="224.10000000000002" height="32" rx="7" class="box"/><text x="129.1" y="207.5" class="tk">counts across two categories?</text><rect x="243.10000000000002" y="187" width="155.1" height="32" rx="7" class="box"/><text x="320.7" y="207.5" class="tk">heatmap</text><rect x="400.20000000000005" y="187" width="272.4" height="32" rx="7" class="box"/><text x="536.4" y="207.5" class="tk">ax.imshow(table)</text></svg></div><figcaption>Each common question has a chart that answers it directly.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">kinds.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+amounts = rng.lognormal(mean=4, sigma=1, size=2_000)
+fig, axes = plt.subplots(1, 3, figsize=(9, 2.6))
+axes[0].hist(amounts, bins=40)
+axes[0].set(title=&quot;Refund amounts&quot;, xlabel=&quot;dollars&quot;)
+axes[1].hist(amounts, bins=np.logspace(0, 4, 40))
+axes[1].set(title=&quot;Same data, log x&quot;, xlabel=&quot;dollars&quot;, xscale=&quot;log&quot;)
+products = {&quot;card&quot;: 420, &quot;mortgage&quot;: 310, &quot;student loan&quot;: 120, &quot;auto&quot;: 75}
+names = sorted(products, key=products.get)
+axes[2].barh(names, [products[n] for n in names])
+axes[2].set(title=&quot;Complaints by product&quot;, xlabel=&quot;complaints&quot;)
+fig.tight_layout()
+print(axes.shape, len(axes[0].patches), len(axes[2].patches))
+print(round(float(np.median(amounts)), 1), round(float(amounts.mean()), 1))</code></pre><div class="out"><span class="ol">Output</span><pre>(3,) 40 4
+52.8 86.5</pre></div><div class="o-figs"><img src="img/m17-5-kinds-2-1.png" alt="Figure 1 drawn by the example above" loading="lazy"></div></div>
+<p>The left histogram is what skewed money data usually looks like: nearly everything is piled against zero, and a few large refunds stretch the axis. The median (about 53 dollars here) is well below the mean (about 87), which a single summary number would hide. A <strong>log scale</strong> on the x axis, with bins spaced evenly in log space, spreads the data out and shows its real shape. The bars are sorted by value, so the ranking is readable at a glance.</p>
+</section>
+<section class="sec" id="pandas">
+<h2><span class="n">3</span>Plotting straight from pandas</h2>
+<p>pandas wraps matplotlib: <code>df.plot(kind="line")</code>, <code>series.plot.bar()</code>, <code>df.plot.scatter(x=..., y=...)</code>, <code>series.plot.hist(bins=...)</code>. It uses the index as the x axis and one line per column, adds a legend, and <strong>returns the Axes</strong>, so you finish the chart with the usual <code>ax.set(...)</code> calls; pass <code>ax=</code> to draw into a grid you created. The typical flow is to shape the data with pandas (a <code>groupby</code>, a <code>resample</code>, a <code>pivot_table</code> from D.3 and D.4) and let the plot be one call.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pandas_plot.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+import matplotlib.pyplot as plt
+
+runs = pd.DataFrame({&quot;epoch&quot;: [1, 2, 3, 4, 5, 6],
+                     &quot;train_loss&quot;: [0.92, 0.61, 0.45, 0.36, 0.30, 0.26],
+                     &quot;val_loss&quot;: [0.95, 0.70, 0.58, 0.55, 0.57, 0.62]}).set_index(&quot;epoch&quot;)
+ax = runs.plot(figsize=(5, 2.6), marker=&quot;o&quot;)
+best = runs[&quot;val_loss&quot;].idxmin()
+ax.axvline(best, color=&quot;gray&quot;, linestyle=&quot;:&quot;)
+ax.set(title=&quot;Training curves&quot;, ylabel=&quot;loss&quot;)
+print(type(ax).__name__, [l.get_label() for l in ax.lines[:2]], best)
+print(ax.get_xlabel())</code></pre><div class="out"><span class="ol">Output</span><pre>Axes [&#x27;train_loss&#x27;, &#x27;val_loss&#x27;] 4
+epoch</pre></div><div class="o-figs"><img src="img/m17-5-pandas-1-1.png" alt="Figure 1 drawn by the example above" loading="lazy"></div></div>
+<p>This is the most important plot in model training. Training loss keeps falling, validation loss bottoms out at epoch 4 and then rises: the model has started to <strong>overfit</strong>, memorising the training data. The dotted line marks the epoch to keep (early stopping). pandas labelled the x axis from the index name and the legend from the column names.</p>
+</section>
+<section class="sec" id="ml">
+<h2><span class="n">4</span>Plots that explain a model</h2>
+<p>Four plots cover most model reviews. The <strong>training curve</strong> above. The <strong>confusion matrix</strong>, drawn as a heatmap with <code>imshow</code> and annotated with the counts, rows for true classes and columns for predictions, so the diagonal is correct and every off-diagonal cell is a specific kind of mistake. The <strong>threshold plot</strong>: precision and recall as the decision threshold moves, which is how you pick an operating point instead of accepting 0.5. And for embeddings, a <strong>2D projection</strong> (PCA, or t-SNE/UMAP) coloured by label or cluster, which shows whether similar items really land together.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">confusion.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+labels = [&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;]
+C = np.array([[50, 6, 2], [9, 31, 4], [1, 3, 44]])
+fig, ax = plt.subplots(figsize=(3.6, 3.2))
+im = ax.imshow(C, cmap=&quot;Blues&quot;)
+ax.set_xticks(range(3), labels=labels)
+ax.set_yticks(range(3), labels=labels)
+ax.set(xlabel=&quot;predicted&quot;, ylabel=&quot;true&quot;, title=&quot;Confusion matrix&quot;)
+for i in range(3):
+    for j in range(3):
+        ax.text(j, i, C[i, j], ha=&quot;center&quot;, va=&quot;center&quot;, color=&quot;white&quot; if C[i, j] &gt; C.max() / 2 else &quot;black&quot;)
+fig.colorbar(im, ax=ax, shrink=0.8)
+print(len(ax.images), len(ax.texts), [t.get_text() for t in ax.get_xticklabels()])
+print(&quot;recall per class:&quot;, (np.diag(C) / C.sum(axis=1)).round(2).tolist())
+print(len(fig.axes))</code></pre><div class="out"><span class="ol">Output</span><pre>1 9 [&#x27;card&#x27;, &#x27;loan&#x27;, &#x27;mortgage&#x27;]
+recall per class: [0.86, 0.7, 0.92]
+2</pre></div><div class="o-figs"><img src="img/m17-5-ml-1-1.png" alt="Figure 1 drawn by the example above" loading="lazy"></div></div>
+<p>The colour bar is a second Axes added to the figure, which is why <code>fig.axes</code> has two entries. Reading the matrix: 9 true <code>loan</code> complaints were predicted as <code>card</code>, the biggest single error, and loan recall is the lowest (0.70); that row, not the overall accuracy of 0.83, is where to look next. The text colour flips on dark cells so every number stays readable.</p>
+</section>
+<section class="sec" id="honest">
+<h2><span class="n">5</span>Charts that do not mislead</h2>
+<p>A few habits separate a chart that informs from one that misleads. <strong>Label everything</strong>: title, axis labels with units, a legend when there is more than one series. <strong>Bars start at zero</strong>, because their length is the value; a truncated bar axis turns a 2% difference into a cliff. Lines may zoom in, since they show change. Use a <strong>log scale</strong> for data spanning orders of magnitude, and say so in the label. Keep <strong>colours meaningful and consistent</strong> (the same model in the same colour across every chart) and colour-blind safe (matplotlib's default cycle and <code>viridis</code> are). Show the <strong>uncertainty</strong> where it exists: error bars, several runs, or a band from <code>fill_between</code>. Two practical ones: <code>fig.savefig("chart.png", dpi=150, bbox_inches="tight")</code> for reports, and <code>plt.close(fig)</code> after saving inside a loop, or every figure stays in memory.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 567 270" role="img" aria-label="habits of an honest chart" style="max-width:567px;min-width:min(567px,540px);margin:0 auto"><rect x="17" y="17" width="231.0" height="32" rx="7" class="box b"/><text x="132.5" y="37.5" class="w mid">habit</text><rect x="250.0" y="17" width="300.0" height="32" rx="7" class="box b"/><text x="400.0" y="37.5" class="w mid">why</text><rect x="17" y="51" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="71.5" class="tk">axis labels with units</text><rect x="250.0" y="51" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="71.5" class="tk">a number without a unit means nothing</text><rect x="17" y="85" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="105.5" class="tk">bars start at zero</text><rect x="250.0" y="85" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="105.5" class="tk">bar length is read as the value</text><rect x="17" y="119" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="139.5" class="tk">log scale for skewed data</text><rect x="250.0" y="119" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="139.5" class="tk">otherwise most points sit in one corner</text><rect x="17" y="153" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="173.5" class="tk">same colour for the same thing</text><rect x="250.0" y="153" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="173.5" class="tk">readers carry the mapping between charts</text><rect x="17" y="187" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="207.5" class="tk">show uncertainty</text><rect x="250.0" y="187" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="207.5" class="tk">a single run can be luck</text><rect x="17" y="221" width="231.0" height="32" rx="7" class="box"/><text x="132.5" y="241.5" class="tk">plt.close(fig) in loops</text><rect x="250.0" y="221" width="300.0" height="32" rx="7" class="box"/><text x="400.0" y="241.5" class="tk">open figures keep their memory</text></svg></div><figcaption>Small habits that keep a chart truthful and readable.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">honest.py</span><button class="copy">Copy</button></div><pre><code class="py">import matplotlib.pyplot as plt
+
+models, acc = [&quot;baseline&quot;, &quot;new model&quot;], [0.91, 0.93]
+fig, (a, b) = plt.subplots(1, 2, figsize=(6, 2.4))
+a.bar(models, acc)
+a.set(ylim=(0.9, 0.935), title=&quot;Truncated: looks huge&quot;)
+b.bar(models, acc)
+b.set(ylim=(0, 1), title=&quot;From zero: +2 points&quot;)
+for axis in (a, b):
+    axis.set_ylabel(&quot;accuracy&quot;)
+fig.tight_layout()
+print(a.get_ylim(), b.get_ylim())
+print(round((acc[1] - acc[0]) / (0.935 - 0.9), 2), &quot;of the left axis height&quot;)
+plt.close(fig)
+print(plt.get_fignums())</code></pre><div class="out"><span class="ol">Output</span><pre>(np.float64(0.9), np.float64(0.935)) (np.float64(0.0), np.float64(1.0))
+0.57 of the left axis height
+[]</pre></div></div>
+<p>The same two numbers: on the left, the new model's bar looks several times taller, because the axis starts at 0.9 and the 2-point gap fills 57% of its height. On the right, the honest picture. This example closed its figure, so nothing is drawn under its output, which is exactly what <code>plt.close</code> is for.</p>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-what-a-figure-contains" data-pid="m17-5-what-a-figure-contains" data-type="predict" data-level="easy" data-answer="(2, 3) 6
+2 2 1
+[&#x27;_child0&#x27;, &#x27;down&#x27;]
+False True
+[]">
+<header class="prob-head"><h3>1. What a figure contains</h3></header>
+<div class="code"><pre><code class="py">import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(2, 3, figsize=(6, 3))
+print(axes.shape, len(fig.axes))
+ax = axes[0, 1]
+ax.plot([1, 2, 3], [4, 5, 6])
+ax.plot([1, 2, 3], [6, 5, 4], label=&quot;down&quot;)
+ax.bar([&quot;a&quot;, &quot;b&quot;], [1, 2])
+ax.scatter([1, 2], [3, 4])
+print(len(ax.lines), len(ax.patches), len(ax.collections))
+print([l.get_label() for l in ax.lines])
+print(axes[1, 2].has_data(), ax.has_data())
+plt.close(&quot;all&quot;)
+print(plt.get_fignums())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>plot</code> adds Line2D objects to <code>lines</code>, <code>bar</code> adds rectangles to <code>patches</code>, <code>scatter</code> adds one collection. Lines without a label get an automatic one that starts with an underscore.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>(2, 3) 6
+2 2 1
+[&#x27;_child0&#x27;, &#x27;down&#x27;]
+False True
+[]</pre></div><p><code>subplots(2, 3)</code> returns a 2 by 3 NumPy array of Axes, and the figure holds all six. Two <code>plot</code> calls add two lines, the bar call adds two rectangles, and the whole scatter is a single <code>PathCollection</code>. A line without an explicit label gets <code>_child0</code>-style names starting with an underscore, which <code>legend()</code> skips, so only labelled series appear in a legend. The bottom-right Axes was never drawn on. After <code>plt.close("all")</code> no figures remain, so nothing is drawn under this output.</p></div></details>
+</article>
+<article class="prob" id="p-a-labelled-chart-of-daily-complaints" data-pid="m17-5-a-labelled-chart-of-daily-complaints" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>2. A labelled chart of daily complaints</h3></header>
+<div class="prob-q"><p>Write <code>plot_daily(daily)</code> for a Series of daily counts indexed by date. Create a new figure with one Axes, plot the counts as a line with point markers labelled <code>"complaints"</code>, add a dashed horizontal line at the mean labelled <code>"mean"</code>, set the title <code>"Complaints per day"</code>, the y label <code>"complaints"</code>, start the y axis at 0, add a legend, and return the Axes. Use the object-oriented API.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 2">import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def plot_daily(daily):
+    plt.plot(daily.values)
+    plt.title(&quot;complaints&quot;)
+    return plt.gca()
+</textarea>
+<script type="text/plain" class="prob-tests">daily = pd.Series([5, 9, 7, 12, 6], index=pd.date_range("2026-01-01", periods=5), name="n")
+ax = plot_daily(daily)
+assert ax.get_title() == "Complaints per day" and ax.get_ylabel() == "complaints"
+assert len(ax.lines) == 2 and ax.lines[0].get_ydata().tolist() == [5, 9, 7, 12, 6]
+assert ax.lines[0].get_marker() not in (None, "None", "") and ax.lines[1].get_linestyle() == "--"
+assert ax.lines[1].get_ydata()[0] == 7.8 and ax.get_ylim()[0] == 0
+assert [t.get_text() for t in ax.get_legend().get_texts()] == ["complaints", "mean"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">daily = pd.Series([5, 9, 7, 12, 6], index=pd.date_range(&quot;2026-01-01&quot;, periods=5), name=&quot;n&quot;)
+ax = plot_daily(daily)
+assert ax.get_title() == &quot;Complaints per day&quot; and ax.get_ylabel() == &quot;complaints&quot;
+assert len(ax.lines) == 2 and ax.lines[0].get_ydata().tolist() == [5, 9, 7, 12, 6]
+assert ax.lines[0].get_marker() not in (None, &quot;None&quot;, &quot;&quot;) and ax.lines[1].get_linestyle() == &quot;--&quot;
+assert ax.lines[1].get_ydata()[0] == 7.8 and ax.get_ylim()[0] == 0
+assert [t.get_text() for t in ax.get_legend().get_texts()] == [&quot;complaints&quot;, &quot;mean&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fig, ax = plt.subplots()</code>, then <code>ax.plot(daily.index, daily.values, marker="o", label="complaints")</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ax.axhline(daily.mean(), linestyle="--", label="mean")</code> and <code>ax.set_ylim(bottom=0)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def plot_daily(daily):
+    fig, ax = plt.subplots(figsize=(5, 2.6))
+    ax.plot(daily.index, daily.values, marker=&quot;o&quot;, label=&quot;complaints&quot;)
+    ax.axhline(daily.mean(), color=&quot;gray&quot;, linestyle=&quot;--&quot;, label=&quot;mean&quot;)
+    ax.set(title=&quot;Complaints per day&quot;, ylabel=&quot;complaints&quot;)
+    ax.set_ylim(bottom=0)
+    ax.legend()
+    fig.autofmt_xdate()
+    return ax</code></pre></div><p>The starter drew on pyplot's current Axes, plotted against positions instead of dates, and labelled nothing useful. Creating the figure explicitly and calling methods on <code>ax</code> makes the function independent of whatever was drawn before. Plotting against the index puts real dates on the x axis, and <code>fig.autofmt_xdate()</code> tilts them so they do not overlap. Starting the y axis at zero keeps a small day from looking like a collapse. Returning the Axes is the convention that lets callers add to the plot or test it, as here.</p></div></details>
+</article>
+<article class="prob" id="p-a-histogram-that-shows-the-shape" data-pid="m17-5-a-histogram-that-shows-the-shape" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">Data work</span><h3>3. A histogram that shows the shape</h3></header>
+<div class="prob-q"><p>Write <code>plot_amounts(amounts, bins=30)</code> that creates a figure with <strong>two</strong> Axes side by side: on the left a histogram of the amounts with <code>bins</code> equal-width bins, titled <code>"linear"</code>; on the right a histogram with <code>bins</code> bins spaced evenly on a log scale between the smallest and largest amount (<code>np.geomspace</code>), a logarithmic x axis, titled <code>"log"</code>. Both x labels are <code>"amount ($)"</code>; add a vertical line at the median on both. Return the array of the two Axes. Amounts must be positive; raise <code>ValueError</code> otherwise.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_amounts(amounts, bins=30):
+    fig, ax = plt.subplots()
+    ax.hist(amounts)
+    return ax
+</textarea>
+<script type="text/plain" class="prob-tests">rng = np.random.default_rng(1)
+x = rng.lognormal(3, 1.2, 500)
+axes = plot_amounts(x, bins=20)
+assert len(axes) == 2 and [a.get_title() for a in axes] == ["linear", "log"]
+assert len(axes[0].patches) == 20 and len(axes[1].patches) == 20
+assert axes[1].get_xscale() == "log" and axes[0].get_xscale() == "linear"
+assert all(a.get_xlabel() == "amount ($)" for a in axes)
+assert all(abs(a.lines[0].get_xdata()[0] - np.median(x)) < 1e-9 for a in axes)
+import pytest
+with pytest.raises(ValueError):
+    plot_amounts(np.array([3.0, 0.0]))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rng = np.random.default_rng(1)
+x = rng.lognormal(3, 1.2, 500)
+axes = plot_amounts(x, bins=20)
+assert len(axes) == 2 and [a.get_title() for a in axes] == [&quot;linear&quot;, &quot;log&quot;]
+assert len(axes[0].patches) == 20 and len(axes[1].patches) == 20
+assert axes[1].get_xscale() == &quot;log&quot; and axes[0].get_xscale() == &quot;linear&quot;
+assert all(a.get_xlabel() == &quot;amount ($)&quot; for a in axes)
+assert all(abs(a.lines[0].get_xdata()[0] - np.median(x)) &lt; 1e-9 for a in axes)
+import pytest
+with pytest.raises(ValueError):
+    plot_amounts(np.array([3.0, 0.0]))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>fig, axes = plt.subplots(1, 2)</code>; <code>np.geomspace(x.min(), x.max(), bins + 1)</code> gives the bin edges.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ax.axvline(np.median(x))</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_amounts(amounts, bins=30):
+    x = np.asarray(amounts, dtype=float)
+    if (x &lt;= 0).any():
+        raise ValueError(&quot;amounts must be positive for a log scale&quot;)
+    fig, axes = plt.subplots(1, 2, figsize=(7, 2.6))
+    axes[0].hist(x, bins=bins)
+    axes[0].set_title(&quot;linear&quot;)
+    axes[1].hist(x, bins=np.geomspace(x.min(), x.max(), bins + 1))
+    axes[1].set(title=&quot;log&quot;, xscale=&quot;log&quot;)
+    for ax in axes:
+        ax.axvline(np.median(x), color=&quot;black&quot;, linestyle=&quot;--&quot;)
+        ax.set_xlabel(&quot;amount ($)&quot;)
+    fig.tight_layout()
+    return axes</code></pre></div><p>On a linear axis a skewed distribution is one tall bar near zero and a long empty tail; only the log view shows that the amounts are roughly bell-shaped in log terms (log-normal), which also tells you to log-transform the feature for a linear model. Equal-width bins on a log axis would be thin on the right and fat on the left, so the edges are spaced geometrically, <code>bins + 1</code> edges for <code>bins</code> bins. A log scale cannot show zero or negative values, so the function refuses them instead of silently dropping data. The median line is robust to the tail, unlike the mean.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-every-series-lands-on-the-last-plot" data-pid="m17-5-every-series-lands-on-the-last-plot" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">Data work</span><h3>4. Every series lands on the last plot</h3></header>
+<div class="prob-q"><p><code>plot_products</code> should draw one small line chart per product in a row of subplots, each titled with its product. Instead, every line appears on the last subplot and the others are empty. Fix it with the object-oriented API, keep one line per Axes, share the y axis between subplots, and return the figure.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">import matplotlib.pyplot as plt
+
+
+def plot_products(series_by_product):
+    fig, axes = plt.subplots(1, len(series_by_product))
+    for name, values in series_by_product.items():
+        plt.plot(values)
+        plt.title(name)
+    return fig
+</textarea>
+<script type="text/plain" class="prob-tests">data = {"card": [3, 5, 4], "loan": [1, 2, 6], "auto": [2, 2, 3]}
+fig = plot_products(data)
+axes = fig.axes
+assert len(axes) == 3 and [a.get_title() for a in axes] == ["card", "loan", "auto"]
+assert [len(a.lines) for a in axes] == [1, 1, 1]
+assert axes[1].lines[0].get_ydata().tolist() == [1, 2, 6]
+assert axes[0].get_shared_y_axes().joined(axes[0], axes[2])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">data = {&quot;card&quot;: [3, 5, 4], &quot;loan&quot;: [1, 2, 6], &quot;auto&quot;: [2, 2, 3]}
+fig = plot_products(data)
+axes = fig.axes
+assert len(axes) == 3 and [a.get_title() for a in axes] == [&quot;card&quot;, &quot;loan&quot;, &quot;auto&quot;]
+assert [len(a.lines) for a in axes] == [1, 1, 1]
+assert axes[1].lines[0].get_ydata().tolist() == [1, 2, 6]
+assert axes[0].get_shared_y_axes().joined(axes[0], axes[2])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>zip(axes, series_by_product.items())</code> pairs each Axes with one product.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>plt.subplots(1, n, sharey=True)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import matplotlib.pyplot as plt
+
+
+def plot_products(series_by_product):
+    n = len(series_by_product)
+    fig, axes = plt.subplots(1, n, sharey=True, figsize=(2.4 * n, 2.4), squeeze=False)
+    for ax, (name, values) in zip(axes[0], series_by_product.items()):
+        ax.plot(values, marker=&quot;o&quot;)
+        ax.set_title(name)
+    fig.tight_layout()
+    return fig</code></pre></div><p><code>plt.plot</code> and <code>plt.title</code> act on pyplot's <strong>current</strong> Axes, and creating subplots leaves the last one current, so every loop iteration drew on it and the title was overwritten each time. Calling methods on each Axes object removes the hidden state. <code>sharey=True</code> puts all products on the same scale, which is what makes small multiples comparable; without it each subplot would zoom to its own range and a small product would look as busy as a big one. <code>squeeze=False</code> keeps <code>axes</code> two-dimensional even for one product, so the code works for any count.</p></div></details>
+</article>
+<article class="prob" id="p-training-curves-with-early-stopping-mark" data-pid="m17-5-training-curves-with-early-stopping-mark" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. Training curves with early stopping marked</h3></header>
+<div class="prob-q"><p>Write <code>plot_history(history)</code> where <code>history</code> has lists <code>train_loss</code> and <code>val_loss</code> (one value per epoch, epochs numbered from 1). Draw both on one Axes, labelled <code>"train"</code> and <code>"validation"</code>, mark the epoch with the lowest validation loss with a dotted vertical line and an annotation text <code>f"best epoch {k}"</code>, set the x label <code>"epoch"</code> and y label <code>"loss"</code>, add a legend, and return <code>(ax, k)</code>. If the lists have different lengths, raise <code>ValueError</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">import matplotlib.pyplot as plt
+
+
+def plot_history(history):
+    fig, ax = plt.subplots()
+    ax.plot(history[&quot;train_loss&quot;])
+    ax.plot(history[&quot;val_loss&quot;])
+    return ax, len(history[&quot;val_loss&quot;])
+</textarea>
+<script type="text/plain" class="prob-tests">h = {"train_loss": [1.0, 0.7, 0.5, 0.4, 0.33, 0.3], "val_loss": [1.05, 0.8, 0.62, 0.6, 0.63, 0.7]}
+ax, k = plot_history(h)
+assert k == 4
+assert [l.get_label() for l in ax.lines[:2]] == ["train", "validation"]
+assert ax.lines[0].get_xdata().tolist() == [1, 2, 3, 4, 5, 6]
+assert any(l.get_linestyle() == ":" and l.get_xdata()[0] == 4 for l in ax.lines[2:])
+assert any(t.get_text() == "best epoch 4" for t in ax.texts)
+assert ax.get_xlabel() == "epoch" and ax.get_ylabel() == "loss" and ax.get_legend() is not None
+import pytest
+with pytest.raises(ValueError):
+    plot_history({"train_loss": [1, 2], "val_loss": [1]})</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">h = {&quot;train_loss&quot;: [1.0, 0.7, 0.5, 0.4, 0.33, 0.3], &quot;val_loss&quot;: [1.05, 0.8, 0.62, 0.6, 0.63, 0.7]}
+ax, k = plot_history(h)
+assert k == 4
+assert [l.get_label() for l in ax.lines[:2]] == [&quot;train&quot;, &quot;validation&quot;]
+assert ax.lines[0].get_xdata().tolist() == [1, 2, 3, 4, 5, 6]
+assert any(l.get_linestyle() == &quot;:&quot; and l.get_xdata()[0] == 4 for l in ax.lines[2:])
+assert any(t.get_text() == &quot;best epoch 4&quot; for t in ax.texts)
+assert ax.get_xlabel() == &quot;epoch&quot; and ax.get_ylabel() == &quot;loss&quot; and ax.get_legend() is not None
+import pytest
+with pytest.raises(ValueError):
+    plot_history({&quot;train_loss&quot;: [1, 2], &quot;val_loss&quot;: [1]})</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>epochs = range(1, n + 1)</code>; <code>k = int(np.argmin(val)) + 1</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ax.annotate(f"best epoch {k}", xy=(k, val[k - 1]), xytext=(k, max(val)))</code> adds a text to <code>ax.texts</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_history(history):
+    train, val = list(history[&quot;train_loss&quot;]), list(history[&quot;val_loss&quot;])
+    if len(train) != len(val):
+        raise ValueError(&quot;train and validation histories differ in length&quot;)
+    epochs = list(range(1, len(val) + 1))
+    k = int(np.argmin(val)) + 1
+    fig, ax = plt.subplots(figsize=(5, 2.8))
+    ax.plot(epochs, train, marker=&quot;o&quot;, label=&quot;train&quot;)
+    ax.plot(epochs, val, marker=&quot;o&quot;, label=&quot;validation&quot;)
+    ax.axvline(k, color=&quot;gray&quot;, linestyle=&quot;:&quot;)
+    ax.annotate(f&quot;best epoch {k}&quot;, xy=(k, val[k - 1]), xytext=(k + 0.2, max(val)),
+                arrowprops={&quot;arrowstyle&quot;: &quot;-&gt;&quot;})
+    ax.set(xlabel=&quot;epoch&quot;, ylabel=&quot;loss&quot;)
+    ax.legend()
+    return ax, k</code></pre></div><p>Plotting a list without x values numbers the points from 0, so "epoch 1" would sit at x = 0 and the marked epoch would be off by one; passing <code>range(1, n + 1)</code> makes the axis match the training log. <code>argmin</code> gives a position, so the epoch is position plus one. The picture tells the story: training loss keeps falling while validation loss turns upwards after epoch 4, the signature of overfitting, so a training loop with early stopping would keep the weights from epoch 4. Annotating the point makes the chart self-explanatory in a report.</p></div></details>
+</article>
+<article class="prob" id="p-a-confusion-matrix-heatmap" data-pid="m17-5-a-confusion-matrix-heatmap" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. A confusion-matrix heatmap</h3></header>
+<div class="prob-q"><p>Write <code>plot_confusion(C, labels, normalize=False)</code> for a square count matrix <code>C</code> (rows true, columns predicted). Draw it with <code>imshow</code>, put the class names on both axes, label the axes <code>"predicted"</code> and <code>"true"</code>, and write each cell's value in the cell: the integer count, or, when <code>normalize=True</code>, the row fraction formatted with two decimals (each row divided by its sum; an empty row shows <code>0.00</code>). Add a colour bar and return the Axes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_confusion(C, labels, normalize=False):
+    fig, ax = plt.subplots()
+    ax.imshow(C)
+    return ax
+</textarea>
+<script type="text/plain" class="prob-tests">C = np.array([[8, 2, 0], [1, 6, 3], [0, 0, 0]])
+ax = plot_confusion(C, ["a", "b", "c"])
+assert len(ax.images) == 1 and [t.get_text() for t in ax.get_xticklabels()] == ["a", "b", "c"]
+assert [t.get_text() for t in ax.get_yticklabels()] == ["a", "b", "c"]
+assert ax.get_xlabel() == "predicted" and ax.get_ylabel() == "true"
+assert sorted(t.get_text() for t in ax.texts)[:3] == ["0", "0", "0"] and len(ax.texts) == 9
+axn = plot_confusion(C, ["a", "b", "c"], normalize=True)
+cells = {(round(t.get_position()[1]), round(t.get_position()[0])): t.get_text() for t in axn.texts}
+assert cells[(0, 0)] == "0.80" and cells[(1, 2)] == "0.30" and cells[(2, 2)] == "0.00"
+assert len(ax.figure.axes) == 2</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 6 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">C = np.array([[8, 2, 0], [1, 6, 3], [0, 0, 0]])
+ax = plot_confusion(C, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;])
+assert len(ax.images) == 1 and [t.get_text() for t in ax.get_xticklabels()] == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+assert [t.get_text() for t in ax.get_yticklabels()] == [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]
+assert ax.get_xlabel() == &quot;predicted&quot; and ax.get_ylabel() == &quot;true&quot;
+assert sorted(t.get_text() for t in ax.texts)[:3] == [&quot;0&quot;, &quot;0&quot;, &quot;0&quot;] and len(ax.texts) == 9
+axn = plot_confusion(C, [&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], normalize=True)
+cells = {(round(t.get_position()[1]), round(t.get_position()[0])): t.get_text() for t in axn.texts}
+assert cells[(0, 0)] == &quot;0.80&quot; and cells[(1, 2)] == &quot;0.30&quot; and cells[(2, 2)] == &quot;0.00&quot;
+assert len(ax.figure.axes) == 2</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ax.text(j, i, ...)</code> places text at column <code>j</code>, row <code>i</code>: x is the column.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Row fractions: <code>C / C.sum(axis=1, keepdims=True)</code> with <code>np.divide(..., where=...)</code> for empty rows (D.1).</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_confusion(C, labels, normalize=False):
+    C = np.asarray(C)
+    if normalize:
+        rows = C.sum(axis=1, keepdims=True)
+        M = np.divide(C, rows, out=np.zeros(C.shape), where=rows &gt; 0)
+    else:
+        M = C
+    n = len(labels)
+    fig, ax = plt.subplots(figsize=(3.8, 3.2))
+    im = ax.imshow(M, cmap=&quot;Blues&quot;)
+    ax.set_xticks(range(n), labels=labels)
+    ax.set_yticks(range(n), labels=labels)
+    ax.set(xlabel=&quot;predicted&quot;, ylabel=&quot;true&quot;)
+    limit = M.max() / 2 if M.max() &gt; 0 else 1
+    for i in range(n):
+        for j in range(n):
+            text = f&quot;{M[i, j]:.2f}&quot; if normalize else str(int(M[i, j]))
+            ax.text(j, i, text, ha=&quot;center&quot;, va=&quot;center&quot;, color=&quot;white&quot; if M[i, j] &gt; limit else &quot;black&quot;)
+    fig.colorbar(im, ax=ax, shrink=0.8)
+    return ax</code></pre></div><p><code>imshow</code> draws row <code>i</code> at height <code>i</code> and column <code>j</code> at horizontal position <code>j</code>, so the text for cell <code>[i, j]</code> goes at <code>(x=j, y=i)</code>; swapping them is the classic bug that writes the matrix transposed over its own colours. Normalising by row turns counts into recall per class (each row sums to 1), which makes classes of different sizes comparable; an empty row would divide by zero, so it is masked. The double loop over a few cells is fine, since the expensive work is already done. Text colour flips on dark cells for contrast, and the colour bar is a second Axes, which the last test counts.</p></div></details>
+</article>
+<article class="prob" id="p-precision-and-recall-against-the-thresho" data-pid="m17-5-precision-and-recall-against-the-thresho" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>7. Precision and recall against the threshold</h3></header>
+<div class="prob-q"><p>Write <code>threshold_curve(y_true, scores)</code> returning a DataFrame with columns <code>threshold</code>, <code>precision</code>, <code>recall</code>, one row for each distinct score (sorted ascending), where predictions are <code>scores &gt;= threshold</code>; precision is 1.0 when nothing is predicted positive. Then write <code>plot_threshold(curve, target_recall)</code> that plots precision and recall against the threshold (labels <code>"precision"</code> and <code>"recall"</code>), draws a dashed vertical line at the <strong>highest</strong> threshold whose recall is at least <code>target_recall</code>, sets the x label <code>"threshold"</code>, and returns <code>(ax, chosen_threshold)</code>. Vectorised with NumPy, no loop over thresholds is required (one is allowed).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def threshold_curve(y_true, scores):
+    return pd.DataFrame({&quot;threshold&quot;: [0.5], &quot;precision&quot;: [1.0], &quot;recall&quot;: [1.0]})
+
+
+def plot_threshold(curve, target_recall):
+    fig, ax = plt.subplots()
+    return ax, 0.5
+</textarea>
+<script type="text/plain" class="prob-tests">y = np.array([1, 0, 1, 1, 0, 0, 1, 0])
+s = np.array([0.9, 0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1])
+c = threshold_curve(y, s)
+assert c["threshold"].tolist() == [0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9]
+row = c.set_index("threshold").loc[0.6]
+assert row["precision"] == 0.75 and row["recall"] == 0.75
+assert c["recall"].iloc[0] == 1.0 and c["precision"].iloc[0] == 0.5
+ax, t = plot_threshold(c, 0.75)
+assert t == 0.6
+assert [l.get_label() for l in ax.lines[:2]] == ["precision", "recall"]
+assert any(l.get_linestyle() == "--" and l.get_xdata()[0] == 0.6 for l in ax.lines[2:])
+assert ax.get_xlabel() == "threshold"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">y = np.array([1, 0, 1, 1, 0, 0, 1, 0])
+s = np.array([0.9, 0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1])
+c = threshold_curve(y, s)
+assert c[&quot;threshold&quot;].tolist() == [0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9]
+row = c.set_index(&quot;threshold&quot;).loc[0.6]
+assert row[&quot;precision&quot;] == 0.75 and row[&quot;recall&quot;] == 0.75
+assert c[&quot;recall&quot;].iloc[0] == 1.0 and c[&quot;precision&quot;].iloc[0] == 0.5
+ax, t = plot_threshold(c, 0.75)
+assert t == 0.6
+assert [l.get_label() for l in ax.lines[:2]] == [&quot;precision&quot;, &quot;recall&quot;]
+assert any(l.get_linestyle() == &quot;--&quot; and l.get_xdata()[0] == 0.6 for l in ax.lines[2:])
+assert ax.get_xlabel() == &quot;threshold&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compare all scores with all thresholds at once: <code>pred = scores[None, :] &gt;= th[:, None]</code>, shape <code>(n_thresholds, n)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>True positives per threshold: <code>(pred &amp; (y == 1)).sum(axis=1)</code>; predicted positives: <code>pred.sum(axis=1)</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def threshold_curve(y_true, scores):
+    y = np.asarray(y_true) == 1
+    s = np.asarray(scores, dtype=float)
+    th = np.unique(s)
+    pred = s[None, :] &gt;= th[:, None]
+    tp = (pred &amp; y).sum(axis=1)
+    pp = pred.sum(axis=1)
+    precision = np.divide(tp, pp, out=np.ones(len(th)), where=pp &gt; 0)
+    recall = tp / max(y.sum(), 1)
+    return pd.DataFrame({&quot;threshold&quot;: th, &quot;precision&quot;: precision.round(4), &quot;recall&quot;: recall.round(4)})
+
+
+def plot_threshold(curve, target_recall):
+    ok = curve[curve[&quot;recall&quot;] &gt;= target_recall]
+    chosen = float(ok[&quot;threshold&quot;].max())
+    fig, ax = plt.subplots(figsize=(5, 2.8))
+    ax.plot(curve[&quot;threshold&quot;], curve[&quot;precision&quot;], marker=&quot;o&quot;, label=&quot;precision&quot;)
+    ax.plot(curve[&quot;threshold&quot;], curve[&quot;recall&quot;], marker=&quot;o&quot;, label=&quot;recall&quot;)
+    ax.axvline(chosen, color=&quot;gray&quot;, linestyle=&quot;--&quot;)
+    ax.set(xlabel=&quot;threshold&quot;, ylim=(0, 1.05))
+    ax.legend()
+    return ax, chosen</code></pre></div><p>A classifier outputs scores, and the threshold turns them into decisions; 0.5 is a default, not a business choice. Raising the threshold predicts fewer positives, so precision tends to rise and recall falls. For a complaint-routing model that must catch at least 75% of urgent cases, the right operating point is the <strong>highest</strong> threshold that still meets the recall target, because it gives the best precision among acceptable options: 0.6 here. Broadcasting the scores against every threshold computes all confusion counts in one step (D.1), and <code>np.unique</code> gives sorted distinct thresholds. scikit-learn's <code>precision_recall_curve</code> does the same computation in D.6.</p></div></details>
+</article>
+<article class="prob" id="p-latency-of-two-prompt-versions" data-pid="m17-5-latency-of-two-prompt-versions" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>8. Latency of two prompt versions</h3></header>
+<div class="prob-q"><p>Write <code>plot_latency(df)</code> for evaluation results with columns <code>version</code> and <code>latency_ms</code>. Draw a box plot with one box per version (versions sorted), with the individual points overlaid as a semi-transparent scatter (<code>alpha</code> below 1), the title <code>"Latency by prompt version"</code> and the y label <code>"latency (ms)"</code>. Write each version's 95th percentile above its box as the text <code>f"p95 {value:.0f}"</code>. Return the Axes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 8">import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def plot_latency(df):
+    ax = df.plot.box()
+    return ax
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+rng = np.random.default_rng(4)
+df = pd.DataFrame({"version": ["v2"] * 50 + ["v1"] * 50,
+                   "latency_ms": np.r_[rng.normal(900, 80, 50), rng.normal(1200, 200, 50)]})
+ax = plot_latency(df)
+assert [t.get_text() for t in ax.get_xticklabels()] == ["v1", "v2"]
+assert ax.get_title() == "Latency by prompt version" and ax.get_ylabel() == "latency (ms)"
+assert len(ax.collections) >= 1 and all(c.get_alpha() is not None and c.get_alpha() < 1 for c in ax.collections)
+p95 = df.groupby("version")["latency_ms"].quantile(0.95)
+texts = sorted(t.get_text() for t in ax.texts)
+assert texts == sorted([f"p95 {p95['v1']:.0f}", f"p95 {p95['v2']:.0f}"])</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+rng = np.random.default_rng(4)
+df = pd.DataFrame({&quot;version&quot;: [&quot;v2&quot;] * 50 + [&quot;v1&quot;] * 50,
+                   &quot;latency_ms&quot;: np.r_[rng.normal(900, 80, 50), rng.normal(1200, 200, 50)]})
+ax = plot_latency(df)
+assert [t.get_text() for t in ax.get_xticklabels()] == [&quot;v1&quot;, &quot;v2&quot;]
+assert ax.get_title() == &quot;Latency by prompt version&quot; and ax.get_ylabel() == &quot;latency (ms)&quot;
+assert len(ax.collections) &gt;= 1 and all(c.get_alpha() is not None and c.get_alpha() &lt; 1 for c in ax.collections)
+p95 = df.groupby(&quot;version&quot;)[&quot;latency_ms&quot;].quantile(0.95)
+texts = sorted(t.get_text() for t in ax.texts)
+assert texts == sorted([f&quot;p95 {p95[&#x27;v1&#x27;]:.0f}&quot;, f&quot;p95 {p95[&#x27;v2&#x27;]:.0f}&quot;])</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>groups = [df.loc[df.version == v, "latency_ms"].to_numpy() for v in versions]</code>, then <code>ax.boxplot(groups, tick_labels=versions)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Boxes sit at x = 1, 2, ...; scatter each group at its x with a little random jitter.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def plot_latency(df):
+    versions = sorted(df[&quot;version&quot;].unique())
+    groups = [df.loc[df[&quot;version&quot;] == v, &quot;latency_ms&quot;].to_numpy() for v in versions]
+    fig, ax = plt.subplots(figsize=(4.5, 3))
+    ax.boxplot(groups, tick_labels=versions)
+    rng = np.random.default_rng(0)
+    for i, g in enumerate(groups, start=1):
+        ax.scatter(i + rng.uniform(-0.12, 0.12, len(g)), g, s=10, alpha=0.4)
+        p95 = np.quantile(g, 0.95)
+        ax.text(i, p95, f&quot;p95 {p95:.0f}&quot;, ha=&quot;center&quot;, va=&quot;bottom&quot;)
+    ax.set(title=&quot;Latency by prompt version&quot;, ylabel=&quot;latency (ms)&quot;)
+    return ax</code></pre></div><p>Latency is a distribution, and the tail is what users notice, so a box plot (median, quartiles, whiskers, outliers) is better than a bar of averages, and the raw points show how many runs stand behind each box; a little horizontal jitter stops them piling into one vertical line, and transparency shows density. Writing the p95 on the chart puts the number the service-level objective is written against next to the picture. The starter's <code>df.plot.box()</code> boxes every numeric <strong>column</strong>, not each version. Sorting versions makes the order stable across runs, and a fixed jitter seed makes the picture reproducible.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-embeddings-in-two-dimensions" data-pid="m17-5-embeddings-in-two-dimensions" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>9. Embeddings in two dimensions</h3></header>
+<div class="prob-q"><p>Write <code>pca_2d(E)</code> that projects an <code>(n, d)</code> embedding matrix onto its first two principal components with NumPy: centre the columns, take the SVD, and return <code>(n, 2)</code> coordinates <code>U[:, :2] * S[:2]</code>, with each component's sign fixed so that its largest-magnitude coordinate is positive (SVD signs are arbitrary). Then write <code>plot_embeddings(E, labels)</code> that scatters the projection with one scatter call per label (sorted), each with that label as its legend entry, sets the axis labels <code>"PC1"</code> and <code>"PC2"</code> and returns the Axes.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def pca_2d(E):
+    return E[:, :2]
+
+
+def plot_embeddings(E, labels):
+    fig, ax = plt.subplots()
+    ax.scatter(E[:, 0], E[:, 1])
+    return ax
+</textarea>
+<script type="text/plain" class="prob-tests">rng = np.random.default_rng(5)
+a = rng.normal(0, 0.3, (20, 8)) + np.r_[3, 0, 0, 0, 0, 0, 0, 0]
+b = rng.normal(0, 0.3, (20, 8)) - np.r_[3, 0, 0, 0, 0, 0, 0, 0]
+E = np.vstack([a, b])
+P = pca_2d(E)
+assert P.shape == (40, 2) and np.allclose(P.mean(axis=0), 0, atol=1e-9)
+assert (np.sign(P[:20, 0]) != np.sign(P[20:, 0])).all()
+assert abs(P[:, 0]).max() == P[:, 0].max() and abs(P[:, 1]).max() == P[:, 1].max()
+assert np.var(P[:, 0]) > 10 * np.var(P[:, 1])
+ax = plot_embeddings(E, ["refund"] * 20 + ["fraud"] * 20)
+assert len(ax.collections) == 2 and [t.get_text() for t in ax.get_legend().get_texts()] == ["fraud", "refund"]
+assert ax.get_xlabel() == "PC1" and ax.get_ylabel() == "PC2"
+assert len(ax.collections[0].get_offsets()) == 20</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">rng = np.random.default_rng(5)
+a = rng.normal(0, 0.3, (20, 8)) + np.r_[3, 0, 0, 0, 0, 0, 0, 0]
+b = rng.normal(0, 0.3, (20, 8)) - np.r_[3, 0, 0, 0, 0, 0, 0, 0]
+E = np.vstack([a, b])
+P = pca_2d(E)
+assert P.shape == (40, 2) and np.allclose(P.mean(axis=0), 0, atol=1e-9)
+assert (np.sign(P[:20, 0]) != np.sign(P[20:, 0])).all()
+assert abs(P[:, 0]).max() == P[:, 0].max() and abs(P[:, 1]).max() == P[:, 1].max()
+assert np.var(P[:, 0]) &gt; 10 * np.var(P[:, 1])
+ax = plot_embeddings(E, [&quot;refund&quot;] * 20 + [&quot;fraud&quot;] * 20)
+assert len(ax.collections) == 2 and [t.get_text() for t in ax.get_legend().get_texts()] == [&quot;fraud&quot;, &quot;refund&quot;]
+assert ax.get_xlabel() == &quot;PC1&quot; and ax.get_ylabel() == &quot;PC2&quot;
+assert len(ax.collections[0].get_offsets()) == 20</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Xc = E - E.mean(axis=0)</code>; <code>U, S, Vt = np.linalg.svd(Xc, full_matrices=False)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>For each column <code>k</code> of the result, find <code>i = np.argmax(np.abs(P[:, k]))</code> and multiply the column by <code>np.sign(P[i, k])</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+
+
+def pca_2d(E):
+    X = np.asarray(E, dtype=float)
+    Xc = X - X.mean(axis=0)
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    P = U[:, :2] * S[:2]
+    idx = np.argmax(np.abs(P), axis=0)
+    return P * np.sign(P[idx, np.arange(2)])
+
+
+def plot_embeddings(E, labels):
+    P = pca_2d(E)
+    labels = np.asarray(labels)
+    fig, ax = plt.subplots(figsize=(4.5, 3.4))
+    for lab in sorted(set(labels.tolist())):
+        m = labels == lab
+        ax.scatter(P[m, 0], P[m, 1], s=18, alpha=0.7, label=lab)
+    ax.set(xlabel=&quot;PC1&quot;, ylabel=&quot;PC2&quot;)
+    ax.legend()
+    return ax</code></pre></div><p>The first two raw dimensions of an embedding are arbitrary; PCA finds the two directions along which the points vary most, so a 2D picture keeps as much of the structure as a linear projection can. Centring is essential, otherwise the first component just points at the mean. The SVD of the centred matrix gives those directions, and <code>U * S</code> are the coordinates. SVD can return either sign for each component, so the same data could plot mirrored on another machine; fixing the sign makes the picture and the test deterministic. One scatter call per label gives each class its own colour and legend entry. The two clusters separate along PC1, which carries most of the variance. For non-linear structure t-SNE or UMAP show clusters better, but distances in those pictures are not to be trusted.</p></div></details>
+</article>
+<article class="prob" id="p-a-one-page-evaluation-dashboard" data-pid="m17-5-a-one-page-evaluation-dashboard" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>10. A one-page evaluation dashboard</h3></header>
+<div class="prob-q"><p>Write <code>eval_dashboard(results)</code> for LLM evaluation results with columns <code>version</code>, <code>category</code>, <code>passed</code> (bool) and <code>latency_ms</code>. Build a 2 by 2 figure and return it: top-left, a bar chart of pass rate per version (sorted), y from 0 to 1, titled <code>"pass rate"</code>; top-right, a horizontal bar chart of pass rate per category for the <strong>latest</strong> version (the last in sorted order), sorted so the worst category is at the top, titled <code>"by category (latest)"</code>; bottom-left, a histogram of latency per version, one <code>hist</code> call per version with <code>label=version</code> and <code>alpha=0.5</code>, titled <code>"latency"</code>, with a legend; bottom-right, a scatter of each case's latency against whether it passed (x = latency, y = 1 or 0, with vertical jitter), titled <code>"latency vs outcome"</code>. Give the figure a suptitle <code>"Evaluation"</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def eval_dashboard(results):
+    fig, axes = plt.subplots(2, 2)
+    return fig
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+rng = np.random.default_rng(6)
+n = 120
+r = pd.DataFrame({"version": np.repeat(["v1", "v2"], n // 2),
+                  "category": np.tile(["billing", "fraud", "access"], n // 3),
+                  "passed": rng.random(n) < np.repeat([0.6, 0.8], n // 2),
+                  "latency_ms": rng.normal(1000, 150, n)})
+fig = eval_dashboard(r)
+a, b, c, d = fig.axes[:4]
+assert [x.get_title() for x in (a, b, c, d)] == ["pass rate", "by category (latest)", "latency", "latency vs outcome"]
+heights = [p.get_height() for p in a.patches]
+assert np.allclose(heights, r.groupby("version")["passed"].mean().values) and a.get_ylim() == (0, 1)
+latest = r[r.version == "v2"].groupby("category")["passed"].mean().sort_values(ascending=False)
+assert [t.get_text() for t in b.get_yticklabels()] == latest.index.tolist()
+assert [t.get_text() for t in c.get_legend().get_texts()] == ["v1", "v2"]
+assert len(d.collections[0].get_offsets()) == n and fig._suptitle.get_text() == "Evaluation"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+rng = np.random.default_rng(6)
+n = 120
+r = pd.DataFrame({&quot;version&quot;: np.repeat([&quot;v1&quot;, &quot;v2&quot;], n // 2),
+                  &quot;category&quot;: np.tile([&quot;billing&quot;, &quot;fraud&quot;, &quot;access&quot;], n // 3),
+                  &quot;passed&quot;: rng.random(n) &lt; np.repeat([0.6, 0.8], n // 2),
+                  &quot;latency_ms&quot;: rng.normal(1000, 150, n)})
+fig = eval_dashboard(r)
+a, b, c, d = fig.axes[:4]
+assert [x.get_title() for x in (a, b, c, d)] == [&quot;pass rate&quot;, &quot;by category (latest)&quot;, &quot;latency&quot;, &quot;latency vs outcome&quot;]
+heights = [p.get_height() for p in a.patches]
+assert np.allclose(heights, r.groupby(&quot;version&quot;)[&quot;passed&quot;].mean().values) and a.get_ylim() == (0, 1)
+latest = r[r.version == &quot;v2&quot;].groupby(&quot;category&quot;)[&quot;passed&quot;].mean().sort_values(ascending=False)
+assert [t.get_text() for t in b.get_yticklabels()] == latest.index.tolist()
+assert [t.get_text() for t in c.get_legend().get_texts()] == [&quot;v1&quot;, &quot;v2&quot;]
+assert len(d.collections[0].get_offsets()) == n and fig._suptitle.get_text() == &quot;Evaluation&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>rates = results.groupby("version")["passed"].mean()</code> is already sorted by version.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>barh</code> draws the first label at the bottom, so sort the categories from best to worst to put the worst at the top.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+def eval_dashboard(results):
+    fig, axes = plt.subplots(2, 2, figsize=(8, 5.5))
+    (a, b), (c, d) = axes
+    rates = results.groupby(&quot;version&quot;)[&quot;passed&quot;].mean()
+    a.bar(rates.index, rates.values)
+    a.set(title=&quot;pass rate&quot;, ylim=(0, 1))
+    latest = rates.index[-1]
+    cat = results[results[&quot;version&quot;] == latest].groupby(&quot;category&quot;)[&quot;passed&quot;].mean().sort_values(ascending=False)
+    b.barh(cat.index, cat.values)
+    b.set(title=&quot;by category (latest)&quot;, xlim=(0, 1))
+    for v, g in results.groupby(&quot;version&quot;):
+        c.hist(g[&quot;latency_ms&quot;], bins=15, alpha=0.5, label=v)
+    c.set(title=&quot;latency&quot;, xlabel=&quot;ms&quot;)
+    c.legend()
+    jitter = np.random.default_rng(0).uniform(-0.08, 0.08, len(results))
+    d.scatter(results[&quot;latency_ms&quot;], results[&quot;passed&quot;].astype(int) + jitter, s=8, alpha=0.5)
+    d.set(title=&quot;latency vs outcome&quot;, xlabel=&quot;ms&quot;, yticks=[0, 1], yticklabels=[&quot;fail&quot;, &quot;pass&quot;])
+    fig.suptitle(&quot;Evaluation&quot;)
+    fig.tight_layout()
+    return fig</code></pre></div><p>A dashboard answers a sequence of questions: did the new version improve overall, where is it still weak, did it get slower, and are failures related to latency (timeouts often are). Each panel is one earlier technique: a group-by mean as bars, a sorted horizontal bar chart, overlaid histograms with transparency so both distributions stay visible, and a jittered scatter so 120 points at y = 0 or 1 do not hide each other. <code>barh</code> draws the first category at the <strong>bottom</strong>, so sorting from best to worst puts the worst at the top, where the eye starts; that is what the test checks. Fixing the pass-rate axis to 0 to 1 keeps the bars honest. Unpacking <code>axes</code> into named variables keeps a grid of plots readable.</p></div></details>
+</article>
+<article class="prob" id="p-pyplot-s-hidden-state" data-pid="m17-5-pyplot-s-hidden-state" data-type="predict" data-level="hard" data-answer="0 1 True
+&#x27;first&#x27; &#x27;&#x27;
+2 0 1 True
+0 [1, 2]
+[1]">
+<header class="prob-head"><h3>11. pyplot's hidden state</h3></header>
+<div class="code"><pre><code class="py">import matplotlib.pyplot as plt
+
+fig1, ax1 = plt.subplots()
+fig2, ax2 = plt.subplots()
+plt.plot([1, 2], [3, 4])
+print(len(ax1.lines), len(ax2.lines), plt.gca() is ax2)
+plt.figure(fig1.number)
+plt.title(&quot;first&quot;)
+print(repr(ax1.get_title()), repr(ax2.get_title()))
+right = ax1.twinx()
+right.plot([1, 2], [100, 200])
+print(len(fig1.axes), len(ax1.lines), len(right.lines), plt.gca() is right)
+ax2.cla()
+print(len(ax2.lines), plt.get_fignums())
+plt.close(fig2)
+print(plt.get_fignums())</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Creating a figure makes it current. <code>plt.figure(n)</code> makes figure <code>n</code> current again. <code>twinx</code> adds a new Axes sharing the x axis.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>0 1 True
+&#x27;first&#x27; &#x27;&#x27;
+2 0 1 True
+0 [1, 2]
+[1]</pre></div><p>The second <code>subplots</code> call made figure 2 current, so <code>plt.plot</code> drew on <code>ax2</code>. Re-activating figure 1 makes its last-active Axes current, so <code>plt.title</code> titles <code>ax1</code>. <code>twinx</code> creates a second Axes in figure 1 that shares the x axis and has its own y axis on the right, and it becomes the current Axes; its line belongs to it, not to <code>ax1</code>. <code>cla()</code> clears an Axes but keeps the figure open. Closing figure 2 leaves only figure 1, which is the one picture drawn under this output. This hidden state is why code that you keep should hold on to its <code>fig</code> and <code>ax</code> objects.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-how-would-you-present-a-classification-m" data-pid="m17-5-how-would-you-present-a-classification-m" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>12. How would you present a classification model's performance to a non-technical stakeholder?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Start from the decision the model supports and translate metrics into consequences: "of 100 urgent complaints, it routes 92 correctly; it sends 8 to the slow queue; and 1 in 10 of its urgent flags is a false alarm." Show a baseline next to the model (the current manual process or a simple rule), because a number alone has no meaning. Use a small number of honest charts: a confusion matrix labelled in business terms with counts, a bar chart against the baseline that starts at zero, and, if a threshold must be chosen, a precision and recall chart with the operating point marked and the trade-off spelled out. Break results down by important segments (products, regions, customer groups) to show where it fails and to check fairness. Express uncertainty (results on held-out data, ranges across several runs or time periods) and state what happens when it is wrong and how errors are caught. Avoid jargon such as AUC or F1 unless the audience uses it, and end with the recommendation and what monitoring will be in place.</p></div></details>
+</article>
+<article class="prob" id="p-why-prefer-the-object-oriented-matplotli" data-pid="m17-5-why-prefer-the-object-oriented-matplotli" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>13. Why prefer the object-oriented matplotlib API over pyplot calls in production code?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>pyplot functions such as <code>plt.plot</code> and <code>plt.title</code> act on global "current figure" and "current axes" state, which depends on whatever code ran before: a helper that calls <code>plt.plot</code> draws on someone else's chart, a loop over subplots draws everything on the last one, and tests become order-dependent. The object-oriented API (<code>fig, ax = plt.subplots()</code>, then <code>ax.plot</code>, <code>ax.set</code>) makes the target explicit, so functions can take an <code>ax</code> parameter and return it, compose into grids, and be tested by inspecting the returned objects. It also makes resource handling explicit: you keep the figure, save it with <code>fig.savefig</code>, and close it with <code>plt.close(fig)</code>, which matters in long-running services and batch jobs that render many charts (open figures are never freed). In scripts and services, set a non-interactive backend such as Agg. pyplot remains fine for quick exploration in a notebook, and <code>plt.subplots</code> itself is the usual entry point.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>A Figure holds Axes; each Axes owns its lines, patches, collections, images, texts, labels and legend. Use <code>fig, ax = plt.subplots()</code> and call methods on <code>ax</code>.</li><li>Pick the chart from the question: line for change over time, sorted bars for categories, histograms or box plots for distributions, scatter for relationships.</li><li>pandas <code>.plot</code> returns the Axes; shape the data first (group-by, resample, pivot), then plot in one call and finish with <code>ax.set(...)</code>.</li><li>Model plots: training curves (overfitting, best epoch), confusion-matrix heatmaps (<code>ax.text(j, i, ...)</code>), precision and recall against threshold, PCA of embeddings.</li><li>Honest charts: labels with units, bars from zero, log scales for skew, consistent colours, uncertainty shown, and <code>plt.close(fig)</code> in loops.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>

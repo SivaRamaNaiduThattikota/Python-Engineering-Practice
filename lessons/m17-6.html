@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>D.6 · scikit-learn: pipelines, validation and metrics</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<script src="../assets/boot.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/glass.css">
+<link rel="stylesheet" href="../assets/practice.css">
+</head>
+<body data-id="m17-6" data-root="../">
+<div class="shell"><div class="main">
+<main class="content page">
+
+<section class="l-hero">
+  <div class="crumbs"><a href="../index.html">Course</a><span>›</span><span>Module D · Data libraries</span></div>
+  <h1>D.6 scikit-learn: pipelines, validation and metrics</h1>
+  <p>scikit-learn turns the pieces of the last five lessons into models you can trust. The estimator API, honest splits and cross-validation, pipelines that make leakage impossible, preprocessing mixed columns, metrics that fit the problem (and the baseline to beat), a text classifier, hyperparameter search, and your own transformer.</p>
+  <div class="chips"><span class="chip">16 problems</span><span class="chip">3 easy · 8 medium · 5 hard</span><span class="chip" id="lesson-score"></span></div>
+</section>
+
+<details class="toc" id="toc"></details>
+
+<section class="sec" id="api">
+<h2><span class="n">1</span>One API for every model</h2>
+<p>Every scikit-learn object follows one small contract, which is why you can swap a logistic regression for a random forest in one line. An <strong>estimator</strong> is created with its settings (<strong>hyperparameters</strong>: <code>LogisticRegression(C=1.0, max_iter=1000)</code>), and <strong><code>fit(X, y)</code></strong> learns from data and returns the estimator itself. What it learned is stored in attributes ending with an underscore: <code>coef_</code>, <code>classes_</code>, <code>mean_</code>. Models then offer <strong><code>predict(X)</code></strong> (labels), <strong><code>predict_proba(X)</code></strong> (one probability column per class, in the order of <code>classes_</code>) and <strong><code>score(X, y)</code></strong> (accuracy for classifiers, R^2 for regressors). <strong>Transformers</strong> such as <code>StandardScaler</code> offer <strong><code>transform(X)</code></strong>, and <code>fit_transform</code> does both steps on the same data.</p>
+<p><code>X</code> is a 2-D table (<code>(n_samples, n_features)</code>, a NumPy array or a DataFrame) and <code>y</code> a 1-D array of labels: the <code>make_xy</code> of D.2. Anything random (splits, model initialisation, forests) takes a <strong><code>random_state</code></strong>; set it, so a result can be reproduced and two experiments differ only in what you changed.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">api.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+X = np.array([[20.0, 1], [35.0, 0], [300.0, 3], [1200.0, 5], [15.0, 0], [250.0, 4]])
+y = np.array([&quot;low&quot;, &quot;low&quot;, &quot;high&quot;, &quot;high&quot;, &quot;low&quot;, &quot;high&quot;])
+scaler = StandardScaler()
+Xs = scaler.fit_transform(X)
+print(scaler.mean_.round(1), Xs.mean(axis=0).round(6), Xs.std(axis=0).round(6))
+model = LogisticRegression(random_state=0)
+print(model.fit(Xs, y) is model, model.classes_)
+new = scaler.transform([[40.0, 1], [900.0, 4]])
+print(model.predict(new), model.predict_proba(new).round(3))
+print(model.score(Xs, y), model.coef_.shape)</code></pre><div class="out"><span class="ol">Output</span><pre>[303.3   2.2] [0. 0.] [1. 1.]
+True [&#x27;high&#x27; &#x27;low&#x27;]
+[&#x27;low&#x27; &#x27;high&#x27;] [[0.296 0.704]
+ [0.869 0.131]]
+1.0 (1, 2)</pre></div></div>
+<p>The new rows were scaled with <code>scaler.transform</code>, using the mean and spread learned from the training rows; calling <code>fit_transform</code> on them would rescale them by their own statistics, the leakage and inconsistency D.2's imputer warned about. Keeping fit and transform straight by hand is error-prone, which is what pipelines are for.</p>
+</section>
+<section class="sec" id="split">
+<h2><span class="n">2</span>Honest splits and cross-validation</h2>
+<p>A model is judged on data it did not learn from. <strong><code>train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)</code></strong> holds out a test set; <code>stratify=y</code> keeps the class proportions equal in both parts, which matters when one class is rare (with 5% urgent complaints, an unstratified split can put almost none in the test set). The test set is used <strong>once</strong>, at the end. Choices made while developing (features, models, hyperparameters) are compared with <strong>cross-validation</strong> on the training part: <code>cross_val_score(model, X, y, cv=StratifiedKFold(5, shuffle=True, random_state=0))</code> trains five times, each time holding out a different fifth, and returns five scores whose mean and spread are much more reliable than one split. For time-ordered data use <code>TimeSeriesSplit</code> instead (D.4).</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 762 98" role="img" aria-label="all labelled data then train 80% then 5-fold cross-validation: compare ideas then refit the chosen pipeline on train then test 20%: scored once" style="max-width:762px;min-width:min(762px,540px);margin:0 auto"><defs><marker id="m76n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m76a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m76r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m76g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><rect x="16.0" y="16.0" width="110.8" height="66.0" rx="12.0" class="box"/><text x="71.4" y="46.0" class="v mid">all labelled</text><text x="71.4" y="61.0" class="v mid">data</text><path d="M129.8 49.0 H157.8" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m76n)"/><rect x="160.8" y="16.0" width="96.0" height="66.0" rx="12.0" class="box a"/><text x="208.8" y="53.5" class="w mid">train 80%</text><path d="M259.8 49.0 H287.8" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m76n)"/><rect x="290.8" y="16.0" width="145.3" height="66.0" rx="12.0" class="box"/><text x="363.5" y="38.5" class="v mid">5-fold</text><text x="363.5" y="53.5" class="v mid">cross-validation:</text><text x="363.5" y="68.5" class="v mid">compare ideas</text><path d="M439.1 49.0 H467.1" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m76n)"/><rect x="470.1" y="16.0" width="138.4" height="66.0" rx="12.0" class="box"/><text x="539.3" y="38.5" class="v mid">refit the chosen</text><text x="539.3" y="53.5" class="v mid">pipeline on</text><text x="539.3" y="68.5" class="v mid">train</text><path d="M611.5 49.0 H639.5" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m76n)"/><rect x="642.5" y="16.0" width="103.9" height="66.0" rx="12.0" class="box g"/><text x="694.5" y="46.0" class="w mid">test 20%:</text><text x="694.5" y="61.0" class="w mid">scored once</text></svg></div><figcaption>The test set is touched once; every decision before that uses cross-validation on the training data.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">split.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.linear_model import LogisticRegression
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(400, 3))
+y = (X[:, 0] + 0.5 * X[:, 1] + rng.normal(scale=0.8, size=400) &gt; 1.6).astype(int)
+print(&quot;positive rate:&quot;, y.mean())
+for strat in (None, y):
+    _, _, _, y_te = train_test_split(X, y, test_size=0.2, random_state=3, stratify=strat)
+    print(&quot;stratified&quot; if strat is not None else &quot;plain&quot;, round(y_te.mean(), 3))
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=0, stratify=y)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+scores = cross_val_score(LogisticRegression(), X_tr, y_tr, cv=cv)
+print(scores.round(3), round(scores.mean(), 3), round(scores.std(), 3))</code></pre><div class="out"><span class="ol">Output</span><pre>positive rate: 0.1175
+plain 0.112
+stratified 0.112
+[0.906 0.922 0.875 0.891 0.906] 0.9 0.016</pre></div></div>
+</section>
+<section class="sec" id="pipelines">
+<h2><span class="n">3</span>Pipelines and ColumnTransformer</h2>
+<p>A <strong><code>Pipeline</code></strong> chains steps into one estimator: <code>Pipeline([("scale", StandardScaler()), ("clf", LogisticRegression())])</code>. Calling <code>fit</code> fits each transformer on the training data and passes the transformed data to the next step; <code>predict</code> applies the <strong>already fitted</strong> transformers and then the model. Inside <code>cross_val_score</code>, the whole pipeline is refitted on each training fold, so scaling, imputation and encoding statistics never see the fold being scored. That makes the commonest leakage (preprocessing fitted on all the data before splitting) impossible by construction, and it means the object you save is the complete recipe from raw columns to prediction.</p>
+<p>Real tables mix types, and each needs different treatment. A <strong><code>ColumnTransformer</code></strong> applies a transformer to a list of columns, in parallel: numeric columns get <code>SimpleImputer(strategy="median")</code> then <code>StandardScaler()</code>, categorical ones <code>SimpleImputer(strategy="most_frequent")</code> then <code>OneHotEncoder(handle_unknown="ignore")</code> (the safe one-hot of D.4), and text columns a vectoriser. The outputs are placed side by side as one feature matrix. Parameters of inner steps are addressed with double underscores: <code>clf__C</code>, <code>prep__num__impute__strategy</code>.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 692 352" role="img" aria-label="a ColumnTransformer inside a Pipeline" style="max-width:692px;min-width:min(692px,540px);margin:0 auto"><defs><marker id="m77n" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--label2)"/></marker><marker id="m77a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--accent)"/></marker><marker id="m77r" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--red)"/></marker><marker id="m77g" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" style="fill:var(--green)"/></marker></defs><path d="M262.0 56.0 L126.0 56.0 L126.0 113.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M346.0 76.0 L346.0 113.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M430.0 56.0 L566.0 56.0 L566.0 113.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M126.0 159.0 L126.0 216.0 L262.0 216.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M346.0 159.0 L346.0 196.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M566.0 159.0 L566.0 216.0 L430.0 216.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><path d="M346.0 236.0 L346.0 276.0" style="stroke:var(--label2);stroke-width:2;fill:none" marker-end="url(#m77n)"/><rect x="262.0" y="36.0" width="168.0" height="40.0" rx="20.0" class="box a"/><text x="346.0" y="60.5" class="w mid">raw complaints table</text><rect x="42.0" y="113.0" width="168.0" height="46.0" rx="12.0" class="box"/><text x="126.0" y="133.0" class="v mid">amount, days:</text><text x="126.0" y="148.0" class="v mid">impute median, scale</text><rect x="262.0" y="113.0" width="168.0" height="46.0" rx="12.0" class="box"/><text x="346.0" y="133.0" class="v mid">product, state:</text><text x="346.0" y="148.0" class="v mid">impute, one-hot</text><rect x="482.0" y="113.0" width="168.0" height="46.0" rx="12.0" class="box"/><text x="566.0" y="133.0" class="v mid">narrative:</text><text x="566.0" y="148.0" class="v mid">TF-IDF</text><rect x="262.0" y="196.0" width="168.0" height="40.0" rx="12.0" class="box a"/><text x="346.0" y="220.5" class="w mid">one feature matrix</text><rect x="262.0" y="276.0" width="168.0" height="40.0" rx="20.0" class="box b"/><text x="346.0" y="300.5" class="w mid">LogisticRegression</text></svg></div><figcaption>Each column group gets its own preprocessing; the pipeline fits all of it on training data only.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">pipeline.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+df = pd.DataFrame({&quot;amount&quot;: [20, None, 300, 1200, 15, 250, 80, 40],
+                   &quot;product&quot;: [&quot;card&quot;, &quot;card&quot;, &quot;mortgage&quot;, &quot;mortgage&quot;, &quot;card&quot;, None, &quot;loan&quot;, &quot;card&quot;],
+                   &quot;urgent&quot;: [0, 0, 1, 1, 0, 1, 0, 0]})
+num = Pipeline([(&quot;impute&quot;, SimpleImputer(strategy=&quot;median&quot;)), (&quot;scale&quot;, StandardScaler())])
+cat = Pipeline([(&quot;impute&quot;, SimpleImputer(strategy=&quot;most_frequent&quot;)), (&quot;onehot&quot;, OneHotEncoder(handle_unknown=&quot;ignore&quot;))])
+prep = ColumnTransformer([(&quot;num&quot;, num, [&quot;amount&quot;]), (&quot;cat&quot;, cat, [&quot;product&quot;])])
+model = Pipeline([(&quot;prep&quot;, prep), (&quot;clf&quot;, LogisticRegression())])
+model.fit(df[[&quot;amount&quot;, &quot;product&quot;]], df[&quot;urgent&quot;])
+print(model.named_steps[&quot;prep&quot;].get_feature_names_out().tolist())
+new = pd.DataFrame({&quot;amount&quot;: [900, None], &quot;product&quot;: [&quot;crypto&quot;, &quot;card&quot;]})
+print(model.predict(new), model.predict_proba(new)[:, 1].round(3))
+print(model.named_steps[&quot;prep&quot;].named_transformers_[&quot;num&quot;].named_steps[&quot;impute&quot;].statistics_)
+print(sorted(k for k in model.get_params() if k.startswith(&quot;clf__&quot;))[:3])</code></pre><div class="out"><span class="ol">Output</span><pre>[&#x27;num__amount&#x27;, &#x27;cat__product_card&#x27;, &#x27;cat__product_loan&#x27;, &#x27;cat__product_mortgage&#x27;]
+[1 0] [0.763 0.251]
+[80.]
+[&#x27;clf__C&#x27;, &#x27;clf__class_weight&#x27;, &#x27;clf__dual&#x27;]</pre></div></div>
+<p>The unseen product <code>crypto</code> did not break anything: <code>handle_unknown="ignore"</code> encodes it as all zeros, and the missing amount was filled with the training median (printed on the third line). <code>get_feature_names_out</code> shows the columns the model actually sees. The parameter names printed last are what a grid search uses.</p>
+</section>
+<section class="sec" id="metrics">
+<h2><span class="n">4</span>Metrics and the baseline to beat</h2>
+<p><strong>Accuracy</strong> is the fraction of correct predictions, and it is misleading when classes are imbalanced: if 5% of complaints are urgent, a model that never predicts "urgent" is 95% accurate and useless. So start every project with a <strong>baseline</strong>, <code>DummyClassifier(strategy="most_frequent")</code>, and report metrics that look at the class you care about. <strong>Precision</strong>: of the complaints flagged urgent, how many were? <strong>Recall</strong>: of the urgent complaints, how many were flagged? <strong>F1</strong> is their harmonic mean. Which matters more is a business choice: missing an urgent fraud case (low recall) usually costs more than reviewing a false alarm (low precision). <code>classification_report</code> prints all of them per class, and <code>confusion_matrix</code> gives the counts behind them.</p>
+<p>Threshold-free metrics judge the <strong>scores</strong> rather than one cut-off: <strong>ROC AUC</strong> is the probability that a random positive gets a higher score than a random negative (0.5 is chance), and <strong>average precision</strong> (the area under the precision-recall curve) is more informative when positives are rare. With imbalance, <code>class_weight="balanced"</code> makes the model pay more attention to the rare class, and choosing the threshold from a precision-recall curve (D.5) sets the operating point.</p>
+<figure class="fig"><div class="sv"><svg viewBox="0 0 448 134" role="img" aria-label="precision = TP / (TP + FP), recall = TP / (TP + FN)" style="max-width:448px;min-width:min(448px,540px);margin:0 auto"><rect x="17" y="17" width="106.80000000000001" height="32" rx="7" class="box b"/><text x="70.4" y="37.5" class="w mid"></text><rect x="125.80000000000001" y="17" width="134.4" height="32" rx="7" class="box b"/><text x="193.0" y="37.5" class="w mid">predicted urgent</text><rect x="262.20000000000005" y="17" width="168.9" height="32" rx="7" class="box b"/><text x="346.7" y="37.5" class="w mid">predicted normal</text><rect x="17" y="51" width="106.80000000000001" height="32" rx="7" class="box"/><text x="70.4" y="71.5" class="tk">truly urgent</text><rect x="125.80000000000001" y="51" width="134.4" height="32" rx="7" class="box"/><text x="193.0" y="71.5" class="tk">TP: caught</text><rect x="262.20000000000005" y="51" width="168.9" height="32" rx="7" class="box a"/><text x="346.7" y="71.5" class="tk w">FN: missed</text><rect x="17" y="85" width="106.80000000000001" height="32" rx="7" class="box"/><text x="70.4" y="105.5" class="tk">truly normal</text><rect x="125.80000000000001" y="85" width="134.4" height="32" rx="7" class="box a"/><text x="193.0" y="105.5" class="tk w">FP: false alarm</text><rect x="262.20000000000005" y="85" width="168.9" height="32" rx="7" class="box"/><text x="346.7" y="105.5" class="tk">TN: correctly ignored</text></svg></div><figcaption>Precision looks down the first column, recall along the first row.</figcaption></figure>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">metrics.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, average_precision_score, classification_report, confusion_matrix, f1_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+
+rng = np.random.default_rng(1)
+X = rng.normal(size=(2_000, 4))
+y = (X[:, 0] + X[:, 1] + rng.normal(scale=1.0, size=2_000) &gt; 2.6).astype(int)
+X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, stratify=y, random_state=0)
+print(&quot;urgent share:&quot;, round(y.mean(), 3))
+for name, m in [(&quot;baseline&quot;, DummyClassifier(strategy=&quot;most_frequent&quot;)),
+                (&quot;logreg&quot;, LogisticRegression()),
+                (&quot;balanced&quot;, LogisticRegression(class_weight=&quot;balanced&quot;))]:
+    p = m.fit(X_tr, y_tr).predict(X_te)
+    print(name, round(accuracy_score(y_te, p), 3), round(f1_score(y_te, p, zero_division=0), 3))
+model = LogisticRegression().fit(X_tr, y_tr)
+s = model.predict_proba(X_te)[:, 1]
+print(confusion_matrix(y_te, model.predict(X_te)).tolist())
+print(round(roc_auc_score(y_te, s), 3), round(average_precision_score(y_te, s), 3))
+print(classification_report(y_te, model.predict(X_te), digits=2).splitlines()[3])</code></pre><div class="out"><span class="ol">Output</span><pre>urgent share: 0.062
+baseline 0.938 0.0
+logreg 0.97 0.706
+balanced 0.826 0.408
+[[467, 2], [13, 18]]
+0.968 0.796
+           1       0.90      0.58      0.71        31</pre></div></div>
+<p>Read the output against the baseline: always predicting "not urgent" is already about 94% accurate with an F1 of 0, so the plain model's 97% is a smaller step than it looks, and its confusion matrix shows 13 urgent complaints missed. The <code>balanced</code> model scored <strong>worse</strong> here: class weights push predictions towards the rare class at the default 0.5 threshold, and on this data that cost more precision than it gained in recall. Class weights move the trade-off; they do not add signal, so compare them with cross-validation and a chosen threshold rather than assuming they help.</p>
+</section>
+<section class="sec" id="text">
+<h2><span class="n">5</span>A text classifier and a hyperparameter search</h2>
+<p>For text, <strong><code>TfidfVectorizer</code></strong> turns documents into sparse vectors: one column per word (or word pair, with <code>ngram_range=(1, 2)</code>), weighted by how often the word appears in the document and how rare it is across documents, so <code>the</code> counts for little and <code>foreclosure</code> for a lot. Followed by <code>LogisticRegression</code>, it is the strong, fast, explainable baseline for complaint routing that any LLM-based classifier should be compared against: it trains in seconds, runs anywhere, and its coefficients show which words drive each class.</p>
+<p><strong>Hyperparameters</strong> (the regularisation strength <code>C</code>, the n-gram range, the minimum document frequency) are chosen by search, never on the test set. <strong><code>GridSearchCV(pipeline, param_grid, cv=...)</code></strong> tries every combination with cross-validation inside the training data, refits the best on all of it, and exposes <code>best_params_</code>, <code>best_score_</code> and the refitted <code>best_estimator_</code>. Because the vectoriser is inside the pipeline, its vocabulary is rebuilt per fold, so no word statistics leak from validation folds.</p>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">text_model.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+
+texts = [&quot;charged twice for one payment&quot;, &quot;unauthorized charge on my card&quot;, &quot;card charged a fee I never agreed to&quot;,
+         &quot;refund for duplicate charge not received&quot;, &quot;mortgage escrow payment increased&quot;, &quot;lender lost my mortgage payment&quot;,
+         &quot;foreclosure notice sent in error&quot;, &quot;escrow account shortage on my mortgage&quot;,
+         &quot;student loan servicer misapplied payment&quot;, &quot;loan forgiveness application ignored&quot;, &quot;student loan interest is wrong&quot;,
+         &quot;servicer put my loan in forbearance&quot;]
+labels = [&quot;card&quot;] * 4 + [&quot;mortgage&quot;] * 4 + [&quot;student loan&quot;] * 4
+pipe = Pipeline([(&quot;tfidf&quot;, TfidfVectorizer()), (&quot;clf&quot;, LogisticRegression(max_iter=1000))])
+search = GridSearchCV(pipe, {&quot;clf__C&quot;: [0.1, 1, 10], &quot;tfidf__ngram_range&quot;: [(1, 1), (1, 2)]}, cv=4)
+search.fit(texts, labels)
+print(search.best_params_, round(search.best_score_, 3))
+best = search.best_estimator_
+print(best.predict([&quot;my card was charged for something I did not buy&quot;, &quot;escrow went up again&quot;, &quot;my loan servicer ignored me&quot;]).tolist())
+vocab = best.named_steps[&quot;tfidf&quot;].get_feature_names_out()
+coef = best.named_steps[&quot;clf&quot;].coef_
+for cls, row in zip(best.classes_, coef):
+    print(cls, [vocab[i] for i in row.argsort()[::-1][:3]])</code></pre><div class="out"><span class="ol">Output</span><pre>{&#x27;clf__C&#x27;: 0.1, &#x27;tfidf__ngram_range&#x27;: (1, 1)} 0.917
+[&#x27;card&#x27;, &#x27;mortgage&#x27;, &#x27;student loan&#x27;]
+card [&#x27;card&#x27;, &#x27;charge&#x27;, &#x27;for&#x27;]
+mortgage [&#x27;mortgage&#x27;, &#x27;escrow&#x27;, &#x27;increased&#x27;]
+student loan [&#x27;loan&#x27;, &#x27;student&#x27;, &#x27;servicer&#x27;]</pre></div></div>
+</section>
+<section class="sec" id="warmup">
+<h2><span class="n">6</span>Warm-up</h2>
+<article class="prob" id="p-the-estimator-contract" data-pid="m17-6-the-estimator-contract" data-type="predict" data-level="easy" data-answer="False True True
+[0, 1] [0, 1] [[0.5, 0.5]]
+[2.5] [[0.0]]
+[-1.0, 1.0]
+1.0 5">
+<header class="prob-head"><h3>1. The estimator contract</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
+X = np.array([[1.0], [2.0], [3.0], [4.0]])
+y = np.array([0, 0, 1, 1])
+m = LogisticRegression()
+print(hasattr(m, &quot;coef_&quot;), m.fit(X, y) is m, hasattr(m, &quot;coef_&quot;))
+print(m.classes_.tolist(), m.predict([[0.0], [5.0]]).tolist(), m.predict_proba([[2.5]]).round(2).tolist())
+s = StandardScaler().fit(X)
+print(s.mean_.tolist(), s.transform([[2.5]]).tolist())
+print(StandardScaler().fit_transform([[10.0], [20.0]]).ravel().tolist())
+print(m.get_params()[&quot;C&quot;], LogisticRegression(C=5).get_params()[&quot;C&quot;])</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Learned attributes only exist after <code>fit</code>. Halfway between the two classes, a symmetric problem gives probability 0.5 for each.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>False True True
+[0, 1] [0, 1] [[0.5, 0.5]]
+[2.5] [[0.0]]
+[-1.0, 1.0]
+1.0 5</pre></div><p>An unfitted estimator has only its settings; <code>coef_</code> appears after <code>fit</code>, which returns the estimator itself so calls can be chained. The classes are sorted, and <code>predict_proba</code> columns follow that order. The data is symmetric around 2.5, so that point gets 0.5 for both classes. The scaler learned the mean 2.5, so 2.5 transforms to 0. Two values 10 and 20 standardise to -1 and 1 (scikit-learn's <code>std</code> divides by <code>n</code>, not <code>n - 1</code>). <code>get_params</code> returns the hyperparameters, here the default <code>C=1.0</code> and an explicit 5.</p></div></details>
+</article>
+<article class="prob" id="p-stratified-or-not" data-pid="m17-6-stratified-or-not" data-type="predict" data-level="easy" data-answer="20 1 2
+[2, 2, 2, 2, 2]
+[80, 81, 82] 0">
+<header class="prob-head"><h3>2. Stratified or not</h3></header>
+<div class="code"><pre><code class="py">import numpy as np
+from sklearn.model_selection import train_test_split, StratifiedKFold
+
+y = np.array([1] * 10 + [0] * 90)
+X = np.arange(100).reshape(-1, 1)
+_, _, _, plain = train_test_split(X, y, test_size=0.2, random_state=4)
+_, _, _, strat = train_test_split(X, y, test_size=0.2, random_state=4, stratify=y)
+print(len(plain), int(plain.sum()), int(strat.sum()))
+folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=0).split(X, y)
+print([int(y[test].sum()) for _, test in folds])
+_, X_te, _, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
+print(X_te.ravel().tolist()[:3], int(y[80:].sum()))</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Stratification keeps the 10% positive rate in every part: 2 of 20. Without shuffling, the test set is simply the last 20 rows.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>20 1 2
+[2, 2, 2, 2, 2]
+[80, 81, 82] 0</pre></div><p>A plain random split leaves the number of positives in the test set to chance, so the test estimate is noisy. Stratifying keeps the proportion: 2 of 20. Stratified folds put exactly 2 positives in each of the five folds. With <code>shuffle=False</code> the test set is the last 20 rows, which here contain no positives at all, because the data is sorted by label, an extreme version of why sorted data must be shuffled (or, for time series, split deliberately by time).</p></div></details>
+</article>
+<article class="prob" id="p-beat-the-baseline" data-pid="m17-6-beat-the-baseline" data-type="write" data-level="easy">
+<header class="prob-head"><span class="ptag">ML</span><h3>3. Beat the baseline</h3></header>
+<div class="prob-q"><p>Write <code>compare_to_baseline(X, y, seed=0)</code>: split with <code>test_size=0.25</code>, stratified, <code>random_state=seed</code>; fit a <code>DummyClassifier(strategy="most_frequent")</code> and a <code>LogisticRegression(max_iter=1000)</code> on the training part; return a dict <code>{"baseline": {...}, "model": {...}}</code> where each inner dict has <code>accuracy</code>, <code>recall</code> and <code>f1</code> for the positive class 1 on the test part, rounded to 3 (use <code>zero_division=0</code>).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 3">from sklearn.linear_model import LogisticRegression
+
+
+def compare_to_baseline(X, y, seed=0):
+    m = LogisticRegression().fit(X, y)
+    return {&quot;model&quot;: {&quot;accuracy&quot;: m.score(X, y)}}
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+rng = np.random.default_rng(2)
+X = rng.normal(size=(800, 3))
+y = (X[:, 0] - X[:, 2] + rng.normal(scale=0.7, size=800) > 1.8).astype(int)
+r = compare_to_baseline(X, y)
+assert set(r) == {"baseline", "model"} and set(r["model"]) == {"accuracy", "recall", "f1"}
+assert r["baseline"]["recall"] == 0.0 and r["baseline"]["f1"] == 0.0
+assert abs(r["baseline"]["accuracy"] - (1 - y.mean())) < 0.01
+assert r["model"]["f1"] > 0.5 and r["model"]["recall"] > r["baseline"]["recall"]
+assert r["model"]["accuracy"] - r["baseline"]["accuracy"] < 0.15</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+rng = np.random.default_rng(2)
+X = rng.normal(size=(800, 3))
+y = (X[:, 0] - X[:, 2] + rng.normal(scale=0.7, size=800) &gt; 1.8).astype(int)
+r = compare_to_baseline(X, y)
+assert set(r) == {&quot;baseline&quot;, &quot;model&quot;} and set(r[&quot;model&quot;]) == {&quot;accuracy&quot;, &quot;recall&quot;, &quot;f1&quot;}
+assert r[&quot;baseline&quot;][&quot;recall&quot;] == 0.0 and r[&quot;baseline&quot;][&quot;f1&quot;] == 0.0
+assert abs(r[&quot;baseline&quot;][&quot;accuracy&quot;] - (1 - y.mean())) &lt; 0.01
+assert r[&quot;model&quot;][&quot;f1&quot;] &gt; 0.5 and r[&quot;model&quot;][&quot;recall&quot;] &gt; r[&quot;baseline&quot;][&quot;recall&quot;]
+assert r[&quot;model&quot;][&quot;accuracy&quot;] - r[&quot;baseline&quot;][&quot;accuracy&quot;] &lt; 0.15</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>train_test_split(X, y, test_size=0.25, stratify=y, random_state=seed)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>from sklearn.metrics import accuracy_score, recall_score, f1_score</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, recall_score
+from sklearn.model_selection import train_test_split
+
+
+def compare_to_baseline(X, y, seed=0):
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, stratify=y, random_state=seed)
+    out = {}
+    for name, est in [(&quot;baseline&quot;, DummyClassifier(strategy=&quot;most_frequent&quot;)), (&quot;model&quot;, LogisticRegression(max_iter=1000))]:
+        p = est.fit(X_tr, y_tr).predict(X_te)
+        out[name] = {&quot;accuracy&quot;: round(accuracy_score(y_te, p), 3),
+                     &quot;recall&quot;: round(recall_score(y_te, p, zero_division=0), 3),
+                     &quot;f1&quot;: round(f1_score(y_te, p, zero_division=0), 3)}
+    return out</code></pre></div><p>The starter scored the model on the data it was trained on, which measures memory, and gave no reference point. When positives are rare, "always negative" is already highly accurate, so the model's accuracy looks only a few points better, as the last test checks; recall and F1 for the positive class show the real difference (the baseline catches nothing). Every model report should include a baseline row; it also catches pipelines that are broken in a way that makes them predict one class.</p></div></details>
+</article>
+</section>
+<section class="sec" id="medium">
+<h2><span class="n">7</span>Medium</h2>
+<article class="prob" id="p-a-selector-that-has-seen-the-validation-" data-pid="m17-6-a-selector-that-has-seen-the-validation-" data-type="fix" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>4. A selector that has seen the validation folds</h3></header>
+<div class="prob-q"><p><code>evaluate</code> reports a cross-validated accuracy, but the scaler and the feature selection were fitted on <strong>all</strong> the data before cross-validation, so information from every validation fold leaked into training. Rewrite it with a <code>Pipeline</code> so that scaling and <code>SelectKBest(k=5)</code> are refitted inside each fold, and return the mean of <code>cross_val_score</code> with the given <code>cv</code>, rounded to 3. The function must also return the pipeline fitted on all the data as the second value.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 4">from sklearn.feature_selection import SelectKBest
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+
+
+def evaluate(X, y, cv):
+    Xs = StandardScaler().fit_transform(X)
+    Xk = SelectKBest(k=5).fit_transform(Xs, y)
+    model = LogisticRegression(max_iter=1000)
+    score = cross_val_score(model, Xk, y, cv=cv).mean()
+    return round(score, 3), model.fit(Xk, y)
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+rng = np.random.default_rng(7)
+X = rng.normal(size=(60, 500))
+y = rng.integers(0, 2, 60)
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+score, model = evaluate(X, y, cv)
+assert isinstance(model, Pipeline) and len(model.steps) == 3
+assert score < 0.7
+assert model.predict(X[:3]).shape == (3,)
+assert hasattr(model.named_steps[model.steps[1][0]], "scores_")</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import Pipeline
+rng = np.random.default_rng(7)
+X = rng.normal(size=(60, 500))
+y = rng.integers(0, 2, 60)
+cv = StratifiedKFold(5, shuffle=True, random_state=0)
+score, model = evaluate(X, y, cv)
+assert isinstance(model, Pipeline) and len(model.steps) == 3
+assert score &lt; 0.7
+assert model.predict(X[:3]).shape == (3,)
+assert hasattr(model.named_steps[model.steps[1][0]], &quot;scores_&quot;)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>Pipeline([("scale", StandardScaler()), ("select", SelectKBest(k=5)), ("clf", LogisticRegression(max_iter=1000))])</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Pass the raw <code>X</code> to <code>cross_val_score</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.feature_selection import SelectKBest
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+
+def evaluate(X, y, cv):
+    pipe = Pipeline([(&quot;scale&quot;, StandardScaler()), (&quot;select&quot;, SelectKBest(k=5)),
+                     (&quot;clf&quot;, LogisticRegression(max_iter=1000))])
+    score = cross_val_score(pipe, X, y, cv=cv).mean()
+    return round(float(score), 3), pipe.fit(X, y)</code></pre></div><p>The test data is pure noise: 500 random features and random labels, so the honest answer is about 50% accuracy. Selecting the 5 features most correlated with the labels <strong>on all 60 rows</strong> finds features that happen to correlate with the labels of the validation folds too, so the leaky version reports a score far above chance on data with no signal at all. That is selection leakage, a famous failure in genomics and in any wide dataset. Inside a pipeline, <code>cross_val_score</code> refits the scaler and the selector on each training fold only, and the score drops back to chance, as the test requires. The same applies to imputation, encoding, TF-IDF vocabularies, and oversampling.</p></div></details>
+</article>
+<article class="prob" id="p-a-pipeline-for-a-mixed-complaints-table" data-pid="m17-6-a-pipeline-for-a-mixed-complaints-table" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>5. A pipeline for a mixed complaints table</h3></header>
+<div class="prob-q"><p>Write <code>build_model(numeric, categorical)</code> returning an unfitted <code>Pipeline</code> with steps named <code>"prep"</code> and <code>"clf"</code>: <code>"prep"</code> is a <code>ColumnTransformer</code> with a <code>"num"</code> part (median imputation then standard scaling) for the <code>numeric</code> columns and a <code>"cat"</code> part (most-frequent imputation then <code>OneHotEncoder(handle_unknown="ignore")</code>) for the <code>categorical</code> columns; <code>"clf"</code> is <code>LogisticRegression(max_iter=1000, class_weight="balanced")</code>. The model must train on a DataFrame with missing values and predict for rows with categories never seen in training.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 5">from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+
+
+def build_model(numeric, categorical):
+    return Pipeline([(&quot;clf&quot;, LogisticRegression())])
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+import pandas as pd
+rng = np.random.default_rng(8)
+n = 300
+df = pd.DataFrame({"amount": rng.lognormal(4, 1, n), "days": rng.integers(0, 60, n).astype(float),
+                   "product": rng.choice(["card", "loan", "mortgage"], n), "channel": rng.choice(["web", "phone"], n)})
+df.loc[::10, "amount"] = np.nan
+df.loc[::7, "product"] = None
+y = ((df["product"] == "mortgage") & (df["days"] > 20)).astype(int)
+model = build_model(["amount", "days"], ["product", "channel"])
+assert [s[0] for s in model.steps] == ["prep", "clf"]
+model.fit(df, y)
+new = pd.DataFrame({"amount": [np.nan, 50.0], "days": [40.0, 1.0], "product": ["mortgage", "crypto"], "channel": ["fax", "web"]})
+assert model.predict(new).tolist() == [1, 0]
+names = model.named_steps["prep"].get_feature_names_out().tolist()
+assert "num__amount" in names and "cat__product_mortgage" in names
+assert model.named_steps["clf"].class_weight == "balanced"</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+import pandas as pd
+rng = np.random.default_rng(8)
+n = 300
+df = pd.DataFrame({&quot;amount&quot;: rng.lognormal(4, 1, n), &quot;days&quot;: rng.integers(0, 60, n).astype(float),
+                   &quot;product&quot;: rng.choice([&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;], n), &quot;channel&quot;: rng.choice([&quot;web&quot;, &quot;phone&quot;], n)})
+df.loc[::10, &quot;amount&quot;] = np.nan
+df.loc[::7, &quot;product&quot;] = None
+y = ((df[&quot;product&quot;] == &quot;mortgage&quot;) &amp; (df[&quot;days&quot;] &gt; 20)).astype(int)
+model = build_model([&quot;amount&quot;, &quot;days&quot;], [&quot;product&quot;, &quot;channel&quot;])
+assert [s[0] for s in model.steps] == [&quot;prep&quot;, &quot;clf&quot;]
+model.fit(df, y)
+new = pd.DataFrame({&quot;amount&quot;: [np.nan, 50.0], &quot;days&quot;: [40.0, 1.0], &quot;product&quot;: [&quot;mortgage&quot;, &quot;crypto&quot;], &quot;channel&quot;: [&quot;fax&quot;, &quot;web&quot;]})
+assert model.predict(new).tolist() == [1, 0]
+names = model.named_steps[&quot;prep&quot;].get_feature_names_out().tolist()
+assert &quot;num__amount&quot; in names and &quot;cat__product_mortgage&quot; in names
+assert model.named_steps[&quot;clf&quot;].class_weight == &quot;balanced&quot;</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>ColumnTransformer([("num", num_pipe, numeric), ("cat", cat_pipe, categorical)])</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Each part is itself a small <code>Pipeline</code> of an imputer and a scaler or encoder.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def build_model(numeric, categorical):
+    num = Pipeline([(&quot;impute&quot;, SimpleImputer(strategy=&quot;median&quot;)), (&quot;scale&quot;, StandardScaler())])
+    cat = Pipeline([(&quot;impute&quot;, SimpleImputer(strategy=&quot;most_frequent&quot;)),
+                    (&quot;onehot&quot;, OneHotEncoder(handle_unknown=&quot;ignore&quot;))])
+    prep = ColumnTransformer([(&quot;num&quot;, num, list(numeric)), (&quot;cat&quot;, cat, list(categorical))])
+    return Pipeline([(&quot;prep&quot;, prep), (&quot;clf&quot;, LogisticRegression(max_iter=1000, class_weight=&quot;balanced&quot;))])</code></pre></div><p>This is the standard shape of a tabular model, and it encodes every lesson of this module: imputation statistics and scaling learned from training data (D.2), one-hot categories fixed at fit time with unknowns ignored (D.4), and a model that does not ignore the rare class. Because it is one estimator, it can be cross-validated, grid-searched, pickled and served as a unit: the serving code passes a raw DataFrame and gets a prediction, with no separate preprocessing script to keep in sync. Feature names such as <code>num__amount</code> and <code>cat__product_mortgage</code> come from the step names, which makes coefficients and feature importances readable.</p></div></details>
+</article>
+<article class="prob" id="p-metrics-that-tell-the-truth-on-imbalance" data-pid="m17-6-metrics-that-tell-the-truth-on-imbalance" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>6. Metrics that tell the truth on imbalanced data</h3></header>
+<div class="prob-q"><p>Write <code>report(y_true, scores, threshold=0.5)</code> for binary labels and predicted probabilities. Return a dict with <code>accuracy</code>, <code>precision</code>, <code>recall</code>, <code>f1</code> (for class 1, predicting 1 when the score is at least the threshold, <code>zero_division=0</code>), <code>roc_auc</code>, <code>average_precision</code>, the confusion counts <code>tp</code>, <code>fp</code>, <code>fn</code>, <code>tn</code> as ints, and <code>base_rate</code> (the share of positives), all floats rounded to 3. Use <code>sklearn.metrics</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 6">from sklearn.metrics import accuracy_score
+
+
+def report(y_true, scores, threshold=0.5):
+    pred = [1 if s &gt; 0.5 else 0 for s in scores]
+    return {&quot;accuracy&quot;: accuracy_score(y_true, pred)}
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+y = np.array([0] * 90 + [1] * 10)
+s = np.r_[np.linspace(0.0, 0.6, 90), np.linspace(0.4, 0.9, 10)]
+r = report(y, s)
+tp, fp, fn, tn = int(((s >= 0.5) & (y == 1)).sum()), int(((s >= 0.5) & (y == 0)).sum()), int(((s < 0.5) & (y == 1)).sum()), int(((s < 0.5) & (y == 0)).sum())
+assert r["base_rate"] == 0.1 and (r["tp"], r["fp"], r["fn"], r["tn"]) == (tp, fp, fn, tn)
+assert r["accuracy"] == round((tp + tn) / 100, 3) and r["precision"] == round(tp / (tp + fp), 3) and r["recall"] == round(tp / 10, 3)
+assert 0.9 < r["roc_auc"] < 1.0 and r["average_precision"] < r["roc_auc"]
+assert report(y, s, threshold=0.65)["fp"] == 0
+assert all(isinstance(r[k], int) for k in ("tp", "fp", "fn", "tn"))</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+y = np.array([0] * 90 + [1] * 10)
+s = np.r_[np.linspace(0.0, 0.6, 90), np.linspace(0.4, 0.9, 10)]
+r = report(y, s)
+tp, fp, fn, tn = int(((s &gt;= 0.5) &amp; (y == 1)).sum()), int(((s &gt;= 0.5) &amp; (y == 0)).sum()), int(((s &lt; 0.5) &amp; (y == 1)).sum()), int(((s &lt; 0.5) &amp; (y == 0)).sum())
+assert r[&quot;base_rate&quot;] == 0.1 and (r[&quot;tp&quot;], r[&quot;fp&quot;], r[&quot;fn&quot;], r[&quot;tn&quot;]) == (tp, fp, fn, tn)
+assert r[&quot;accuracy&quot;] == round((tp + tn) / 100, 3) and r[&quot;precision&quot;] == round(tp / (tp + fp), 3) and r[&quot;recall&quot;] == round(tp / 10, 3)
+assert 0.9 &lt; r[&quot;roc_auc&quot;] &lt; 1.0 and r[&quot;average_precision&quot;] &lt; r[&quot;roc_auc&quot;]
+assert report(y, s, threshold=0.65)[&quot;fp&quot;] == 0
+assert all(isinstance(r[k], int) for k in (&quot;tp&quot;, &quot;fp&quot;, &quot;fn&quot;, &quot;tn&quot;))</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>pred = (np.asarray(scores) &gt;= threshold).astype(int)</code>; <code>confusion_matrix(y, pred, labels=[0, 1]).ravel()</code> returns <code>tn, fp, fn, tp</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.metrics import (accuracy_score, average_precision_score, confusion_matrix, f1_score,
+                             precision_score, recall_score, roc_auc_score)
+
+
+def report(y_true, scores, threshold=0.5):
+    y = np.asarray(y_true)
+    s = np.asarray(scores, dtype=float)
+    pred = (s &gt;= threshold).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y, pred, labels=[0, 1]).ravel()
+    r = lambda v: round(float(v), 3)
+    return {
+        &quot;accuracy&quot;: r(accuracy_score(y, pred)),
+        &quot;precision&quot;: r(precision_score(y, pred, zero_division=0)),
+        &quot;recall&quot;: r(recall_score(y, pred, zero_division=0)),
+        &quot;f1&quot;: r(f1_score(y, pred, zero_division=0)),
+        &quot;roc_auc&quot;: r(roc_auc_score(y, s)),
+        &quot;average_precision&quot;: r(average_precision_score(y, s)),
+        &quot;tp&quot;: int(tp), &quot;fp&quot;: int(fp), &quot;fn&quot;: int(fn), &quot;tn&quot;: int(tn),
+        &quot;base_rate&quot;: r(y.mean()),
+    }</code></pre></div><p>Each number answers a different question, and a report needs them together. The base rate (10%) is the context for accuracy: a score in the 80s sounds fine until you see that always predicting "no" would score 90%. Low precision says most flags are false alarms, recall says what share of urgent cases is caught, and a ROC AUC above 0.9 says the scores rank cases well, so the problem is the threshold: raising it to 0.65 removes every false positive here. Average precision is lower than ROC AUC because it focuses on the rare class, where the errors are. <code>confusion_matrix(...).ravel()</code> returns the counts in the order <code>tn, fp, fn, tp</code>, and passing <code>labels=[0, 1]</code> keeps that order even if a batch contains only one class. The starter's <code>&gt;</code> instead of <code>&gt;=</code> also silently changes results at scores equal to the threshold.</p></div></details>
+</article>
+<article class="prob" id="p-route-complaints-with-tf-idf-and-logisti" data-pid="m17-6-route-complaints-with-tf-idf-and-logisti" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>7. Route complaints with TF-IDF and logistic regression</h3></header>
+<div class="prob-q"><p>Write <code>train_router(texts, labels)</code> returning a fitted <code>Pipeline</code> of <code>TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True)</code> and <code>LogisticRegression(max_iter=1000)</code>, and <code>explain(model, k=3)</code> returning a dict from each class to its <code>k</code> highest-weighted features (words or word pairs), in order. Then write <code>route(model, texts, min_confidence)</code> returning, for each text, the predicted class, or <code>"human review"</code> when the highest class probability is below <code>min_confidence</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 7">def train_router(texts, labels):
+    return None
+
+
+def explain(model, k=3):
+    return {}
+
+
+def route(model, texts, min_confidence):
+    return [&quot;human review&quot;] * len(texts)
+</textarea>
+<script type="text/plain" class="prob-tests">texts = ["charged twice on my card", "card fee I never agreed to", "unauthorized card charge", "card statement wrong",
+         "mortgage escrow went up", "lender lost mortgage payment", "foreclosure notice in error", "mortgage payment misapplied",
+         "student loan servicer ignored me", "loan forgiveness denied", "student loan interest wrong", "loan servicer forbearance"]
+labels = ["card"] * 4 + ["mortgage"] * 4 + ["loan"] * 4
+model = train_router(texts, labels)
+assert model.predict(["my card was charged twice"]).tolist() == ["card"]
+ex = explain(model, k=2)
+assert set(ex) == {"card", "loan", "mortgage"} and all(len(v) == 2 for v in ex.values())
+assert "card" in ex["card"] and "mortgage" in ex["mortgage"]
+out = route(model, ["mortgage escrow payment lost", "hello there"], 0.5)
+assert out == ["mortgage", "human review"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">texts = [&quot;charged twice on my card&quot;, &quot;card fee I never agreed to&quot;, &quot;unauthorized card charge&quot;, &quot;card statement wrong&quot;,
+         &quot;mortgage escrow went up&quot;, &quot;lender lost mortgage payment&quot;, &quot;foreclosure notice in error&quot;, &quot;mortgage payment misapplied&quot;,
+         &quot;student loan servicer ignored me&quot;, &quot;loan forgiveness denied&quot;, &quot;student loan interest wrong&quot;, &quot;loan servicer forbearance&quot;]
+labels = [&quot;card&quot;] * 4 + [&quot;mortgage&quot;] * 4 + [&quot;loan&quot;] * 4
+model = train_router(texts, labels)
+assert model.predict([&quot;my card was charged twice&quot;]).tolist() == [&quot;card&quot;]
+ex = explain(model, k=2)
+assert set(ex) == {&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;} and all(len(v) == 2 for v in ex.values())
+assert &quot;card&quot; in ex[&quot;card&quot;] and &quot;mortgage&quot; in ex[&quot;mortgage&quot;]
+out = route(model, [&quot;mortgage escrow payment lost&quot;, &quot;hello there&quot;], 0.5)
+assert out == [&quot;mortgage&quot;, &quot;human review&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>vocab = model.named_steps[...].get_feature_names_out()</code>; for each class row of <code>coef_</code>, <code>argsort()[::-1][:k]</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>proba = model.predict_proba(texts)</code>; <code>proba.max(axis=1)</code> is the confidence and <code>model.classes_[proba.argmax(axis=1)]</code> the class.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+
+
+def train_router(texts, labels):
+    pipe = Pipeline([(&quot;tfidf&quot;, TfidfVectorizer(ngram_range=(1, 2), sublinear_tf=True)),
+                     (&quot;clf&quot;, LogisticRegression(max_iter=1000))])
+    return pipe.fit(texts, labels)
+
+
+def explain(model, k=3):
+    vocab = model.named_steps[&quot;tfidf&quot;].get_feature_names_out()
+    coef = model.named_steps[&quot;clf&quot;].coef_
+    return {cls: [vocab[i] for i in row.argsort()[::-1][:k]] for cls, row in zip(model.classes_, coef)}
+
+
+def route(model, texts, min_confidence):
+    proba = model.predict_proba(texts)
+    best = model.classes_[proba.argmax(axis=1)]
+    return [str(c) if p &gt;= min_confidence else &quot;human review&quot; for c, p in zip(best, proba.max(axis=1))]</code></pre></div><p>TF-IDF plus logistic regression is the baseline every LLM classifier should beat: it trains in milliseconds, costs nothing per prediction, and is explainable, because each class has one weight per word and the largest weights read like a summary of the class. <code>sublinear_tf</code> dampens repeated words and bigrams catch phrases such as "student loan". The routing rule adds a confidence gate: a text that shares no vocabulary with the training data ("hello there") gets nearly uniform probabilities (about a third each), so it goes to a person instead of being forced into a queue. The same pattern (a cheap model first, a fallback for low confidence) is common in LLM systems, where the fallback is the expensive model or a human.</p></div></details>
+</article>
+<article class="prob" id="p-predict-one-row-at-a-time-or-in-one-batc" data-pid="m17-6-predict-one-row-at-a-time-or-in-one-batc" data-type="choose" data-level="medium" data-answer="b">
+<header class="prob-head"><span class="ptag">ML</span><h3>8. Predict one row at a time or in one batch</h3></header>
+<div class="prob-q"><p>Both score 2,000 complaints with a fitted pipeline. Which is faster?</p></div>
+<div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">setup</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+rng = np.random.default_rng(0)
+X = rng.normal(size=(2_000, 10))
+y = (X[:, 0] &gt; 0).astype(int)
+model = make_pipeline(StandardScaler(), LogisticRegression()).fit(X, y)</code></pre></div>
+<div class="opts"><button class="opt" type="button" data-key="a"><b>A</b><pre><code class="py">preds = [model.predict(row.reshape(1, -1))[0] for row in X]</code></pre></button><button class="opt" type="button" data-key="b"><b>B</b><pre><code class="py">preds = model.predict(X)</code></pre></button></div><div class="answer-row"><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Every <code>predict</code> call validates its input and runs each pipeline step, whatever the number of rows.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="tbl"><table><tr><th>Option</th><th>Time per run (measured at build time)</th></tr><tr><td>A</td><td>1.08 s</td></tr><tr><td>B</td><td>846.40 µs</td></tr></table></div><p>Each <code>predict</code> call has a fixed overhead: input validation, dtype checks, and one call per pipeline step, before a tiny amount of arithmetic. Option A pays it 2,000 times; option B pays it once and does the arithmetic as one matrix product. In a web service that scores requests one by one this overhead is the latency floor, which is why batch jobs, and services that micro-batch concurrent requests, are far more efficient.</p></div></details>
+</article>
+<article class="prob" id="p-a-cross-validation-report" data-pid="m17-6-a-cross-validation-report" data-type="write" data-level="medium">
+<header class="prob-head"><span class="ptag">ML</span><h3>9. A cross-validation report</h3></header>
+<div class="prob-q"><p>Write <code>cv_report(models, X, y, folds=5, seed=0)</code> where <code>models</code> is a dict from name to unfitted estimator. Use <code>cross_validate</code> with <code>StratifiedKFold(folds, shuffle=True, random_state=seed)</code> and the scorers <code>"accuracy"</code>, <code>"f1"</code> and <code>"roc_auc"</code>, and return a DataFrame indexed by model name with columns <code>accuracy_mean</code>, <code>accuracy_std</code>, <code>f1_mean</code>, <code>f1_std</code>, <code>roc_auc_mean</code>, <code>roc_auc_std</code> (rounded to 3), sorted by <code>f1_mean</code> descending.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 9">import pandas as pd
+
+
+def cv_report(models, X, y, folds=5, seed=0):
+    return pd.DataFrame({name: {&quot;f1_mean&quot;: 0.0} for name in models}).T
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+rng = np.random.default_rng(9)
+X = rng.normal(size=(300, 4))
+y = (X[:, 0] + X[:, 1] > 0.8).astype(int)
+rep = cv_report({"dummy": DummyClassifier(strategy="most_frequent"), "logreg": LogisticRegression(),
+                 "tree": DecisionTreeClassifier(max_depth=3, random_state=0)}, X, y)
+assert list(rep.columns) == ["accuracy_mean", "accuracy_std", "f1_mean", "f1_std", "roc_auc_mean", "roc_auc_std"]
+assert rep.index[0] == "logreg" and rep.index[-1] == "dummy"
+assert rep.loc["dummy", "f1_mean"] == 0.0 and rep.loc["dummy", "roc_auc_mean"] == 0.5
+assert rep.loc["logreg", "roc_auc_mean"] > 0.95 and (rep.filter(like="_std") >= 0).all().all()</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+rng = np.random.default_rng(9)
+X = rng.normal(size=(300, 4))
+y = (X[:, 0] + X[:, 1] &gt; 0.8).astype(int)
+rep = cv_report({&quot;dummy&quot;: DummyClassifier(strategy=&quot;most_frequent&quot;), &quot;logreg&quot;: LogisticRegression(),
+                 &quot;tree&quot;: DecisionTreeClassifier(max_depth=3, random_state=0)}, X, y)
+assert list(rep.columns) == [&quot;accuracy_mean&quot;, &quot;accuracy_std&quot;, &quot;f1_mean&quot;, &quot;f1_std&quot;, &quot;roc_auc_mean&quot;, &quot;roc_auc_std&quot;]
+assert rep.index[0] == &quot;logreg&quot; and rep.index[-1] == &quot;dummy&quot;
+assert rep.loc[&quot;dummy&quot;, &quot;f1_mean&quot;] == 0.0 and rep.loc[&quot;dummy&quot;, &quot;roc_auc_mean&quot;] == 0.5
+assert rep.loc[&quot;logreg&quot;, &quot;roc_auc_mean&quot;] &gt; 0.95 and (rep.filter(like=&quot;_std&quot;) &gt;= 0).all().all()</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>cross_validate(est, X, y, cv=cv, scoring=["accuracy", "f1", "roc_auc"])</code> returns arrays under keys such as <code>test_f1</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import pandas as pd
+from sklearn.model_selection import StratifiedKFold, cross_validate
+
+
+def cv_report(models, X, y, folds=5, seed=0):
+    cv = StratifiedKFold(folds, shuffle=True, random_state=seed)
+    rows = {}
+    for name, est in models.items():
+        res = cross_validate(est, X, y, cv=cv, scoring=[&quot;accuracy&quot;, &quot;f1&quot;, &quot;roc_auc&quot;])
+        rows[name] = {f&quot;{m}_{stat}&quot;: round(float(getattr(res[f&quot;test_{m}&quot;], stat)()), 3)
+                      for m in (&quot;accuracy&quot;, &quot;f1&quot;, &quot;roc_auc&quot;) for stat in (&quot;mean&quot;, &quot;std&quot;)}
+    return pd.DataFrame.from_dict(rows, orient=&quot;index&quot;).sort_values(&quot;f1_mean&quot;, ascending=False)</code></pre></div><p>Comparing models on one split mixes up model quality with the luck of the split; five folds give five scores per model, and the standard deviation says how much of a difference is noise (two models whose means differ by less than their spread are not clearly different). Using the <strong>same</strong> <code>cv</code> object with a fixed seed for every model means they are scored on identical folds, a fair comparison. Several scorers at once show trade-offs, and the dummy row anchors the table: an F1 of 0 and an AUC of 0.5 are what "no skill" looks like.</p></div></details>
+</article>
+</section>
+<section class="sec" id="hard">
+<h2><span class="n">8</span>Hard</h2>
+<article class="prob" id="p-tune-a-pipeline-then-test-it-once" data-pid="m17-6-tune-a-pipeline-then-test-it-once" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">ML</span><h3>10. Tune a pipeline, then test it once</h3></header>
+<div class="prob-q"><p>Write <code>tune_and_test(X, y, seed=0)</code>: hold out 25% as a stratified test set; on the training part run <code>GridSearchCV</code> over a pipeline of <code>StandardScaler</code> and <code>LogisticRegression(max_iter=1000)</code> with <code>C</code> in <code>[0.01, 0.1, 1, 10]</code> and <code>class_weight</code> in <code>[None, "balanced"]</code>, scoring <code>"f1"</code>, with <code>StratifiedKFold(5, shuffle=True, random_state=seed)</code>; return a dict with <code>best_params</code> (the parameter dict with the step prefix removed, such as <code>{"C": 1, "class_weight": "balanced"}</code>), <code>cv_f1</code> (best cross-validated F1, rounded to 3) and <code>test_f1</code> (F1 of the refitted best model on the test set, rounded to 3).</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 10">from sklearn.linear_model import LogisticRegression
+
+
+def tune_and_test(X, y, seed=0):
+    best = None
+    for C in [0.01, 0.1, 1, 10]:
+        m = LogisticRegression(C=C).fit(X, y)
+        if best is None or m.score(X, y) &gt; best.score(X, y):
+            best = m
+    return {&quot;best_params&quot;: {&quot;C&quot;: best.C}}
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+rng = np.random.default_rng(10)
+X = rng.normal(size=(600, 5))
+y = (X[:, 0] + 0.6 * X[:, 1] + rng.normal(scale=0.8, size=600) > 1.9).astype(int)
+r = tune_and_test(X, y)
+assert set(r) == {"best_params", "cv_f1", "test_f1"}
+assert set(r["best_params"]) == {"C", "class_weight"} and r["best_params"]["class_weight"] in (None, "balanced")
+assert r["best_params"]["C"] in (0.01, 0.1, 1, 10)
+assert 0.4 < r["cv_f1"] < 1 and 0.4 < r["test_f1"] < 1
+assert r == tune_and_test(X, y)</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 5 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+rng = np.random.default_rng(10)
+X = rng.normal(size=(600, 5))
+y = (X[:, 0] + 0.6 * X[:, 1] + rng.normal(scale=0.8, size=600) &gt; 1.9).astype(int)
+r = tune_and_test(X, y)
+assert set(r) == {&quot;best_params&quot;, &quot;cv_f1&quot;, &quot;test_f1&quot;}
+assert set(r[&quot;best_params&quot;]) == {&quot;C&quot;, &quot;class_weight&quot;} and r[&quot;best_params&quot;][&quot;class_weight&quot;] in (None, &quot;balanced&quot;)
+assert r[&quot;best_params&quot;][&quot;C&quot;] in (0.01, 0.1, 1, 10)
+assert 0.4 &lt; r[&quot;cv_f1&quot;] &lt; 1 and 0.4 &lt; r[&quot;test_f1&quot;] &lt; 1
+assert r == tune_and_test(X, y)</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Name the steps, for example <code>"clf"</code>, and use <code>{"clf__C": [...], "clf__class_weight": [...]}</code> as the grid.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>search.best_params_</code> has keys like <code>clf__C</code>; <code>k.split("__", 1)[1]</code> removes the prefix. <code>search.predict(X_te)</code> uses the refitted best model.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import f1_score
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+
+def tune_and_test(X, y, seed=0):
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.25, stratify=y, random_state=seed)
+    pipe = Pipeline([(&quot;scale&quot;, StandardScaler()), (&quot;clf&quot;, LogisticRegression(max_iter=1000))])
+    grid = {&quot;clf__C&quot;: [0.01, 0.1, 1, 10], &quot;clf__class_weight&quot;: [None, &quot;balanced&quot;]}
+    search = GridSearchCV(pipe, grid, scoring=&quot;f1&quot;, cv=StratifiedKFold(5, shuffle=True, random_state=seed))
+    search.fit(X_tr, y_tr)
+    params = {k.split(&quot;__&quot;, 1)[1]: v for k, v in search.best_params_.items()}
+    return {&quot;best_params&quot;: params, &quot;cv_f1&quot;: round(float(search.best_score_), 3),
+            &quot;test_f1&quot;: round(float(f1_score(y_te, search.predict(X_te))), 3)}</code></pre></div><p>The starter chose <code>C</code> by accuracy on the training data, which rewards memorising and ignores the minority class. The grid search compares all eight settings by cross-validated F1 inside the training set, so the choice reflects the rare class the F1 objective cares about, whichever setting wins. The cross-validated score of the winner is slightly optimistic (it was the maximum over eight noisy estimates), which is why the test set exists: scored once, at the end, it is the number to report. Fixed seeds everywhere make the whole procedure repeatable, which the last test checks.</p></div></details>
+</article>
+<article class="prob" id="p-your-own-transformer-for-text-statistics" data-pid="m17-6-your-own-transformer-for-text-statistics" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>11. Your own transformer for text statistics</h3></header>
+<div class="prob-q"><p>Write a transformer <code>TextStats(BaseEstimator, TransformerMixin)</code> that turns a list (or Series) of texts into a float array with four columns: number of words, mean word length, share of characters that are upper-case letters (rounded to 4), and number of redaction markers (words of two or more <code>X</code>, as in D.4), with <code>get_feature_names_out()</code> returning <code>["n_words", "mean_word_len", "upper_share", "n_redactions"]</code>. It learns nothing, but <code>fit</code> must return <code>self</code>. Then write <code>text_model()</code> returning a <code>Pipeline</code> that feeds the same texts to both a <code>TfidfVectorizer</code> and <code>TextStats</code> followed by <code>StandardScaler</code>, combined with <code>FeatureUnion</code>, into <code>LogisticRegression(max_iter=1000)</code>.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 11">from sklearn.base import BaseEstimator, TransformerMixin
+
+
+class TextStats(BaseEstimator, TransformerMixin):
+    def transform(self, X):
+        return [len(t) for t in X]
+
+
+def text_model():
+    return None
+</textarea>
+<script type="text/plain" class="prob-tests">import numpy as np
+ts = TextStats()
+assert ts.fit(["a"]) is ts
+out = ts.transform(["Charged TWICE by XXXX", "ok", ""])
+assert out.shape == (3, 4) and out.dtype == float
+assert out[0].tolist() == [4.0, 4.5, round(10 / 21, 4), 1.0]
+assert out[2].tolist() == [0.0, 0.0, 0.0, 0.0]
+assert ts.get_feature_names_out().tolist() == ["n_words", "mean_word_len", "upper_share", "n_redactions"]
+texts = ["URGENT fraud XXXX charged", "my card was charged twice", "FRAUD on account XXXX XXXX", "fee on statement",
+         "UNAUTHORIZED XXXX transfer", "question about my bill"] * 3
+y = [1, 0, 1, 0, 1, 0] * 3
+m = text_model().fit(texts, y)
+assert m.predict(["FRAUD XXXX now", "a question about a fee"]).tolist() == [1, 0]
+from sklearn.base import clone
+assert clone(ts).get_params() == {}</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 7 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">import numpy as np
+ts = TextStats()
+assert ts.fit([&quot;a&quot;]) is ts
+out = ts.transform([&quot;Charged TWICE by XXXX&quot;, &quot;ok&quot;, &quot;&quot;])
+assert out.shape == (3, 4) and out.dtype == float
+assert out[0].tolist() == [4.0, 4.5, round(10 / 21, 4), 1.0]
+assert out[2].tolist() == [0.0, 0.0, 0.0, 0.0]
+assert ts.get_feature_names_out().tolist() == [&quot;n_words&quot;, &quot;mean_word_len&quot;, &quot;upper_share&quot;, &quot;n_redactions&quot;]
+texts = [&quot;URGENT fraud XXXX charged&quot;, &quot;my card was charged twice&quot;, &quot;FRAUD on account XXXX XXXX&quot;, &quot;fee on statement&quot;,
+         &quot;UNAUTHORIZED XXXX transfer&quot;, &quot;question about my bill&quot;] * 3
+y = [1, 0, 1, 0, 1, 0] * 3
+m = text_model().fit(texts, y)
+assert m.predict([&quot;FRAUD XXXX now&quot;, &quot;a question about a fee&quot;]).tolist() == [1, 0]
+from sklearn.base import clone
+assert clone(ts).get_params() == {}</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Compute each row's four numbers in a list comprehension over texts and return <code>np.array(rows, dtype=float)</code>.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>FeatureUnion([("tfidf", TfidfVectorizer()), ("stats", make_pipeline(TextStats(), StandardScaler()))])</code>.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import re
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import FeatureUnion, Pipeline, make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+REDACTION = re.compile(r&quot;\bX{2,}\b&quot;)
+
+
+class TextStats(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        rows = []
+        for t in X:
+            t = t or &quot;&quot;
+            words = t.split()
+            upper = sum(c.isupper() for c in t)
+            rows.append([
+                len(words),
+                float(np.mean([len(w) for w in words])) if words else 0.0,
+                round(upper / len(t), 4) if t else 0.0,
+                len(REDACTION.findall(t)),
+            ])
+        return np.array(rows, dtype=float).reshape(-1, 4)
+
+    def get_feature_names_out(self, input_features=None):
+        return np.array([&quot;n_words&quot;, &quot;mean_word_len&quot;, &quot;upper_share&quot;, &quot;n_redactions&quot;], dtype=object)
+
+
+def text_model():
+    features = FeatureUnion([(&quot;tfidf&quot;, TfidfVectorizer()),
+                             (&quot;stats&quot;, make_pipeline(TextStats(), StandardScaler()))])
+    return Pipeline([(&quot;features&quot;, features), (&quot;clf&quot;, LogisticRegression(max_iter=1000))])</code></pre></div><p>Anything that follows the contract (<code>fit</code> returning <code>self</code>, <code>transform</code> returning a 2-D array) plugs into pipelines, cross-validation and grid search. Inheriting from <code>BaseEstimator</code> provides <code>get_params</code> and <code>set_params</code> from the <code>__init__</code> arguments (none here, so <code>clone</code> gives an empty dict), and <code>TransformerMixin</code> provides <code>fit_transform</code>. A stateless transformer still needs <code>fit</code>, because pipelines call it. <code>FeatureUnion</code> runs both branches on the same input and concatenates their columns, so the model sees the sparse word features and four dense style features side by side; the style features are scaled so their size does not dominate. Shouting, redactions and length are signals that a bag of words misses, and in LLM systems the same pattern computes cheap features (length, language, presence of personal data) that route requests or flag them for review.</p></div></details>
+</article>
+<article class="prob" id="p-how-often-does-the-llm-judge-agree-with-" data-pid="m17-6-how-often-does-the-llm-judge-agree-with-" data-type="write" data-level="hard">
+<header class="prob-head"><span class="ptag">GenAI</span><h3>12. How often does the LLM judge agree with people</h3></header>
+<div class="prob-q"><p>An LLM labels complaints, and a sample was also labelled by people. Write <code>agreement(human, llm, labels)</code> returning a dict with <code>accuracy</code> (share of identical labels), <code>kappa</code> (Cohen's kappa, <code>sklearn.metrics.cohen_kappa_score</code>), <code>per_label_recall</code> (a dict from each label to the share of human-labelled items of that label that the LLM also gave it), and <code>top_confusions</code>, a list of the three most frequent <code>(human, llm, count)</code> disagreements, most frequent first, ties broken by labels alphabetically. Round floats to 3.</p></div>
+<textarea class="prob-code" aria-label="Your code for problem 12">def agreement(human, llm, labels):
+    same = sum(h == l for h, l in zip(human, llm))
+    return {&quot;accuracy&quot;: same / len(human)}
+</textarea>
+<script type="text/plain" class="prob-tests">human = ["card"] * 10 + ["loan"] * 6 + ["mortgage"] * 4
+llm = ["card"] * 8 + ["loan"] * 2 + ["loan"] * 4 + ["card"] * 2 + ["mortgage"] * 3 + ["loan"]
+r = agreement(human, llm, ["card", "loan", "mortgage"])
+assert r["accuracy"] == 0.75
+assert r["per_label_recall"] == {"card": 0.8, "loan": 0.667, "mortgage": 0.75}
+assert r["top_confusions"] == [("card", "loan", 2), ("loan", "card", 2), ("mortgage", "loan", 1)]
+from sklearn.metrics import cohen_kappa_score
+assert r["kappa"] == round(cohen_kappa_score(human, llm), 3) and r["kappa"] < r["accuracy"]</script>
+<details class="disc tests-show"><summary><span class="tag q">Tests</span><span class="q">The 4 checks Run tests uses</span><span class="chev"></span></summary><div class="ans"><div class="code"><pre><code class="py">human = [&quot;card&quot;] * 10 + [&quot;loan&quot;] * 6 + [&quot;mortgage&quot;] * 4
+llm = [&quot;card&quot;] * 8 + [&quot;loan&quot;] * 2 + [&quot;loan&quot;] * 4 + [&quot;card&quot;] * 2 + [&quot;mortgage&quot;] * 3 + [&quot;loan&quot;]
+r = agreement(human, llm, [&quot;card&quot;, &quot;loan&quot;, &quot;mortgage&quot;])
+assert r[&quot;accuracy&quot;] == 0.75
+assert r[&quot;per_label_recall&quot;] == {&quot;card&quot;: 0.8, &quot;loan&quot;: 0.667, &quot;mortgage&quot;: 0.75}
+assert r[&quot;top_confusions&quot;] == [(&quot;card&quot;, &quot;loan&quot;, 2), (&quot;loan&quot;, &quot;card&quot;, 2), (&quot;mortgage&quot;, &quot;loan&quot;, 1)]
+from sklearn.metrics import cohen_kappa_score
+assert r[&quot;kappa&quot;] == round(cohen_kappa_score(human, llm), 3) and r[&quot;kappa&quot;] &lt; r[&quot;accuracy&quot;]</code></pre></div></div></details>
+<details class="disc hint"><summary><span class="tag">Hint 1</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>confusion_matrix(human, llm, labels=labels)</code> gives counts; recall is the diagonal over the row sums.</p></div></details><details class="disc hint"><summary><span class="tag">Hint 2</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p>Collect off-diagonal cells as <code>(-count, h, l)</code> tuples and sort them, then take three.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="code"><div class="code-bar"><span class="lights"><i></i><i></i><i></i></span><span class="lbl">solution.py</span><button class="copy">Copy</button></div><pre><code class="py">import numpy as np
+from sklearn.metrics import cohen_kappa_score, confusion_matrix
+
+
+def agreement(human, llm, labels):
+    C = confusion_matrix(human, llm, labels=labels)
+    rows = C.sum(axis=1)
+    recall = {lab: round(float(C[i, i] / rows[i]), 3) if rows[i] else 0.0 for i, lab in enumerate(labels)}
+    off = sorted((-int(C[i, j]), labels[i], labels[j]) for i in range(len(labels)) for j in range(len(labels))
+                 if i != j and C[i, j] &gt; 0)
+    return {
+        &quot;accuracy&quot;: round(float(np.trace(C) / C.sum()), 3),
+        &quot;kappa&quot;: round(float(cohen_kappa_score(human, llm)), 3),
+        &quot;per_label_recall&quot;: recall,
+        &quot;top_confusions&quot;: [(h, l, -n) for n, h, l in off[:3]],
+    }</code></pre></div><p>Before trusting an LLM as a labeller or a judge, measure it against people on a sample, exactly as you would a model. Raw agreement is inflated by chance: if most items are <code>card</code>, two labellers who both guess <code>card</code> often agree. <strong>Cohen's kappa</strong> subtracts the agreement expected from each labeller's label frequencies, so 0 means chance and 1 perfect agreement; here 0.75 raw agreement becomes a noticeably lower kappa. Per-label recall shows where the judge is weak, and the most frequent confusions tell you what to fix in the prompt or the label definitions (card versus loan is the main confusion in both directions). A confusion matrix over the label list keeps every label in a fixed position, including labels that one side never used.</p></div></details>
+</article>
+<article class="prob" id="p-pipelines-params-and-clones" data-pid="m17-6-pipelines-params-and-clones" data-type="predict" data-level="hard" data-answer="[&#x27;standardscaler&#x27;, &#x27;logisticregression&#x27;]
+0.5
+2.0 2.0
+True False 2.0
+[[0.0]]
+ValueError">
+<header class="prob-head"><h3>13. Pipelines, params and clones</h3></header>
+<div class="code"><pre><code class="py">from sklearn.base import clone
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+pipe = make_pipeline(StandardScaler(), LogisticRegression(C=0.5))
+print([name for name, _ in pipe.steps])
+print(pipe.get_params()[&quot;logisticregression__C&quot;])
+pipe.set_params(logisticregression__C=2.0)
+print(pipe.named_steps[&quot;logisticregression&quot;].C, pipe[-1].C)
+pipe.fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
+c = clone(pipe)
+print(hasattr(pipe[-1], &quot;coef_&quot;), hasattr(c[-1], &quot;coef_&quot;), c[-1].C)
+print(pipe[:-1].transform([[1.5]]).round(3).tolist())
+try:
+    pipe.set_params(logisticregression__alpha=1)
+except ValueError:
+    print(&quot;ValueError&quot;)</code></pre></div>
+<div class="answer-row"><textarea class="prob-answer" aria-label="What it prints" placeholder="Type exactly what it prints"></textarea><button class="btn check" type="button">Check</button><span class="check-fb"></span></div>
+<details class="disc hint"><summary><span class="tag">Hint</span><span class="q">Open a hint</span><span class="chev"></span></summary><div class="ans"><p><code>make_pipeline</code> names steps after the lower-cased class names. <code>clone</code> copies the settings but not what was learned.</p></div></details><details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Show the solution and why</span><span class="chev"></span></summary><div class="ans"><div class="out"><span class="ol">Real output</span><pre>[&#x27;standardscaler&#x27;, &#x27;logisticregression&#x27;]
+0.5
+2.0 2.0
+True False 2.0
+[[0.0]]
+ValueError</pre></div><p><code>make_pipeline</code> names each step after its class in lower case, so parameters are addressed as <code>logisticregression__C</code>. <code>set_params</code> changes the estimator inside the pipeline (indexing <code>pipe[-1]</code> gets the same object). <code>clone</code> builds a new, unfitted estimator with the same parameters, which is what <code>cross_val_score</code> and <code>GridSearchCV</code> do for every fold: fitted state is never shared between folds. Slicing a pipeline gives a sub-pipeline, here just the fitted scaler, whose mean of 1.5 maps 1.5 to 0. An unknown parameter name raises <code>ValueError</code>, which catches typos in grid definitions.</p></div></details>
+</article>
+</section>
+<section class="sec" id="interview">
+<h2><span class="n">9</span>Interview questions</h2>
+<article class="prob" id="p-what-is-data-leakage-and-how-do-pipeline" data-pid="m17-6-what-is-data-leakage-and-how-do-pipeline" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>14. What is data leakage, and how do pipelines help prevent it?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>Leakage is any way information that would not be available at prediction time gets into training or model selection, so offline scores are better than production performance. Common forms: preprocessing fitted on all data before splitting (scaling, imputation, encoding, TF-IDF vocabularies, feature selection, oversampling); target leakage, where a feature is a consequence of the label (a "refund issued" flag when predicting refund requests); temporal leakage, training on the future (D.4); duplicate or near-duplicate rows on both sides of a split; and tuning on the test set. A scikit-learn <code>Pipeline</code> bundles every learned preprocessing step with the model, so <code>fit</code> learns them from training data only, and <code>cross_val_score</code> or <code>GridSearchCV</code> refit the whole pipeline per fold, which makes the first form impossible by construction; it also means the deployed object applies exactly the same steps. Pipelines do not fix target, temporal or duplicate leakage: those need feature review, time-based splits, group-aware splits (<code>GroupKFold</code>) and de-duplication.</p></div></details>
+</article>
+<article class="prob" id="p-which-metric-would-you-use-for-an-imbala" data-pid="m17-6-which-metric-would-you-use-for-an-imbala" data-type="explain" data-level="medium">
+<header class="prob-head"><span class="ptag">Interview</span><h3>15. Which metric would you use for an imbalanced classification problem, and why not accuracy?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>With imbalance, accuracy is dominated by the majority class: at 2% positives, predicting "negative" always scores 98%. Choose metrics that reflect the cost of each error on the class you care about. Precision (how many flagged items are real) matters when false alarms are expensive; recall (how many real items are caught) when misses are expensive, such as fraud or safety; F1 or F-beta combine them with a chosen weighting. For the ranking quality of scores, average precision (area under the precision-recall curve) is more informative than ROC AUC under heavy imbalance, because ROC AUC can look excellent while precision at useful thresholds is poor. Always report the base rate and a baseline, look at the confusion matrix, choose the threshold from the precision-recall curve against business constraints ("recall at least 90%"), and use stratified splits and folds so the rare class appears in every evaluation. Techniques such as <code>class_weight="balanced"</code> or resampling (inside the pipeline) help training, but the metric choice is what keeps evaluation honest.</p></div></details>
+</article>
+<article class="prob" id="p-when-would-you-choose-a-tf-idf-plus-logi" data-pid="m17-6-when-would-you-choose-a-tf-idf-plus-logi" data-type="explain" data-level="hard">
+<header class="prob-head"><span class="ptag">Interview</span><h3>16. When would you choose a TF-IDF plus logistic regression model over an LLM for text classification?</h3></header>
+
+<details class="disc sol"><summary><span class="tag">Solution</span><span class="q">Model answer</span><span class="chev"></span></summary><div class="ans"><p>When the classes are well defined and there are enough labelled examples (hundreds to thousands), a TF-IDF and logistic regression model is often within a few points of an LLM, at a tiny fraction of the cost and latency: it trains in seconds, predicts in microseconds on a CPU, needs no external API (so no data leaves your environment), is deterministic, and is explainable through its word weights. It is also the baseline that justifies, or not, an LLM's cost. Choose an LLM (zero- or few-shot, or fine-tuned) when labelled data is scarce, labels change often or are defined in natural language, the task needs reasoning or world knowledge beyond word overlap, the text is long or multilingual, or you need extraction and explanations, not just a label. Common hybrids: an LLM labels data to train a cheap model; a cheap model handles confident cases and routes uncertain ones to the LLM or to people; or embeddings from a language model feed a logistic regression. Decide with an evaluation on the same held-out set, including cost per thousand predictions and latency, not only accuracy.</p></div></details>
+</article>
+</section>
+
+<section class="recap">
+  <h2>Recap</h2>
+  <ul><li>The estimator contract: settings in the constructor, <code>fit</code> returns <code>self</code>, learned values end in <code>_</code>, then <code>predict</code>, <code>predict_proba</code>, <code>transform</code>. Set <code>random_state</code>.</li><li>Hold out a stratified test set and use it once; compare ideas with cross-validation on the training data (<code>StratifiedKFold</code>, or <code>TimeSeriesSplit</code> for time).</li><li>Put every learned preprocessing step in a <code>Pipeline</code> (with a <code>ColumnTransformer</code> for mixed columns), so it is refitted per fold and deployed as one object.</li><li>Beat a <code>DummyClassifier</code>; on imbalanced data report precision, recall, F1, average precision and the base rate, and choose the threshold deliberately.</li><li>TF-IDF plus logistic regression is the fast, explainable text baseline; <code>GridSearchCV</code> tunes <code>step__param</code> names; custom transformers follow <code>fit</code>/<code>transform</code>.</li></ul>
+  <p class="muted">Every output on this page comes from running the code in Python 3.14.2 (Pyodide), the same Python that runs your code here.</p>
+</section>
+
+<div class="done-bar"><span class="msg" id="done-msg"></span><label class="switch"><input type="checkbox" id="done-toggle"><span class="track"></span>Completed</label></div>
+<nav class="pager" id="pager"></nav>
+
+</main>
+</div></div>
+<script src="../assets/app.js"></script>
+<script src="../assets/runner.js"></script>
+</body>
+</html>
