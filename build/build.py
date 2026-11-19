@@ -7,6 +7,7 @@ Every snippet is run in Pyodide (build/run_py.mjs) before any HTML is written.
 The build stops if a solution fails its tests, a write/fix starter already passes,
 a refactor starter fails, an example errors, or the "faster" option is not faster.
 """
+import base64
 import html as H
 import json
 import re
@@ -234,6 +235,21 @@ def render_problem(les, pr, n, res):
             + "\n".join(body) + "\n" + hints + sol_html + "\n</article>")
 
 
+def example_figures(les, s, i, r):
+    # matplotlib figures drawn by an example are saved next to the page as PNG files
+    imgs = r.get("images") or []
+    if not imgs:
+        return ""
+    folder = ROOT / "lessons" / "img"
+    folder.mkdir(exist_ok=True)
+    tags = []
+    for n, b64 in enumerate(imgs, 1):
+        name = f"{les.id}-{s.id}-{i}-{n}.png"
+        (folder / name).write_bytes(base64.b64decode(b64))
+        tags.append(f'<img src="img/{name}" alt="Figure {n} drawn by the example above" loading="lazy">')
+    return f'<div class="o-figs">{"".join(tags)}</div>'
+
+
 def render_part(les, s, i, x, res, counter):
     if isinstance(x, L.Html):
         return x.html
@@ -247,7 +263,7 @@ def render_part(les, s, i, x, res, counter):
     if isinstance(x, L.Example):
         r = res[f"ex-{s.id}-{i}"]
         out = r["stdout"] + (("\n" if r["stdout"] else "") + r["error"] if r["error"] else "")
-        return code_block(x.code, x.label).removesuffix("</div>") + output_block(out) + "</div>"
+        return code_block(x.code, x.label).removesuffix("</div>") + output_block(out) + example_figures(les, s, i, r) + "</div>"
     if isinstance(x, L.Problem):
         counter[0] += 1
         return render_problem(les, x, counter[0], res)

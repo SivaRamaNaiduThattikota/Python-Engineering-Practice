@@ -26,7 +26,7 @@ onmessage = async e => {
     const res = py.globals.get('_run')(code, tests || '');
     const out = res.toJs({ dict_converter: Object.fromEntries });
     res.destroy();
-    postMessage({ id, type: 'done', error: out.error, tests: out.tests });
+    postMessage({ id, type: 'done', error: out.error, tests: out.tests, images: out.images || [] });
   } catch (err) {
     postMessage({ id, type: 'done', error: String(err.message || err), tests: [] });
   }

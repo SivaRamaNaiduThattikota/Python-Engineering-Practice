@@ -1,6 +1,12 @@
 // Grading code shared by the browser worker and the build, so both judge code the same way.
 export const HELPER = `
-import ast, builtins, sys, traceback
+import ast, builtins, os, sys, traceback
+
+# No screen in a worker or in Node: matplotlib draws off-screen and _run returns PNGs.
+os.environ["MPLBACKEND"] = "Agg"
+# This matplotlib build passes floats to its own renderer and warns about it; that is not the learner's code.
+import warnings
+warnings.filterwarnings("ignore", message=r"The (x|y|width|height) parameter as float was deprecated")
 
 def _no_input(*args):
     raise RuntimeError("input() does not work in the browser. Copy this one and run it locally.")
@@ -28,9 +34,27 @@ def _why(node, ns):
         return f"got {left!r}, expected {right!r}"
     return f"left side was {left!r}, right side was {right!r}"
 
+def _figures():
+    # Every open matplotlib figure as base64 PNG, then closed so the next run starts clean.
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return []
+    import base64, io, warnings
+    out = []
+    for n in plt.get_fignums():
+        buf = io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            plt.figure(n).savefig(buf, format="png", dpi=80, bbox_inches="tight")
+        out.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+    plt.close("all")
+    return out
+
 def _run(code, tests):
     ns = {"__name__": "__main__", "input": _no_input, "__source__": code}
     res = {"error": None, "tests": []}
+    if "matplotlib.pyplot" in sys.modules:
+        sys.modules["matplotlib.pyplot"].close("all")
     try:
         exec(compile(code, "main.py", "exec"), ns)
     except BaseException as e:
@@ -48,6 +72,10 @@ def _run(code, tests):
                 res["tests"].append([src, False, str(e) or _why(node, ns) or "assert failed"])
             except BaseException as e:
                 res["tests"].append([src, False, type(e).__name__ + ": " + str(e)])
+    try:
+        res["images"] = _figures()
+    except Exception:
+        res["images"] = []
     sys.stdout.flush(); sys.stderr.flush()
     return res
 

@@ -27,6 +27,6 @@ for (const j of jobs) {
   const r = py.globals.get('_run')(j.code, j.tests || '');
   const o = r.toJs({ dict_converter: Object.fromEntries });
   r.destroy();
-  results[j.id] = { stdout: lines.join('\n'), error: o.error ?? null, tests: o.tests || [] };
+  results[j.id] = { stdout: lines.join('\n'), error: o.error ?? null, tests: o.tests || [], images: o.images || [] };
 }
 fs.writeFileSync(outPath, JSON.stringify({ version, results }));

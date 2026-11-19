@@ -171,6 +171,7 @@
       parts.push(`<div class="o-tests"><div class="o-sum ${ok === tests.length ? 'all' : ''}">${ok === tests.length ? '✓ All tests passed' : `${ok} of ${tests.length} tests passed`}</div>` +
         tests.map(([src, pass, why]) => `<div class="o-t ${pass ? 'pass' : 'fail'}"><span class="o-i">${pass ? '✓' : '✗'}</span><code>${esc(src)}</code>${why ? `<small>${esc(why)}</small>` : ''}</div>`).join('') + '</div>');
     }
+    if (res.images && res.images.length) parts.push(`<div class="o-figs">${res.images.map((b, i) => `<img src="data:image/png;base64,${b}" alt="Figure ${i + 1} drawn by the code">`).join('')}</div>`);
     if (!parts.length) parts.push('<pre class="o-std o-dim">(no output)</pre>');
     out.innerHTML = parts.join('');
   }
